@@ -58,19 +58,15 @@ def load_state_dict(model, state_dict, strict=True):
 # torch support!
 
 def torch_load(fn:str):
-  t = Tensor.empty(os.stat(fn).st_size, dtype=dtypes.uint8, device=f"disk:{fn}") #.to("GPU")
+  t = Tensor.empty(os.stat(fn).st_size, dtype=dtypes.uint8, device=f"disk:{fn}")
   offsets: Dict[str, int] = {}
   lens: Dict[str, int] = {}
   def _rebuild_tensor_v2(storage, storage_offset, size, stride, requires_grad, backward_hooks, metadata=None):
-    shape = tuple(size)
-    if shape == (50257, 1024):
-      pass
-      # print("hi", storage, storage_offset, size, stride, requires_grad, backward_hooks, metadata)
-
     lens[storage[2]] = storage[4] * storage[1].itemsize
     if storage[2] not in offsets: return None
     byte_offset = offsets[storage[2]]+storage_offset*storage[1].itemsize
-    ret = t[byte_offset:byte_offset+prod(size)] #.cast(storage[1])
+    # ret = t.cast(storage[1]).to("GPU")[byte_offset:byte_offset+prod(size)] the "solution" could be to just bitcast the entire tensor, transfer and slice.
+    ret = t[byte_offset:byte_offset+prod(size)] # .cast(storage[1]) -> bitcast disabled
     # convert bfloat16 -> float16 using LLVM for Llama 2
     # upstream LLaMA also does this conversion:
     # https://github.com/facebookresearch/llama/blob/6c7fe276574e78057f917549435a2554000a876d/llama/generation.py#L95
