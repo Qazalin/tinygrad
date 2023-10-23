@@ -103,12 +103,13 @@ class ShapeTracker:
       real_offset = v.offset + (sum(x*st for (x,_),st in zip(v.mask, v.strides)) if v.mask else 0)
 
       if getenv("ALLOW_AS_STRIDED") == "0": # TODO remove once this works on all backends
+        target_shape = tuple([s if st != 0 else 1 for s,st in zip(real_shape, v.strides)])
         # first, we apply the offset
         if real_offset != 0: to_apply.append((MovementOps.SHRINK, ((real_offset,-1),)))
         # then, we make it the correct shape
-        to_apply.append((MovementOps.RESHAPE, real_shape))
+        to_apply.append((MovementOps.RESHAPE, target_shape))
         # then, we apply permutations
-        shape_strides = [(s, st) for s,st in zip(real_shape, v.strides) if s != 1]
+        shape_strides = [(s, st) for s,st in zip(target_shape, v.strides) if s != 1]
         permute_indexes = [len(shape_strides)-1-y for y in argsort([x[1] for x in shape_strides])]
         if tuple(permute_indexes) != tuple(range(len(permute_indexes))):
           intermediate_shape = tuple([shape_strides[x][0] for x in argsort(permute_indexes)])
