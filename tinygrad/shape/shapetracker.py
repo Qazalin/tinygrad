@@ -2,11 +2,12 @@
 from __future__ import annotations
 import functools, operator
 from dataclasses import dataclass
+from os import getenv
 from typing import Tuple, List, Optional, Dict, cast
 from tinygrad.ops import MovementOps
-from tinygrad.helpers import prod, DEBUG, dedup
+from tinygrad.helpers import argsort, prod, DEBUG, dedup
 from tinygrad.shape.symbolic import Variable, MulNode, NumNode, Node, SumNode, sint
-from tinygrad.shape.view import View
+from tinygrad.shape.view import View, strides_for_shape
 
 @functools.lru_cache(maxsize=None)
 def to_shape_strides(shape:Tuple[int, ...], strides:Tuple[int, ...]) -> Tuple[Tuple[int, int], ...]:
@@ -100,11 +101,23 @@ class ShapeTracker:
     for v in self.views:
       real_shape = tuple(y-x for x,y in v.mask) if v.mask else v.shape
       real_offset = v.offset + (sum(x*st for (x,_),st in zip(v.mask, v.strides)) if v.mask else 0)
-      # first, we apply the offset
-      # then, we make it the correct shape
-      # then, we apply permutations
+
+      if getenv("ALLOW_AS_STRIDED") == "0": # TODO remove once this works on all backends
+        # first, we apply the offset
+        if real_offset != 0: to_apply.append((MovementOps.SHRINK, ((real_offset,-1),)))
+        # then, we make it the correct shape
+        to_apply.append((MovementOps.RESHAPE, real_shape))
+        # then, we apply permutations
+        shape_strides = [(s, st) for s,st in zip(real_shape, v.strides) if s != 1]
+        permute_indexes = [len(shape_strides)-1-y for y in argsort([x[1] for x in shape_strides])]
+        if tuple(permute_indexes) != tuple(range(len(permute_indexes))):
+          intermediate_shape = tuple([shape_strides[x][0] for x in argsort(permute_indexes)])
+          assert tuple([shape_strides[i][1] for i in argsort(permute_indexes)]) == strides_for_shape(intermediate_shape), "nonpermutable strides"
+          to_apply.append((MovementOps.RESHAPE, intermediate_shape))
+          to_apply.append((MovementOps.PERMUTE, permute_indexes))
+
       # TODO: don't use as_strided
-      to_apply.append((MovementOps.AS_STRIDED, ([s if st != 0 else 1 for s,st in zip(real_shape, v.strides)], v.strides, real_offset)))
+      else: to_apply.append((MovementOps.AS_STRIDED, ([s if st != 0 else 1 for s,st in zip(real_shape, v.strides)], v.strides, real_offset)))
       # then, we apply pre expand pads
       if v.mask is not None:
         pre_expand_pads = tuple((x,s-y) if st != 0 else (0,0) for (x,y),s,st in zip(v.mask, v.shape, v.strides))
