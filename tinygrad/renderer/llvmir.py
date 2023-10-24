@@ -25,6 +25,7 @@ code_for_op: Final[Dict[Op, Callable]] = {
 }
 
 dtype_to_llvm_dtype = {dtypes.float64:ir.DoubleType(), dtypes.float16:ir.HalfType(), dtypes.bfloat16:ir.IntType(16), dtypes.float32:ir.FloatType(), dtypes.int8:ir.IntType(8), dtypes.uint8:ir.IntType(8), dtypes.bool: ir.IntType(1), dtypes.int64: ir.IntType(64), dtypes.int32: ir.IntType(32), dtypes._arg_int32: ir.IntType(32)}
+llvm_dtype_to_dtype = {v:k for k,v in dtype_to_llvm_dtype.items()}
 
 def cast(bb, val, input_type, output_type):
   if input_type == output_type: return val
@@ -159,10 +160,11 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
       bb[-1].store(element, bb[-1].gep(lvars[vin[0]], [lvars[vin[1]]], inbounds=True))
     if uop == UOps.ALU:
       vars = [lvars[x] for x in vin]
-      if args in BinaryOps and vars[0].type != vars[1].type: vars[1] = cast(bb, vars[1], vin[1].dtype, vin[0].dtype)
+      if args in BinaryOps and vars[0].type != vars[1].type:
+        vars[1] = cast(bb, vars[1], llvm_dtype_to_dtype[vars[1].type], llvm_dtype_to_dtype[vars[0].type])
       elif args in TernaryOps:
-        if vars[0].type != vars[1].type: vars[1] = cast(bb, vars[1], vin[1].dtype, vin[0].dtype)
-        if vars[0].type != vars[2].type: vars[2] = cast(bb, vars[2], vin[2].dtype, vin[0].dtype)
+        if vars[0].type != vars[1].type: vars[1] = cast(bb, vars[1], llvm_dtype_to_dtype[vars[1].type], llvm_dtype_to_dtype[vars[0].type])
+        if vars[0].type != vars[2].type: vars[2] = cast(bb, vars[2], llvm_dtype_to_dtype[vars[2].type], llvm_dtype_to_dtype[vars[0].type])
       lvars[u] = code_for_op[args](bb[-1], *vars)
     if uop == UOps.CAST:
       lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtype)
