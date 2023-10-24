@@ -1,7 +1,7 @@
 from typing import Final, Dict, Callable, Any, List, Optional, Tuple
 from llvmlite import ir  # type: ignore
 from tinygrad.codegen.linearizer import UOps, UOp
-from tinygrad.helpers import dtypes
+from tinygrad.helpers import DType, PtrDType, dtypes
 from tinygrad.ops import Op, UnaryOps, BinaryOps, TernaryOps
 
 LLVM_FAST_MATH_FLAGS = ('nsz', 'arcp', 'contract', 'afn', 'reassoc') # All from fast math, but nnan and ninf
@@ -28,6 +28,7 @@ dtype_to_llvm_dtype = {dtypes.float64:ir.DoubleType(), dtypes.float16:ir.HalfTyp
 
 def cast(bb, val, input_type, output_type):
   if input_type == output_type: return val
+  if isinstance(input_type, PtrDType): input_type = DType(input_type.priority, input_type.itemsize, input_type.name, input_type.np, input_type.sz)
 
   if output_type == dtypes.float32:
     if dtypes.is_int(input_type) or input_type == dtypes.bool:
@@ -53,6 +54,24 @@ def cast(bb, val, input_type, output_type):
       val = bb[-1].fpext(val, ir.DoubleType())
     else:
       val = bb[-1].fptrunc(val, dtype_to_llvm_dtype[output_type])
+    return val
+
+  if input_type == dtypes.float16:
+    if dtypes.is_int(output_type) or output_type == dtypes.bool: val = bb[-1].fptoui(val, dtype_to_llvm_dtype[output_type]) if dtypes.is_unsigned(output_type) or output_type == dtypes.bool else bb[-1].fptosi(val, dtype_to_llvm_dtype[output_type])
+    elif output_type == dtypes.float64: val = bb[-1].fpext(val, ir.DoubleType())
+    else: val = bb[-1].fptrunc(val, dtype_to_llvm_dtype[output_type])
+    return val
+
+  if dtypes.is_int(input_type) or input_type == dtypes.bool:
+    unsigned_or_bool = dtypes.is_unsigned(input_type) or input_type == dtypes.bool
+    if output_type == dtypes.float32: val = bb[-1].uitofp(val, ir.FloatType()) if unsigned_or_bool else bb[-1].sitofp(val, ir.FloatType())
+    elif output_type == dtypes.float16:
+      val = bb[-1].uitofp(val, ir.FloatType()) if unsigned_or_bool else bb[-1].sitofp(val, ir.FloatType())
+      val = bb[-1].fptrunc(val, ir.HalfType())
+    elif output_type == dtypes.float64: val = bb[-1].uitofp(val, ir.DoubleType()) if unsigned_or_bool else bb[-1].sitofp(val, ir.DoubleType())
+    elif dtypes.is_int(output_type) or output_type == dtypes.bool:
+      if input_type.itemsize > output_type.itemsize: val = bb[-1].trunc(val, dtype_to_llvm_dtype[output_type])
+      else: val = bb[-1].zext(val, dtype_to_llvm_dtype[output_type]) if unsigned_or_bool else bb[-1].sext(val, dtype_to_llvm_dtype[output_type])
     return val
 
   raise NotImplementedError(f"cast from {input_type} -> {output_type} not implemented")
@@ -139,7 +158,14 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
       element = cast(bb, lvars[vin[2]], vin[2].dtype, vin[0].dtype)
       bb[-1].store(element, bb[-1].gep(lvars[vin[0]], [lvars[vin[1]]], inbounds=True))
     if uop == UOps.ALU:
-      lvars[u] = code_for_op[args](bb[-1], *[lvars[x] for x in vin])
+      vars = [lvars[x] for x in vin]
+      if args in BinaryOps and vars[0].type != vars[1].type: vars[1] = cast(bb, vars[1], vin[1].dtype, vin[0].dtype)
+      elif args in TernaryOps:
+        if vars[0].type != vars[1].type: vars[1] = cast(bb, vars[1], vin[1].dtype, vin[0].dtype)
+        if vars[0].type != vars[2].type: vars[2] = cast(bb, vars[2], vin[2].dtype, vin[0].dtype)
+      lvars[u] = code_for_op[args](bb[-1], *vars)
+    if uop == UOps.CAST:
+      lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtype)
 
   bb[-1].ret_void()
   return str(module), {"binary":False}
