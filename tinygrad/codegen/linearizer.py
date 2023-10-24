@@ -4,7 +4,7 @@ import itertools, math, functools
 from collections import defaultdict
 from enum import Enum, auto
 
-from tinygrad.helpers import colored, ImageDType, DEBUG, dtypes, DType, prod, PtrDType, all_same
+from tinygrad.helpers import colored, ImageDType, DEBUG, dtypes, DType, prod, PtrDType
 from tinygrad.ops import LazyOp, UnaryOps, ConstBuffer, MemBuffer, BufferOps
 from tinygrad.ops import ReduceOps, BinaryOps, TernaryOps
 from tinygrad.shape.shapetracker import ShapeTracker
@@ -408,7 +408,6 @@ class Linearizer(OptimizedKernel):
     if cachable: self.saved_exprs[key] = self.uops[-1]
     return self.uops[-1]
 
-  
   def parse_cast(self, uop: UOp, dtype:DType, bitcast:bool) -> UOp:
     if isinstance(dtype, ImageDType): return uop # TODO: imagef and imageh casted to fp32 and fp16?
     return self.uop(UOps.CAST, dtype, (uop,), (dtype,bitcast))
