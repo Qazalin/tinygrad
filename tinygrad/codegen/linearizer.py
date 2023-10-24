@@ -389,7 +389,6 @@ class Linearizer(OptimizedKernel):
   def uop(self, uop:UOps, dtype:Optional[DType], vin:Tuple[UOp, ...], arg:Any=None, cachable=True) -> UOp:
     key = (uop, dtype, vin, arg)
     if uop == UOps.PHI and len(vin) == 2 and vin[0] == vin[1]: return vin[0]   # self phi is noop
-    if uop == UOps.CAST and all(x.uop == UOps.GEP for x in vin) and all_same([x.vin[0] for x in vin]) and all(x.arg == i for i,x in enumerate(vin)): return vin[0].vin[0]
     if uop == UOps.GEP and vin[0].uop == UOps.CONST: return self.const(vin[0].arg, dtype)
     if uop == UOps.ALU:
       # rewrites. NOTE: the rewritten NEG op is still around...
@@ -409,10 +408,16 @@ class Linearizer(OptimizedKernel):
     if cachable: self.saved_exprs[key] = self.uops[-1]
     return self.uops[-1]
 
+  
+  def parse_cast(self, uop: UOp, dtype:DType, bitcast:bool) -> UOp:
+    if isinstance(dtype, ImageDType): return uop # TODO: imagef and imageh casted to fp32 and fp16?
+    return self.uop(UOps.CAST, dtype, (uop,), (dtype,bitcast))
+
   def ast_parse(self, x, acc, offs, loaded_buffers, do_reduce=False) -> List[UOp]:
     if x.__class__ is not LazyOp: return loaded_buffers[x]    # for LOCAL_BUFFER
     if x.op in BufferOps: return loaded_buffers[x.arg]
-    if x.op in [UnaryOps.NOOP, UnaryOps.CAST]: return self.ast_parse(x.src[0], acc, offs, loaded_buffers)  # cast isn't an ALU op
+    if x.op == UnaryOps.NOOP: return self.ast_parse(x.src[0], acc, offs, loaded_buffers)
+    if x.op == UnaryOps.CAST: return [self.parse_cast(val, *x.arg) for val in self.ast_parse(x.src[0], acc, offs, loaded_buffers)]
     if x.op in ReduceOps and not do_reduce:
       assert offs is None, "not available if we aren't doing reduce"
       return acc
