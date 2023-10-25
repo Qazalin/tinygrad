@@ -398,7 +398,7 @@ class Linearizer(OptimizedKernel):
     return self.uops[-1]
 
   def parse_cast(self, uop: UOp, dtype:DType, bitcast:bool) -> UOp:
-    if isinstance(dtype, ImageDType): dtype = dtypes.float16 if dtype.name == "imageh" else dtypes.float32
+    if isinstance(dtype, ImageDType): return uop
     return self.uop(UOps.CAST, dtype, (uop,), (dtype,bitcast))
 
   def ast_parse(self, x, acc, offs, loaded_buffers, do_reduce=False) -> List[UOp]:
