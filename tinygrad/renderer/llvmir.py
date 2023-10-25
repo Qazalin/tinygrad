@@ -163,10 +163,19 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
     if uop == UOps.ALU:
       alu_vars = [lvars[x] for x in vin]
       if args in BinaryOps and alu_vars[0].type != alu_vars[1].type: alu_vars[1] = cast(bb, alu_vars[1], llvm_dtype_to_dtype[alu_vars[1].type], llvm_dtype_to_dtype[alu_vars[0].type])
-      # elif args in TernaryOps: TODO x: cond, y: true, z: false, ensure y.type == z.type, x.type == bool
+      elif args in TernaryOps: 
+        # TODO x: cond, y: true, z: false, ensure y.type == z.type, x.type == bool
+        lhs = alu_vars[1]
+        rhs = alu_vars[2]
+        if lhs.type != rhs.type:
+          alu_vars[1] = cast(bb, alu_vars[1], llvm_dtype_to_dtype[alu_vars[1].type], dtypes.float32)
+          alu_vars[2] = cast(bb, alu_vars[2], llvm_dtype_to_dtype[alu_vars[2].type], dtypes.float32)
+
       lvars[u] = code_for_op[args](bb[-1], *alu_vars)
     if uop == UOps.CAST:
-      lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtype)
+      # HACK
+      if dtype != dtypes.bool: lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtype)
+      else: lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtypes.float32)
 
   bb[-1].ret_void()
   return str(module), {"binary":False}
