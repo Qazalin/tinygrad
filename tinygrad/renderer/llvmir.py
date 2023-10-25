@@ -162,9 +162,11 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
       vars = [lvars[x] for x in vin]
       if args in BinaryOps and vars[0].type != vars[1].type:
         vars[1] = cast(bb, vars[1], llvm_dtype_to_dtype[vars[1].type], llvm_dtype_to_dtype[vars[0].type])
+      """
       elif args in TernaryOps:
         if vars[0].type != vars[1].type: vars[1] = cast(bb, vars[1], llvm_dtype_to_dtype[vars[1].type], llvm_dtype_to_dtype[vars[0].type])
         if vars[0].type != vars[2].type: vars[2] = cast(bb, vars[2], llvm_dtype_to_dtype[vars[2].type], llvm_dtype_to_dtype[vars[0].type])
+      """
       lvars[u] = code_for_op[args](bb[-1], *vars)
     if uop == UOps.CAST:
       lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtype)
