@@ -405,11 +405,8 @@ class Linearizer(OptimizedKernel):
   def ast_parse(self, x, acc, offs, loaded_buffers, do_reduce=False) -> List[UOp]:
     if x.__class__ is not LazyOp: return loaded_buffers[x]    # for LOCAL_BUFFER
     if x.op in BufferOps: return loaded_buffers[x.arg]
-    if getenv("CAST_V2") != "0":
-      if x.op == UnaryOps.NOOP: return self.ast_parse(x.src[0], acc, offs, loaded_buffers)
-      if x.op == UnaryOps.CAST: return [self.parse_cast(val, *x.arg) for val in self.ast_parse(x.src[0], acc, offs, loaded_buffers)]
-    else:
-     if x.op in [UnaryOps.NOOP, UnaryOps.CAST]: return self.ast_parse(x.src[0], acc, offs, loaded_buffers)  # cast isn't an ALU op 
+    if x.op == UnaryOps.NOOP: return self.ast_parse(x.src[0], acc, offs, loaded_buffers)
+    if x.op == UnaryOps.CAST: return [self.parse_cast(val, *x.arg) for val in self.ast_parse(x.src[0], acc, offs, loaded_buffers)]
     if x.op in ReduceOps and not do_reduce:
       assert offs is None, "not available if we aren't doing reduce"
       return acc
