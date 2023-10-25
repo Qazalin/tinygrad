@@ -16,7 +16,7 @@ def Add(input: Tensor, other: Tensor, broadcast=None): return input + other if i
 def Sub(input: Union[Tensor, Any], other: Tensor): return input - other # some test has input as int
 def Mul(input: Tensor, other: Tensor): return (input * other) if input.dtype == dtypes.float else (input * other).cast(input.dtype)
 # in openpilot, due to SHUFFLE_PAD_OPS issues, we are spending an extra kernel
-def Div(input: Tensor, other: Tensor): return input / other if input.dtype == dtypes.float or isinstance(input.dtype, ImageDType) else input.div(other).floor() # TODO what about imageh
+def Div(input: Tensor, other: Tensor): return input / other if input.dtype == dtypes.float or (isinstance(input.dtype, ImageDType) and input.dtype.name == "imagef") else input.div(other).floor()
 def Pow(input: Tensor, other: Tensor): return (input.float() ** other.float()).cast(input.dtype)
 def Reciprocal(input: Tensor): return input.reciprocal()
 def Sqrt(input: Tensor): return input.sqrt()
