@@ -28,6 +28,8 @@ dtype_to_llvm_dtype = {dtypes.float64:ir.DoubleType(), dtypes.float16:ir.HalfTyp
 llvm_dtype_to_dtype = {v:k for k,v in dtype_to_llvm_dtype.items()}
 
 def cast(bb, val, input_type, output_type):
+  if input_type == dtypes._arg_int32: input_type = dtypes.int32
+  if output_type == dtypes._arg_int32: output_type = dtypes.int32
   if input_type == output_type: return val
   if isinstance(input_type, PtrDType): input_type = DType(input_type.priority, input_type.itemsize, input_type.name, input_type.np, input_type.sz)
 
@@ -156,18 +158,13 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
       while backward.uop == UOps.PHI: backward = backward.vin[0]
       lvars[backward] = lvars[u]
     if uop == UOps.STORE:
-      element = cast(bb, lvars[vin[2]], vin[2].dtype, vin[0].dtype)
+      element = cast(bb, lvars[vin[2]], llvm_dtype_to_dtype[lvars[vin[2]].type], vin[0].dtype)
       bb[-1].store(element, bb[-1].gep(lvars[vin[0]], [lvars[vin[1]]], inbounds=True))
     if uop == UOps.ALU:
-      vars = [lvars[x] for x in vin]
-      if args in BinaryOps and vars[0].type != vars[1].type:
-        vars[1] = cast(bb, vars[1], llvm_dtype_to_dtype[vars[1].type], llvm_dtype_to_dtype[vars[0].type])
-      """
-      elif args in TernaryOps:
-        if vars[0].type != vars[1].type: vars[1] = cast(bb, vars[1], llvm_dtype_to_dtype[vars[1].type], llvm_dtype_to_dtype[vars[0].type])
-        if vars[0].type != vars[2].type: vars[2] = cast(bb, vars[2], llvm_dtype_to_dtype[vars[2].type], llvm_dtype_to_dtype[vars[0].type])
-      """
-      lvars[u] = code_for_op[args](bb[-1], *vars)
+      alu_vars = [lvars[x] for x in vin]
+      if args in BinaryOps and alu_vars[0].type != alu_vars[1].type: alu_vars[1] = cast(bb, alu_vars[1], llvm_dtype_to_dtype[alu_vars[1].type], llvm_dtype_to_dtype[alu_vars[0].type])
+      # elif args in TernaryOps: TODO x: cond, y: true, z: false, ensure y.type == z.type, x.type == bool
+      lvars[u] = code_for_op[args](bb[-1], *alu_vars)
     if uop == UOps.CAST:
       lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtype)
 
