@@ -173,7 +173,7 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
           alu_vars[2] = cast(bb, alu_vars[2], llvm_dtype_to_dtype[alu_vars[2].type], dtypes.float32)
       lvars[u] = code_for_op[args](bb[-1], *alu_vars)
     if uop == UOps.CAST:
-      lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtypes.float32)
+      lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtype)
 
   bb[-1].ret_void()
   return str(module), {"binary":False}
