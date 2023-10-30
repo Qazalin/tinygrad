@@ -28,6 +28,7 @@ dtype_to_llvm_dtype = {dtypes.float64:ir.DoubleType(), dtypes.float16:ir.HalfTyp
 llvm_dtype_to_dtype = {v:k for k,v in dtype_to_llvm_dtype.items()}
 
 def cast(bb, val, input_type, output_type):
+  print("CAST", input_type, output_type)
   if input_type == dtypes._arg_int32: input_type = dtypes.int32
   if output_type == dtypes._arg_int32: output_type = dtypes.int32
   if input_type == output_type: return val
@@ -64,7 +65,7 @@ def cast(bb, val, input_type, output_type):
     return val
 
   if input_type == dtypes.float16:
-    if output_type == dtypes.bool: val = bb[-1].fcmp_ordered("!=", val, ir.Constant(ir.HalfType(), 0))
+    #if output_type == dtypes.bool: val = bb[-1].fcmp_ordered("!=", val, ir.Constant(ir.HalfType(), 0))
     if dtypes.is_int(output_type): val = bb[-1].fptoui(val, dtype_to_llvm_dtype[output_type]) if dtypes.is_unsigned(output_type) else bb[-1].fptosi(val, dtype_to_llvm_dtype[output_type])
     elif output_type == dtypes.float64: val = bb[-1].fpext(val, ir.DoubleType())
     else: val = bb[-1].fptrunc(val, dtype_to_llvm_dtype[output_type])
