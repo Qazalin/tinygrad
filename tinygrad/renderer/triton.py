@@ -3,7 +3,6 @@ from collections import defaultdict
 from tinygrad.ops import UnaryOps, BinaryOps, TernaryOps, Op
 from tinygrad.helpers import DType, dtypes, ImageDType, DEBUG, getenv
 from tinygrad.codegen.linearizer import  UOp, UOps
-from triton.compiler import compile as triton_compile  # type: ignore
 import linecache
 import math
 import re
@@ -108,7 +107,9 @@ def uops_to_triton(function_name:str, uops:List[UOp]):
         kk(f"{args[1]} = tl.arange({0}, {next_power_of_2(args[2])})")
         local_size.append(args[2])
       r[u] = args[1]
-    elif uop == UOps.CAST and dtype is not None: r[u] = render_cast(r[vin[0]], dtype)
+    elif uop == UOps.CAST and dtype is not None:
+      print("cast", dtype)
+      r[u] = render_cast(r[vin[0]], dtype)
     else: raise NotImplementedError(f"unimplemented: {uop}")
 
   prg = f"import triton\nimport triton.language as tl\ntl.core.TRITON_MAX_TENSOR_NUMEL = float('inf')\n@triton.jit\ndef {function_name}("+','.join(f"{buf[0]}" for buf in bufs)+"):\n"
@@ -119,12 +120,12 @@ def uops_to_triton(function_name:str, uops:List[UOp]):
   for x in local_size: acc_local_size *= next_power_of_2(x)
   local_size = [acc_local_size] + [1] * (len(local_size) - 1)
 
-  if DEBUG >=4: print(prg)
+  return prg
   getlines = linecache.getlines
   linecache.getlines = lambda filename, module_globals=None: prg.splitlines(keepends=True) if "<triton>" == filename else getlines(filename, module_globals)
   exec(compile(prg, "<triton>", "exec"), globals()) # pylint: disable=W0122\
-  compiled = triton_compile(globals()[function_name], signature=",".join(signatures), device_type="cuda", debug=False, cc=(35 if getenv("CUDACPU", 0) else None))
-  prg = remove_single_scalar_curly_braces(compiled.asm["ptx"].split(".file")[0].split(".visible .func")[0])
-  max_local_size =  [int(x) for x in prg.split(".maxntid ")[1].split("\n")[0].split(", ")]
-  for i in range(len(local_size)): local_size[i] = min(local_size[i], max_local_size[i])
-  return prg, {"binary":True, "shared":compiled.metadata["shared"], "local_size_override":local_size +  [1]*(3-len(local_size))}
+  #compiled = triton_compile(globals()[function_name], signature=",".join(signatures), device_type="cuda", debug=False, cc=(35 if getenv("CUDACPU", 0) else None))
+  #prg = remove_single_scalar_curly_braces(compiled.asm["ptx"].split(".file")[0].split(".visible .func")[0])
+  #max_local_size =  [int(x) for x in prg.split(".maxntid ")[1].split("\n")[0].split(", ")]
+  #for i in range(len(local_size)): local_size[i] = min(local_size[i], max_local_size[i])
+  #return prg, {"binary":True, "shared":compiled.metadata["shared"], "local_size_override":local_size +  [1]*(3-len(local_size))}
