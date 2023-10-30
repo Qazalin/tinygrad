@@ -1,3 +1,4 @@
+print("CUDA PROG")
 import subprocess, time, re, hashlib, tempfile
 from pathlib import Path
 from typing import Optional, List, Any, Tuple
@@ -90,6 +91,7 @@ class CUDAGraph(GraphBatchExecutor):
 
 class CUDAProgram:
   def __init__(self, name:str, prg:str, binary=False, shared = 0, local_size_override=None):
+    print(prg)
     if not binary:
       try: prg = cuda_compile(prg, target="ptx", no_extern_c=True, options=['-Wno-deprecated-gpu-targets']).decode('utf-8')
       except cuda.CompileError as e:
@@ -116,9 +118,6 @@ class CUDAProgram:
       end.synchronize()
       return start.time_till(end)*1e-3
 
-if True:
-  from tinygrad.renderer.triton import uops_to_triton
-  TritonRenderer = uops_to_triton
-  CUDABuffer = Compiled(RawCUDABuffer, LinearizerOptions(supports_float4=False, supports_float4_alu=False, global_max = [65535, 65535, 2147483647], local_max = [64, 1024, 1024], has_shared=False), TritonRenderer, CUDAProgram, cuda.Context.synchronize)
-else:
-  CUDABuffer = Compiled(RawCUDABuffer, LinearizerOptions(supports_float4=False if getenv("PTX") else True, supports_float4_alu=False, global_max = [65535, 65535, 2147483647], local_max = [64, 1024, 1024]), CUDARenderer, CUDAProgram, cuda.Context.synchronize, CUDAGraph)
+from tinygrad.renderer.triton import uops_to_triton
+TritonRenderer = uops_to_triton
+CUDABuffer = Compiled(RawCUDABuffer, LinearizerOptions(supports_float4=False, supports_float4_alu=False, global_max = [65535, 65535, 2147483647], local_max = [64, 1024, 1024], has_shared=False), TritonRenderer, CUDAProgram, cuda.Context.synchronize)
