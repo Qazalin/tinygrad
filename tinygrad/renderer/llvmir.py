@@ -71,16 +71,16 @@ def cast(bb, val, input_type, output_type):
     return val
 
   if dtypes.is_int(input_type) or input_type == dtypes.bool:
-    if output_type == dtypes.bool: val = bb[-1].icmp_signed('!=', val, ir.Constant(val.type, 0))
     unsigned_or_bool = dtypes.is_unsigned(input_type) or input_type == dtypes.bool
     if output_type == dtypes.float32: val = bb[-1].uitofp(val, ir.FloatType()) if unsigned_or_bool else bb[-1].sitofp(val, ir.FloatType())
     elif output_type == dtypes.float16:
       val = bb[-1].uitofp(val, ir.FloatType()) if unsigned_or_bool else bb[-1].sitofp(val, ir.FloatType())
       val = bb[-1].fptrunc(val, ir.HalfType())
     elif output_type == dtypes.float64: val = bb[-1].uitofp(val, ir.DoubleType()) if unsigned_or_bool else bb[-1].sitofp(val, ir.DoubleType())
-    elif dtypes.is_int(output_type) or output_type == dtypes.bool:
+    elif dtypes.is_int(output_type):
       if input_type.itemsize > output_type.itemsize: val = bb[-1].trunc(val, dtype_to_llvm_dtype[output_type])
       else: val = bb[-1].zext(val, dtype_to_llvm_dtype[output_type]) if unsigned_or_bool else bb[-1].sext(val, dtype_to_llvm_dtype[output_type])
+    elif output_type == dtypes.bool: val = bb[-1].icmp_signed('!=', val, ir.Constant(val.type, 0))
     return val
 
   raise NotImplementedError(f"cast from {input_type} -> {output_type} not implemented")
