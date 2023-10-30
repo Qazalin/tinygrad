@@ -64,12 +64,14 @@ def cast(bb, val, input_type, output_type):
     return val
 
   if input_type == dtypes.float16:
-    if dtypes.is_int(output_type) or output_type == dtypes.bool: val = bb[-1].fptoui(val, dtype_to_llvm_dtype[output_type]) if dtypes.is_unsigned(output_type) or output_type == dtypes.bool else bb[-1].fptosi(val, dtype_to_llvm_dtype[output_type])
+    if output_type == dtypes.bool: val = bb[-1].fcmp_ordered("!=", val, ir.Constant(ir.HalfType(), 0))
+    if dtypes.is_int(output_type): val = bb[-1].fptoui(val, dtype_to_llvm_dtype[output_type]) if dtypes.is_unsigned(output_type) else bb[-1].fptosi(val, dtype_to_llvm_dtype[output_type])
     elif output_type == dtypes.float64: val = bb[-1].fpext(val, ir.DoubleType())
     else: val = bb[-1].fptrunc(val, dtype_to_llvm_dtype[output_type])
     return val
 
   if dtypes.is_int(input_type) or input_type == dtypes.bool:
+    if output_type == dtypes.bool: val = bb[-1].icmp_signed('!=', val, ir.Constant(val.type, 0))
     unsigned_or_bool = dtypes.is_unsigned(input_type) or input_type == dtypes.bool
     if output_type == dtypes.float32: val = bb[-1].uitofp(val, ir.FloatType()) if unsigned_or_bool else bb[-1].sitofp(val, ir.FloatType())
     elif output_type == dtypes.float16:
@@ -173,7 +175,7 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
           alu_vars[2] = cast(bb, alu_vars[2], llvm_dtype_to_dtype[alu_vars[2].type], dtypes.float32)
       lvars[u] = code_for_op[args](bb[-1], *alu_vars)
     if uop == UOps.CAST:
-      lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtypes.float32)
+      lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtype)
 
   bb[-1].ret_void()
   return str(module), {"binary":False}
