@@ -1,0 +1,918 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.6, pytest-7.4.2, pluggy-1.3.0
+rootdir: /Users/qazal/code/tinygrad/tinygrad
+configfile: pytest.ini
+plugins: flakefinder-1.1.0, xdist-3.3.1
+collected 1 item
+
+test/test_ops.py #include <metal_stdlib>
+using namespace metal;
+kernel void r_256_2_2_4_2_8_8_2_2_2(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 256 */
+  int lidx1 = lid.z; /* 2 */
+  int lidx2 = lid.y; /* 2 */
+  int lidx3 = lid.x; /* 8 */
+  float2 acc0 = float2(0.0f,0.0f);
+  float2 acc1 = float2(0.0f,0.0f);
+  float2 acc2 = float2(0.0f,0.0f);
+  float2 acc3 = float2(0.0f,0.0f);
+  for (int ridx0 = 0; ridx0 < 8; ++ridx0) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float2 val0 = (float2)(*((device float2*)(data1+(gidx0*1024)+(lidx1*256)+((lidx3/2)*64)+(ridx0*8)+((lidx3%2)*2)+(lidx2*4))));
+    float2 val1 = (float2)(*((device float2*)(data1+(gidx0*1024)+(lidx1*256)+((lidx3/2)*64)+(ridx0*8)+((lidx3%2)*2)+(lidx2*4)+512)));
+    float val2 = *(data2+(gidx0*1024)+(lidx2*256)+((lidx3%2)*128)+(ridx0*8)+(lidx3/2)+(lidx1*4));
+    float val3 = *(data2+(gidx0*1024)+(lidx2*256)+((lidx3%2)*128)+(ridx0*8)+(lidx3/2)+(lidx1*4)+64);
+    float val4 = *(data2+(gidx0*1024)+(lidx2*256)+((lidx3%2)*128)+(ridx0*8)+(lidx3/2)+(lidx1*4)+512);
+    float val5 = *(data2+(gidx0*1024)+(lidx2*256)+((lidx3%2)*128)+(ridx0*8)+(lidx3/2)+(lidx1*4)+576);
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val0).x; a.thread_elements()[1] = (val0).y;
+    b.thread_elements()[0] = val2; b.thread_elements()[1] = val3;
+    c.thread_elements()[0] = (acc0).x; c.thread_elements()[1] = (acc0).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc0).x = c.thread_elements()[0]; (acc0).y = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val1).x; a.thread_elements()[1] = (val1).y;
+    b.thread_elements()[0] = val2; b.thread_elements()[1] = val3;
+    c.thread_elements()[0] = (acc1).x; c.thread_elements()[1] = (acc1).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc1).x = c.thread_elements()[0]; (acc1).y = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val0).x; a.thread_elements()[1] = (val0).y;
+    b.thread_elements()[0] = val4; b.thread_elements()[1] = val5;
+    c.thread_elements()[0] = (acc2).x; c.thread_elements()[1] = (acc2).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc2).x = c.thread_elements()[0]; (acc2).y = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val1).x; a.thread_elements()[1] = (val1).y;
+    b.thread_elements()[0] = val4; b.thread_elements()[1] = val5;
+    c.thread_elements()[0] = (acc3).x; c.thread_elements()[1] = (acc3).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc3).x = c.thread_elements()[0]; (acc3).y = c.thread_elements()[1]; }
+  }
+  *((device float2*)(data0+(gidx0*256)+(lidx1*64)+(lidx2*4)+((lidx3/2)*16)+((lidx3%2)*2))) = (float2)float2(((acc0).x*0.125f),((acc0).y*0.125f));
+  *((device float2*)(data0+(gidx0*256)+(lidx1*64)+(lidx2*4)+((lidx3/2)*16)+((lidx3%2)*2)+128)) = (float2)float2(((acc1).x*0.125f),((acc1).y*0.125f));
+  *((device float2*)(data0+(gidx0*256)+(lidx1*64)+(lidx2*4)+((lidx3/2)*16)+((lidx3%2)*2)+8)) = (float2)float2(((acc2).x*0.125f),((acc2).y*0.125f));
+  *((device float2*)(data0+(gidx0*256)+(lidx1*64)+(lidx2*4)+((lidx3/2)*16)+((lidx3%2)*2)+136)) = (float2)float2(((acc3).x*0.125f),((acc3).y*0.125f));
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void r_128_32_16(device float* data0, const device float* data1, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 128 */
+  int lidx1 = lid.x; /* 32 */
+  float acc0 = -INFINITY;
+  float val0 = *(data1+(gidx0*512)+(lidx1*16));
+  float val1 = *(data1+(gidx0*512)+(lidx1*16)+1);
+  float val2 = *(data1+(gidx0*512)+(lidx1*16)+2);
+  float val3 = *(data1+(gidx0*512)+(lidx1*16)+3);
+  float val4 = *(data1+(gidx0*512)+(lidx1*16)+4);
+  float val5 = *(data1+(gidx0*512)+(lidx1*16)+5);
+  float val6 = *(data1+(gidx0*512)+(lidx1*16)+6);
+  float val7 = *(data1+(gidx0*512)+(lidx1*16)+7);
+  float val8 = *(data1+(gidx0*512)+(lidx1*16)+8);
+  float val9 = *(data1+(gidx0*512)+(lidx1*16)+9);
+  float val10 = *(data1+(gidx0*512)+(lidx1*16)+10);
+  float val11 = *(data1+(gidx0*512)+(lidx1*16)+11);
+  float val12 = *(data1+(gidx0*512)+(lidx1*16)+12);
+  float val13 = *(data1+(gidx0*512)+(lidx1*16)+13);
+  float val14 = *(data1+(gidx0*512)+(lidx1*16)+14);
+  float val15 = *(data1+(gidx0*512)+(lidx1*16)+15);
+  acc0 = max(val0,acc0);
+  acc0 = max(val1,acc0);
+  acc0 = max(val2,acc0);
+  acc0 = max(val3,acc0);
+  acc0 = max(val4,acc0);
+  acc0 = max(val5,acc0);
+  acc0 = max(val6,acc0);
+  acc0 = max(val7,acc0);
+  acc0 = max(val8,acc0);
+  acc0 = max(val9,acc0);
+  acc0 = max(val10,acc0);
+  acc0 = max(val11,acc0);
+  acc0 = max(val12,acc0);
+  acc0 = max(val13,acc0);
+  acc0 = max(val14,acc0);
+  acc0 = max(val15,acc0);
+  *(data0+(gidx0*32)+lidx1) = acc0;
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void E_128_32_4_4(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 128 */
+  int lidx1 = lid.y; /* 32 */
+  int lidx2 = lid.x; /* 4 */
+  float4 val0 = (float4)(*((device float4*)(data1+(gidx0*512)+(lidx1*16)+(lidx2*4))));
+  float val1 = *(data2+(gidx0*32)+lidx1);
+  *((device float4*)(data0+(gidx0*512)+(lidx1*16)+(lidx2*4))) = (float4)float4(exp2((((val0).x-val1)*1.4426950408889634f)),exp2((((val0).y-val1)*1.4426950408889634f)),exp2((((val0).z-val1)*1.4426950408889634f)),exp2((((val0).w-val1)*1.4426950408889634f)));
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void r_128_32_16n1(device float* data0, const device float* data1, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 128 */
+  int lidx1 = lid.x; /* 32 */
+  float acc0 = 0.0f;
+  float val0 = *(data1+(gidx0*512)+(lidx1*16));
+  float val1 = *(data1+(gidx0*512)+(lidx1*16)+1);
+  float val2 = *(data1+(gidx0*512)+(lidx1*16)+2);
+  float val3 = *(data1+(gidx0*512)+(lidx1*16)+3);
+  float val4 = *(data1+(gidx0*512)+(lidx1*16)+4);
+  float val5 = *(data1+(gidx0*512)+(lidx1*16)+5);
+  float val6 = *(data1+(gidx0*512)+(lidx1*16)+6);
+  float val7 = *(data1+(gidx0*512)+(lidx1*16)+7);
+  float val8 = *(data1+(gidx0*512)+(lidx1*16)+8);
+  float val9 = *(data1+(gidx0*512)+(lidx1*16)+9);
+  float val10 = *(data1+(gidx0*512)+(lidx1*16)+10);
+  float val11 = *(data1+(gidx0*512)+(lidx1*16)+11);
+  float val12 = *(data1+(gidx0*512)+(lidx1*16)+12);
+  float val13 = *(data1+(gidx0*512)+(lidx1*16)+13);
+  float val14 = *(data1+(gidx0*512)+(lidx1*16)+14);
+  float val15 = *(data1+(gidx0*512)+(lidx1*16)+15);
+  acc0 = (val0+acc0);
+  acc0 = (val1+acc0);
+  acc0 = (val2+acc0);
+  acc0 = (val3+acc0);
+  acc0 = (val4+acc0);
+  acc0 = (val5+acc0);
+  acc0 = (val6+acc0);
+  acc0 = (val7+acc0);
+  acc0 = (val8+acc0);
+  acc0 = (val9+acc0);
+  acc0 = (val10+acc0);
+  acc0 = (val11+acc0);
+  acc0 = (val12+acc0);
+  acc0 = (val13+acc0);
+  acc0 = (val14+acc0);
+  acc0 = (val15+acc0);
+  *(data0+(gidx0*32)+lidx1) = acc0;
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void E_128_32_4_4n1(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 128 */
+  int lidx1 = lid.y; /* 32 */
+  int lidx2 = lid.x; /* 4 */
+  float4 val0 = (float4)(*((device float4*)(data1+(gidx0*512)+(lidx1*16)+(lidx2*4))));
+  float val1 = *(data2+(gidx0*32)+lidx1);
+  *((device float4*)(data0+(gidx0*512)+(lidx1*16)+(lidx2*4))) = (float4)float4(((val0).x/val1),((val0).y/val1),((val0).z/val1),((val0).w/val1));
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void r_256_2_2_2_4_2_2_8_2_2_4(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 256 */
+  int lidx1 = lid.z; /* 2 */
+  int lidx2 = lid.y; /* 2 */
+  int lidx3 = lid.x; /* 16 */
+  float2 acc0 = float2(0.0f,0.0f);
+  float2 acc1 = float2(0.0f,0.0f);
+  float2 acc2 = float2(0.0f,0.0f);
+  float2 acc3 = float2(0.0f,0.0f);
+  float2 acc4 = float2(0.0f,0.0f);
+  float2 acc5 = float2(0.0f,0.0f);
+  float2 acc6 = float2(0.0f,0.0f);
+  float2 acc7 = float2(0.0f,0.0f);
+  for (int ridx0 = 0; ridx0 < 2; ++ridx0) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float2 val0 = (float2)(*((device float2*)(data1+(gidx0*256)+(lidx2*64)+(((lidx3/2)%4)*16)+(ridx0*8)+((lidx3%2)*2)+((lidx3/8)*4))));
+    float2 val1 = (float2)(*((device float2*)(data1+(gidx0*256)+(lidx2*64)+(((lidx3/2)%4)*16)+(ridx0*8)+((lidx3%2)*2)+((lidx3/8)*4)+128)));
+    float2 val2 = (float2)(*((device float2*)(data2+(gidx0*1024)+(lidx1*32)+((lidx3/8)*4)+((lidx3%2)*2)+(ridx0*512)+(((lidx3/2)%4)*64)+(lidx2*256))));
+    float2 val3 = (float2)(*((device float2*)(data2+(gidx0*1024)+(lidx1*32)+((lidx3/8)*4)+((lidx3%2)*2)+(ridx0*512)+(((lidx3/2)%4)*64)+(lidx2*256)+8)));
+    float2 val4 = (float2)(*((device float2*)(data2+(gidx0*1024)+(lidx1*32)+((lidx3/8)*4)+((lidx3%2)*2)+(ridx0*512)+(((lidx3/2)%4)*64)+(lidx2*256)+16)));
+    float2 val5 = (float2)(*((device float2*)(data2+(gidx0*1024)+(lidx1*32)+((lidx3/8)*4)+((lidx3%2)*2)+(ridx0*512)+(((lidx3/2)%4)*64)+(lidx2*256)+24)));
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val0).x; a.thread_elements()[1] = (val0).y;
+    b.thread_elements()[0] = (val2).x; b.thread_elements()[1] = (val2).y;
+    c.thread_elements()[0] = (acc0).x; c.thread_elements()[1] = (acc0).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc0).x = c.thread_elements()[0]; (acc0).y = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val1).x; a.thread_elements()[1] = (val1).y;
+    b.thread_elements()[0] = (val2).x; b.thread_elements()[1] = (val2).y;
+    c.thread_elements()[0] = (acc1).x; c.thread_elements()[1] = (acc1).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc1).x = c.thread_elements()[0]; (acc1).y = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val0).x; a.thread_elements()[1] = (val0).y;
+    b.thread_elements()[0] = (val3).x; b.thread_elements()[1] = (val3).y;
+    c.thread_elements()[0] = (acc2).x; c.thread_elements()[1] = (acc2).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc2).x = c.thread_elements()[0]; (acc2).y = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val1).x; a.thread_elements()[1] = (val1).y;
+    b.thread_elements()[0] = (val3).x; b.thread_elements()[1] = (val3).y;
+    c.thread_elements()[0] = (acc3).x; c.thread_elements()[1] = (acc3).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc3).x = c.thread_elements()[0]; (acc3).y = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val0).x; a.thread_elements()[1] = (val0).y;
+    b.thread_elements()[0] = (val4).x; b.thread_elements()[1] = (val4).y;
+    c.thread_elements()[0] = (acc4).x; c.thread_elements()[1] = (acc4).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc4).x = c.thread_elements()[0]; (acc4).y = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val1).x; a.thread_elements()[1] = (val1).y;
+    b.thread_elements()[0] = (val4).x; b.thread_elements()[1] = (val4).y;
+    c.thread_elements()[0] = (acc5).x; c.thread_elements()[1] = (acc5).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc5).x = c.thread_elements()[0]; (acc5).y = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val0).x; a.thread_elements()[1] = (val0).y;
+    b.thread_elements()[0] = (val5).x; b.thread_elements()[1] = (val5).y;
+    c.thread_elements()[0] = (acc6).x; c.thread_elements()[1] = (acc6).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc6).x = c.thread_elements()[0]; (acc6).y = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val1).x; a.thread_elements()[1] = (val1).y;
+    b.thread_elements()[0] = (val5).x; b.thread_elements()[1] = (val5).y;
+    c.thread_elements()[0] = (acc7).x; c.thread_elements()[1] = (acc7).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc7).x = c.thread_elements()[0]; (acc7).y = c.thread_elements()[1]; }
+  }
+  *((device float2*)(data0+(gidx0*1024)+(lidx1*32)+(lidx2*256)+((lidx3/8)*4)+(((lidx3/2)%4)*64)+((lidx3%2)*2))) = (float2)acc0;
+  *((device float2*)(data0+(gidx0*1024)+(lidx1*32)+(lidx2*256)+((lidx3/8)*4)+(((lidx3/2)%4)*64)+((lidx3%2)*2)+512)) = (float2)acc1;
+  *((device float2*)(data0+(gidx0*1024)+(lidx1*32)+(lidx2*256)+((lidx3/8)*4)+(((lidx3/2)%4)*64)+((lidx3%2)*2)+8)) = (float2)acc2;
+  *((device float2*)(data0+(gidx0*1024)+(lidx1*32)+(lidx2*256)+((lidx3/8)*4)+(((lidx3/2)%4)*64)+((lidx3%2)*2)+520)) = (float2)acc3;
+  *((device float2*)(data0+(gidx0*1024)+(lidx1*32)+(lidx2*256)+((lidx3/8)*4)+(((lidx3/2)%4)*64)+((lidx3%2)*2)+16)) = (float2)acc4;
+  *((device float2*)(data0+(gidx0*1024)+(lidx1*32)+(lidx2*256)+((lidx3/8)*4)+(((lidx3/2)%4)*64)+((lidx3%2)*2)+528)) = (float2)acc5;
+  *((device float2*)(data0+(gidx0*1024)+(lidx1*32)+(lidx2*256)+((lidx3/8)*4)+(((lidx3/2)%4)*64)+((lidx3%2)*2)+24)) = (float2)acc6;
+  *((device float2*)(data0+(gidx0*1024)+(lidx1*32)+(lidx2*256)+((lidx3/8)*4)+(((lidx3/2)%4)*64)+((lidx3%2)*2)+536)) = (float2)acc7;
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void E_(device float* data0, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  *(data0+0) = 3.814697265625e-06f;
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void E_2048_32_4(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 2048 */
+  int lidx1 = lid.x; /* 32 */
+  float4 val0 = (float4)(*((device float4*)(data1+(gidx0*128)+(lidx1*4))));
+  float val1 = *(data2+0);
+  float alu0 = (((val0).x+1.0f)*val1);
+  float alu1 = (((val0).y+1.0f)*val1);
+  float alu2 = (((val0).z+1.0f)*val1);
+  float alu3 = (((val0).w+1.0f)*val1);
+  *((device float4*)(data0+(gidx0*128)+(lidx1*4))) = (float4)float4((alu0+alu0),(alu1+alu1),(alu2+alu2),(alu3+alu3));
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void r_256_2_2_4_2_8_8_2_2_2n1(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 256 */
+  int lidx1 = lid.z; /* 2 */
+  int lidx2 = lid.y; /* 2 */
+  int lidx3 = lid.x; /* 8 */
+  float acc0 = 0.0f;
+  float acc1 = 0.0f;
+  float acc2 = 0.0f;
+  float acc3 = 0.0f;
+  float acc4 = 0.0f;
+  float acc5 = 0.0f;
+  float acc6 = 0.0f;
+  float acc7 = 0.0f;
+  for (int ridx0 = 0; ridx0 < 8; ++ridx0) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float2 val0 = (float2)(*((device float2*)(data1+(gidx0*1024)+(lidx1*256)+((lidx3/2)*64)+(ridx0*8)+((lidx3%2)*2)+(lidx2*4))));
+    float2 val1 = (float2)(*((device float2*)(data1+(gidx0*1024)+(lidx1*256)+((lidx3/2)*64)+(ridx0*8)+((lidx3%2)*2)+(lidx2*4)+512)));
+    float val2 = *(data2+(gidx0*1024)+(lidx2*256)+((lidx3%2)*128)+(ridx0*8)+(lidx3/2)+(lidx1*4));
+    float val3 = *(data2+(gidx0*1024)+(lidx2*256)+((lidx3%2)*128)+(ridx0*8)+(lidx3/2)+(lidx1*4)+64);
+    float val4 = *(data2+(gidx0*1024)+(lidx2*256)+((lidx3%2)*128)+(ridx0*8)+(lidx3/2)+(lidx1*4)+512);
+    float val5 = *(data2+(gidx0*1024)+(lidx2*256)+((lidx3%2)*128)+(ridx0*8)+(lidx3/2)+(lidx1*4)+576);
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val0).x; a.thread_elements()[1] = (val0).y;
+    b.thread_elements()[0] = val2; b.thread_elements()[1] = val3;
+    c.thread_elements()[0] = acc0; c.thread_elements()[1] = acc1;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc0 = c.thread_elements()[0]; acc1 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val1).x; a.thread_elements()[1] = (val1).y;
+    b.thread_elements()[0] = val2; b.thread_elements()[1] = val3;
+    c.thread_elements()[0] = acc2; c.thread_elements()[1] = acc3;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc2 = c.thread_elements()[0]; acc3 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val0).x; a.thread_elements()[1] = (val0).y;
+    b.thread_elements()[0] = val4; b.thread_elements()[1] = val5;
+    c.thread_elements()[0] = acc4; c.thread_elements()[1] = acc5;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc4 = c.thread_elements()[0]; acc5 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val1).x; a.thread_elements()[1] = (val1).y;
+    b.thread_elements()[0] = val4; b.thread_elements()[1] = val5;
+    c.thread_elements()[0] = acc6; c.thread_elements()[1] = acc7;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc6 = c.thread_elements()[0]; acc7 = c.thread_elements()[1]; }
+  }
+  *(data0+(gidx0*256)+(lidx1*4)+(lidx2*64)+(lidx3/2)+((lidx3%2)*32)) = acc0;
+  *(data0+(gidx0*256)+(lidx1*4)+(lidx2*64)+(lidx3/2)+((lidx3%2)*32)+16) = acc1;
+  *(data0+(gidx0*256)+(lidx1*4)+(lidx2*64)+(lidx3/2)+((lidx3%2)*32)+8) = acc2;
+  *(data0+(gidx0*256)+(lidx1*4)+(lidx2*64)+(lidx3/2)+((lidx3%2)*32)+24) = acc3;
+  *(data0+(gidx0*256)+(lidx1*4)+(lidx2*64)+(lidx3/2)+((lidx3%2)*32)+128) = acc4;
+  *(data0+(gidx0*256)+(lidx1*4)+(lidx2*64)+(lidx3/2)+((lidx3%2)*32)+144) = acc5;
+  *(data0+(gidx0*256)+(lidx1*4)+(lidx2*64)+(lidx3/2)+((lidx3%2)*32)+136) = acc6;
+  *(data0+(gidx0*256)+(lidx1*4)+(lidx2*64)+(lidx3/2)+((lidx3%2)*32)+152) = acc7;
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void r_128_32_16n2(device float* data0, const device float* data1, const device float* data2, const device float* data3, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 128 */
+  int lidx1 = lid.x; /* 32 */
+  float acc0 = 0.0f;
+  float val0 = *(data1+(gidx0*512)+(lidx1*16));
+  float val1 = *(data1+(gidx0*512)+(lidx1*16)+1);
+  float val2 = *(data1+(gidx0*512)+(lidx1*16)+2);
+  float val3 = *(data1+(gidx0*512)+(lidx1*16)+3);
+  float val4 = *(data1+(gidx0*512)+(lidx1*16)+4);
+  float val5 = *(data1+(gidx0*512)+(lidx1*16)+5);
+  float val6 = *(data1+(gidx0*512)+(lidx1*16)+6);
+  float val7 = *(data1+(gidx0*512)+(lidx1*16)+7);
+  float val8 = *(data1+(gidx0*512)+(lidx1*16)+8);
+  float val9 = *(data1+(gidx0*512)+(lidx1*16)+9);
+  float val10 = *(data1+(gidx0*512)+(lidx1*16)+10);
+  float val11 = *(data1+(gidx0*512)+(lidx1*16)+11);
+  float val12 = *(data1+(gidx0*512)+(lidx1*16)+12);
+  float val13 = *(data1+(gidx0*512)+(lidx1*16)+13);
+  float val14 = *(data1+(gidx0*512)+(lidx1*16)+14);
+  float val15 = *(data1+(gidx0*512)+(lidx1*16)+15);
+  float val16 = *(data2+(gidx0*512)+(lidx1*16));
+  float val17 = *(data2+(gidx0*512)+(lidx1*16)+1);
+  float val18 = *(data2+(gidx0*512)+(lidx1*16)+2);
+  float val19 = *(data2+(gidx0*512)+(lidx1*16)+3);
+  float val20 = *(data2+(gidx0*512)+(lidx1*16)+4);
+  float val21 = *(data2+(gidx0*512)+(lidx1*16)+5);
+  float val22 = *(data2+(gidx0*512)+(lidx1*16)+6);
+  float val23 = *(data2+(gidx0*512)+(lidx1*16)+7);
+  float val24 = *(data2+(gidx0*512)+(lidx1*16)+8);
+  float val25 = *(data2+(gidx0*512)+(lidx1*16)+9);
+  float val26 = *(data2+(gidx0*512)+(lidx1*16)+10);
+  float val27 = *(data2+(gidx0*512)+(lidx1*16)+11);
+  float val28 = *(data2+(gidx0*512)+(lidx1*16)+12);
+  float val29 = *(data2+(gidx0*512)+(lidx1*16)+13);
+  float val30 = *(data2+(gidx0*512)+(lidx1*16)+14);
+  float val31 = *(data2+(gidx0*512)+(lidx1*16)+15);
+  float val32 = *(data3+(gidx0*32)+lidx1);
+  float alu0 = (val32*val32);
+  acc0 = ((((-val0)*val16)/alu0)+acc0);
+  acc0 = ((((-val1)*val17)/alu0)+acc0);
+  acc0 = ((((-val2)*val18)/alu0)+acc0);
+  acc0 = ((((-val3)*val19)/alu0)+acc0);
+  acc0 = ((((-val4)*val20)/alu0)+acc0);
+  acc0 = ((((-val5)*val21)/alu0)+acc0);
+  acc0 = ((((-val6)*val22)/alu0)+acc0);
+  acc0 = ((((-val7)*val23)/alu0)+acc0);
+  acc0 = ((((-val8)*val24)/alu0)+acc0);
+  acc0 = ((((-val9)*val25)/alu0)+acc0);
+  acc0 = ((((-val10)*val26)/alu0)+acc0);
+  acc0 = ((((-val11)*val27)/alu0)+acc0);
+  acc0 = ((((-val12)*val28)/alu0)+acc0);
+  acc0 = ((((-val13)*val29)/alu0)+acc0);
+  acc0 = ((((-val14)*val30)/alu0)+acc0);
+  acc0 = ((((-val15)*val31)/alu0)+acc0);
+  *(data0+(gidx0*32)+lidx1) = acc0;
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void E_128_32_4_4n2(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 128 */
+  int lidx1 = lid.y; /* 32 */
+  int lidx2 = lid.x; /* 4 */
+  float4 val0 = (float4)(*((device float4*)(data1+(gidx0*512)+(lidx1*16)+(lidx2*4))));
+  float val1 = *(data2+(gidx0*32)+lidx1);
+  *((device float4*)(data0+(gidx0*512)+(lidx1*16)+(lidx2*4))) = (float4)float4((1.0f-((val0).x<val1)),(1.0f-((val0).y<val1)),(1.0f-((val0).z<val1)),(1.0f-((val0).w<val1)));
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void r_128_32_16n3(device float* data0, const device float* data1, const device float* data2, const device float* data3, const device float* data4, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 128 */
+  int lidx1 = lid.x; /* 32 */
+  float acc0 = 0.0f;
+  float val0 = *(data1+(gidx0*512)+(lidx1*16));
+  float val1 = *(data1+(gidx0*512)+(lidx1*16)+1);
+  float val2 = *(data1+(gidx0*512)+(lidx1*16)+2);
+  float val3 = *(data1+(gidx0*512)+(lidx1*16)+3);
+  float val4 = *(data1+(gidx0*512)+(lidx1*16)+4);
+  float val5 = *(data1+(gidx0*512)+(lidx1*16)+5);
+  float val6 = *(data1+(gidx0*512)+(lidx1*16)+6);
+  float val7 = *(data1+(gidx0*512)+(lidx1*16)+7);
+  float val8 = *(data1+(gidx0*512)+(lidx1*16)+8);
+  float val9 = *(data1+(gidx0*512)+(lidx1*16)+9);
+  float val10 = *(data1+(gidx0*512)+(lidx1*16)+10);
+  float val11 = *(data1+(gidx0*512)+(lidx1*16)+11);
+  float val12 = *(data1+(gidx0*512)+(lidx1*16)+12);
+  float val13 = *(data1+(gidx0*512)+(lidx1*16)+13);
+  float val14 = *(data1+(gidx0*512)+(lidx1*16)+14);
+  float val15 = *(data1+(gidx0*512)+(lidx1*16)+15);
+  float val16 = *(data2+(gidx0*512)+(lidx1*16));
+  float val17 = *(data2+(gidx0*512)+(lidx1*16)+1);
+  float val18 = *(data2+(gidx0*512)+(lidx1*16)+2);
+  float val19 = *(data2+(gidx0*512)+(lidx1*16)+3);
+  float val20 = *(data2+(gidx0*512)+(lidx1*16)+4);
+  float val21 = *(data2+(gidx0*512)+(lidx1*16)+5);
+  float val22 = *(data2+(gidx0*512)+(lidx1*16)+6);
+  float val23 = *(data2+(gidx0*512)+(lidx1*16)+7);
+  float val24 = *(data2+(gidx0*512)+(lidx1*16)+8);
+  float val25 = *(data2+(gidx0*512)+(lidx1*16)+9);
+  float val26 = *(data2+(gidx0*512)+(lidx1*16)+10);
+  float val27 = *(data2+(gidx0*512)+(lidx1*16)+11);
+  float val28 = *(data2+(gidx0*512)+(lidx1*16)+12);
+  float val29 = *(data2+(gidx0*512)+(lidx1*16)+13);
+  float val30 = *(data2+(gidx0*512)+(lidx1*16)+14);
+  float val31 = *(data2+(gidx0*512)+(lidx1*16)+15);
+  float val32 = *(data3+(gidx0*32)+lidx1);
+  float val33 = *(data4+(gidx0*32)+lidx1);
+  acc0 = ((-(val0*((val16/val32)+val33)))+acc0);
+  acc0 = ((-(val1*((val17/val32)+val33)))+acc0);
+  acc0 = ((-(val2*((val18/val32)+val33)))+acc0);
+  acc0 = ((-(val3*((val19/val32)+val33)))+acc0);
+  acc0 = ((-(val4*((val20/val32)+val33)))+acc0);
+  acc0 = ((-(val5*((val21/val32)+val33)))+acc0);
+  acc0 = ((-(val6*((val22/val32)+val33)))+acc0);
+  acc0 = ((-(val7*((val23/val32)+val33)))+acc0);
+  acc0 = ((-(val8*((val24/val32)+val33)))+acc0);
+  acc0 = ((-(val9*((val25/val32)+val33)))+acc0);
+  acc0 = ((-(val10*((val26/val32)+val33)))+acc0);
+  acc0 = ((-(val11*((val27/val32)+val33)))+acc0);
+  acc0 = ((-(val12*((val28/val32)+val33)))+acc0);
+  acc0 = ((-(val13*((val29/val32)+val33)))+acc0);
+  acc0 = ((-(val14*((val30/val32)+val33)))+acc0);
+  acc0 = ((-(val15*((val31/val32)+val33)))+acc0);
+  *(data0+(gidx0*32)+lidx1) = acc0;
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void E_128_32_4_4n3(device float* data0, const device float* data1, const device float* data2, const device float* data3, const device float* data4, const device float* data5, const device float* data6, const device float* data7, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 128 */
+  int lidx1 = lid.y; /* 32 */
+  int lidx2 = lid.x; /* 4 */
+  float4 val0 = (float4)(*((device float4*)(data1+(gidx0*512)+(lidx1*16)+(lidx2*4))));
+  float4 val1 = (float4)(*((device float4*)(data2+(gidx0*512)+(lidx1*16)+(lidx2*4))));
+  float val2 = *(data3+(gidx0*32)+lidx1);
+  float val3 = *(data4+(gidx0*32)+lidx1);
+  float4 val4 = (float4)(*((device float4*)(data5+(gidx0*512)+(lidx1*16)+(lidx2*4))));
+  float val5 = *(data6+(gidx0*32)+lidx1);
+  float val6 = *(data7+(gidx0*32)+lidx1);
+  *((device float4*)(data0+(gidx0*512)+(lidx1*16)+(lidx2*4))) = (float4)float4((0.125f*(((val0).x*(((val1).x/val2)+val3))+(((val4).x/val5)*val6))),(0.125f*(((val0).y*(((val1).y/val2)+val3))+(((val4).y/val5)*val6))),(0.125f*(((val0).z*(((val1).z/val2)+val3))+(((val4).z/val5)*val6))),(0.125f*(((val0).w*(((val1).w/val2)+val3))+(((val4).w/val5)*val6))));
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void r_256_2_2_2_4_2_2_8_2_4_2(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.y; /* 256 */
+  int gidx1 = gid.x; /* 2 */
+  int lidx2 = lid.z; /* 2 */
+  int lidx3 = lid.y; /* 2 */
+  int lidx4 = lid.x; /* 8 */
+  float acc0 = 0.0f;
+  float acc1 = 0.0f;
+  float acc2 = 0.0f;
+  float acc3 = 0.0f;
+  float acc4 = 0.0f;
+  float acc5 = 0.0f;
+  float acc6 = 0.0f;
+  float acc7 = 0.0f;
+  float acc8 = 0.0f;
+  float acc9 = 0.0f;
+  float acc10 = 0.0f;
+  float acc11 = 0.0f;
+  float acc12 = 0.0f;
+  float acc13 = 0.0f;
+  float acc14 = 0.0f;
+  float acc15 = 0.0f;
+  for (int ridx0 = 0; ridx0 < 2; ++ridx0) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float val0 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256));
+    float val1 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+64);
+    float val2 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+8);
+    float val3 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+72);
+    float val4 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+16);
+    float val5 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+80);
+    float val6 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+24);
+    float val7 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+88);
+    float val8 = *(data2+(gidx0*256)+(lidx3*64)+((lidx4%2)*32)+(ridx0*8)+(lidx4/2)+(lidx2*4));
+    float val9 = *(data2+(gidx0*256)+(lidx3*64)+((lidx4%2)*32)+(ridx0*8)+(lidx4/2)+(lidx2*4)+16);
+    float val10 = *(data2+(gidx0*256)+(lidx3*64)+((lidx4%2)*32)+(ridx0*8)+(lidx4/2)+(lidx2*4)+128);
+    float val11 = *(data2+(gidx0*256)+(lidx3*64)+((lidx4%2)*32)+(ridx0*8)+(lidx4/2)+(lidx2*4)+144);
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val0; a.thread_elements()[1] = val1;
+    b.thread_elements()[0] = val8; b.thread_elements()[1] = val9;
+    c.thread_elements()[0] = acc0; c.thread_elements()[1] = acc1;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc0 = c.thread_elements()[0]; acc1 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val2; a.thread_elements()[1] = val3;
+    b.thread_elements()[0] = val8; b.thread_elements()[1] = val9;
+    c.thread_elements()[0] = acc2; c.thread_elements()[1] = acc3;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc2 = c.thread_elements()[0]; acc3 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val4; a.thread_elements()[1] = val5;
+    b.thread_elements()[0] = val8; b.thread_elements()[1] = val9;
+    c.thread_elements()[0] = acc4; c.thread_elements()[1] = acc5;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc4 = c.thread_elements()[0]; acc5 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val6; a.thread_elements()[1] = val7;
+    b.thread_elements()[0] = val8; b.thread_elements()[1] = val9;
+    c.thread_elements()[0] = acc6; c.thread_elements()[1] = acc7;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc6 = c.thread_elements()[0]; acc7 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val0; a.thread_elements()[1] = val1;
+    b.thread_elements()[0] = val10; b.thread_elements()[1] = val11;
+    c.thread_elements()[0] = acc8; c.thread_elements()[1] = acc9;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc8 = c.thread_elements()[0]; acc9 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val2; a.thread_elements()[1] = val3;
+    b.thread_elements()[0] = val10; b.thread_elements()[1] = val11;
+    c.thread_elements()[0] = acc10; c.thread_elements()[1] = acc11;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc10 = c.thread_elements()[0]; acc11 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val4; a.thread_elements()[1] = val5;
+    b.thread_elements()[0] = val10; b.thread_elements()[1] = val11;
+    c.thread_elements()[0] = acc12; c.thread_elements()[1] = acc13;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc12 = c.thread_elements()[0]; acc13 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val6; a.thread_elements()[1] = val7;
+    b.thread_elements()[0] = val10; b.thread_elements()[1] = val11;
+    c.thread_elements()[0] = acc14; c.thread_elements()[1] = acc15;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc14 = c.thread_elements()[0]; acc15 = c.thread_elements()[1]; }
+  }
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)) = acc0;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+64) = acc1;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+8) = acc2;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+72) = acc3;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+16) = acc4;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+80) = acc5;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+24) = acc6;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+88) = acc7;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+512) = acc8;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+576) = acc9;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+520) = acc10;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+584) = acc11;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+528) = acc12;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+592) = acc13;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+536) = acc14;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+600) = acc15;
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void r_256_2_2_2_4_2_2_8_2_4_2n1(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.y; /* 256 */
+  int gidx1 = gid.x; /* 2 */
+  int lidx2 = lid.z; /* 2 */
+  int lidx3 = lid.y; /* 2 */
+  int lidx4 = lid.x; /* 8 */
+  float acc0 = 0.0f;
+  float acc1 = 0.0f;
+  float acc2 = 0.0f;
+  float acc3 = 0.0f;
+  float acc4 = 0.0f;
+  float acc5 = 0.0f;
+  float acc6 = 0.0f;
+  float acc7 = 0.0f;
+  float acc8 = 0.0f;
+  float acc9 = 0.0f;
+  float acc10 = 0.0f;
+  float acc11 = 0.0f;
+  float acc12 = 0.0f;
+  float acc13 = 0.0f;
+  float acc14 = 0.0f;
+  float acc15 = 0.0f;
+  for (int ridx0 = 0; ridx0 < 2; ++ridx0) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float val0 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256));
+    float val1 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+64);
+    float val2 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+8);
+    float val3 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+72);
+    float val4 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+16);
+    float val5 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+80);
+    float val6 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+24);
+    float val7 = *(data1+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx4/2)+(ridx0*512)+((lidx4%2)*128)+(lidx3*256)+88);
+    float2 val8 = (float2)(*((device float2*)(data2+(gidx0*256)+(lidx3*4)+((lidx4%2)*2)+(ridx0*128)+((lidx4/2)*16)+(lidx2*64))));
+    float2 val9 = (float2)(*((device float2*)(data2+(gidx0*256)+(lidx3*4)+((lidx4%2)*2)+(ridx0*128)+((lidx4/2)*16)+(lidx2*64)+8)));
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val0; a.thread_elements()[1] = val1;
+    b.thread_elements()[0] = (val8).x; b.thread_elements()[1] = (val8).y;
+    c.thread_elements()[0] = acc0; c.thread_elements()[1] = acc1;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc0 = c.thread_elements()[0]; acc1 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val2; a.thread_elements()[1] = val3;
+    b.thread_elements()[0] = (val8).x; b.thread_elements()[1] = (val8).y;
+    c.thread_elements()[0] = acc2; c.thread_elements()[1] = acc3;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc2 = c.thread_elements()[0]; acc3 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val4; a.thread_elements()[1] = val5;
+    b.thread_elements()[0] = (val8).x; b.thread_elements()[1] = (val8).y;
+    c.thread_elements()[0] = acc4; c.thread_elements()[1] = acc5;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc4 = c.thread_elements()[0]; acc5 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val6; a.thread_elements()[1] = val7;
+    b.thread_elements()[0] = (val8).x; b.thread_elements()[1] = (val8).y;
+    c.thread_elements()[0] = acc6; c.thread_elements()[1] = acc7;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc6 = c.thread_elements()[0]; acc7 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val0; a.thread_elements()[1] = val1;
+    b.thread_elements()[0] = (val9).x; b.thread_elements()[1] = (val9).y;
+    c.thread_elements()[0] = acc8; c.thread_elements()[1] = acc9;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc8 = c.thread_elements()[0]; acc9 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val2; a.thread_elements()[1] = val3;
+    b.thread_elements()[0] = (val9).x; b.thread_elements()[1] = (val9).y;
+    c.thread_elements()[0] = acc10; c.thread_elements()[1] = acc11;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc10 = c.thread_elements()[0]; acc11 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val4; a.thread_elements()[1] = val5;
+    b.thread_elements()[0] = (val9).x; b.thread_elements()[1] = (val9).y;
+    c.thread_elements()[0] = acc12; c.thread_elements()[1] = acc13;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc12 = c.thread_elements()[0]; acc13 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val6; a.thread_elements()[1] = val7;
+    b.thread_elements()[0] = (val9).x; b.thread_elements()[1] = (val9).y;
+    c.thread_elements()[0] = acc14; c.thread_elements()[1] = acc15;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc14 = c.thread_elements()[0]; acc15 = c.thread_elements()[1]; }
+  }
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)) = acc0;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+64) = acc1;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+8) = acc2;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+72) = acc3;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+16) = acc4;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+80) = acc5;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+24) = acc6;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+88) = acc7;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+512) = acc8;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+576) = acc9;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+520) = acc10;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+584) = acc11;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+528) = acc12;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+592) = acc13;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+536) = acc14;
+  *(data0+(gidx0*1024)+(gidx1*32)+(lidx2*4)+(lidx3*256)+(lidx4/2)+((lidx4%2)*128)+600) = acc15;
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void r_256_2_2_2_4_2_2_8_2_2_4n1(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 256 */
+  int lidx1 = lid.z; /* 2 */
+  int lidx2 = lid.y; /* 2 */
+  int lidx3 = lid.x; /* 16 */
+  float acc0 = 0.0f;
+  float acc1 = 0.0f;
+  float acc2 = 0.0f;
+  float acc3 = 0.0f;
+  float acc4 = 0.0f;
+  float acc5 = 0.0f;
+  float acc6 = 0.0f;
+  float acc7 = 0.0f;
+  float acc8 = 0.0f;
+  float acc9 = 0.0f;
+  float acc10 = 0.0f;
+  float acc11 = 0.0f;
+  float acc12 = 0.0f;
+  float acc13 = 0.0f;
+  float acc14 = 0.0f;
+  float acc15 = 0.0f;
+  for (int ridx0 = 0; ridx0 < 2; ++ridx0) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float val0 = *(data1+(gidx0*256)+(lidx2*4)+((lidx3/2)%4)+(ridx0*128)+((lidx3%2)*32)+((lidx3/8)*64));
+    float val1 = *(data1+(gidx0*256)+(lidx2*4)+((lidx3/2)%4)+(ridx0*128)+((lidx3%2)*32)+((lidx3/8)*64)+16);
+    float val2 = *(data1+(gidx0*256)+(lidx2*4)+((lidx3/2)%4)+(ridx0*128)+((lidx3%2)*32)+((lidx3/8)*64)+8);
+    float val3 = *(data1+(gidx0*256)+(lidx2*4)+((lidx3/2)%4)+(ridx0*128)+((lidx3%2)*32)+((lidx3/8)*64)+24);
+    float2 val4 = (float2)(*((device float2*)(data2+(gidx0*1024)+(lidx1*32)+((lidx3/8)*4)+((lidx3%2)*2)+(ridx0*512)+(((lidx3/2)%4)*64)+(lidx2*256))));
+    float2 val5 = (float2)(*((device float2*)(data2+(gidx0*1024)+(lidx1*32)+((lidx3/8)*4)+((lidx3%2)*2)+(ridx0*512)+(((lidx3/2)%4)*64)+(lidx2*256)+8)));
+    float2 val6 = (float2)(*((device float2*)(data2+(gidx0*1024)+(lidx1*32)+((lidx3/8)*4)+((lidx3%2)*2)+(ridx0*512)+(((lidx3/2)%4)*64)+(lidx2*256)+16)));
+    float2 val7 = (float2)(*((device float2*)(data2+(gidx0*1024)+(lidx1*32)+((lidx3/8)*4)+((lidx3%2)*2)+(ridx0*512)+(((lidx3/2)%4)*64)+(lidx2*256)+24)));
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val0; a.thread_elements()[1] = val1;
+    b.thread_elements()[0] = (val4).x; b.thread_elements()[1] = (val4).y;
+    c.thread_elements()[0] = acc0; c.thread_elements()[1] = acc1;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc0 = c.thread_elements()[0]; acc1 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val2; a.thread_elements()[1] = val3;
+    b.thread_elements()[0] = (val4).x; b.thread_elements()[1] = (val4).y;
+    c.thread_elements()[0] = acc2; c.thread_elements()[1] = acc3;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc2 = c.thread_elements()[0]; acc3 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val0; a.thread_elements()[1] = val1;
+    b.thread_elements()[0] = (val5).x; b.thread_elements()[1] = (val5).y;
+    c.thread_elements()[0] = acc4; c.thread_elements()[1] = acc5;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc4 = c.thread_elements()[0]; acc5 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val2; a.thread_elements()[1] = val3;
+    b.thread_elements()[0] = (val5).x; b.thread_elements()[1] = (val5).y;
+    c.thread_elements()[0] = acc6; c.thread_elements()[1] = acc7;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc6 = c.thread_elements()[0]; acc7 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val0; a.thread_elements()[1] = val1;
+    b.thread_elements()[0] = (val6).x; b.thread_elements()[1] = (val6).y;
+    c.thread_elements()[0] = acc8; c.thread_elements()[1] = acc9;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc8 = c.thread_elements()[0]; acc9 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val2; a.thread_elements()[1] = val3;
+    b.thread_elements()[0] = (val6).x; b.thread_elements()[1] = (val6).y;
+    c.thread_elements()[0] = acc10; c.thread_elements()[1] = acc11;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc10 = c.thread_elements()[0]; acc11 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val0; a.thread_elements()[1] = val1;
+    b.thread_elements()[0] = (val7).x; b.thread_elements()[1] = (val7).y;
+    c.thread_elements()[0] = acc12; c.thread_elements()[1] = acc13;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc12 = c.thread_elements()[0]; acc13 = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = val2; a.thread_elements()[1] = val3;
+    b.thread_elements()[0] = (val7).x; b.thread_elements()[1] = (val7).y;
+    c.thread_elements()[0] = acc14; c.thread_elements()[1] = acc15;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    acc14 = c.thread_elements()[0]; acc15 = c.thread_elements()[1]; }
+  }
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)) = acc0;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+16) = acc1;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+8) = acc2;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+24) = acc3;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+128) = acc4;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+144) = acc5;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+136) = acc6;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+152) = acc7;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+256) = acc8;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+272) = acc9;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+264) = acc10;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+280) = acc11;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+384) = acc12;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+400) = acc13;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+392) = acc14;
+  *(data0+(gidx0*1024)+(lidx1*512)+(lidx2*4)+((lidx3/8)*64)+((lidx3/2)%4)+((lidx3%2)*32)+408) = acc15;
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void E_256_2_8_16_4(device float* data0, const device float* data1, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.y; /* 256 */
+  int gidx1 = gid.x; /* 2 */
+  int lidx2 = lid.y; /* 8 */
+  int lidx3 = lid.x; /* 16 */
+  float val0 = *(data1+(gidx0*1024)+(gidx1*8)+lidx2+(lidx3*64));
+  float val1 = *(data1+(gidx0*1024)+(gidx1*8)+lidx2+(lidx3*64)+16);
+  float val2 = *(data1+(gidx0*1024)+(gidx1*8)+lidx2+(lidx3*64)+32);
+  float val3 = *(data1+(gidx0*1024)+(gidx1*8)+lidx2+(lidx3*64)+48);
+  *((device float4*)(data0+(gidx0*1024)+(gidx1*512)+(lidx2*64)+(lidx3*4))) = (float4)float4(val0,val1,val2,val3);
+}
+
+testing [(32, 8, 16, 64), (32, 8, 16, 64), (32, 8, 16, 64)]   torch/tinygrad fp: 0.42 / 167.58 ms  bp: 2.29 / 25.93 ms #include <metal_stdlib>
+using namespace metal;
+kernel void r_256_2_2_4_2_8_8_2_2_2n2(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 256 */
+  int lidx1 = lid.z; /* 2 */
+  int lidx2 = lid.y; /* 2 */
+  int lidx3 = lid.x; /* 8 */
+  float2 acc0 = float2(0.0f,0.0f);
+  float2 acc1 = float2(0.0f,0.0f);
+  float2 acc2 = float2(0.0f,0.0f);
+  float2 acc3 = float2(0.0f,0.0f);
+  for (int ridx0 = 0; ridx0 < 8; ++ridx0) {
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float2 val0 = (float2)(*((device float2*)(data1+(gidx0*1024)+(lidx1*256)+((lidx3/2)*64)+(ridx0*8)+((lidx3%2)*2)+(lidx2*4))));
+    float2 val1 = (float2)(*((device float2*)(data1+(gidx0*1024)+(lidx1*256)+((lidx3/2)*64)+(ridx0*8)+((lidx3%2)*2)+(lidx2*4)+512)));
+    float val2 = *(data2+(gidx0*1024)+(lidx2*256)+((lidx3%2)*128)+(ridx0*8)+(lidx3/2)+(lidx1*4));
+    float val3 = *(data2+(gidx0*1024)+(lidx2*256)+((lidx3%2)*128)+(ridx0*8)+(lidx3/2)+(lidx1*4)+64);
+    float val4 = *(data2+(gidx0*1024)+(lidx2*256)+((lidx3%2)*128)+(ridx0*8)+(lidx3/2)+(lidx1*4)+512);
+    float val5 = *(data2+(gidx0*1024)+(lidx2*256)+((lidx3%2)*128)+(ridx0*8)+(lidx3/2)+(lidx1*4)+576);
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val0).x; a.thread_elements()[1] = (val0).y;
+    b.thread_elements()[0] = val2; b.thread_elements()[1] = val3;
+    c.thread_elements()[0] = (acc0).x; c.thread_elements()[1] = (acc0).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc0).x = c.thread_elements()[0]; (acc0).y = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val1).x; a.thread_elements()[1] = (val1).y;
+    b.thread_elements()[0] = val2; b.thread_elements()[1] = val3;
+    c.thread_elements()[0] = (acc1).x; c.thread_elements()[1] = (acc1).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc1).x = c.thread_elements()[0]; (acc1).y = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val0).x; a.thread_elements()[1] = (val0).y;
+    b.thread_elements()[0] = val4; b.thread_elements()[1] = val5;
+    c.thread_elements()[0] = (acc2).x; c.thread_elements()[1] = (acc2).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc2).x = c.thread_elements()[0]; (acc2).y = c.thread_elements()[1]; }
+    { simdgroup_float8x8 a,b,c;
+    a.thread_elements()[0] = (val1).x; a.thread_elements()[1] = (val1).y;
+    b.thread_elements()[0] = val4; b.thread_elements()[1] = val5;
+    c.thread_elements()[0] = (acc3).x; c.thread_elements()[1] = (acc3).y;
+    simdgroup_multiply_accumulate(c, a, b, c);
+    (acc3).x = c.thread_elements()[0]; (acc3).y = c.thread_elements()[1]; }
+  }
+  *((device float2*)(data0+(gidx0*256)+(lidx1*64)+(lidx2*4)+((lidx3/2)*16)+((lidx3%2)*2))) = (float2)acc0;
+  *((device float2*)(data0+(gidx0*256)+(lidx1*64)+(lidx2*4)+((lidx3/2)*16)+((lidx3%2)*2)+128)) = (float2)acc1;
+  *((device float2*)(data0+(gidx0*256)+(lidx1*64)+(lidx2*4)+((lidx3/2)*16)+((lidx3%2)*2)+8)) = (float2)acc2;
+  *((device float2*)(data0+(gidx0*256)+(lidx1*64)+(lidx2*4)+((lidx3/2)*16)+((lidx3%2)*2)+136)) = (float2)acc3;
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void E_512_32_4(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 512 */
+  int lidx1 = lid.x; /* 32 */
+  float4 val0 = (float4)(*((device float4*)(data1+(gidx0*128)+(lidx1*4))));
+  float4 val1 = (float4)(*((device float4*)(data2+(gidx0*128)+(lidx1*4))));
+  *((device float4*)(data0+(gidx0*128)+(lidx1*4))) = (float4)float4((((val0).x*0.125f)+(val1).x),(((val0).y*0.125f)+(val1).y),(((val0).z*0.125f)+(val1).z),(((val0).w*0.125f)+(val1).w));
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void E_128_32_4_4n4(device float* data0, const device float* data1, const device float* data2, const device float* data3, const device float* data4, const device float* data5, const device float* data6, const device float* data7, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.x; /* 128 */
+  int lidx1 = lid.y; /* 32 */
+  int lidx2 = lid.x; /* 4 */
+  float4 val0 = (float4)(*((device float4*)(data1+(gidx0*512)+(lidx1*16)+(lidx2*4))));
+  float4 val1 = (float4)(*((device float4*)(data2+(gidx0*512)+(lidx1*16)+(lidx2*4))));
+  float val2 = *(data3+(gidx0*32)+lidx1);
+  float val3 = *(data4+(gidx0*32)+lidx1);
+  float4 val4 = (float4)(*((device float4*)(data5+(gidx0*512)+(lidx1*16)+(lidx2*4))));
+  float val5 = *(data6+(gidx0*32)+lidx1);
+  float val6 = *(data7+(gidx0*32)+lidx1);
+  *((device float4*)(data0+(gidx0*512)+(lidx1*16)+(lidx2*4))) = (float4)float4((((val0).x*(((val1).x/val2)+val3))+(((val4).x/val5)*val6)),(((val0).y*(((val1).y/val2)+val3))+(((val4).y/val5)*val6)),(((val0).z*(((val1).z/val2)+val3))+(((val4).z/val5)*val6)),(((val0).w*(((val1).w/val2)+val3))+(((val4).w/val5)*val6)));
+}
+
+testing [(32, 8, 16, 64), (32, 8, 16, 64), (32, 8, 16, 64), (32, 8, 16, 16)]   torch/tinygrad fp: 1.60 / 17.86 ms  bp: 3.04 / 3.51 ms #include <metal_stdlib>
+using namespace metal;
+kernel void r_16_16(device float* data0, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  threadgroup float temp[16];
+  int gidx0 = gid.x; /* 16 */
+  int lidx1 = lid.x; /* 16 */
+  float acc0 = 0.0f;
+  acc0 = (((((gidx0*(-1))+(lidx1*(-1)))<(-14))!=0?1.0f:0.0f)+acc0);
+  *(temp+lidx1) = acc0;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if ((lidx1<1)) {
+    float acc1 = 0.0f;
+    for (int ridx0 = 0; ridx0 < 16; ++ridx0) {
+      float val0 = *(temp+ridx0);
+      acc1 = (val0+acc1);
+    }
+    *(data0+gidx0) = (acc1+(-2.0f));
+  }
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void r_16_16n1(device float* data0, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  threadgroup float temp[16];
+  int gidx0 = gid.x; /* 16 */
+  int lidx1 = lid.x; /* 16 */
+  float acc0 = 0.0f;
+  acc0 = (((((gidx0*(-1))+(lidx1*(-1)))<(-14))!=0?1.0f:0.0f)+acc0);
+  *(temp+lidx1) = acc0;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if ((lidx1<1)) {
+    float acc1 = 0.0f;
+    for (int ridx0 = 0; ridx0 < 16; ++ridx0) {
+      float val0 = *(temp+ridx0);
+      acc1 = (val0+acc1);
+    }
+    *(data0+gidx0) = (acc1+(-1.0f));
+  }
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void E_16_4_4(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int lidx0 = lid.y; /* 16 */
+  int lidx1 = lid.x; /* 4 */
+  float4 val0 = (float4)(*((device float4*)(data1+lidx1*4)));
+  float val1 = *(data2+lidx0);
+  float alu0 = ((1.0f-((val0).x<val1))!=0?0.0f:1.0f);
+  float alu1 = ((1.0f-((val0).y<val1))!=0?0.0f:1.0f);
+  float alu2 = ((1.0f-((val0).z<val1))!=0?0.0f:1.0f);
+  float alu3 = ((1.0f-((val0).w<val1))!=0?0.0f:1.0f);
+  *((device float4*)(data0+(lidx0*16)+(lidx1*4))) = (float4)float4(((1.0f-((alu0<0.0f)+(0.0f<alu0)))!=0?(-INFINITY):alu0),((1.0f-((alu1<0.0f)+(0.0f<alu1)))!=0?(-INFINITY):alu1),((1.0f-((alu2<0.0f)+(0.0f<alu2)))!=0?(-INFINITY):alu2),((1.0f-((alu3<0.0f)+(0.0f<alu3)))!=0?(-INFINITY):alu3));
+}
+#include <metal_stdlib>
+using namespace metal;
+kernel void E_8_16_8_16_4(device float* data0, const device float* data1, const device float* data2, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+  int gidx0 = gid.y; /* 8 */
+  int gidx1 = gid.x; /* 16 */
+  int lidx2 = lid.y; /* 8 */
+  int lidx3 = lid.x; /* 16 */
+  float val0 = *(data1+(gidx0*8192)+(gidx1*16)+(lidx2*1024)+lidx3);
+  float val1 = *(data1+(gidx0*8192)+(gidx1*16)+(lidx2*1024)+lidx3+256);
+  float val2 = *(data1+(gidx0*8192)+(gidx1*16)+(lidx2*1024)+lidx3+512);
+  float val3 = *(data1+(gidx0*8192)+(gidx1*16)+(lidx2*1024)+lidx3+768);
+  float val4 = *(data2+(gidx1*16)+lidx3);
+  *(data0+(gidx0*8192)+(gidx1*16)+(lidx2*1024)+lidx3) = ((val0*0.125f)+val4);
+  *(data0+(gidx0*8192)+(gidx1*16)+(lidx2*1024)+lidx3+256) = ((val1*0.125f)+val4);
+  *(data0+(gidx0*8192)+(gidx1*16)+(lidx2*1024)+lidx3+512) = ((val2*0.125f)+val4);
+  *(data0+(gidx0*8192)+(gidx1*16)+(lidx2*1024)+lidx3+768) = ((val3*0.125f)+val4);
+}
+
+testing [(32, 8, 16, 64), (32, 8, 16, 64), (32, 8, 16, 64)]   torch/tinygrad fp: 0.27 / 12.39 ms  bp: 1.29 / 2.14 ms .
+
+============================== 1 passed in 0.95s ===============================

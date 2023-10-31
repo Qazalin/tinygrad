@@ -28,11 +28,11 @@ dtype_to_llvm_dtype = {dtypes.float64:ir.DoubleType(), dtypes.float16:ir.HalfTyp
 llvm_dtype_to_dtype = {v:k for k,v in dtype_to_llvm_dtype.items()}
 
 def cast(bb, val, input_type, output_type):
-  print("CAST", input_type, output_type)
   if input_type == dtypes._arg_int32: input_type = dtypes.int32
   if output_type == dtypes._arg_int32: output_type = dtypes.int32
   if input_type == output_type: return val
   if isinstance(input_type, PtrDType): input_type = DType(input_type.priority, input_type.itemsize, input_type.name, input_type.np, input_type.sz)
+  print("CAST", input_type, output_type)
 
   if output_type == dtypes.float32:
     if dtypes.is_int(input_type) or input_type == dtypes.bool:
