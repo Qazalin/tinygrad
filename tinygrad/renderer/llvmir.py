@@ -1,7 +1,7 @@
 from typing import Final, Dict, Callable, Any, List, Optional, Tuple
 from llvmlite import ir  # type: ignore
 from tinygrad.codegen.linearizer import UOps, UOp
-from tinygrad.helpers import DType, PtrDType, dtypes
+from tinygrad.helpers import DType, PtrDType, dtypes, getenv
 from tinygrad.ops import Op, UnaryOps, BinaryOps, TernaryOps
 
 LLVM_FAST_MATH_FLAGS = ('nsz', 'arcp', 'contract', 'afn', 'reassoc') # All from fast math, but nnan and ninf
@@ -176,7 +176,8 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
           alu_vars[2] = cast(bb, alu_vars[2], llvm_dtype_to_dtype[alu_vars[2].type], dtypes.float32)
       lvars[u] = code_for_op[args](bb[-1], *alu_vars)
     if uop == UOps.CAST:
-      lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtype)
+      if getenv("DTYPE") == 1: lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtype)
+      else: lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtypes.float32)
 
   bb[-1].ret_void()
   return str(module), {"binary":False}
