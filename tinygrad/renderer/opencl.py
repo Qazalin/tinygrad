@@ -20,4 +20,8 @@ class OpenCLLanguage(CStyleLanguage):
   # NOTE: mad is used so the loads aren't reordered into the math on 845
   code_for_op = {**CStyleLanguage().code_for_op, TernaryOps.MULACC: lambda a,b,c: f"mad({a},{b},{c})"}
 
+  def render_cast(self, x, var_dtype, bitcast=False) -> str:
+    if bitcast: return f"as_{type_map.get(var_dtype) or var_dtype.name}({x[0]})"
+    return super().render_cast(x, var_dtype)
+
 OpenCLRenderer = functools.partial(uops_to_cstyle, OpenCLLanguage())
