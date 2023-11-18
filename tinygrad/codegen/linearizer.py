@@ -503,3 +503,11 @@ class Linearizer(Kernel):
         ordered_ret[k] = j
     assert all(isinstance(x, UOp) for x in ordered_ret), "some tokens didn't get scattered?"
     return cast(List[UOp], ordered_ret)
+
+  # TODO the next 2 functions are poorly designed
+  def cast_to_same_vins(self, vins: List[UOp], dtype: DType) -> Tuple[UOp, ...]: return tuple([v if v.dtype == dtype else self.uop(UOps.CAST, dtype, (v,)) for v in vins])
+  def get_mullac_dtype(self, promoted: DType):
+    if dtypes.is_float(promoted): return promoted
+    fpmatch = [x for x in [dtypes.float16, dtypes.float32, dtypes.float64] if x.itemsize == promoted.itemsize]
+    #if len(fpmatch) > 0: return fpmatch[0] TODO double is broken
+    return dtypes.float
