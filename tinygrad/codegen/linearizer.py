@@ -76,6 +76,7 @@ class Linearizer(Kernel):
     else:
       g_idx, g_valid = self.sts[i].expr_idxs(fake_idxs)
     localtype = buf.dtype.vec(amt) if amt > 1 else buf.dtype
+    if isinstance(buf.dtype, ImageDType) and amt == 1: localtype = buf.dtype.underlying
 
     e_idxs, e_valids = g_idx.expand(expand_vars), g_valid.expand(expand_vars)
 
