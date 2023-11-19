@@ -96,7 +96,7 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
       phis = []
       for rp in reduce_phis:
         incoming = lvars[rp]
-        lvars[rp] = bb[-1].phi(ir.FloatType())
+        lvars[rp] = bb[-1].phi(dtype_to_llvm_dtype[rp.dtype])
         lvars[rp].add_incoming(incoming, bb[-2]._block)
         phis.append((rp, lvars[rp]))
 
@@ -113,7 +113,8 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
     if uop == UOps.DEFINE_GLOBAL:
       lvars[u] = func.args[buf_index[args[0]]]
     if uop == UOps.DEFINE_ACC:
-      lvars[u] = ir.Constant(dtype_to_llvm_dtype[dtype], args)
+      value = int(args) if dtypes.is_int(dtype) else bool(args) if dtype == dtypes.bool else args
+      lvars[u] = ir.Constant(dtype_to_llvm_dtype[dtype], value)
       reduce_phis.append(u)
     if uop == UOps.SPECIAL:
       lvars[u] = lvars[args.expr]
@@ -137,7 +138,7 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
       # PHI UOps can link to other PHI Uops, backtrace this to DEFINE_ACC
       backward = vin[0]
       while backward.uop == UOps.PHI: backward = backward.vin[0]
-      lvars[backward] = lvars[u]
+      lvars[backward] = cast(bb, lvars[u], dtype, backward.dtype)
     if uop == UOps.STORE:
       element = cast(bb, lvars[vin[2]], vin[2].dtype, vin[0].dtype)
       bb[-1].store(element, bb[-1].gep(lvars[vin[0]], [lvars[vin[1]]], inbounds=True))
