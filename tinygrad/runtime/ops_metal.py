@@ -45,8 +45,8 @@ def unwrap(x):
   assert err is None, str(err)
   return ret
 
-@diskcache
 def compile_metal(prg, use_xcode=bool(getenv("METAL_XCODE"))) -> bytes:
+  print(prg)
   if use_xcode:
     # NOTE: if you run llvm-dis on "air" you can see the llvm bytecode
     air = subprocess.check_output(['xcrun', '-sdk', 'macosx', 'metal', '-x', 'metal', '-c', '-', '-o', '-'], input=prg.encode('utf-8'))

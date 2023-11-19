@@ -124,6 +124,7 @@ def uops_to_cstyle(lang:CStyleLanguage, function_name:str, uops:List[UOp]) -> Tu
       child_count[v] += 1
 
   for u in uops:
+    print(u)
     uop,dtype,vin,args = u.uop,u.dtype,u.vin,u.arg
     if uop == UOps.LOOP:
       kk(lang.render_for(ssa(u,'ridx'), r[vin[0]], r[vin[1]]))
@@ -158,8 +159,6 @@ def uops_to_cstyle(lang:CStyleLanguage, function_name:str, uops:List[UOp]) -> Tu
       # remove parens if ALU types are the same. TODO: can do more here
       if vin[0].uop == UOps.ALU and vin[0].arg == args and args in {BinaryOps.ADD, BinaryOps.SUB, BinaryOps.MUL}:
         val = lang.code_for_op[args](strip_parens(r[vin[0]]), *[r[x] for x in vin[1:]])
-      elif args == BinaryOps.MAX:
-        val = lang.code_for_op[args](*[lang.render_cast([r[x]], dtype) if x.dtype != dtype else r[x] for x in vin])
       else:
         val = lang.code_for_op[args](*[r[x] for x in vin])
       assert child_count[u] != 0, f"childless ALU op found {u}"
