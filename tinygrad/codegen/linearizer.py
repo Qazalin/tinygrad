@@ -489,13 +489,13 @@ class Linearizer(Kernel):
       ret = []
       input_acc = acc[:]
       for idx, val, off in zip([[i] for i in range(len(values[0]))], zip(*values), cast(List[int], offs)):
-        acc[off] = self.uop(UOps.ALU, dtypes.float32, val+(acc[off],), ops[x.op])
+        acc[off] = self.uop(UOps.ALU, dtypes.float32, self.cast_vins(val+(acc[off],), dtypes.float), ops[x.op])
         ret.append((idx, acc[off]))
       for off in range(len(acc)):
         if input_acc[off] != acc[off]:
           acc[off] = self.uop(UOps.PHI, dtypes.float32, (input_acc[off], acc[off]) + tuple(loop_ctx))
     else:
-      ret = [(idx, self.uop(UOps.ALU, dtypes.float32, val, x.op)) for idx, val in zip([[i] for i in range(len(values[0]))], zip(*values))]
+      ret = [(idx, self.uop(UOps.ALU, dtypes.float32, self.cast_vins(val, dtypes.float), x.op)) for idx, val in zip([[i] for i in range(len(values[0]))], zip(*values))]
     ordered_ret: List[Optional[UOp]] = [None]*len(values[0])
     # scatter
     for i,j in ret:
@@ -503,3 +503,6 @@ class Linearizer(Kernel):
         ordered_ret[k] = j
     assert all(isinstance(x, UOp) for x in ordered_ret), "some tokens didn't get scattered?"
     return cast(List[UOp], ordered_ret)
+
+  # TODO the next function is poorly designed
+  def cast_vins(self, vins, dtype) -> Tuple[UOp, ...]: return tuple([v if v.dtype == dtype else self.uop(UOps.CAST, dtype, (v,)) for v in vins])
