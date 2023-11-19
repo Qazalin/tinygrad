@@ -40,6 +40,7 @@ class CStyleLanguage(NamedTuple):
     BinaryOps.CMPLT: lambda a,b: f"({a}<{b})", TernaryOps.MULACC: lambda a,b,c: f"(({a}*{b})+{c})",
     TernaryOps.WHERE: lambda a,b,c: f"({a}!=0?{b}:{c})"
   }
+  end = "}"
 
   # returns a str expression of the casted xs with the given type
   def render_cast(self, x:List[str], var_dtype:DType) -> str:
@@ -108,6 +109,9 @@ class CStyleLanguage(NamedTuple):
       return f"*(({self.smem_prefix if local and self.smem_prefix_for_cast else self.buffer_prefix}{buf_dtype.name}{var_dtype.sz}*)({buf_name}+{idx})) = ({buf_dtype.name}{var_dtype.sz}){var_name};"
     return f"*({buf_name}+{idx}) = {var_name};" if self.uses_ptr_arithmetic else f"{buf_name}[{idx}] = {var_name};"
 
+  def TODO_name_this(self, dtype: DType, val: str, vin: List[str], args) -> str: return val
+  def render_phi(self, x:str) -> str: return f"{x};"
+
 def uops_to_cstyle(lang:CStyleLanguage, function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
   local_size: List[int] = []
   kernel,prekernel,bufs = [],[],[]
@@ -140,7 +144,7 @@ def uops_to_cstyle(lang:CStyleLanguage, function_name:str, uops:List[UOp]) -> Tu
       kk(lang.barrier)
     elif uop == UOps.END:
       depth -= 1
-      kk("}")
+      kk(lang.end)
     elif uop == UOps.WMMA:
       if args[0] == "METAL":
         assert dtype == dtypes._float2, "output dtype of METAL TC is _float2"
@@ -169,7 +173,8 @@ def uops_to_cstyle(lang:CStyleLanguage, function_name:str, uops:List[UOp]) -> Tu
         val = lang.code_for_op[args](*[r[x] for x in vin])
       assert child_count[u] != 0, f"childless ALU op found {u}"
       if (child_count[u] <= 1 or dtypes.is_int(dtype)) and args != BinaryOps.MAX:  # fix index rendering issue. fix clang nested max macro issue
-        r[u] = val
+        # TODO
+        r[u] = lang.TODO_name_this(dtype, val, [r[x] for x in vin], args)
       else:
         kk(f"{lang.generic_var_prefix if lang.generic_var_prefix else dtype.name} {ssa(u,'alu')} = {val};")
     elif uop == UOps.DEFINE_ACC:
@@ -188,7 +193,7 @@ def uops_to_cstyle(lang:CStyleLanguage, function_name:str, uops:List[UOp]) -> Tu
       if len(vin) > 3: val = lang.render_conditional(r[vin[2]], val, r[vin[3]])
       kk(f"{lang.generic_var_prefix if lang.generic_var_prefix else dtype.name} {ssa(u,'val')} = {val};")
     elif uop == UOps.PHI:
-      kk(f"{r[vin[0]]} = {r[vin[1]]};")
+      kk(f"{r[vin[0]]} = {lang.render_phi(r[vin[1]])}")
       r[u] = r[vin[0]]
     elif uop == UOps.STORE:
       assert vin[0].dtype is not None and vin[2].dtype is not None
