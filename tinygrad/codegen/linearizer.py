@@ -75,7 +75,7 @@ class Linearizer(Kernel):
         (g_idx, g_valid), amt, dim = self.sts[i].expr_idxs(fake_idxs), 1, None
     else:
       g_idx, g_valid = self.sts[i].expr_idxs(fake_idxs)
-    localtype = dtypes.float32 if amt == 1 else dtypes._float4 if amt == 4 else dtypes._float2
+    localtype = buf.dtype.vec(amt) if amt > 1 else buf.dtype if not isinstance(buf.dtype, ImageDType) else buf.dtype.underlying
 
     e_idxs, e_valids = g_idx.expand(expand_vars), g_valid.expand(expand_vars)
 
@@ -107,7 +107,7 @@ class Linearizer(Kernel):
             self.load_cache[key] = self.uop(UOps.LOAD, localtype, (buf_uop, rendered_idx, valid_rendered, self.const(invalid_value, localtype)) + ((barrier,) if barrier else ()))
           else:
             self.load_cache[key] = self.uop(UOps.LOAD, localtype, (buf_uop, rendered_idx) + ((barrier,) if barrier else ()))
-      ret.append(self.uop(UOps.GEP, dtypes.float32, (self.load_cache[key],), rep_idx[dim]) if dim is not None else self.load_cache[key])
+      ret.append(self.uop(UOps.GEP, localtype.scalar(), (self.load_cache[key],), rep_idx[dim]) if dim is not None else self.load_cache[key])
     return ret
 
   def global_store(self, i:int, idxs:List[Node], store:List[UOp]) -> List[UOp]:

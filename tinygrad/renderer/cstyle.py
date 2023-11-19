@@ -46,12 +46,7 @@ class CStyleLanguage(NamedTuple):
     if len(x) == 1: return f"({var_dtype.name})({x[0]})"
     assert len(x) == var_dtype.sz, f"cast is wrong size {len(x)} != {var_dtype.sz}"
     assert self.float4 is not None, "cast is not supported on this platform"
-    if var_dtype == dtypes._half16: return f"{{{','.join(f'(half){x}' for x in x)}}}"
-    if var_dtype == dtypes._float8: return f"{{{','.join(x)}}}"
-    if var_dtype == dtypes._float4: return f"{self.float4}({','.join(x)})"
-    if var_dtype == dtypes._float2: return f"{self.float4.replace('float4', 'float2')}({','.join(x)})"
-    if var_dtype == dtypes._int2: return f"{self.float4.replace('float4', 'int2')}({','.join(x)})"
-    raise NotImplementedError(f"no cast for {var_dtype}")
+    return f"{self.float4.replace('float4', var_dtype.name)}({','.join(x)})"
 
   # returns a str expression of the const with the given type
   def render_const(self, x:Union[float,int], var_dtype) -> str:
@@ -63,8 +58,8 @@ class CStyleLanguage(NamedTuple):
   # returns a str expression of the loaded value with the output type
   def render_load(self, output_dtype, buf_name, buf_dtype, idx, local=False) -> str:
     if isinstance(buf_dtype, ImageDType):
-      assert output_dtype == dtypes._float4, f"images must be float4, getting {output_dtype}"
-      return f"read_imagef({buf_name}, smp, {idx})"
+      assert output_dtype == buf_dtype.underlying.vec(4), f"expected {buf_dtype.underlying.vec(4)} but got {output_dtype} for {buf_dtype}"
+      return f"read_{buf_dtype.name}({buf_name}, smp, {idx})"
     if self.uses_vload and buf_dtype == dtypes.float16:
       return f"vload_half{'' if output_dtype.sz == 1 else str(output_dtype.sz)}(0, {buf_name}+{idx})"
     if output_dtype.sz > 1:
@@ -94,7 +89,7 @@ class CStyleLanguage(NamedTuple):
     prg = ''.join([f"{self.kernel_prefix}void {f'__launch_bounds__ ({prod(local_size)}, 1) ' if self.launch_bounds else ''}{function_name}(",] +
     [', '.join([f'{t} {name}' for name,t in buftypes] + self.extra_args)] +
     [") {\n" + tmp] + ['\n'.join(kernel), "\n}"])
-    if self.half_prekernel and any(dtype == dtypes.float16 for _,dtype in bufs): prg = ''.join([f"{self.half_prekernel}", "\n", prg])
+    if self.half_prekernel and any(dtype.scalar() == dtypes.half if not isinstance(dtype, ImageDType) else dtype.underlying == dtypes.half for _,dtype in bufs): prg = ''.join([f"{self.half_prekernel}", "\n", prg])
     return prg
 
   # returns a str statement that does the store
