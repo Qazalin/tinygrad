@@ -75,7 +75,7 @@ class Linearizer(Kernel):
         (g_idx, g_valid), amt, dim = self.sts[i].expr_idxs(fake_idxs), 1, None
     else:
       g_idx, g_valid = self.sts[i].expr_idxs(fake_idxs)
-    localtype = dtypes.float32 if amt == 1 else dtypes._float4 if amt == 4 else dtypes._float2
+    localtype = buf.dtype.vec(amt) if amt > 1 else buf.dtype if not isinstance(buf.dtype, ImageDType) else buf.dtype.underlying
 
     e_idxs, e_valids = g_idx.expand(expand_vars), g_valid.expand(expand_vars)
 
@@ -107,7 +107,7 @@ class Linearizer(Kernel):
             self.load_cache[key] = self.uop(UOps.LOAD, localtype, (buf_uop, rendered_idx, valid_rendered, self.const(invalid_value, localtype)) + ((barrier,) if barrier else ()))
           else:
             self.load_cache[key] = self.uop(UOps.LOAD, localtype, (buf_uop, rendered_idx) + ((barrier,) if barrier else ()))
-      ret.append(self.uop(UOps.GEP, dtypes.float32, (self.load_cache[key],), rep_idx[dim]) if dim is not None else self.load_cache[key])
+      ret.append(self.uop(UOps.GEP, localtype.scalar(), (self.load_cache[key],), rep_idx[dim]) if dim is not None else self.load_cache[key])
     return ret
 
   def global_store(self, i:int, idxs:List[Node], store:List[UOp]) -> List[UOp]:
@@ -489,13 +489,14 @@ class Linearizer(Kernel):
       ret = []
       input_acc = acc[:]
       for idx, val, off in zip([[i] for i in range(len(values[0]))], zip(*values), cast(List[int], offs)):
-        acc[off] = self.uop(UOps.ALU, dtypes.float32, val+(acc[off],), ops[x.op])
+        acc[off] = self.uop(UOps.ALU, dtypes.float32, self.cast_my_vins(val+(acc[off],)), ops[x.op])
         ret.append((idx, acc[off]))
       for off in range(len(acc)):
         if input_acc[off] != acc[off]:
-          acc[off] = self.uop(UOps.PHI, dtypes.float32, (input_acc[off], acc[off]) + tuple(loop_ctx))
+          my_vins = (input_acc[off], acc[off]) + tuple(loop_ctx)
+          acc[off] = self.uop(UOps.PHI, dtypes.float32, my_vins)
     else:
-      ret = [(idx, self.uop(UOps.ALU, dtypes.float32, val, x.op)) for idx, val in zip([[i] for i in range(len(values[0]))], zip(*values))]
+      ret = [(idx, self.uop(UOps.ALU, dtypes.float32, self.cast_my_vins(val), x.op)) for idx, val in zip([[i] for i in range(len(values[0]))], zip(*values))]
     ordered_ret: List[Optional[UOp]] = [None]*len(values[0])
     # scatter
     for i,j in ret:
@@ -503,3 +504,5 @@ class Linearizer(Kernel):
         ordered_ret[k] = j
     assert all(isinstance(x, UOp) for x in ordered_ret), "some tokens didn't get scattered?"
     return cast(List[UOp], ordered_ret)
+
+  def cast_my_vins(self, vins): return tuple(self.uop(UOps.CAST, dtypes.float32, (x,), None) if x.dtype != dtypes.float else x for x in vins)

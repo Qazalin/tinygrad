@@ -135,6 +135,7 @@ class dtypes:
   int8: Final[DType] = DType(1, 1, "char", np.int8)
   int16: Final[DType] = DType(3, 2, "short", np.int16)
   int32: Final[DType] = DType(5, 4, "int", np.int32)
+  int = int32
   int64: Final[DType] = DType(7, 8, "long", np.int64)
   uint8: Final[DType] = DType(2, 1, "unsigned char", np.uint8)
   uint16: Final[DType] = DType(4, 2, "unsigned short", np.uint16)
