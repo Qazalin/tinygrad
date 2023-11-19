@@ -90,14 +90,19 @@ class DType(NamedTuple):
   name: str
   np: Optional[type]  # TODO: someday this will be removed with the "remove numpy" project
   sz: int = 1
-  def __repr__(self): return f"dtypes.{INVERSE_DTYPES_DICT[self]}"
+  def __repr__(self): return f"dtypes.{INVERSE_DTYPES_DICT[self]}" if self.sz == 1 else f"dtypes.{self.name}"
+  def vec(self, sz:int):
+    assert sz > 1 and self.sz == 1, f"can't vectorize {self} with size {sz}"
+    return DType(self.priority, self.itemsize*sz, self.name+str(sz), None, sz) if not isinstance(self, ImageDType) else self.underlying.vec(4)
+  def scalar(self): return DTYPES_DICT[self.name[:-1]] if self.sz > 1 else self if not isinstance(self, ImageDType) else self.underlying
 
 # dependent typing?
 class ImageDType(DType):
-  def __new__(cls, priority, itemsize, name, np, shape):
+  def __new__(cls, priority, itemsize, name, np, shape, underlying):
     return super().__new__(cls, priority, itemsize, name, np)
-  def __init__(self, priority, itemsize, name, np, shape):
+  def __init__(self, priority, itemsize, name, np, shape, underlying):
     self.shape: Tuple[int, ...] = shape  # arbitrary arg for the dtype, used in image for the shape
+    self.underlying = underlying
     super().__init__()
   def __repr__(self): return f"dtypes.{self.name}({self.shape})"
   # TODO: fix this to not need these
@@ -150,9 +155,9 @@ class dtypes:
 
   # NOTE: these are image dtypes
   @staticmethod
-  def imageh(shp): return ImageDType(100, 2, "imageh", np.float16, shp)
+  def imageh(shp): return ImageDType(100, 2, "imageh", np.float16, shp, underlying=dtypes.half)
   @staticmethod
-  def imagef(shp): return ImageDType(100, 4, "imagef", np.float32, shp)
+  def imagef(shp): return ImageDType(100, 4, "imagef", np.float32, shp, underlying=dtypes.float)
 
 # HACK: staticmethods are not callable in 3.8 so we have to compare the class
 DTYPES_DICT = {k: v for k, v in dtypes.__dict__.items() if not k.startswith('__') and not callable(v) and not v.__class__ == staticmethod}
