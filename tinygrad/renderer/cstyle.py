@@ -15,6 +15,8 @@ class CStyleLanguage(NamedTuple):
   smem_prefix: str = ""
   smem_prefix_for_cast: bool = True
   arg_int_prefix: str = ""
+  max_vector_width: int = 1
+  vectorize_fn = None
   barrier: str = ""
   xid: List[str] = []
   gid: List[str] = []
@@ -22,7 +24,6 @@ class CStyleLanguage(NamedTuple):
   global_max: List[int] = []
   local_max: List[int] = []
   extra_args: List[str] = []
-  float4: Optional[str] = None
   half_prekernel: Optional[str] = None
   uses_vload: bool = False
   external_local_bufs: bool = False
@@ -45,10 +46,8 @@ class CStyleLanguage(NamedTuple):
   def render_cast(self, x:List[str], var_dtype:DType) -> str:
     if len(x) == 1: return f"({var_dtype.name})({x[0]})"
     assert len(x) == var_dtype.sz, f"cast is wrong size {len(x)} != {var_dtype.sz}"
-    assert self.float4 is not None, "cast is not supported on this platform"
-    if var_dtype == dtypes.half.vec(16): return f"{{{','.join(f'(half){x}' for x in x)}}}"
-    if var_dtype == dtypes.float.vec(8): return f"{{{','.join(x)}}}"
-    return f"{self.float4.replace('float4', var_dtype.name)}({','.join(f'(half){x}' if var_dtype.scalar() == dtypes.half else x for x in x)})"
+    assert self.vectorize_fn and var_dtype.sz > self.max_vector_width, f"vectorized cast of size {var_dtype.sz} is not supported on this platform"
+    return f"{self.vectorize_fn(var_dtype)({','.join(x)})}"
 
   # returns a str expression of the const with the given type
   def render_const(self, x:Union[float,int], var_dtype) -> str:

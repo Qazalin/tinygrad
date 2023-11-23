@@ -12,7 +12,8 @@ class OpenCLLanguage(CStyleLanguage):
   arg_int_prefix = "const int"
   half_prekernel = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable"
   barrier = "barrier(CLK_LOCAL_MEM_FENCE);"
-  float4 = "(float4)"
+  max_vector_width = 16 # https://registry.khronos.org/OpenCL/specs/opencl-1.2.pdf#page=200
+  vectorize_fn = lambda x: str(x)
   gid = [f'get_group_id({i})' for i in range(3)]
   lid = [f'get_local_id({i})' for i in range(3)]
   xid = [f'get_global_id({i})' for i in range(3)]

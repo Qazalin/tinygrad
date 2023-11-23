@@ -7,7 +7,8 @@ class CUDALanguage(CStyleLanguage):
   smem_prefix_for_cast = False
   arg_int_prefix = "const int"
   barrier = "__syncthreads();" 
-  float4 = "make_float4"
+  max_vector_width = 16 # https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#vector-types
+  vectorize_fn = lambda x: f"make_{x}"
   gid = [f'blockIdx.{chr(120+i)}' for i in range(3)]
   lid = [f'threadIdx.{chr(120+i)}' for i in range(3)]
   xid = [f'(blockIdx.{chr(120+i)}*blockDim.{chr(120+i)}+threadIdx.{chr(120+i)})' for i in range(3)]
