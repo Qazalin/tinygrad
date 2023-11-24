@@ -27,10 +27,11 @@ class WGSLLanguage(CStyleLanguage):
     return f"var<workgroup> {name}: array<f32,{size}>;"
 
   def render_const(self, x:Union[float,int], var_dtype) -> str:
-    if math.isnan(x): val = "nan()"
+    if math.isnan(x): val = "nan()" # TODO to save lines maybe try using render_nan and render_inf here
     elif math.isinf(x): val = ("-" if x < 0 else "") + "0x1.fffffep+127f"
-    else: val = f"({x}" + ("" if dtypes.is_int(var_dtype) else "f") + ")"
-    return self.render_cast([val]*var_dtype.sz, var_dtype) if var_dtype.sz > 1 else val
+    # TODO the next two lines are copied from cstyle
+    else: val = f"{x}f" if dtypes.is_float(var_dtype) and isinstance(x, float) else f"{int(x)}" if dtypes.is_int(var_dtype) else str(x).lower()
+    return self.render_cast([val]*var_dtype.sz, var_dtype)
 
   def render_kernel(self, function_name:str, kernel:List[str], bufs:List[Tuple[str,DType]], local_size:List[int], prekernel:List[str]) -> str:
     local_size = local_size[::-1] if local_size else [1]
@@ -52,9 +53,6 @@ class WGSLLanguage(CStyleLanguage):
   def render_cast(self, x:List[str], var_dtype:DType) -> str:
     if type_map[var_dtype]: return f"{type_map[var_dtype]}({x[0]})"
     raise NotImplementedError(f"no cast for {var_dtype}")
-
-  def render_load(self, output_dtype, buf_name, buf_dtype, idx, local=False) -> str:
-    return f"f32({super().render_load(output_dtype, buf_name, buf_dtype, idx, local)})"
 
   def render_store(self, buf_name:str, buf_dtype:DType, var_name:str, var_dtype:DType, idx, local=False) -> str:
     if buf_dtype != var_dtype:

@@ -49,19 +49,18 @@ class CStyleLanguage(NamedTuple):
     return f"{self.float4.replace('float4', var_dtype.name)}({','.join(x)})"
 
   # returns a str expression of the const with the given type
-  def render_const(self, x:Union[float,int], var_dtype) -> str:
+  def render_const(self, x:Union[float,int,bool], var_dtype) -> str:
     if math.isnan(x): val = "NAN"
     elif math.isinf(x): val = ("-" if x < 0 else "") + "INFINITY"
-    else: val = f"{x}f" if dtypes.is_float(var_dtype) and isinstance(x, float) else f"{int(x)}"
-    return self.render_cast([val]*var_dtype.sz, var_dtype) if var_dtype.sz > 1 else val
+    else: val = f"{x}f" if dtypes.is_float(var_dtype) and isinstance(x, float) else f"{int(x)}" if dtypes.is_int(var_dtype) else str(x).lower() # TODO try using f, h and l here instead of all floats being fp32
+    return self.render_cast([val]*var_dtype.sz, var_dtype) if var_dtype.sz > 1 or var_dtype not in [dtypes.int, dtypes.float] else val # TODO it's not just int32 and float32, you can also do it with h and l once those are done, basically everyone gets a free pass except non-32bit ints and all uints, but careful with INFINITY
 
   # returns a str expression of the loaded value with the output type
   def render_load(self, output_dtype, buf_name, buf_dtype, idx, local=False) -> str:
     if isinstance(buf_dtype, ImageDType):
-      assert output_dtype == dtypes.float.vec(4), f"images must be float4, getting {output_dtype}"
-      return f"read_imagef({buf_name}, smp, {idx})"
-    if self.uses_vload and buf_dtype == dtypes.float16:
-      return f"vload_half{'' if output_dtype.sz == 1 else str(output_dtype.sz)}(0, {buf_name}+{idx})"
+      assert output_dtype == buf_dtype.underlying.vec(4), f"expected {buf_dtype.underlying.vec(4)} but got {output_dtype} for {buf_dtype}"
+      return f"read_{buf_dtype.name}({buf_name}, smp, {idx})"
+    if self.uses_vload and buf_dtype.scalar() == dtypes.half and output_dtype.scalar() == dtypes.float: return f"vload_half{'' if output_dtype.sz == 1 else str(output_dtype.sz)}(0, {buf_name}+{idx})"
     if output_dtype.sz > 1:
       out_val = f"*(({self.smem_prefix if local and self.smem_prefix_for_cast else self.buffer_prefix}{buf_dtype.name}{output_dtype.sz}*)({buf_name}+{idx}))"
     else:
@@ -89,7 +88,7 @@ class CStyleLanguage(NamedTuple):
     prg = ''.join([f"{self.kernel_prefix}void {f'__launch_bounds__ ({prod(local_size)}, 1) ' if self.launch_bounds else ''}{function_name}(",] +
     [', '.join([f'{t} {name}' for name,t in buftypes] + self.extra_args)] +
     [") {\n" + tmp] + ['\n'.join(kernel), "\n}"])
-    if self.half_prekernel and any(dtype == dtypes.float16 for _,dtype in bufs): prg = ''.join([f"{self.half_prekernel}", "\n", prg])
+    if self.half_prekernel and (any(dtype.scalar() == dtypes.half if not isinstance(dtype, ImageDType) else dtype.underlying == dtypes.half for _,dtype in bufs) or dtypes.half.name in prg): prg = ''.join([f"{self.half_prekernel}", "\n", prg])
     return prg
 
   # returns a str statement that does the store
@@ -97,10 +96,10 @@ class CStyleLanguage(NamedTuple):
     if isinstance(buf_dtype, ImageDType):
       assert var_dtype == dtypes.float.vec(4), "images must be float4"
       return f"write_imagef({buf_name}, {idx}, {var_name});"
-    if self.uses_vload and buf_dtype == dtypes.float16 and var_dtype != dtypes.float16:
-      return f"vstore_half{'' if var_dtype.sz == 1 else str(var_dtype.sz)}({var_name}, 0, {buf_name}+{idx});"
+    if self.uses_vload and buf_dtype.scalar() == dtypes.half and var_dtype.scalar() != dtypes.half: return f"vstore_half{'' if var_dtype.sz == 1 else str(var_dtype.sz)}({var_name}, 0, {buf_name}+{idx});"
     if var_dtype.sz > 1:
-      return f"*(({self.smem_prefix if local and self.smem_prefix_for_cast else self.buffer_prefix}{buf_dtype.name}{var_dtype.sz}*)({buf_name}+{idx})) = ({buf_dtype.name}{var_dtype.sz}){var_name};"
+      val = f"*(({self.smem_prefix if local and self.smem_prefix_for_cast else self.buffer_prefix}{buf_dtype.name}{var_dtype.sz}*)({buf_name}+{idx})) = {self.render_cast([var_name], buf_dtype.vec(var_dtype.sz))};"
+      return val
     return f"*({buf_name}+{idx}) = {var_name};" if self.uses_ptr_arithmetic else f"{buf_name}[{idx}] = {var_name};"
 
 def uops_to_cstyle(lang:CStyleLanguage, function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
@@ -158,8 +157,8 @@ def uops_to_cstyle(lang:CStyleLanguage, function_name:str, uops:List[UOp]) -> Tu
       # remove parens if ALU types are the same. TODO: can do more here
       if vin[0].uop == UOps.ALU and vin[0].arg == args and args in {BinaryOps.ADD, BinaryOps.SUB, BinaryOps.MUL}:
         val = lang.code_for_op[args](strip_parens(r[vin[0]]), *[r[x] for x in vin[1:]])
-      elif args == BinaryOps.MAX:
-        val = lang.code_for_op[args](*[lang.render_cast([r[x]], dtype) if x.dtype != dtype else r[x] for x in vin])
+      if args == UnaryOps.NEG and dtype == dtypes.bool:
+        val = f"!{r[vin[0]]}"
       else:
         val = lang.code_for_op[args](*[r[x] for x in vin])
       assert child_count[u] != 0, f"childless ALU op found {u}"

@@ -60,6 +60,8 @@ def cast(bb, val, input_type, output_type):
 
   raise NotImplementedError(f"cast from {input_type} -> {output_type} not implemented")
 
+def const(args, dtype): return ir.Constant(dtype_to_llvm_dtype[dtype], int(args) if dtypes.is_int(dtype) else bool(args) if dtype == dtypes.bool else args)
+
 def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
   # all llvm stuff goes into a module
   module = ir.Module(name=__file__)
@@ -96,7 +98,7 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
       phis = []
       for rp in reduce_phis:
         incoming = lvars[rp]
-        lvars[rp] = bb[-1].phi(ir.FloatType())
+        lvars[rp] = bb[-1].phi(dtype_to_llvm_dtype[rp.dtype])
         lvars[rp].add_incoming(incoming, bb[-2]._block)
         phis.append((rp, lvars[rp]))
 
@@ -113,13 +115,12 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
     if uop == UOps.DEFINE_GLOBAL:
       lvars[u] = func.args[buf_index[args[0]]]
     if uop == UOps.DEFINE_ACC:
-      lvars[u] = ir.Constant(dtype_to_llvm_dtype[dtype], args)
+      lvars[u] = const(args, dtype)
       reduce_phis.append(u)
     if uop == UOps.SPECIAL:
       lvars[u] = lvars[args.expr]
     if uop == UOps.CONST:
-      value = int(args) if dtypes.is_int(dtype) else bool(args) if dtype == dtypes.bool else args
-      lvars[u] = ir.Constant(dtype_to_llvm_dtype[dtype], value)
+      lvars[u] = const(args, dtype)
     if uop == UOps.LOAD:
       assert dtype is not None
       if len(vin) > 2:
@@ -145,7 +146,8 @@ def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
         with bb[-1].if_then(bb[-1].trunc(lvars[vin[3]], ir.IntType(1))): store_op()
       else: store_op()
     if uop == UOps.ALU:
-      lvars[u] = cast(bb, code_for_op[args](bb[-1], *[cast(bb, lvars[x], x.dtype, dtypes.float) for x in vin]), dtypes.float, dtype)
+      if args == UnaryOps.NEG and dtype == dtypes.bool: lvars[u] = bb[-1].xor(lvars[vin[0]], ir.Constant(ir.IntType(1), 1))
+      else: lvars[u] = cast(bb, code_for_op[args](bb[-1], *[cast(bb, lvars[x], x.dtype, dtypes.float) for x in vin]), dtypes.float, dtype)
     if uop == UOps.CAST: lvars[u] = cast(bb, lvars[vin[0]], vin[0].dtype, dtype)
 
   bb[-1].ret_void()

@@ -38,7 +38,7 @@ def _realize_rand(buffer: LazyBuffer) -> None:
   assert all_int(buffer.shape), "does not support symbolic shape"
   if DEBUG >= 2: print(f"***      rand {buffer.device}    seed {buffer.op.arg:<10d}  shape {str(buffer.shape):23s} dtype {buffer.dtype}")
   rng = np.random.default_rng(buffer.op.arg)
-  buffer.realized = Device[buffer.device].buffer.fromCPU(rng.random(size=prod(buffer.shape), dtype=np.float32).astype(dtype=buffer.dtype.np, copy=False), **buffer._device_extra_args())
+  buffer.realized = Device[buffer.device].buffer.fromCPU(rng.random(size=prod(buffer.shape), dtype=buffer.dtype.np), **buffer._device_extra_args())
 
 # *** one op LoadOps ***
 
