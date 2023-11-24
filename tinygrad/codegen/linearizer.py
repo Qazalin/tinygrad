@@ -451,6 +451,7 @@ class Linearizer(Kernel):
   def uop(self, uop:UOps, dtype:Optional[DType], vin:Tuple[UOp, ...], arg:Any=None, cachable=True, insert_before=None, simplify=True) -> UOp:
     key = (uop, dtype, vin, arg)
     if uop == UOps.DEFINE_ACC and not dtypes.is_float(cast(DType, dtype)) and arg == -math.inf: arg = False if dtype == dtypes.bool else -2**31
+    if uop == UOps.ALU and arg not in [BinaryOps.CMPLT, TernaryOps.WHERE]: vin = tuple(self.uop(UOps.CAST, dtype, (x,), None) if x.dtype != dtype else x for x in vin)
     if simplify:
       if uop == UOps.PHI and len(vin) == 2: return vin[1]   # a phi without loops is a noop
       if uop == UOps.GEP and vin[0].uop == UOps.CONST: return self.const(vin[0].arg, dtype, insert_before)
@@ -496,7 +497,7 @@ class Linearizer(Kernel):
       ret = []
       input_acc = acc[:]
       for idx, val, off in zip([[i] for i in range(len(values[0]))], zip(*values), cast(List[int], offs)):
-        acc[off] = self.uop(UOps.ALU, max(v.dtype for v in val+(acc[off],)) if x.op != TernaryOps.MULACC else dtypes.float, self.cast_my_vins(val+(acc[off],), max(v.dtype for v in val+(acc[off],)) if x.op != TernaryOps.MULACC else dtypes.float), ops[x.op])
+        acc[off] = self.uop(UOps.ALU, max(v.dtype for v in val+(acc[off],)) if x.op != TernaryOps.MULACC else dtypes.float, val+(acc[off],), ops[x.op])
         ret.append((idx, acc[off]))
       for off in range(len(acc)):
         if input_acc[off] != acc[off]:
@@ -507,7 +508,7 @@ class Linearizer(Kernel):
           phi_vins = (v0, v1) + tuple(loop_ctx)
           acc[off] = self.uop(UOps.PHI, v0.dtype, phi_vins)
     else:
-      ret = [(idx, self.uop(UOps.ALU, max(v.dtype for v in val), self.cast_my_vins(val, max(v.dtype for v in val)), x.op)) for idx, val in zip([[i] for i in range(len(values[0]))], zip(*values))]
+      ret = [(idx, self.uop(UOps.ALU, max(v.dtype for v in val), val, x.op)) for idx, val in zip([[i] for i in range(len(values[0]))], zip(*values))]
     ordered_ret: List[Optional[UOp]] = [None]*len(values[0])
     # scatter
     for i,j in ret:
@@ -515,6 +516,3 @@ class Linearizer(Kernel):
         ordered_ret[k] = j
     assert all(isinstance(x, UOp) for x in ordered_ret), "some tokens didn't get scattered?"
     return cast(List[UOp], ordered_ret)
-
-  # TODO this is poorly named
-  def cast_my_vins(self, vins, dtype=dtypes.float32): return tuple(self.uop(UOps.CAST, dtype, (x,), None) if x.dtype != dtype else x for x in vins)
