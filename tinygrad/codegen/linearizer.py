@@ -451,7 +451,8 @@ class Linearizer(Kernel):
   def uop(self, uop:UOps, dtype:Optional[DType], vin:Tuple[UOp, ...], arg:Any=None, cachable=True, insert_before=None, simplify=True) -> UOp:
     key = (uop, dtype, vin, arg)
     if uop == UOps.DEFINE_ACC and not dtypes.is_float(cast(DType, dtype)) and arg == -math.inf: arg = False if dtype == dtypes.bool else -2**31
-    if uop == UOps.ALU and arg not in [BinaryOps.CMPLT, TernaryOps.WHERE]: vin = tuple(self.uop(UOps.CAST, dtype, (x,), None) if x.dtype != dtype else x for x in vin)
+    if uop == UOps.PHI and vin[1].dtype != dtype: vin = tuple((vin[0], self.uop(UOps.CAST, dtype, (vin[1],)))) + vin[1:]
+    if uop == UOps.ALU and arg not in [BinaryOps.CMPLT, TernaryOps.WHERE]: vin = tuple(self.uop(UOps.CAST, dtype, (x,)) if x.dtype != dtype else x for x in vin)
     if simplify:
       if uop == UOps.PHI and len(vin) == 2: return vin[1]   # a phi without loops is a noop
       if uop == UOps.GEP and vin[0].uop == UOps.CONST: return self.const(vin[0].arg, dtype, insert_before)
@@ -501,12 +502,7 @@ class Linearizer(Kernel):
         ret.append((idx, acc[off]))
       for off in range(len(acc)):
         if input_acc[off] != acc[off]:
-          # TODO refactor this
-          v0 = input_acc[off]
-          v1 = acc[off]
-          if v0.dtype != v1.dtype: v1 = self.uop(UOps.CAST, v0.dtype, (v1,))
-          phi_vins = (v0, v1) + tuple(loop_ctx)
-          acc[off] = self.uop(UOps.PHI, v0.dtype, phi_vins)
+          acc[off] = self.uop(UOps.PHI, input_acc[off].dtype, (input_acc[off], acc[off]) + tuple(loop_ctx))
     else:
       ret = [(idx, self.uop(UOps.ALU, max(v.dtype for v in val), val, x.op)) for idx, val in zip([[i] for i in range(len(values[0]))], zip(*values))]
     ordered_ret: List[Optional[UOp]] = [None]*len(values[0])
