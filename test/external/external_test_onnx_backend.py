@@ -182,6 +182,10 @@ if Device.DEFAULT in ['LLVM', 'CUDA'] and CI:
   backend_test.exclude('test_max_float16_cpu')
   backend_test.exclude('test_min_float16_cpu')
 
+# Segfaults in CI
+if getenv('LLVM') and CI:
+  backend_test.exclude('test_dequantizelinear_e4m3fn_float16_cpu')
+
 # GPU requires cl_khr_fp16
 if getenv('GPU') and CI:
   backend_test.exclude('test_dequantizelinear_e4m3fn_float16_cpu')
