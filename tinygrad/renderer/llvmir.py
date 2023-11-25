@@ -60,7 +60,7 @@ def cast(bb, val, input_type, output_type):
 
   raise NotImplementedError(f"cast from {input_type} -> {output_type} not implemented")
 
-def const(args, dtype): return ir.Constant(dtype_to_llvm_dtype[dtype], float(args) if dtypes.is_float(args) else int(args) if dtypes.is_int(dtype) else bool(args))
+def const(args, dtype): return ir.Constant(dtype_to_llvm_dtype[dtype], int(args) if dtypes.is_int(dtype) else bool(args) if dtype == dtypes.bool else args)
 
 def uops_to_llvm_ir(function_name:str, uops:List[UOp]) -> Tuple[str, Dict]:
   # all llvm stuff goes into a module
