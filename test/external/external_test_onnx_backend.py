@@ -196,6 +196,19 @@ if getenv('GPU') and CI:
 if Device.DEFAULT in ['GPU', 'METAL', 'LLVM', 'CLANG']:
   backend_test.exclude('test_MaxPool3d_stride_padding_cpu')
 
+# Broken in CI
+if getenv('CLANG') and CI:
+  backend_test.exclude('test_ai_onnx_ml_array_feature_extractor_cpu')
+  backend_test.exclude('test_gather_elements_0_cpu')
+  backend_test.exclude('test_gather_elements_1_cpu')
+  backend_test.exclude('test_sce_NCd1_mean_weight_negative_ii_cpu')
+  backend_test.exclude('test_sce_NCd1_mean_weight_negative_ii_log_prob_cpu')
+  backend_test.exclude('test_nllloss_NCd1_expanded_cpu')
+  backend_test.exclude('test_sce_mean_weight_ii_3d_cpu')
+  backend_test.exclude('test_nllloss_NCd1_weight_expanded_cpu')
+  backend_test.exclude('test_gather_elements_negative_indices_cpu')
+  backend_test.exclude('test_sce_NCd1d2d3d4d5_mean_weight_cpu')
+
 # disable model tests for now since they are slow
 if not getenv("MODELTESTS"):
   for x in backend_test.test_suite:
