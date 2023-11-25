@@ -3,7 +3,7 @@ import numpy as np
 from tinygrad.helpers import CI, DTYPES_DICT, getenv, DType, DEBUG, ImageDType, PtrDType, OSX
 from tinygrad.ops import Device
 from tinygrad.tensor import Tensor, dtypes
-from typing import Any, List
+from typing import Any, List, Optional
 
 def is_dtype_supported(dtype: DType):
   # for GPU, cl_khr_fp16 isn't supported (except now we don't need it!)
@@ -189,6 +189,33 @@ class TestEqStrDType(unittest.TestCase):
     if PtrDType is None: raise unittest.SkipTest("no PtrDType support")
     self.assertEqual(str(dtypes.imagef((1,2,4))), "dtypes.imagef((1, 2, 4))")
     self.assertEqual(str(PtrDType(dtypes.float32)), "ptr.dtypes.float")
+
+class TestPromotion(unittest.TestCase):
+  def helper_test_promote(self, dts: List[DType], target:Optional[DType]=None):
+    def promote_np(dts: List[DType]) -> DType: return dtypes.from_np(sum([np.ones(1, dtype=d.np) for d in dts], np.array(0)).dtype)
+    if target is None: target = promote_np(dts) # In some cases, we don't follow numpy's promotion rules
+    self.assertEqual(dtypes.promote(dts), target)
+
+  def test_promote_float(self):
+    self.helper_test_promote([dtypes.float32, dtypes.float16])
+    self.helper_test_promote([dtypes.float32, dtypes.int32], dtypes.float32)
+    self.helper_test_promote([dtypes.float32, dtypes.int16], dtypes.float32)
+
+  def test_promote_same_category_ints(self):
+    self.helper_test_promote([dtypes.int32, dtypes.int16])
+    self.helper_test_promote([dtypes.int32, dtypes.int64])
+    self.helper_test_promote([dtypes.uint32, dtypes.uint16])
+    self.helper_test_promote([dtypes.uint32, dtypes.uint64])
+
+  def test_promote_same_size_ints(self):
+    self.helper_test_promote([dtypes.int32, dtypes.uint32])
+    self.helper_test_promote([dtypes.int16, dtypes.uint16])
+    self.helper_test_promote([dtypes.int64, dtypes.uint64])
+
+  def test_promote_different_size_ints(self):
+    self.helper_test_promote([dtypes.int32, dtypes.int64, dtypes.uint32], dtypes.int64)
+    self.helper_test_promote([dtypes.int32, dtypes.int16, dtypes.uint32], dtypes.int64)
+    self.helper_test_promote([dtypes.int8, dtypes.int32, dtypes.uint32], dtypes.int64)
 
 if __name__ == '__main__':
   unittest.main()
