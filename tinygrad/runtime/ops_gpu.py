@@ -64,8 +64,8 @@ class CLBuffer(RawBufferCopyInOut, RawBufferTransfer):
       cl.enqueue_copy_buffer_p2p_amd(CL.cl_platform, CL.cl_queue[x._buf.device], x._buf, self._buf, x.size * x.dtype.itemsize).wait()
     else: raise NotImplementedError("p2p transfer between devices not implemented on non-amd")
 
-@diskcache
 def compile_gpu(prg:str) -> bytes:
+  print(prg)
   clprg = cl.Program(CL.cl_ctxs[0], prg)
   clprg.build()
   return clprg.get_info(cl.program_info.BINARIES)[0]
