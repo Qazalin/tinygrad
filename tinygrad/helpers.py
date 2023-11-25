@@ -37,8 +37,8 @@ def partition(lst:List[T], fxn:Callable[[T],bool]):
   b:List[T] = []
   for s in lst: (a if fxn(s) else b).append(s)
   return a,b
-def unwrap(x:Optional[T]) -> T:
-  assert x is not None
+def unwrap(x:Optional[T], err:Optional[str]=None) -> T:
+  assert x is not None, err
   return x
 def get_child(obj, key):
   for k in key.split('.'):

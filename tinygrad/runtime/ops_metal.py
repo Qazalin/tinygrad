@@ -2,7 +2,7 @@ import os, subprocess, pathlib, ctypes, tempfile
 import Metal, libdispatch
 from typing import List, Any, Tuple, Dict, cast, Optional
 from tinygrad.codegen.kernel import LinearizerOptions
-from tinygrad.helpers import prod, getenv, DEBUG, DType, dtypes, diskcache, dedup
+from tinygrad.helpers import prod, getenv, DEBUG, DType, dtypes, diskcache, dedup, unwrap
 from tinygrad.ops import Compiled, CompiledASTRunner, update_stats
 from tinygrad.renderer.metal import MetalRenderer
 from tinygrad.runtime.lib import RawBufferMapped, RawBuffer, LRUAllocator
@@ -13,8 +13,7 @@ class MetalAllocator(LRUAllocator):
   def _do_alloc(self, size, dtype, device, **kwargs):
     buf_len, max_buf_len = size*dtype.itemsize, METAL.device.maxBufferLength()
     assert buf_len < max_buf_len, f"Buffer length of {buf_len/1e9:5.2f} GB exceeds Metal's max buffer length of {max_buf_len/1e9:5.2f} GB."
-    buf = METAL.device.newBufferWithLength_options_(buf_len, Metal.MTLResourceStorageModeShared)
-    assert buf, f"Metal buffer allocation failed with {buf}."
+    buf = unwrap(METAL.device.newBufferWithLength_options_(buf_len, Metal.MTLResourceStorageModeShared), f"Metal buffer allocation failed.")
     return buf
   def _do_free(self, buf): buf.release()
   def _cached_bufkey(self, size, dtype, device): return (device, size*dtype.itemsize) # Buffers of the same length could be reused, no matter what dtype.
@@ -38,11 +37,6 @@ class RawMetalBuffer(RawBufferMapped):
   def _buffer(self):
     METAL.synchronize()
     return self._buf.contents().as_buffer(self._buf.length())
-
-def unwrap(x):
-  ret, err = x
-  assert err is None, str(err)
-  return ret
 
 @diskcache
 def compile_metal(prg, use_xcode=bool(getenv("METAL_XCODE"))) -> bytes:
