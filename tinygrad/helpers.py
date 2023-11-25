@@ -138,6 +138,8 @@ class dtypes:
   def from_np(x) -> DType: return DTYPES_DICT[np.dtype(x).name]
   @staticmethod
   def fields() -> Dict[str, DType]: return DTYPES_DICT
+  @staticmethod
+  def promote(lst: List[DType]) -> DType: return max(lst, key=lambda x: x.priority)
   bool: Final[DType] = DType(0, 1, "bool", np.bool_)
   float16: Final[DType] = DType(9, 2, "half", np.float16)
   half = float16
