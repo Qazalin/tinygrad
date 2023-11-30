@@ -26,6 +26,7 @@ def helper_test_op(shps, torch_fxn, tinygrad_fxn=None, atol=1e-6, rtol=1e-3, gra
   tinygrad_fp = time.monotonic() - st
 
   def compare(s, x,y,atol,rtol):
+    if getenv("MOCKHIP") == 1: return
     if PRINT_TENSORS: print(s, x, y)
     assert x.shape == y.shape, f"shape mismatch: tinygrad={x.shape} | torch={y.shape}"
     try:
