@@ -604,7 +604,7 @@ class Tensor:
 
   # ***** mlops (unary) *****
 
-  def neg(self): return mlops.Neg.apply(self)
+  def neg(self): return mlops.Neg.apply(self) if self.dtype != dtypes.bool else self.logical_not()
   def contiguous(self): return mlops.Contiguous.apply(self)
   def contiguous_backward(self): return mlops.ContiguousBackward.apply(self)
   def log(self): return mlops.Log.apply(self)
@@ -618,6 +618,7 @@ class Tensor:
   def rsqrt(self): return (1/self).sqrt()
   def cos(self): return ((math.pi/2)-self).sin()
   def tan(self): return self.sin() / self.cos()
+  def logical_not(self): return mlops.LogicalNot.apply(self)
 
   # ***** math functions (unary) *****
 

@@ -32,6 +32,10 @@ class Neg(Function):
   def forward(self, x:LazyBuffer) -> LazyBuffer: return x.e(UnaryOps.NEG)
   def backward(self, grad:LazyBuffer) -> LazyBuffer: return grad.e(UnaryOps.NEG)
 
+class LogicalNot(Function):
+  def forward(self, x:LazyBuffer) -> LazyBuffer: return x.e(UnaryOps.NOT)
+  def backward(self, grad:LazyBuffer) -> LazyBuffer: return grad.const(0)
+
 class Sin(Function):
   def forward(self, x:LazyBuffer) -> LazyBuffer:
     self.x = x

@@ -60,6 +60,7 @@ def uops_to_triton(function_name:str, uops:List[UOp]):
   def kk(s): kernel.append("  "*depth+s)
   code_for_op: Final[Dict[Op, Callable]] = {
     UnaryOps.EXP2: lambda x,: f"tl.math.exp2({x})",
+    UnaryOps.NOT: lambda x,: f"tl.logical_not({x})",
     UnaryOps.LOG2: lambda x,: f"tl.math.log2({x})",
     UnaryOps.SIN: lambda x,: f"tl.sin({x})",
     UnaryOps.SQRT: lambda x,: f"tl.sqrt({x})",
