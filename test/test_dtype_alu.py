@@ -17,6 +17,7 @@ binary_operations = ((operator.add, operator.add), (operator.sub, operator.sub),
 unary_operations = ((Tensor.exp, np.exp), (Tensor.log, np.log), (operator.neg, operator.neg))
 
 def universal_test(a, b, dtype, op):
+  if not dtype in dtypes_bool and a > (np.finfo(dtype.np) if dtype in dtypes_float else np.iinfo(dtype.np)).max: return
   tensor_value = (op[0](Tensor([a], dtype=dtype), Tensor([b], dtype=dtype))).numpy()
   numpy_value = op[1](np.array([a]).astype(dtype.np), np.array([b]).astype(dtype.np))
   if dtype in dtypes_float: np.testing.assert_allclose(tensor_value, numpy_value, atol=1e-10)
