@@ -15,10 +15,7 @@ dtypes_int = (dtypes.int8, dtypes.int16, dtypes.int32, dtypes.int64, dtypes.uint
 dtypes_bool = (dtypes.bool,)
 binary_operations = [operator.add, operator.sub, operator.mul]
 integer_binary_operations = binary_operations + [(Tensor.xor, np.bitwise_xor)]
-unary_operations = [(Tensor.exp, np.exp), (Tensor.log, np.log), operator.neg, (Tensor.sin, np.sin), (Tensor.sqrt, np.sqrt), (Tensor.reciprocal, np.reciprocal)]
-
-# TODO: enable this (this is a dtype issue)
-binary_operations.append(operator.truediv)
+unary_operations = [(Tensor.exp, np.exp), (Tensor.log, np.log), operator.neg, (Tensor.sin, np.sin), (Tensor.sqrt, np.sqrt), (Tensor.reciprocal, np.reciprocal), operator.truediv]
 
 # TODO: enable mod on Tensor
 #binary_operations.append(operator.mod)
