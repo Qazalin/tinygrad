@@ -9,7 +9,7 @@ kernel void kkl(
     const device float* in [[ buffer(0) ]],
     device float* out [[ buffer(1) ]],
     uint id [[ thread_position_in_grid ]]) {
-    out[id] = in[0] + in[1];
+    out[id] = in[0] / in[1];
 }
 """
 mc.compile(code, "kkl")
