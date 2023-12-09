@@ -701,7 +701,7 @@ class Tensor:
 
   def _to_float(self, x:Union[Tensor, float]):
     return x.lazydata.base.op.arg if isinstance(x, Tensor) and x.lazydata.is_unrealized_contiguous_const() \
-      and not x.requires_grad and self._broadcasted(x)[0].shape == self.shape else x
+        and not x.requires_grad and self._broadcasted(x)[0].shape == self.shape else x
 
   def add(self, x:Union[Tensor, float], reverse=False) -> Tensor:
     x = self._to_float(x)
@@ -715,6 +715,7 @@ class Tensor:
     if x.__class__ is not Tensor and x == -1.0: return -self
     return mlops.Mul.apply(*self._broadcasted(x, reverse)) if x.__class__ is Tensor or x != 1.0 else self
   def div(self, x:Union[Tensor, float], reverse=False) -> Tensor:
+    if not dtypes.is_float(self.dtype): self = self.cast(dtypes.float32)
     x = self._to_float(x)
     return mlops.Div.apply(*self._broadcasted(x, reverse)) if x.__class__ is Tensor or reverse or not x or not dtypes.is_float(self.dtype) else self.mul(1/x)
   def pow(self, x:Union[Tensor, float], reverse=False) -> Tensor:
