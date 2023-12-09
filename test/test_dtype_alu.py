@@ -18,7 +18,7 @@ integer_binary_operations = binary_operations + [(Tensor.xor, np.bitwise_xor)]
 unary_operations = [(Tensor.exp, np.exp), (Tensor.log, np.log), operator.neg, (Tensor.sin, np.sin), (Tensor.sqrt, np.sqrt), (Tensor.reciprocal, np.reciprocal)]
 
 # TODO: enable this (this is a dtype issue)
-#binary_operations.append(operator.truediv)
+binary_operations.append(operator.truediv)
 
 # TODO: enable mod on Tensor
 #binary_operations.append(operator.mod)
