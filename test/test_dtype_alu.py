@@ -13,9 +13,9 @@ print(settings.default)
 dtypes_float = (dtypes.float32, dtypes.float16)
 dtypes_int = (dtypes.int8, dtypes.int16, dtypes.int32, dtypes.int64, dtypes.uint8, dtypes.uint16, dtypes.uint32, dtypes.uint64)
 dtypes_bool = (dtypes.bool,)
-binary_operations = [operator.add, operator.sub, operator.mul]
+binary_operations = [operator.add, operator.sub, operator.mul, operator.truediv]
 integer_binary_operations = binary_operations + [(Tensor.xor, np.bitwise_xor)]
-unary_operations = [(Tensor.exp, np.exp), (Tensor.log, np.log), operator.neg, (Tensor.sin, np.sin), (Tensor.sqrt, np.sqrt), (Tensor.reciprocal, np.reciprocal), operator.truediv]
+unary_operations = [(Tensor.exp, np.exp), (Tensor.log, np.log), operator.neg, (Tensor.sin, np.sin), (Tensor.sqrt, np.sqrt), (Tensor.reciprocal, np.reciprocal)]
 
 # TODO: enable mod on Tensor
 #binary_operations.append(operator.mod)
@@ -82,14 +82,14 @@ class TestDTypeALU(unittest.TestCase):
   # GPU requires cl_khr_fp16
   # for LLVM, it segfaults because it can't link to the casting function
   # CUDACPU architecture is sm_35 but we need at least sm_70 to run fp16 ALUs
-  @unittest.skipIf((Device.DEFAULT in ["GPU", "LLVM"] and CI) or getenv("CUDACPU"), "")
+  @unittest.skipIf((Device.DEFAULT in ["GPU"] and CI) or getenv("CUDACPU") or Device.DEFAULT == "LLVM", "")
   @given(ht.float16, ht.float16, st.sampled_from(binary_operations))
   def test_float16(self, a, b, op): universal_test(a, b, dtypes.float16, op)
 
   @given(ht.float32, st.sampled_from(unary_operations))
   def test_float32_unary(self, a, op): universal_test_unary(a, dtypes.float32, op)
 
-  @unittest.skipIf((Device.DEFAULT in ["GPU", "LLVM"] and CI) or getenv("CUDACPU"), "")
+  @unittest.skipIf((Device.DEFAULT in ["GPU"] and CI) or getenv("CUDACPU") or Device.DEFAULT == "LLVM", "")
   @given(ht.float32, st.sampled_from(unary_operations))
   def test_float16_unary(self, a, op): universal_test_unary(a, dtypes.float16, op)
 
