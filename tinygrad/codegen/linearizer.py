@@ -464,7 +464,8 @@ class Linearizer(Kernel):
     key = (uop, dtype, vin, arg)
     if uop == UOps.PHI and vin[1].dtype != dtype: vin = (vin[0], self.cast(vin[1], dtype)) + vin[1:]
     if uop == UOps.ALU: # upcast vins to the same dtype
-      upcast_dtype = dtypes.float if arg == TernaryOps.MULACC else max(cast(DType, x.dtype) for x in vin) # MULACC is only supported in float
+      upcast_dtype = max(cast(DType, x.dtype) for x in vin)
+      if not dtypes.is_float(upcast_dtype) and arg in [TernaryOps.MULACC, UnaryOps.EXP2, UnaryOps.SIN, UnaryOps.SQRT]: upcast_dtype = dtypes.float
       if arg == TernaryOps.WHERE: vin = (vin[0],) + tuple(self.cast(x, upcast_dtype) for x in vin[1:]) # the first arg is always bool
       else: vin = tuple(self.cast(x, upcast_dtype) for x in vin)
       dtype = dtype or upcast_dtype # some ops like BinaryOps.CMPLT return bool
