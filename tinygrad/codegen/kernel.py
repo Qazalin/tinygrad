@@ -334,8 +334,7 @@ class Kernel:
         has_cast = tc.dtype_in != tc.dtype_out
 
         if has_cast and not(isinstance(self.reduceop.src[0], LazyOp) and self.reduceop.src[0].op == UnaryOps.CAST and self.reduceop.src[0].arg[0] == tc.dtype_out): continue
-        if self.reduceop.src[0].op == TernaryOps.MULACC: mul_op = LazyOp(BinaryOps.MUL, self.reduceop.src[0].src) # TODO hack undo MULACC fusion
-        else: mul_op = cast(LazyOp, self.reduceop.src[0].src[0] if has_cast else self.reduceop.src[0])
+        mul_op = self.reduceop.src[0].src[0] if has_cast else self.reduceop.src[0] if self.reduceop.src[0].op != TernaryOps.MULACC else LazyOp(BinaryOps.MUL, self.reduceop.src[0].src) # undo MULACC fusion if needed
 
         if not(isinstance(mul_op, LazyOp) and mul_op.op == BinaryOps.MUL): continue
         if not(isinstance(mul_op.src[0], LazyOp) and mul_op.src[0].op == BufferOps.LOAD and mul_op.src[0].arg.dtype == tc.dtype_in): continue

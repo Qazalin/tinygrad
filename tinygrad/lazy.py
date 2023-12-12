@@ -75,10 +75,10 @@ def _replace_bufferops(op:LazyOp) -> Tuple[LazyOp, List[LazyBuffer]]:
 # TODO poorly wrritten recursion
 def _try_fuse_sum(op):
   if op.src[0].__class__ is LazyOp and op.src[0].op == BinaryOps.MUL:
-    src = LazyOp(TernaryOps.MULACC, cast(LazyOp, cast(LazyOp, op).src[0]).src) # absurd xd
+    src = LazyOp(TernaryOps.MULACC, cast(LazyOp, cast(LazyOp, op).src[0]).src, arg=op.arg)
     return LazyOp(ReduceOps.SUM, (src,), op.arg)
   if op.src[0].__class__ is LazyOp and op.src[0].op == UnaryOps.CAST and op.src[0].src[0].__class__ is LazyOp and op.src[0].src[0].op == BinaryOps.MUL: # type:ignore
-    src = LazyOp(TernaryOps.MULACC, op.src[0].src[0].src) # type:ignore
+    src = LazyOp(TernaryOps.MULACC, op.src[0].src[0].src, arg=op.arg) # type:ignore
     return LazyOp(ReduceOps.SUM, (src,), op.arg)
   return op
 def _fuse_mulacc(leaf) -> LazyOp:
