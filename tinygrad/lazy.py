@@ -72,6 +72,21 @@ def _replace_bufferops(op:LazyOp) -> Tuple[LazyOp, List[LazyBuffer]]:
       raise NotImplementedError(f"not handled {x}")
   return (op.src[0] if op.op in {MovementOps.RESHAPE, LoadOps.CONTIGUOUS} else op).map_buffers(replacements), base_bufs
 
+# TODO poorly wrritten recursion
+def _try_fuse_sum(op):
+  if op.src[0].__class__ is LazyOp and op.src[0].op == BinaryOps.MUL:
+    src = LazyOp(TernaryOps.MULACC, cast(LazyOp, cast(LazyOp, op).src[0]).src) # absurd xd
+    return LazyOp(ReduceOps.SUM, (src,), op.arg)
+  if op.src[0].__class__ is LazyOp and op.src[0].op == UnaryOps.CAST and op.src[0].src[0].__class__ is LazyOp and op.src[0].src[0].op == BinaryOps.MUL: # type:ignore
+    src = LazyOp(TernaryOps.MULACC, op.src[0].src[0].src) # type:ignore
+    return LazyOp(ReduceOps.SUM, (src,), op.arg)
+  return op
+def _fuse_mulacc(leaf) -> LazyOp:
+  real_srcs: Any = {x:None for x in leaf.buffers}
+  if leaf.op == ReduceOps.SUM: leaf = _try_fuse_sum(leaf)
+  for op in leaf.src: real_srcs[op] = _fuse_mulacc(op)
+  return leaf.map_buffers(cast(Dict[LazyBuffer, Union[LazyOp, LazyBuffer]], real_srcs))
+
 # **** lazy operations ****
 
 def get_movementroot(root:LazyBuffer, allow_contiguous=False) -> LazyBuffer: return get_movementroot(cast(LazyBuffer, root.op.src[0]), allow_contiguous) if not root.realized and (root.optype == MovementOps or (root.op.op == LoadOps.CONTIGUOUS and allow_contiguous and root.op.src[0].st.contiguous)) else root
@@ -161,6 +176,7 @@ class LazyBuffer:
     var_vals = merge_dicts([self.st.var_vals] + [buf.st.var_vals for buf in op.buffers])
 
     op, base_bufs = _replace_bufferops(op)
+    op = _fuse_mulacc(op)
 
     # check if we can reuse the output buffer
     # if it's aliased, don't use it
@@ -184,6 +200,7 @@ class LazyBuffer:
         if DEBUG >= 3: print(f"forcing image {self.dtype} to float32")
         self.dtype = dtypes.float32  # NOTE; this is what makes the dtype above not match
         op = LazyOp(UnaryOps.CAST, (op, ), (dtypes.float32, False))
+
 
       # TODO: why doesn't this match?
       #assert info.shape == self.shape, f"shape mismatch {info.shape=} != {self.shape=}"
