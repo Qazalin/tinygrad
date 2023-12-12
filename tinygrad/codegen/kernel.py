@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os, math, itertools
 from typing import NamedTuple, Optional, List, Tuple, cast, Dict, Union
-from tinygrad.ops import LazyOp, FlopCounter, get_lazyop_info, UnaryOps, BinaryOps, ReduceOps, MemBuffer, ConstBuffer, BufferOps, vars_from_ast
+from tinygrad.ops import LazyOp, FlopCounter, TernaryOps, get_lazyop_info, UnaryOps, BinaryOps, ReduceOps, MemBuffer, ConstBuffer, BufferOps, vars_from_ast
 from tinygrad.device import Device, Compiled
 from tinygrad.helpers import dedup, dtypes, colored, ImageDType, DType, ansilen, getenv, prod, DEBUG, round_up
 from tinygrad.shape.shapetracker import ShapeTracker, get_contraction
@@ -334,7 +334,8 @@ class Kernel:
         has_cast = tc.dtype_in != tc.dtype_out
 
         if has_cast and not(isinstance(self.reduceop.src[0], LazyOp) and self.reduceop.src[0].op == UnaryOps.CAST and self.reduceop.src[0].arg[0] == tc.dtype_out): continue
-        mul_op = self.reduceop.src[0].src[0] if has_cast else self.reduceop.src[0]
+        if self.reduceop.src[0].op == TernaryOps.MULACC: mul_op = LazyOp(BinaryOps.MUL, self.reduceop.src[0].src) # TODO hack undo MULACC fusion
+        else: mul_op = self.reduceop.src[0].src[0] if has_cast else self.reduceop.src[0]
 
         if not(isinstance(mul_op, LazyOp) and mul_op.op == BinaryOps.MUL): continue
         if not(isinstance(mul_op.src[0], LazyOp) and mul_op.src[0].op == BufferOps.LOAD and mul_op.src[0].arg.dtype == tc.dtype_in): continue
