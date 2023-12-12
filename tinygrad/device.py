@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Union, Any, List, Optional, Dict, Callable
 import importlib, inspect, functools, pathlib, time, re, ctypes
 from tinygrad.helpers import ansilen, DEBUG, getenv, GlobalCounters, colored, BEAM, NOOPT, all_int, to_function_name, DType, from_mv, dtypes, flat_mv, ImageDType
 from tinygrad.shape.symbolic import Variable, sym_infer, sint
-from tinygrad.ops import LazyOp, TernaryOps, get_lazyop_info, ReduceOps, BufferOps, BinaryOps, UnaryOps, Op, vars_from_ast
+from tinygrad.ops import LazyOp, TernaryOps, get_lazyop_info, ReduceOps, BufferOps, UnaryOps, Op, vars_from_ast
 
 if TYPE_CHECKING:
   from tinygrad.codegen.linearizer import Linearizer
@@ -208,6 +208,9 @@ def _get_interpreted_fxn(fxn_for_op:Dict[Op, Callable], ast:LazyOp) -> Interpret
   def _interpret_ast(ast:LazyOp) -> str:
     # TODO: shortcutted store won't work with strides
     if ast.op == BufferOps.STORE: return _interpret_ast(ast.src[0])
+    # TODO remove this
+    if ast.op == ReduceOps.SUM and ast.src[0].op == TernaryOps.MULACC: # type:ignore
+      ast = LazyOp(TernaryOps.MULACC, ast.src[0].src, ast.arg) # TODO needs long-term fix in lazy, pass in the new_shape directly there
     if ast.op in BufferOps:
       if ast.op == ast.op == BufferOps.CONST: tmp = f"{gstr(fxn_for_op[ast.op], ast.op)}({gstr(ast.arg.val)}, {gstr(ast.arg.dtype)})"
       else: tmp = f"{gstr(fxn_for_op[UnaryOps.CAST], UnaryOps.CAST)}(inputs[{ast.arg.idx}], ({gstr(ast.arg.dtype)}, True))"
