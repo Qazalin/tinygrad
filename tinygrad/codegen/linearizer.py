@@ -504,7 +504,7 @@ class Linearizer(Kernel):
       return acc
     values = [self.ast_parse(cast(LazyOp, v), acc, offs, loaded_buffers, loop_ctx=loop_ctx) for v in x.src]
     ops = {ReduceOps.SUM:BinaryOps.ADD, ReduceOps.MAX:BinaryOps.MAX, TernaryOps.MULACC:TernaryOps.MULACC}
-    if x.op in ops:
+    if x.op in ops and not (x.op == ReduceOps.SUM and x.src[0].op == TernaryOps.MULACC): # TODO HACK
       ret: List[UOp] = []
       input_acc = acc[:]
       for val, off in zip(zip(*values), cast(List[int], offs)):
