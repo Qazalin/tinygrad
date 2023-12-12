@@ -72,15 +72,9 @@ def _replace_bufferops(op:LazyOp) -> Tuple[LazyOp, List[LazyBuffer]]:
       raise NotImplementedError(f"not handled {x}")
   return (op.src[0] if op.op in {MovementOps.RESHAPE, LoadOps.CONTIGUOUS} else op).map_buffers(replacements), base_bufs
 
-# TODO poorly wrritten recursion
 def _try_fuse_sum(op):
-  if op.src[0].__class__ is LazyOp and op.src[0].op == BinaryOps.MUL:
-    src = LazyOp(TernaryOps.MULACC, cast(LazyOp, cast(LazyOp, op).src[0]).src, arg=op.arg)
-    return LazyOp(ReduceOps.SUM, (src,), op.arg)
-  if op.src[0].__class__ is LazyOp and op.src[0].op == UnaryOps.CAST and op.src[0].src[0].__class__ is LazyOp and op.src[0].src[0].op == BinaryOps.MUL: # type:ignore
-    src = LazyOp(TernaryOps.MULACC, op.src[0].src[0].src, arg=op.arg) # type:ignore
-    return LazyOp(ReduceOps.SUM, (src,), op.arg)
-  return op
+  mul_srcs = op.src[0].src if op.src[0].op == BinaryOps.MUL else op.src[0].src[0] if op.src[0].op == TernaryOps.MULACC else None
+  return LazyOp(op.op, (LazyOp(TernaryOps.MULACC, mul_srcs, op.arg),), op.arg) if mul_srcs else op
 def _fuse_mulacc(leaf) -> LazyOp:
   real_srcs: Any = {x:None for x in leaf.buffers}
   if leaf.op == ReduceOps.SUM: leaf = _try_fuse_sum(leaf)

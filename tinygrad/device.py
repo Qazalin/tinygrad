@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Union, Any, List, Optional, Dict, Callable
 import importlib, inspect, functools, pathlib, time, re, ctypes
 from tinygrad.helpers import ansilen, DEBUG, getenv, GlobalCounters, colored, BEAM, NOOPT, all_int, to_function_name, DType, from_mv, dtypes, flat_mv, ImageDType
 from tinygrad.shape.symbolic import Variable, sym_infer, sint
-from tinygrad.ops import LazyOp, TernaryOps, get_lazyop_info, ReduceOps, BufferOps, UnaryOps, Op, vars_from_ast
+from tinygrad.ops import LazyOp, get_lazyop_info, BufferOps, UnaryOps, Op, vars_from_ast
 
 if TYPE_CHECKING:
   from tinygrad.codegen.linearizer import Linearizer
