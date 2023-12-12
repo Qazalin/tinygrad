@@ -73,7 +73,7 @@ def _replace_bufferops(op:LazyOp) -> Tuple[LazyOp, List[LazyBuffer]]:
   return (op.src[0] if op.op in {MovementOps.RESHAPE, LoadOps.CONTIGUOUS} else op).map_buffers(replacements), base_bufs
 
 def _try_fuse_sum(op):
-  mul_srcs = op.src[0].src if op.src[0].op == BinaryOps.MUL else op.src[0].src[0] if op.src[0].op == TernaryOps.MULACC else None
+  mul_srcs = op.src[0].src if op.src[0].op == BinaryOps.MUL else op.src[0].src[0].src if (op.src[0].op == UnaryOps.CAST and op.src[0].src[0].op == BinaryOps.MUL) else None
   return LazyOp(op.op, (LazyOp(TernaryOps.MULACC, mul_srcs, op.arg),), op.arg) if mul_srcs else op
 def _fuse_mulacc(leaf) -> LazyOp:
   real_srcs: Any = {x:None for x in leaf.buffers}
