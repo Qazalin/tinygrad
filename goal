@@ -1,0 +1,25 @@
+half*half+half != float*float+half
+
+float/half/float:
+
+````
+half acc
+for {
+  float x;
+  float w;
+  acc = (half)fma(x,w,(float)acc);
+}
+data0 = (float)acc;
+````
+
+half/float/half
+
+```
+float acc
+for {
+  half x;
+  half w;
+  acc = fma((float)x, (float)w, acc);
+}
+data0 = (half)acc;
+```
