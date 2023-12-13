@@ -45,8 +45,8 @@ class TestLazyOp(unittest.TestCase):
     w = Tensor.rand(1024,1024, dtype=d1)
     out = (x*w).cast(d2).sum(-1)
     reduceop = [op for op in out.lazydata.schedule()[-1].ast.get_lazyops() if op.op in ReduceOps][0]
-    #assert reduceop.op == ReduceOps.SUM and reduceop.src[0].op == TernaryOps.MULACC and len(reduceop.src[0].src) == 2
-    # assert get_lazyop_info(reduceop).dtype == d2 TODO what do we expect here? max(d1, d2)? d2? d1?
+    assert reduceop.op == ReduceOps.SUM and reduceop.src[0].op == TernaryOps.MULACC and len(reduceop.src[0].src) == 2
+    assert get_lazyop_info(reduceop).dtype == d2 #TODO what do we expect here? max(d1, d2)? d2? d1?
 
 if __name__ == '__main__':
   unittest.main()
