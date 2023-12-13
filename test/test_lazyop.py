@@ -1,5 +1,5 @@
 import unittest
-from hypothesis import given, strategies as st
+from hypothesis import assume, given, strategies as st
 from tinygrad.tensor import Tensor
 
 # stuff needed to unpack a kernel
@@ -35,18 +35,20 @@ class TestLazyOp(unittest.TestCase):
     x = Tensor.rand(1024,1024, dtype=d)
     w = Tensor.rand(1024,1024, dtype=d)
     out = (x*w).sum(-1)
-    reduceop = [op for op in out.lazydata.schedule()[-1].ast.get_lazyops() if op.op in ReduceOps][0]
-    assert reduceop.op == ReduceOps.SUM and reduceop.src[0].op == TernaryOps.MULACC and len(reduceop.src[0].src) == 2
+    reduceop = [op for op in out.lazydata.schedule()[-1].ast.get_lazyops() if op.op == ReduceOps.SUM][0]
+    assert reduceop.src[0].op == TernaryOps.MULACC and len(reduceop.src[0].src) == 2
     assert get_lazyop_info(reduceop).dtype == d
 
   @given(st.sampled_from([dtype for dtype in DTYPES_DICT.values() if dtypes.is_float(dtype)]), st.sampled_from([dtype for dtype in DTYPES_DICT.values() if dtypes.is_float(dtype)]))
   def test_mulacc_fusion_midcast(self, d1, d2):
+    assume(d1 != d2)
     x = Tensor.rand(1024,1024, dtype=d1)
     w = Tensor.rand(1024,1024, dtype=d1)
     out = (x*w).cast(d2).sum(-1)
-    reduceop = [op for op in out.lazydata.schedule()[-1].ast.get_lazyops() if op.op in ReduceOps][0]
-    assert reduceop.op == ReduceOps.SUM and reduceop.src[0].op == TernaryOps.MULACC and len(reduceop.src[0].src) == 2
-    assert get_lazyop_info(reduceop).dtype == d2 #TODO what do we expect here? max(d1, d2)? d2? d1?
+    reduceop = [op for op in out.lazydata.schedule()[-1].ast.get_lazyops() if op.op == ReduceOps.SUM][0]
+    assert reduceop.op == ReduceOps.SUM
+    assert reduceop.src[0].op == UnaryOps.CAST and reduceop.src[0].arg[0] == d2
+    assert reduceop.src[0].src[0].op == TernaryOps.MULACC and len(reduceop.src[0].src[0].src) == 2
 
 if __name__ == '__main__':
   unittest.main()
