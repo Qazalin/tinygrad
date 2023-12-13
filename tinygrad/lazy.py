@@ -72,12 +72,16 @@ def _replace_bufferops(op:LazyOp) -> Tuple[LazyOp, List[LazyBuffer]]:
       raise NotImplementedError(f"not handled {x}")
   return (op.src[0] if op.op in {MovementOps.RESHAPE, LoadOps.CONTIGUOUS} else op).map_buffers(replacements), base_bufs
 
+# TODO merge the two functions once it works
 def _try_fuse_sum(op):
-  mul_srcs = op.src[0].src if op.src[0].op == BinaryOps.MUL else op.src[0].src[0].src if (op.src[0].op == UnaryOps.CAST and op.src[0].src[0].op == BinaryOps.MUL) else None
-  return LazyOp(op.op, (LazyOp(TernaryOps.MULACC, mul_srcs, op.arg),), op.arg) if mul_srcs else op
+  if op.op != ReduceOps.SUM or not (op.src[0].op == BinaryOps.MUL or op.src[0].op == UnaryOps.CAST and op.src[0].src[0].op == BinaryOps.MUL): return op
+  has_cast = op.src[0].op == UnaryOps.CAST
+  mulacc = LazyOp(TernaryOps.MULACC, op.src[0].src[0].src if has_cast else op.src[0].src, op.arg)
+  mulacc = mulacc if not has_cast else LazyOp(UnaryOps.CAST, (mulacc,), op.src[0].arg)
+  return LazyOp(ReduceOps.SUM, (mulacc,), op.arg)
 def _fuse_mulacc(leaf) -> LazyOp:
   real_srcs: Any = {x:None for x in leaf.buffers}
-  if leaf.op == ReduceOps.SUM: leaf = _try_fuse_sum(leaf)
+  leaf = _try_fuse_sum(leaf)
   for op in leaf.src: real_srcs[op] = _fuse_mulacc(op)
   return leaf.map_buffers(cast(Dict[LazyBuffer, Union[LazyOp, LazyBuffer]], real_srcs))
 
