@@ -1,0 +1,503 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-7.4.3, pluggy-1.3.0
+rootdir: /root/tinygrad
+configfile: pytest.ini
+plugins: hypothesis-6.91.0, xdist-3.5.0
+settings(database=DirectoryBasedExampleDatabase(PosixPath('/root/tinygrad/.hypothesis/examples')), deadline=None, derandomize=False, max_examples=2, phases=(Phase.explicit, Phase.reuse, Phase.generate, Phase.target, Phase.shrink, Phase.explain), print_blob=False, report_multiple_bugs=True, stateful_step_count=50, suppress_health_check=(), verbosity=Verbosity.normal)
+collected 18 items
+
+test/test_dtype_alu.py #include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_(bool* data0, const bool* data1, const bool* data2) {
+  bool val0 = *(data1+0);
+  bool val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n1(bool* data0, const bool* data1, const bool* data2) {
+  bool val0 = *(data1+0);
+  bool val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+.#include <hip/hip_fp16.h>
+
+typedef union { struct { half x, y, z, w; } __attribute__((aligned(8))); half data[4]; } half4;
+__device__ half4 make_half4(half x, half y, half z, half w) { return {x, y, z, w}; }
+typedef union { struct { half x, y, z, w, a, b, c, d; } __attribute__((aligned(16))); half data[8]; } half8;
+__device__ half8 make_half8(half x, half y, half z, half w, half a, half b, half c, half d) { return {x, y, z, w, a, b, c, d}; }
+ typedef _Float16 half16 __attribute__((ext_vector_type(16)));
+__device__ half16 make_half16(half x, half y, half z, half w, half a, half b, half c, half d,
+                              half e, half f, half g, half h, half i, half j, half k, half l) {
+                                return {x, y, z, w, a, b, c, d, e, f, g, h, i, j, k, l}; }
+__device__ float vload_half(size_t offset, const half *p) { return (float)*(p + offset); }
+__device__ float2 vload_half2(size_t offset, const half *p) { return make_float2((float)*(p + offset*2), (float)*(p + offset*2 + 1)); }
+__device__ float4 vload_half4(size_t offset, const half *p) {
+  return make_float4((float)*(p + offset*4), (float)*(p + offset*4 + 1), (float)*(p + offset*4 + 2), (float)*(p + offset*4 + 3)); }
+__device__ void vstore_half(float data, size_t offset, half *p) { *(p + offset) = (half)data; }
+__device__ void vstore_half2(float2 data, size_t offset, half *p) { *(p + offset*2) = (half)data.x; *(p + offset*2 + 1) = (half)data.y; }
+__device__ void vstore_half4(float4 data, size_t offset, half *p) {
+  *(p + offset*4) = (half)data.x; *(p + offset*4 + 1) = (half)data.y; *(p + offset*4 + 2) = (half)data.z; *(p + offset*4 + 3) = (half)data.w; }
+  
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n2(half* data0, const half* data1, const half* data2) {
+  half val0 = *(data1+0);
+  half val1 = *(data2+0);
+  *(data0+0) = __hadd((half)val0,(half)val1);
+}
+#include <hip/hip_fp16.h>
+
+typedef union { struct { half x, y, z, w; } __attribute__((aligned(8))); half data[4]; } half4;
+__device__ half4 make_half4(half x, half y, half z, half w) { return {x, y, z, w}; }
+typedef union { struct { half x, y, z, w, a, b, c, d; } __attribute__((aligned(16))); half data[8]; } half8;
+__device__ half8 make_half8(half x, half y, half z, half w, half a, half b, half c, half d) { return {x, y, z, w, a, b, c, d}; }
+ typedef _Float16 half16 __attribute__((ext_vector_type(16)));
+__device__ half16 make_half16(half x, half y, half z, half w, half a, half b, half c, half d,
+                              half e, half f, half g, half h, half i, half j, half k, half l) {
+                                return {x, y, z, w, a, b, c, d, e, f, g, h, i, j, k, l}; }
+__device__ float vload_half(size_t offset, const half *p) { return (float)*(p + offset); }
+__device__ float2 vload_half2(size_t offset, const half *p) { return make_float2((float)*(p + offset*2), (float)*(p + offset*2 + 1)); }
+__device__ float4 vload_half4(size_t offset, const half *p) {
+  return make_float4((float)*(p + offset*4), (float)*(p + offset*4 + 1), (float)*(p + offset*4 + 2), (float)*(p + offset*4 + 3)); }
+__device__ void vstore_half(float data, size_t offset, half *p) { *(p + offset) = (half)data; }
+__device__ void vstore_half2(float2 data, size_t offset, half *p) { *(p + offset*2) = (half)data.x; *(p + offset*2 + 1) = (half)data.y; }
+__device__ void vstore_half4(float4 data, size_t offset, half *p) {
+  *(p + offset*4) = (half)data.x; *(p + offset*4 + 1) = (half)data.y; *(p + offset*4 + 2) = (half)data.z; *(p + offset*4 + 3) = (half)data.w; }
+  
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n3(half* data0, const half* data1, const half* data2) {
+  half val0 = *(data1+0);
+  half val1 = *(data2+0);
+  *(data0+0) = __hadd((half)val0,(half)val1);
+}
+.#include <hip/hip_fp16.h>
+
+typedef union { struct { half x, y, z, w; } __attribute__((aligned(8))); half data[4]; } half4;
+__device__ half4 make_half4(half x, half y, half z, half w) { return {x, y, z, w}; }
+typedef union { struct { half x, y, z, w, a, b, c, d; } __attribute__((aligned(16))); half data[8]; } half8;
+__device__ half8 make_half8(half x, half y, half z, half w, half a, half b, half c, half d) { return {x, y, z, w, a, b, c, d}; }
+ typedef _Float16 half16 __attribute__((ext_vector_type(16)));
+__device__ half16 make_half16(half x, half y, half z, half w, half a, half b, half c, half d,
+                              half e, half f, half g, half h, half i, half j, half k, half l) {
+                                return {x, y, z, w, a, b, c, d, e, f, g, h, i, j, k, l}; }
+__device__ float vload_half(size_t offset, const half *p) { return (float)*(p + offset); }
+__device__ float2 vload_half2(size_t offset, const half *p) { return make_float2((float)*(p + offset*2), (float)*(p + offset*2 + 1)); }
+__device__ float4 vload_half4(size_t offset, const half *p) {
+  return make_float4((float)*(p + offset*4), (float)*(p + offset*4 + 1), (float)*(p + offset*4 + 2), (float)*(p + offset*4 + 3)); }
+__device__ void vstore_half(float data, size_t offset, half *p) { *(p + offset) = (half)data; }
+__device__ void vstore_half2(float2 data, size_t offset, half *p) { *(p + offset*2) = (half)data.x; *(p + offset*2 + 1) = (half)data.y; }
+__device__ void vstore_half4(float4 data, size_t offset, half *p) {
+  *(p + offset*4) = (half)data.x; *(p + offset*4 + 1) = (half)data.y; *(p + offset*4 + 2) = (half)data.z; *(p + offset*4 + 3) = (half)data.w; }
+  
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n4(float* data0, const half* data1) {
+  half val0 = *(data1+0);
+  *(data0+0) = exp2(((float)(val0)*1.4426950408889634f));
+}
+#include <hip/hip_fp16.h>
+
+typedef union { struct { half x, y, z, w; } __attribute__((aligned(8))); half data[4]; } half4;
+__device__ half4 make_half4(half x, half y, half z, half w) { return {x, y, z, w}; }
+typedef union { struct { half x, y, z, w, a, b, c, d; } __attribute__((aligned(16))); half data[8]; } half8;
+__device__ half8 make_half8(half x, half y, half z, half w, half a, half b, half c, half d) { return {x, y, z, w, a, b, c, d}; }
+ typedef _Float16 half16 __attribute__((ext_vector_type(16)));
+__device__ half16 make_half16(half x, half y, half z, half w, half a, half b, half c, half d,
+                              half e, half f, half g, half h, half i, half j, half k, half l) {
+                                return {x, y, z, w, a, b, c, d, e, f, g, h, i, j, k, l}; }
+__device__ float vload_half(size_t offset, const half *p) { return (float)*(p + offset); }
+__device__ float2 vload_half2(size_t offset, const half *p) { return make_float2((float)*(p + offset*2), (float)*(p + offset*2 + 1)); }
+__device__ float4 vload_half4(size_t offset, const half *p) {
+  return make_float4((float)*(p + offset*4), (float)*(p + offset*4 + 1), (float)*(p + offset*4 + 2), (float)*(p + offset*4 + 3)); }
+__device__ void vstore_half(float data, size_t offset, half *p) { *(p + offset) = (half)data; }
+__device__ void vstore_half2(float2 data, size_t offset, half *p) { *(p + offset*2) = (half)data.x; *(p + offset*2 + 1) = (half)data.y; }
+__device__ void vstore_half4(float4 data, size_t offset, half *p) {
+  *(p + offset*4) = (half)data.x; *(p + offset*4 + 1) = (half)data.y; *(p + offset*4 + 2) = (half)data.z; *(p + offset*4 + 3) = (half)data.w; }
+  
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n5(float* data0, const half* data1) {
+  half val0 = *(data1+0);
+  *(data0+0) = exp2(((float)(val0)*1.4426950408889634f));
+}
+.#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n6(float* data0, const float* data1, const float* data2) {
+  float val0 = *(data1+0);
+  float val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n7(float* data0, const float* data1, const float* data2) {
+  float val0 = *(data1+0);
+  float val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+.#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n8(float* data0, const float* data1) {
+  float val0 = *(data1+0);
+  *(data0+0) = exp2(((float)(val0)*1.4426950408889634f));
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n9(float* data0, const float* data1) {
+  float val0 = *(data1+0);
+  *(data0+0) = exp2(((float)(val0)*1.4426950408889634f));
+}
+.#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n10(double* data0, const double* data1, const double* data2) {
+  double val0 = *(data1+0);
+  double val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n11(double* data0, const double* data1, const double* data2) {
+  double val0 = *(data1+0);
+  double val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+..#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n12(int* data0, const float* data1, const float* data2, const int* data3) {
+  float val0 = *(data1+0);
+  float val1 = *(data2+0);
+  int val2 = *(data3+0);
+  *(data0+0) = ((int)((val0+val1))+val2);
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n13(int* data0, const float* data1, const float* data2, const int* data3) {
+  float val0 = *(data1+0);
+  float val1 = *(data2+0);
+  int val2 = *(data3+0);
+  *(data0+0) = ((int)((val0+val1))+val2);
+}
+.#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n14(short* data0, const short* data1, const short* data2) {
+  short val0 = *(data1+0);
+  short val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n15(short* data0, const short* data1, const short* data2) {
+  short val0 = *(data1+0);
+  short val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+.#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n16(int* data0, const int* data1, const int* data2) {
+  int val0 = *(data1+0);
+  int val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n17(int* data0, const int* data1, const int* data2) {
+  int val0 = *(data1+0);
+  int val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+..#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n18(float* data0, const int* data1, const int* data2, const float* data3) {
+  int val0 = *(data1+0);
+  int val1 = *(data2+0);
+  float val2 = *(data3+0);
+  *(data0+0) = ((float)((val0+val1))+val2);
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n19(float* data0, const int* data1, const int* data2, const float* data3) {
+  int val0 = *(data1+0);
+  int val1 = *(data2+0);
+  float val2 = *(data3+0);
+  *(data0+0) = ((float)((val0+val1))+val2);
+}
+.#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n20(long* data0, const long* data1, const long* data2) {
+  long val0 = *(data1+0);
+  long val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n21(long* data0, const long* data1, const long* data2) {
+  long val0 = *(data1+0);
+  long val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+.#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n22(char* data0, const char* data1, const char* data2) {
+  char val0 = *(data1+0);
+  char val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n23(char* data0, const char* data1, const char* data2) {
+  char val0 = *(data1+0);
+  char val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+.#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n24(unsigned short* data0, const unsigned short* data1, const unsigned short* data2) {
+  unsigned short val0 = *(data1+0);
+  unsigned short val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n25(unsigned short* data0, const unsigned short* data1, const unsigned short* data2) {
+  unsigned short val0 = *(data1+0);
+  unsigned short val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+.#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n26(unsigned int* data0, const unsigned int* data1, const unsigned int* data2) {
+  unsigned int val0 = *(data1+0);
+  unsigned int val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n27(unsigned int* data0, const unsigned int* data1, const unsigned int* data2) {
+  unsigned int val0 = *(data1+0);
+  unsigned int val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+.#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n28(unsigned long* data0, const unsigned long* data1, const unsigned long* data2) {
+  unsigned long val0 = *(data1+0);
+  unsigned long val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n29(unsigned long* data0, const unsigned long* data1, const unsigned long* data2) {
+  unsigned long val0 = *(data1+0);
+  unsigned long val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+.#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n30(unsigned char* data0, const unsigned char* data1, const unsigned char* data2) {
+  unsigned char val0 = *(data1+0);
+  unsigned char val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+#include <hip/hip_common.h>
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+  __device__ float4 pow(float x, float4 y) { return float4(pow(x, y.x), pow(x, y.y), pow(x, y.z), pow(x, y.w)); }
+  __device__ float4 pow(float4 x, float4 y) { return float4(pow(x.x, y.x), pow(x.y, y.y), pow(x.z, y.z), pow(x.w, y.w)); }
+  typedef float float8 __attribute__((ext_vector_type(8)));
+  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
+  extern "C" __global__
+  void __launch_bounds__ (1, 1) E_n31(unsigned char* data0, const unsigned char* data1, const unsigned char* data2) {
+  unsigned char val0 = *(data1+0);
+  unsigned char val1 = *(data2+0);
+  *(data0+0) = (val0+val1);
+}
+.
+
+============================== 18 passed in 0.52s ==============================
