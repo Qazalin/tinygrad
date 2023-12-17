@@ -6,7 +6,7 @@ from enum import Enum, auto
 from dataclasses import dataclass
 
 from tinygrad.helpers import colored, ImageDType, DEBUG, dtypes, DType, prod, PtrDType, getenv, all_same, to_function_name, flatten
-from tinygrad.ops import LazyOp, UnaryOps, BinaryOps, TernaryOps, ReduceOps, ConstBuffer, MemBuffer, BufferOps, vars_from_ast
+from tinygrad.ops import LazyOp, UnaryOps, BinaryOps, TernaryOps, ReduceOps, ConstBuffer, MemBuffer, BufferOps, get_lazyop_info, vars_from_ast
 from tinygrad.shape.shapetracker import ShapeTracker
 from tinygrad.shape.symbolic import Variable, NumNode, VariableOrNum, Node, SumNode, MulNode, DivNode, ModNode, LtNode, AndNode
 from tinygrad.codegen.kernel import LocalBuffer, Kernel
@@ -18,6 +18,11 @@ class UOps(Enum):
   DEFINE_GLOBAL = auto(); DEFINE_LOCAL = auto(); DEFINE_ACC = auto() # this defines buffers # noqa: E702
   LOAD = auto(); STORE = auto(); CONST = auto(); BARRIER = auto(); PHI = auto() # noqa: E702
   ALU = auto(); WMMA = auto(); CAST = auto(); GEP = auto() # noqa: E702
+
+# TODO temp util
+def dt(dtype: DType, amt=1):
+  if isinstance(dtype, ImageDType): dtype = dtype.base
+  return dtype if amt == 1 else dtype.vec(amt)
 
 @dataclass(eq=False)
 class UOp:
@@ -50,9 +55,11 @@ class Linearizer(Kernel):
 
   def cast(self, val: UOp, dtype) -> UOp: return self.uop(UOps.CAST, dtype, (val,)) if val.dtype != dtype else val
 
-  def get_reduce_acc(self, op, dtype:DType):
-    if op == ReduceOps.SUM: return 0.0 if dtypes.is_float(dtype) else 0
-    elif op == ReduceOps.MAX: return -math.inf if dtypes.is_float(dtype) else -2**31 if dtypes.is_int(dtype) else False
+  def get_reduce_acc(self):
+    assert self.reduceop
+    dtype = get_lazyop_info(self.reduceop).dtype
+    if self.reduceop.op == ReduceOps.SUM: return 0.0 if dtypes.is_float(dtype) else 0
+    elif self.reduceop.op == ReduceOps.MAX: return -math.inf if dtypes.is_float(dtype) else -2**31 if dtypes.is_int(dtype) else False
 
   render_ops: Any = { Variable: lambda self, ops, ctx: ctx.loop_uops[self.expr], NumNode: lambda self, ops, ctx: ctx.const(self.b),
                 MulNode: lambda self, ops, ctx: ctx.uop_alu_idx(self.a.render(ops, ctx), self.b, ops, ctx, BinaryOps.MUL),
@@ -83,8 +90,7 @@ class Linearizer(Kernel):
         (g_idx, g_valid), amt, dim = self.sts[i].expr_idxs(fake_idxs), 1, None
     else:
       g_idx, g_valid = self.sts[i].expr_idxs(fake_idxs)
-    localtype = buf.dtype if amt == 1 else buf.dtype.vec(amt)
-    if isinstance(buf.dtype, ImageDType): localtype = dtypes.float if amt == 1 else dtypes.float.vec(amt)
+    localtype = dt(buf.dtype if acc is None else get_lazyop_info(self.reduceop).dtype, amt)
 
     e_idxs, e_valids = g_idx.expand(expand_vars), g_valid.expand(expand_vars)
 
@@ -247,7 +253,7 @@ class Linearizer(Kernel):
       fake_reduce_idxs = [x*0 for x in reduce_idxs]
 
       # define accumulator
-      acc = self.global_load(0, global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, self.get_reduce_acc(self.reduceop.op, self.bufs[0].dtype))
+      acc = self.global_load(0, global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, self.get_reduce_acc())
 
       if self.tensor_core:
         def calc_tc_idxs(local_size: int, aliases: List[List[int]]):
@@ -353,7 +359,7 @@ class Linearizer(Kernel):
         # NOTE: this structure is the same as the reduce op above
 
         # define late accumulator
-        acc = self.global_load(-1, fake_global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, self.get_reduce_acc(self.reduceop.op, self.bufs[-1].dtype))  # noqa: E501
+        acc = self.global_load(-1, fake_global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, self.get_reduce_acc())
 
         # late reduce loop
         loop_ctx = render_loop(end_local_idxs)
@@ -489,12 +495,9 @@ class Linearizer(Kernel):
         assert vin[0].dtype == dtypes.bool, f"{arg} selector dtype mismatch {vin[0].dtype=} != {dtypes.bool}"
         assert dtype == vin[1].dtype == vin[2].dtype, f"{arg} choice dtype mismatch {dtype=} != {vin[1].dtype=} != {vin[2].dtype=}"
 
-    if uop == UOps.PHI and vin[1].dtype != dtype: vin = (vin[0], self.cast(vin[1], dtype)) + vin[1:]
-    if uop == UOps.ALU: # upcast vins to the same dtype
-      upcast_dtype = dtypes.float if arg == TernaryOps.MULACC else max(cast(DType, x.dtype) for x in vin) # MULACC is only supported in float
-      if arg == TernaryOps.WHERE: vin = (vin[0],) + tuple(self.cast(x, upcast_dtype) for x in vin[1:]) # the first arg is always bool
-      else: vin = tuple(self.cast(x, upcast_dtype) for x in vin)
-      dtype = dtype or upcast_dtype # some ops like BinaryOps.CMPLT return bool
+    if uop == UOps.PHI:
+      assert vin[1].dtype == vin[0].dtype, f"PHI dtype mismatch {dtype=} != {vin[0].dtype=} != {vin[1].dtype=}"
+
     if simplify:
       if uop == UOps.PHI and len(vin) == 2: return vin[1]   # a phi without loops is a noop
       if uop == UOps.GEP and vin[0].uop == UOps.CONST: return self.const(vin[0].arg, dtype, insert_before)
@@ -540,11 +543,11 @@ class Linearizer(Kernel):
       ret: List[UOp] = []
       input_acc = acc[:]
       for val, off in zip(zip(*values), cast(List[int], offs)):
-        acc[off] = self.uop(UOps.ALU, vin=val+(acc[off],), arg=ops[x.op])
+        acc[off] = self.uop(UOps.ALU, dtype=dt(get_lazyop_info(self.reduceop).dtype), vin=val+(acc[off],), arg=ops[x.op])
         ret.append(acc[off])
       for off in range(len(acc)):
         if input_acc[off] != acc[off]:
           acc[off] = self.uop(UOps.PHI, input_acc[off].dtype, (input_acc[off], acc[off]) + tuple(loop_ctx))
     else:
-      ret = [self.uop(UOps.ALU, dtype=dtypes.bool if x.op == BinaryOps.CMPLT else val[0].dtype, vin=val, arg=x.op) for val in zip(*values)]
+      ret = [self.uop(UOps.ALU, dtype=dt(get_lazyop_info(x).dtype), vin=val, arg=x.op) for val in zip(*values)]
     return ret
