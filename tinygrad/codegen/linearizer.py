@@ -314,7 +314,7 @@ class Linearizer(Kernel):
                        self.uop(UOps.CAST, dtypes.float.vec(8), tuple(op3)))
               ret = self.uop(UOps.WMMA, dtypes.float.vec(2) if wmma_sz[2] == 2 else dtypes.float.vec(8), ops, (self.opts.device, self.tensor_core.dtype_in, self.tensor_core.dtype_out,))  # noqa: E501
               for z in range(cast(DType, ret.dtype).sz):
-                acc[i+z] = self.uop(UOps.PHI, dtypes.float, (op3[z], self.uop(UOps.GEP, dtypes.float, (ret,), z)) + loop_ctx)
+                acc[i+z] = self.uop(UOps.PHI, dtypes.float, (self.cast(op3[z], dtypes.float), self.uop(UOps.GEP, dtypes.float, (ret,), z)) + loop_ctx)
             i += wmma_sz[2]
       else:
         if locals_to_store:
