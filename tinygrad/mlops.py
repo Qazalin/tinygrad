@@ -148,6 +148,7 @@ class Where(Function):
 class Sum(Function):
   def forward(self, x:LazyBuffer, new_shape:Tuple[int, ...]) -> LazyBuffer:
     self.input_shape = x.shape
+    if x.dtype == dtypes.bool: x = x.cast(dtypes.int32)
     return x.r(ReduceOps.SUM, new_shape)
 
   def backward(self, grad_output:LazyBuffer) -> LazyBuffer:
