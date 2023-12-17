@@ -79,7 +79,7 @@ class Sqrt(Function):
 class Sigmoid(Function):
   def forward(self, x:LazyBuffer) -> LazyBuffer:
     self.ret = x.cast(ftype:=least_upper_float(x.dtype)).const(1).e(
-      BinaryOps.DIV, x.cast(ftype).const(1).e(BinaryOps.ADD, x.e(BinaryOps.MUL, x.cast(ftype).const(-1/math.log(2))).e(UnaryOps.EXP2)))
+      BinaryOps.DIV, x.cast(ftype).const(1).e(BinaryOps.ADD, x.cast(ftype).e(BinaryOps.MUL, x.cast(ftype).const(-1/math.log(2))).e(UnaryOps.EXP2)))
     return self.ret
 
   def backward(self, grad_output:LazyBuffer) -> LazyBuffer:
