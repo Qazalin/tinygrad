@@ -235,8 +235,16 @@ class LazyBuffer:
     # if we are separated from other binary ops by movement ops, we push those movement ops above those binaryops
     if SHUFFLE_MOVEMENT_OPS: srcs = _push_movement_ops(srcs)
 
+   # NOTE: lazy expects all inputs to be the same dtype
+    def get_output_dtype() -> DType:
+      if op == UnaryOps.CAST: return cast(Tuple[DType, bool], arg)[0]
+      if op == BinaryOps.CMPLT: return dtypes.bool
+      if op == TernaryOps.WHERE: return srcs[1].dtype
+      return srcs[0].dtype
+
     # get outputs now
-    out_device, out_shape, out_dtype = srcs[0].device, srcs[0].shape, max([x.dtype for x in srcs]) if op != UnaryOps.CAST else cast(Tuple[DType, bool], arg)[0]
+    out_device, out_shape, out_dtype = srcs[0].device, srcs[0].shape, get_output_dtype()
+
 
     if MERGE_ELEMENTWISE_OPS:
       # remove the buffers from any (childless) BinaryOps that feed into this
