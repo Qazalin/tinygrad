@@ -179,7 +179,10 @@ class LazyBuffer:
     if op.op not in LoadOps:
       # add the store
       info = get_lazyop_info(op)
-      assert info.dtype == self.dtype or isinstance(self.dtype, ImageDType), f"dtype mismatch {info.dtype=} != {self.dtype=}"
+      if op.op == BinaryOps.CMPLT:
+        if self.device == "WEBGPU": assert self.dtype == dtypes.uint32, f"CMPLT must be uint32 {info.dtype=}" # TODO hack
+        else: assert info.dtype == self.dtype == dtypes.bool, f"CMPLT must be bool {info.dtype=}"
+      else: assert info.dtype == self.dtype or isinstance(self.dtype, ImageDType), f"dtype mismatch {info.dtype=} != {self.dtype=}"
 
       if isinstance(self.dtype, ImageDType) and (prod(self.shape) != prod(self.dtype.shape) or not any(self.shape[x]%4 == 0 for x in self.st.unit_stride_axes())):
         if DEBUG >= 3: print(f"forcing image {self.dtype} to float32")
@@ -238,7 +241,7 @@ class LazyBuffer:
    # NOTE: lazy expects all inputs to be the same dtype
     def get_output_dtype() -> DType:
       if op == UnaryOps.CAST: return cast(Tuple[DType, bool], arg)[0]
-      if op == BinaryOps.CMPLT: return dtypes.bool
+      if op == BinaryOps.CMPLT: return dtypes.bool if self.device != "WEBGPU" else dtypes.uint32
       if op == TernaryOps.WHERE: return srcs[1].dtype
       return max([x.dtype for x in srcs]) # TODO this is still using max because of the image dtype, this should be better
 
