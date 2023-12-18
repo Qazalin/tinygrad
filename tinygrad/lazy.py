@@ -179,9 +179,7 @@ class LazyBuffer:
     if op.op not in LoadOps:
       # add the store
       info = get_lazyop_info(op)
-      if op.op == BinaryOps.CMPLT:
-        if self.device != "WEBGPU": assert info.dtype == self.dtype == dtypes.bool, f"CMPLT must be bool {info.dtype=}" # TODO webgpu is broken for bools
-      else: assert info.dtype == self.dtype or isinstance(self.dtype, ImageDType), f"dtype mismatch {info.dtype=} != {self.dtype=}"
+      assert info.dtype == self.dtype or isinstance(self.dtype, ImageDType), f"dtype mismatch {info.dtype=} != {self.dtype=}"
 
       if isinstance(self.dtype, ImageDType) and (prod(self.shape) != prod(self.dtype.shape) or not any(self.shape[x]%4 == 0 for x in self.st.unit_stride_axes())):
         if DEBUG >= 3: print(f"forcing image {self.dtype} to float32")
@@ -238,8 +236,7 @@ class LazyBuffer:
     if SHUFFLE_MOVEMENT_OPS: srcs = _push_movement_ops(srcs)
 
     # get outputs now
-    out_device, out_shape, out_dtype = srcs[0].device, srcs[0].shape, dtypes.uint32 if op == BinaryOps.CMPLT and self.device == "WEBGPU" else dtypes.bool if op == BinaryOps.CMPLT else max([x.dtype for x in srcs]) if op != UnaryOps.CAST else cast(Tuple[DType, bool], arg)[0]
-
+    out_device, out_shape, out_dtype = srcs[0].device, srcs[0].shape, dtypes.bool if op == BinaryOps.CMPLT else max([x.dtype for x in srcs]) if op != UnaryOps.CAST else cast(Tuple[DType, bool], arg)[0]
 
     if MERGE_ELEMENTWISE_OPS:
       # remove the buffers from any (childless) BinaryOps that feed into this
