@@ -203,8 +203,8 @@ class LazyBuffer:
 
   # create a constant with the shape and dtype of self
   def const(self, val:Union[float, int]) -> LazyBuffer:
-    # NOTE: dtypes.from_np(self.dtype.np) to deal with image types
-    return LazyBuffer.loadop(LoadOps.CONST, tuple(), dtypes.from_np(self.dtype.np), self.device, arg=val).reshape((1,)*len(self.shape)).expand(self.shape)
+    # NOTE: we force the image dtype to be a float32
+    return LazyBuffer.loadop(LoadOps.CONST, tuple(), self.dtype if not isinstance(self.dtype, ImageDType) else dtypes.float32, self.device, arg=val).reshape((1,)*len(self.shape)).expand(self.shape)
 
   def copy_to_device(self, device:str) -> LazyBuffer:
     # back off a COPY if it's a double COPY
