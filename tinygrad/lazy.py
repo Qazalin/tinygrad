@@ -240,7 +240,7 @@ class LazyBuffer:
       if op == UnaryOps.CAST: return cast(Tuple[DType, bool], arg)[0]
       if op == BinaryOps.CMPLT: return dtypes.bool
       if op == TernaryOps.WHERE: return srcs[1].dtype
-      return srcs[0].dtype
+      return max([x.dtype for x in srcs]) # TODO this is still using max because of the image dtype, this should be better
 
     # get outputs now
     out_device, out_shape, out_dtype = srcs[0].device, srcs[0].shape, get_output_dtype()
