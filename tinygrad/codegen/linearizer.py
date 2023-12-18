@@ -524,14 +524,21 @@ class Linearizer(Kernel):
     if cachable: self.saved_exprs[key] = ret
     return ret
 
+  def parse_cast(self, x, u):
+    dtype,bitcast = x.arg
+    if not isinstance(dtype, ImageDType): return self.uop(UOps.CAST, dtype, (u,), (dtype,bitcast))
+    if u.dtype == dtype.base: return u
+    return self.uop(UOps.CAST, dtype.base, (u,), (dtype.base,False)) # we don't bitcast on images
+
   def ast_parse(self, x:LazyOp, acc: List[UOp], offs:Optional[List[int]], loaded_buffers:Dict[Union[MemBuffer, ConstBuffer, LocalBuffer], List[UOp]], do_reduce=False, loop_ctx=tuple()) -> List[UOp]:  # noqa: E501
     if x.op in BufferOps: return loaded_buffers[x.arg]
-    if x.op == UnaryOps.CAST: return [self.uop(UOps.CAST, x.arg[0], (u,), x.arg) if not isinstance(x.arg[0], ImageDType) else u for u in self.ast_parse(cast(LazyOp, x.src[0]), acc, offs, loaded_buffers)]  # noqa: E501
+    if x.op == UnaryOps.CAST: return [self.parse_cast(x, u) for u in self.ast_parse(cast(LazyOp, x.src[0]), acc, offs, loaded_buffers)]
     if x.op in ReduceOps and not do_reduce:
       assert offs is None, "not available if we aren't doing reduce"
       return acc
     # MULACC fusion. TODO: this is copied from Interpreted
     # TODO only doing MULACC in floats, ints can mulacc with autocast
+    # TODO should we also check self.reduceop being float? add tests for this
     if x.op == ReduceOps.SUM and x.src[0].__class__ is LazyOp and x.src[0].op == BinaryOps.MUL and dtypes.is_float(dt(get_lazyop_info(x).dtype)):
       x = LazyOp(TernaryOps.MULACC, x.src[0].src, x.arg)
     if x.op == ReduceOps.SUM and x.src[0].__class__ is LazyOp and x.src[0].op == UnaryOps.CAST and x.src[0].src[0].__class__ is LazyOp and x.src[0].src[0].op == BinaryOps.MUL and dtypes.is_float(dt(get_lazyop_info(x).dtype)):  # noqa: E501
