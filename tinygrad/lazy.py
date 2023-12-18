@@ -179,7 +179,7 @@ class LazyBuffer:
     if op.op not in LoadOps:
       # add the store
       info = get_lazyop_info(op)
-      assert info.dtype == self.dtype or isinstance(self.dtype, ImageDType), f"dtype mismatch {info.dtype=} != {self.dtype=}"
+      assert info.dtype == self.dtype or isinstance(self.dtype, ImageDType) or (isinstance(info.dtype, ImageDType) and self.dtype == info.dtype.base), f"dtype mismatch {info.dtype=} != {self.dtype=}"
 
       if isinstance(self.dtype, ImageDType) and (prod(self.shape) != prod(self.dtype.shape) or not any(self.shape[x]%4 == 0 for x in self.st.unit_stride_axes())):
         if DEBUG >= 3: print(f"forcing image {self.dtype} to float32")
