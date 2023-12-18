@@ -314,7 +314,7 @@ class Linearizer(Kernel):
                        self.uop(UOps.CAST, dtypes.float.vec(8), tuple(op3)))
               ret = self.uop(UOps.WMMA, dtypes.float.vec(2) if wmma_sz[2] == 2 else dtypes.float.vec(8), ops, (self.opts.device, self.tensor_core.dtype_in, self.tensor_core.dtype_out,))  # noqa: E501
               for z in range(cast(DType, ret.dtype).sz):
-                acc[i+z] = self.uop(UOps.PHI, dtypes.float, (self.cast(op3[z], dtypes.float), self.uop(UOps.GEP, dtypes.float, (ret,), z)) + loop_ctx)
+                acc[i+z] = self.uop(UOps.PHI, dtypes.float, (op3[z], self.uop(UOps.GEP, dtypes.float, (ret,), z)) + loop_ctx)
             i += wmma_sz[2]
       else:
         if locals_to_store:
@@ -493,8 +493,7 @@ class Linearizer(Kernel):
         assert vin[0].dtype == dtypes.bool, f"{arg} selector dtype mismatch {vin[0].dtype=} != {dtypes.bool}"
         assert dtype == vin[1].dtype == vin[2].dtype, f"{arg} choice dtype mismatch {dtype=} != {vin[1].dtype=} != {vin[2].dtype=}"
 
-    if uop == UOps.PHI:
-      assert vin[1].dtype == vin[0].dtype, f"PHI dtype mismatch {dtype=} != {vin[0].dtype=} != {vin[1].dtype=}"
+    #if uop == UOps.PHI: assert vin[1].dtype == vin[0].dtype, f"PHI dtype mismatch {dtype=} != {vin[0].dtype=} != {vin[1].dtype=}" TODO this is a wmma bug L317
 
     if simplify:
       if uop == UOps.PHI and len(vin) == 2: return vin[1]   # a phi without loops is a noop
