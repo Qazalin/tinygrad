@@ -493,7 +493,7 @@ class Linearizer(Kernel):
         assert vin[0].dtype == dtypes.bool, f"{arg} selector dtype mismatch {vin[0].dtype=} != {dtypes.bool}"
         assert dtype == vin[1].dtype == vin[2].dtype, f"{arg} choice dtype mismatch {dtype=} != {vin[1].dtype=} != {vin[2].dtype=}"
 
-    #if uop == UOps.PHI: assert vin[1].dtype == vin[0].dtype, f"PHI dtype mismatch {dtype=} != {vin[0].dtype=} != {vin[1].dtype=}" TODO this is a wmma bug L317
+    # noqa: E501 if uop == UOps.PHI: assert vin[1].dtype == vin[0].dtype, f"PHI dtype mismatch {dtype=} != {vin[0].dtype=} != {vin[1].dtype=}" TODO this is a wmma bug L317
 
     if simplify:
       if uop == UOps.PHI and len(vin) == 2: return vin[1]   # a phi without loops is a noop
@@ -526,8 +526,7 @@ class Linearizer(Kernel):
   def parse_cast(self, x, u):
     dtype,bitcast = x.arg
     if not isinstance(dtype, ImageDType): return self.uop(UOps.CAST, dtype, (u,), (dtype,bitcast))
-    if u.dtype == dtype.base: return u
-    return self.uop(UOps.CAST, dtype.base, (u,), (dtype.base,False)) # we don't bitcast on images
+    return u if u.dtype == dtype.base else self.uop(UOps.CAST, dtype.base, (u,), (dtype.base,False)) # we don't bitcast on images
 
   def ast_parse(self, x:LazyOp, acc: List[UOp], offs:Optional[List[int]], loaded_buffers:Dict[Union[MemBuffer, ConstBuffer, LocalBuffer], List[UOp]], do_reduce=False, loop_ctx=tuple()) -> List[UOp]:  # noqa: E501
     if x.op in BufferOps: return loaded_buffers[x.arg]

@@ -238,15 +238,8 @@ class LazyBuffer:
     # if we are separated from other binary ops by movement ops, we push those movement ops above those binaryops
     if SHUFFLE_MOVEMENT_OPS: srcs = _push_movement_ops(srcs)
 
-   # NOTE: lazy expects all inputs to be the same dtype
-    def get_output_dtype() -> DType:
-      if op == UnaryOps.CAST: return cast(Tuple[DType, bool], arg)[0]
-      if op == BinaryOps.CMPLT: return dtypes.bool if self.device != "WEBGPU" else dtypes.uint32
-      if op == TernaryOps.WHERE: return srcs[1].dtype
-      return max([x.dtype for x in srcs]) # TODO this is still using max because of the image dtype, this should be better
-
     # get outputs now
-    out_device, out_shape, out_dtype = srcs[0].device, srcs[0].shape, get_output_dtype()
+    out_device, out_shape, out_dtype = srcs[0].device, srcs[0].shape, dtypes.bool if op == BinaryOps.CMPLT else max([x.dtype for x in srcs]) if op != UnaryOps.CAST else cast(Tuple[DType, bool], arg)[0]
 
 
     if MERGE_ELEMENTWISE_OPS:
