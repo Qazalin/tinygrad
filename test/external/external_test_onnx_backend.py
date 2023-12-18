@@ -107,6 +107,9 @@ backend_test.exclude('test_affine_grid_3d_expanded_cpu')
 backend_test.exclude('test_range_int32_type_negative_delta_expanded_cpu')
 
 # unsupported (strange) ops
+# TODO implement a Binarizer op? https://github.com/onnx/onnx/blob/67c456ba4747412afb44158a1a889c0fc3349641/onnx/reference/ops/aionnxml/op_binarizer.py#L13
+backend_test.exclude('test_ai_onnx_ml_binarizer_*')
+backend_test.exclude('test_bitwise_*')
 backend_test.exclude('test_bitwise_*')
 backend_test.exclude('test_blackmanwindow_*')
 backend_test.exclude('test_bernoulli_*')
