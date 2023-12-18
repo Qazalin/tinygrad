@@ -22,7 +22,7 @@ def run_linearizer(lin: Linearizer, rawbufs=None, var_vals=None):
     else:
       prg = device.get_runner(lin.ast)
   except Exception:
-    print_tree(lin.ast)
+    print(lin.ast)
     traceback.print_exc()
     print("COMPILE FAILED!!")
     return "COMPILE_ERROR"
@@ -30,7 +30,7 @@ def run_linearizer(lin: Linearizer, rawbufs=None, var_vals=None):
   try:
     prg.exec(rawbufs, var_vals)
   except Exception:
-    print_tree(lin.ast)
+    print(lin.ast)
     traceback.print_exc()
     print("EXEC FAILED!!")
     return "EXEC_ERROR"
