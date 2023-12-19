@@ -19,11 +19,6 @@ class UOps(Enum):
   LOAD = auto(); STORE = auto(); CONST = auto(); BARRIER = auto(); PHI = auto() # noqa: E702
   ALU = auto(); WMMA = auto(); CAST = auto(); GEP = auto() # noqa: E702
 
-# TODO temp util
-def dt(dtype: DType, amt=1):
-  if isinstance(dtype, ImageDType): dtype = dtype.base
-  return dtype if amt == 1 else dtype.vec(amt)
-
 @dataclass(eq=False)
 class UOp:
   uop: UOps
@@ -53,10 +48,11 @@ class Linearizer(Kernel):
   def const(self, b:Union[int,float], dtype=dtypes.int32, insert_before=None) -> UOp:
     return self.uop(UOps.CONST, dtype, tuple(), b, insert_before=insert_before)
 
-  def cast(self, val: UOp, dtype) -> UOp: return self.uop(UOps.CAST, dtype, (val,)) if val.dtype != dtype else val
+  # NOTE: once images are loaded, we uop them as their base float
+  def get_base_dtype(self, dt:DType): return dt.base if isinstance(dt, ImageDType) else dt
 
   def get_reduce_acc(self):
-    assert self.reduceop
+    assert self.reduceop is not None, "no reduceop found"
     dtype = get_lazyop_info(self.reduceop).dtype
     if self.reduceop.op == ReduceOps.SUM: return 0.0 if dtypes.is_float(dtype) else 0
     elif self.reduceop.op == ReduceOps.MAX: return -math.inf if dtypes.is_float(dtype) else -2**31 if dtypes.is_int(dtype) else False
@@ -73,6 +69,7 @@ class Linearizer(Kernel):
 
   def global_load(self, i:int, idxs:Sequence[Node], acc=None, barrier:Optional[UOp]=None) -> List[UOp]:
     buf = self.bufs[i]
+    localtype = self.get_base_dtype(buf.dtype if acc is None else get_lazyop_info(self.reduceop).dtype)
     const = buf.val if isinstance(buf, ConstBuffer) else acc
 
     def rename_var(v: VariableOrNum, expr: str): return v if isinstance(v, NumNode) else Variable(expr, v.min, v.max)
@@ -90,8 +87,8 @@ class Linearizer(Kernel):
         (g_idx, g_valid), amt, dim = self.sts[i].expr_idxs(fake_idxs), 1, None
     else:
       g_idx, g_valid = self.sts[i].expr_idxs(fake_idxs)
-    localtype = dt(buf.dtype if acc is None else get_lazyop_info(self.reduceop).dtype, amt)
 
+    if amt > 1: localtype = localtype.vec(amt)
     e_idxs, e_valids = g_idx.expand(expand_vars), g_valid.expand(expand_vars)
 
     ret = []
@@ -112,8 +109,8 @@ class Linearizer(Kernel):
           assert buf_uop is not None, f"buffer {i} wasn't UOped"
           image_idx, valid = to_image_idx(buf.dtype.shape, idx, valid)
           rendered_idx = self.uop(UOps.CAST, dtypes.int.vec(2), (image_idx[0].render(self.render_ops, self), image_idx[1].render(self.render_ops, self)))  # noqa: E501
-          valid_tuple = (valid.render(self.render_ops, self), self.const(invalid_value, dtypes.float32.vec(4))) if valid.min == 0 else tuple()
-          self.load_cache[key] = self.uop(UOps.LOAD, dtypes.float32.vec(4), (buf_uop, rendered_idx) + valid_tuple + ((barrier,) if barrier else ()))
+          valid_tuple = (valid.render(self.render_ops, self), self.const(invalid_value, buf.dtype.base.vec(4))) if valid.min == 0 else tuple()
+          self.load_cache[key] = self.uop(UOps.LOAD, buf.dtype.base.vec(4), (buf_uop, rendered_idx) + valid_tuple + ((barrier,) if barrier else ()))
           idx_small = idx%4
           res = idx_small.render(self.render_ops, self)
           if localtype == localtype.scalar():
@@ -202,7 +199,7 @@ class Linearizer(Kernel):
     if self.group_for_reduce:
       # TODO: the strides of this can be controlled
       self.sts.append(ShapeTracker.from_shape(tuple([1] * self.global_dims + list(self.full_shape[self.global_dims:self.global_dims+self.local_dims+len(self.group_for_reduce)]) + [1] * (self.shape_len - self.upcasted - len(self.group_for_reduce) - self.first_reduce) + [x[0] for x in self.upcasted_axis(0)])))  # noqa: E501
-      self.bufs.append(LocalBuffer("temp", self.sts[-1].size(), dt(get_lazyop_info(self.reduceop).dtype)))
+      self.bufs.append(LocalBuffer("temp", self.sts[-1].size(), self.get_base_dtype(get_lazyop_info(self.reduceop).dtype)))
       self.buf_uops.append(self.uop(UOps.DEFINE_LOCAL, PtrDType(dtypes.float32), (), ("temp", self.sts[-1].size())))
 
     # kernel name (before late upcast)
@@ -523,23 +520,18 @@ class Linearizer(Kernel):
     if cachable: self.saved_exprs[key] = ret
     return ret
 
-  def parse_cast(self, x, u):
-    dtype,bitcast = x.arg
-    if not isinstance(dtype, ImageDType): return self.uop(UOps.CAST, dtype, (u,), (dtype,bitcast))
-    return u if u.dtype == dtype.base else self.uop(UOps.CAST, dtype.base, (u,), (dtype.base,False)) # we don't bitcast on images
-
   def ast_parse(self, x:LazyOp, acc: List[UOp], offs:Optional[List[int]], loaded_buffers:Dict[Union[MemBuffer, ConstBuffer, LocalBuffer], List[UOp]], do_reduce=False, loop_ctx=tuple()) -> List[UOp]:  # noqa: E501
     if x.op in BufferOps: return loaded_buffers[x.arg]
-    if x.op == UnaryOps.CAST: return [self.parse_cast(x, u) for u in self.ast_parse(cast(LazyOp, x.src[0]), acc, offs, loaded_buffers)]
+    if x.op == UnaryOps.CAST: return [self.uop(UOps.CAST, dtype:=self.get_base_dtype(x.arg[0]), (u,), (dtype,x.arg[1])) for u in self.ast_parse(cast(LazyOp, x.src[0]), acc, offs, loaded_buffers)] # noqa: E501
     if x.op in ReduceOps and not do_reduce:
       assert offs is None, "not available if we aren't doing reduce"
       return acc
     # MULACC fusion. TODO: this is copied from Interpreted
     # TODO only doing MULACC in floats, ints can mulacc with autocast
     # TODO should we also check self.reduceop being float? add tests for this
-    if x.op == ReduceOps.SUM and x.src[0].__class__ is LazyOp and x.src[0].op == BinaryOps.MUL and dtypes.is_float(dt(get_lazyop_info(x).dtype)):
+    if x.op == ReduceOps.SUM and x.src[0].__class__ is LazyOp and x.src[0].op == BinaryOps.MUL and dtypes.is_float(self.get_base_dtype(get_lazyop_info(x).dtype)): # noqa: E501
       x = LazyOp(TernaryOps.MULACC, x.src[0].src, x.arg)
-    if x.op == ReduceOps.SUM and x.src[0].__class__ is LazyOp and x.src[0].op == UnaryOps.CAST and x.src[0].src[0].__class__ is LazyOp and x.src[0].src[0].op == BinaryOps.MUL and dtypes.is_float(dt(get_lazyop_info(x).dtype)):  # noqa: E501
+    if x.op == ReduceOps.SUM and x.src[0].__class__ is LazyOp and x.src[0].op == UnaryOps.CAST and x.src[0].src[0].__class__ is LazyOp and x.src[0].src[0].op == BinaryOps.MUL and dtypes.is_float(self.get_base_dtype(get_lazyop_info(x).dtype)):  # noqa: E501
       x = LazyOp(TernaryOps.MULACC, x.src[0].src[0].src, x.arg)
     values = [self.ast_parse(cast(LazyOp, v), acc, offs, loaded_buffers, loop_ctx=loop_ctx) for v in x.src]
     ops = {ReduceOps.SUM:BinaryOps.ADD, ReduceOps.MAX:BinaryOps.MAX, TernaryOps.MULACC:TernaryOps.MULACC}
@@ -547,11 +539,11 @@ class Linearizer(Kernel):
       ret: List[UOp] = []
       input_acc = acc[:]
       for val, off in zip(zip(*values), cast(List[int], offs)):
-        acc[off] = self.uop(UOps.ALU, dtype=dt(get_lazyop_info(self.reduceop).dtype), vin=val+(acc[off],), arg=ops[x.op])
+        acc[off] = self.uop(UOps.ALU, dtype=self.get_base_dtype(get_lazyop_info(self.reduceop).dtype), vin=val+(acc[off],), arg=ops[x.op])
         ret.append(acc[off])
       for off in range(len(acc)):
         if input_acc[off] != acc[off]:
           acc[off] = self.uop(UOps.PHI, input_acc[off].dtype, (input_acc[off], acc[off]) + tuple(loop_ctx))
     else:
-      ret = [self.uop(UOps.ALU, dtype=dt(get_lazyop_info(x).dtype), vin=val, arg=x.op) for val in zip(*values)]
+      ret = [self.uop(UOps.ALU, dtype=self.get_base_dtype(get_lazyop_info(x).dtype), vin=val, arg=x.op) for val in zip(*values)]
     return ret
