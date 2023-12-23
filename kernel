@@ -79,9 +79,9 @@ kernel void r_24_24(device long* data0, uint3 gid [[threadgroup_position_in_grid
   int gidx0 = gid.x; /* 24 */
   long acc0 = (long)(0);
   for (int ridx0 = 0; ridx0 < 24; ridx0++) {
-    acc0 = ((long)(((((gidx0*(-1))+(ridx0*(-1)))<(-22))?1:0))+acc0);
+    acc0 = (((((gidx0*(-1))+(ridx0*(-1)))<(-22))?1:0)+acc0);
   }
-  *(data0+gidx0) = (long)((acc0+((long)(-1))));
+  *(data0+gidx0) = (long)((acc0+(-1)));
 }
 #include <metal_stdlib>
 using namespace metal;
@@ -140,9 +140,9 @@ kernel void r_2_2(device long* data0, uint3 gid [[threadgroup_position_in_grid]]
   int gidx0 = gid.x; /* 2 */
   long acc0 = (long)(0);
   for (int ridx0 = 0; ridx0 < 2; ridx0++) {
-    acc0 = ((long)(((((gidx0*(-1))+(ridx0*(-1)))<0)?1:0))+acc0);
+    acc0 = (((((gidx0*(-1))+(ridx0*(-1)))<0)?1:0)+acc0);
   }
-  *(data0+gidx0) = (long)((acc0+((long)(-1))));
+  *(data0+gidx0) = (long)((acc0+(-1)));
 }
 #include <metal_stdlib>
 using namespace metal;
