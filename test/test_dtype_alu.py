@@ -30,6 +30,7 @@ unary_operations = [(Tensor.exp, np.exp), (Tensor.log, np.log), operator.neg, (T
 
 # TODO: CUDACPU segfaults on sin
 if getenv("CUDACPU"): unary_operations.remove((Tensor.sin, np.sin))
+truediv_rtol = 1e-3
 
 class ht:
   float64 = st.floats(width=64, allow_subnormal=False)
@@ -50,7 +51,7 @@ def universal_test(a, b, dtype, op):
   if not isinstance(op, tuple): op = (op, op)
   tensor_value = (op[0](Tensor([a], dtype=dtype), Tensor([b], dtype=dtype))).numpy()
   numpy_value = op[1](np.array([a]).astype(dtype.np), np.array([b]).astype(dtype.np))
-  if op[0] == operator.truediv: np.testing.assert_allclose(tensor_value, numpy_value, rtol=1) # TODO what's a good rtol here
+  if op[0] == operator.truediv: np.testing.assert_allclose(tensor_value, numpy_value, rtol=truediv_rtol)
   elif dtype in dtypes_float: np.testing.assert_allclose(tensor_value, numpy_value, atol=1e-10)
   else: np.testing.assert_equal(tensor_value, numpy_value)
 
@@ -84,7 +85,7 @@ def universal_test_midcast(a, b, c, op1, op2, d1:DType, d2:DType):
   an, bn, cn = np.array([a]).astype(d1.np), np.array([b]).astype(d1.np), np.array([c]).astype(d2.np)
   tensor_value = op2[0](op1[0](at, bt).cast(d2), ct).numpy()
   numpy_value = op2[1](op1[1](an, bn).astype(d2.np), cn)
-  if operator.truediv in (op1[0], op2[0]): np.testing.assert_allclose(tensor_value, numpy_value, rtol=1)
+  if operator.truediv in (op1[0], op2[0]): np.testing.assert_allclose(tensor_value, numpy_value, rtol=truediv_rtol)
   else: np.testing.assert_almost_equal(tensor_value, numpy_value)
 
 class TestDTypeALU(unittest.TestCase):
