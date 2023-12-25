@@ -3,7 +3,7 @@ import unittest
 from tinygrad import Tensor, dtypes, Device
 import operator
 import numpy as np
-from hypothesis import given, strategies as st, settings
+from hypothesis import assume, given, strategies as st, settings
 from tinygrad.helpers import CI, getenv, DType, OSX
 from tinygrad.ops import UnaryOps, get_lazyop_info
 
@@ -14,13 +14,10 @@ print(settings.default)
 dtypes_float = (dtypes.float32, dtypes.float16)
 dtypes_int = (dtypes.int8, dtypes.int16, dtypes.int32, dtypes.int64, dtypes.uint8, dtypes.uint16, dtypes.uint32, dtypes.uint64)
 dtypes_bool = (dtypes.bool,)
-binary_operations = [operator.add, operator.sub, operator.mul]
+binary_operations = [operator.add, operator.sub, operator.mul, operator.truediv]
 integer_binary_operations = binary_operations + [(Tensor.xor, np.bitwise_xor)]
 unary_operations = [(Tensor.exp, np.exp), (Tensor.log, np.log), operator.neg, (Tensor.sin, np.sin),
                     (Tensor.sqrt, np.sqrt), (Tensor.reciprocal, np.reciprocal)]
-
-# TODO: enable this (this is a dtype issue)
-#binary_operations.append(operator.truediv)
 
 # TODO: enable mod on Tensor
 #binary_operations.append(operator.mod)
@@ -49,10 +46,12 @@ class ht:
   bool = st.booleans()
 
 def universal_test(a, b, dtype, op):
+  if op == operator.truediv: assume(b != 0)
   if not isinstance(op, tuple): op = (op, op)
   tensor_value = (op[0](Tensor([a], dtype=dtype), Tensor([b], dtype=dtype))).numpy()
   numpy_value = op[1](np.array([a]).astype(dtype.np), np.array([b]).astype(dtype.np))
-  if dtype in dtypes_float: np.testing.assert_allclose(tensor_value, numpy_value, atol=1e-10)
+  if op[0] == operator.truediv: np.testing.assert_allclose(tensor_value, numpy_value, rtol=1) # TODO what's a good rtol here
+  elif dtype in dtypes_float: np.testing.assert_allclose(tensor_value, numpy_value, atol=1e-10)
   else: np.testing.assert_equal(tensor_value, numpy_value)
 
 def universal_test_unary(a, dtype, op):
@@ -77,13 +76,16 @@ def universal_test_cast(a, in_dtype, dtype):
   np.testing.assert_equal(tensor_value, numpy_value)
 
 def universal_test_midcast(a, b, c, op1, op2, d1:DType, d2:DType):
+  if op1 == operator.truediv: assume(b != 0)
+  if op2 == operator.truediv: assume(c != 0)
   if not isinstance(op1, tuple): op1 = (op1, op1)
   if not isinstance(op2, tuple): op2 = (op2, op2)
   at, bt, ct = Tensor([a], dtype=d1), Tensor([b], dtype=d1), Tensor([c], dtype=d2)
   an, bn, cn = np.array([a]).astype(d1.np), np.array([b]).astype(d1.np), np.array([c]).astype(d2.np)
   tensor_value = op2[0](op1[0](at, bt).cast(d2), ct).numpy()
   numpy_value = op2[1](op1[1](an, bn).astype(d2.np), cn)
-  np.testing.assert_almost_equal(tensor_value, numpy_value)
+  if operator.truediv in (op1[0], op2[0]): np.testing.assert_allclose(tensor_value, numpy_value, rtol=1)
+  else: np.testing.assert_almost_equal(tensor_value, numpy_value)
 
 class TestDTypeALU(unittest.TestCase):
   @unittest.skipIf(OSX and Device.DEFAULT in {"GPU", "METAL"}, "no float64 on OSX GPU")
