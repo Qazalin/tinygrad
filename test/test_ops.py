@@ -54,8 +54,6 @@ def helper_test_op(shps, torch_fxn, tinygrad_fxn=None, atol=1e-6, rtol=1e-3, gra
     for i, (t, tt) in enumerate(zip(ts, tst)):
       compare(f"backward pass tensor {i}", tt.grad.numpy(), t.grad.detach().numpy(), atol=grad_atol, rtol=grad_rtol)
 
-  if not CI: print("\ntesting %40r   torch/tinygrad fp: %.2f / %.2f ms  bp: %.2f / %.2f ms " % (shps, torch_fp*1000, tinygrad_fp*1000, torch_fbp*1000, tinygrad_fbp*1000), end="")
-
 def prepare_test_op(a, b, shps, vals, forward_only=False):
   torch.manual_seed(0)
   np.random.seed(0)
@@ -1421,4 +1419,12 @@ class TestOps(unittest.TestCase):
 
 if __name__ == '__main__':
   np.random.seed(1337)
-  unittest.main(verbosity=2)
+  loader = unittest.TestLoader()
+  suite = loader.loadTestsFromTestCase(TestOps)
+  result = unittest.TestResult()
+  tests = []
+  for test in suite:
+    name = test.__repr__().split("testMethod=")[-1].replace(">", "")
+    tests.append(name)
+    open("running_tests", "w").write("\n".join(tests))
+    test(result)

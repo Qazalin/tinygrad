@@ -7,8 +7,17 @@ from tinygrad.helpers import prod, getenv, DEBUG, diskcache, unwrap2
 from tinygrad.device import Compiled, LRUAllocator
 from tinygrad.renderer.cstyle import MetalRenderer
 
-@diskcache
+
 def compile_metal(prg, use_xcode=bool(getenv("METAL_XCODE"))) -> bytes:
+  last_test = open("running_tests", "r").readlines()[-1]
+  test_idx_content = open("test_idx", "r").read().split(" ")
+  if test_idx_content[0] == last_test:
+    test_idx = int(test_idx_content[1]) + 1
+  else:
+    test_idx = 0
+  open("test_idx", "w").write(f"{last_test} {test_idx}")
+  name = f"{last_test}_{test_idx}" if test_idx > 0 else last_test
+  open(f"../rdna/tests/test_ops/{name}.c", "w").write(prg)
   assert MetalDevice.compiler_device, "metal device creation is required for metal compile"
   if use_xcode:
     # NOTE: if you run llvm-dis on "air" you can see the llvm bytecode
