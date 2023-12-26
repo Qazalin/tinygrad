@@ -16,17 +16,8 @@ def check(status):
 def hip_time_execution(cb, enable=False): return time_execution_cuda_style(cb, hip.hipEvent_t, hip.hipEventCreate, hip.hipEventRecord, hip.hipEventSynchronize, hip.hipEventDestroy, hip.hipEventElapsedTime, enable=enable)  # noqa: E501
 
 def compile_hip(prg) -> bytes:
-
-
-  last_test = open("running_tests", "r").readlines()[-1]
-  test_idx_content = open("test_idx", "r").read().split(" ")
-  if test_idx_content[0] == last_test:
-    test_idx = int(test_idx_content[1]) + 1
-  else:
-    test_idx = 0
-  open("test_idx", "w").write(f"{last_test} {test_idx}")
-  name = f"{last_test}_{test_idx}" if test_idx > 0 else last_test
-  open(f"../rdna/tests/test_ops/{name}.c", "w").write(prg)
+  counter = int(open("counter", "r").read())
+  open(f"../rdna/tests/noopt/{counter}.c", "w").write(prg)
 
   return compile_cuda_style(prg, [f'--offload-arch={HIPDevice.default_arch_name}'], hip.hiprtcProgram, hip.hiprtcCreateProgram, hip.hiprtcCompileProgram, hip.hiprtcGetCode, hip.hiprtcGetCodeSize, hip.hiprtcGetProgramLog, hip.hiprtcGetProgramLogSize, check)  # noqa: E501
 
@@ -37,10 +28,9 @@ class HIPProgram:
     asm = subprocess.check_output(["/opt/rocm/llvm/bin/llvm-objdump", '-d', '-'], input=lib)
     asm = '\n'.join([x for x in asm.decode('utf-8').split("\n") if 's_code_end' not in x])
 
-    last_test = open("running_tests", "r").readlines()[-1]
-    test_idx = int(open("test_idx", "r").read().split(" ")[1])
-    name = f"{last_test}_{test_idx}" if test_idx > 0 else last_test
-    open(f"../rdna/tests/test_ops/{name}.s", "w").write(asm)
+    counter = int(open("counter", "r").read())
+    open(f"../rdna/tests/noopt/{counter}.s", "w").write(asm)
+    open("counter", "w").write(str(counter + 1))
 
     if MOCKHIP: return
     check(hip.hipSetDevice(self.device))
