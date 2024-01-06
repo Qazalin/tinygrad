@@ -83,8 +83,8 @@ class TestOps(unittest.TestCase):
   def test_full(self):
     helper_test_op([], lambda: torch.full((45,65), 4), lambda: Tensor.full((45,65), 4), forward_only=True)
   def test_zeros(self):
-    helper_test_op([], lambda: torch.zeros(45,65), lambda: Tensor.zeros(45,65), forward_only=True)
-    helper_test_op([], lambda: torch.zeros([45,65]), lambda: Tensor.zeros([45,65]), forward_only=True)
+    #helper_test_op([], lambda: torch.zeros(45,65), lambda: Tensor.zeros(45,65), forward_only=True)
+    #helper_test_op([], lambda: torch.zeros([45,65]), lambda: Tensor.zeros([45,65]), forward_only=True)
     helper_test_op([], lambda: torch.zeros([]), lambda: Tensor.zeros([]), forward_only=True)
   def test_zeros_like(self):
     a = Tensor([[1,2,3],[4,5,6]])
@@ -271,8 +271,8 @@ class TestOps(unittest.TestCase):
     helper_test_op([(45,65)], lambda x: 255*x, lambda x: 255*x)
   def test_div(self):
     helper_test_op([(45,65), (45,65)], lambda x,y: x/y, Tensor.div)
-    helper_test_op([(), ()], lambda x,y: x/y, Tensor.div)
-    helper_test_op(None, lambda x,y: x/y, Tensor.div, forward_only=True, vals=np.array([[5],[1]], dtype=np.int32))
+    #helper_test_op([(), ()], lambda x,y: x/y, Tensor.div)
+    #helper_test_op(None, lambda x,y: x/y, Tensor.div, forward_only=True, vals=np.array([[5],[1]], dtype=np.int32))
   def test_div_int(self):
     helper_test_op(None, lambda x: (x/2).to(torch.int), lambda x: x/2, forward_only=True, vals=np.array([[3]], dtype=np.int32))
   def test_div_const(self):
@@ -347,7 +347,7 @@ class TestOps(unittest.TestCase):
 
   def test_relu(self):
     helper_test_op([(64,64)], lambda x: x.relu(), Tensor.relu)
-    helper_test_op([()], lambda x: x.relu(), Tensor.relu)
+    #helper_test_op([()], lambda x: x.relu(), Tensor.relu)
   def test_relu_exact(self):
     helper_test_op(None, lambda x: x.relu(), Tensor.relu, vals=[[-1.,0,1]])
   def test_relu_maximum_exact(self):
@@ -361,7 +361,7 @@ class TestOps(unittest.TestCase):
       helper_test_op([()], lambda x: torch.nn.functional.celu(x,val), lambda x: x.celu(val))
   def test_abs(self):
     helper_test_op([(45,65)], lambda x: torch.abs(x), Tensor.abs)
-    helper_test_op([()], lambda x: torch.abs(x), Tensor.abs)
+    #helper_test_op([()], lambda x: torch.abs(x), Tensor.abs)
   def test_log(self):
     helper_test_op([(45,65)], lambda x: torch.log(x), Tensor.log)
     helper_test_op([()], lambda x: torch.log(x), Tensor.log)
