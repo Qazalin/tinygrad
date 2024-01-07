@@ -16,7 +16,6 @@ def check(status):
 def hip_time_execution(cb, enable=False): return time_execution_cuda_style(cb, hip.hipEvent_t, hip.hipEventCreate, hip.hipEventRecord, hip.hipEventSynchronize, hip.hipEventDestroy, hip.hipEventElapsedTime, enable=enable)  # noqa: E501
 
 def compile_hip(prg) -> bytes:
-  print(prg)
   lib = compile_cuda_style(prg, [f'--offload-arch={HIPDevice.default_arch_name}'], hip.hiprtcProgram, hip.hiprtcCreateProgram, hip.hiprtcCompileProgram, hip.hiprtcGetCode, hip.hiprtcGetCodeSize, hip.hiprtcGetProgramLog, hip.hiprtcGetProgramLogSize, check)  # noqa: E501
   return lib
 
@@ -31,7 +30,6 @@ class HIPProgram:
 
     asm = subprocess.check_output(["/opt/rocm/llvm/bin/llvm-objdump", '-d', '-'], input=lib)
     asm = '\n'.join([x for x in asm.decode('utf-8').split("\n") if 's_code_end' not in x])
-    print(asm)
     open("compiled.s", "w").write(asm)
 
   def __del__(self):
