@@ -1,7 +1,3 @@
-import subprocess
-from tinygrad.runtime.ops_hip import compile_hip
-
-lib = compile_hip("""
 #include <hip/hip_common.h>
 
 #define INFINITY (__builtin_inff())
@@ -23,17 +19,8 @@ extern "C" __global__ void __launch_bounds__ (16, 1) r_256_16_16(int* data0) {
     for (int ridx1 = 0; ridx1 < 16; ridx1++) {
       int val0 = *(temp+ridx1);
       acc1 = (val0+acc1);
+      // printf("gid=%d lid=%d rid=%d val0=%d acc=%d\n", gidx0, lidx1, ridx1, val0, acc1);
     }
-    *(data0+gidx0) = (acc1+(-1));
+    *(data0+gidx0) = acc1;
   }
 }
-""")
-asm = subprocess.check_output(["/opt/rocm/llvm/bin/llvm-objdump", '-d', '-'], input=lib)
-instructions = [x for x in asm.decode('utf-8').split("\n") if 's_code_end' not in x]
-cndm = 0
-for i, instr in enumerate(instructions):
-  prev = instructions[i-1]
-  w = "s_waitcnt"
-  if w in prev and w in instr:
-    print("yay")
-asm = '\n'.join(instructions)

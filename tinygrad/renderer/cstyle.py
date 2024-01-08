@@ -207,31 +207,8 @@ def uops_to_cstyle(lang:CStyleLanguage, function_name:str, uops:List[UOp]) -> Tu
       raise RuntimeError(f"failed to render {uop}")
 
   k = lang.render_kernel(function_name, kernel, bufs, local_size, prekernel)
-  k = """
-#include <hip/hip_common.h>
-#define INFINITY (__builtin_inff())
-#define NAN (__builtin_nanf(""))
-  typedef float float8 __attribute__((ext_vector_type(8)));
-  __device__ float8 make_float8(float x, float y, float z, float w, float a, float b, float c, float d) { return {x, y, z, w, a, b, c, d}; }
-  extern "C" __global__
-  void __launch_bounds__ (16, 1) r_256_16_16(int* data0) {
-  __shared__ int temp[16];
-  int gidx0 = blockIdx.x; /* 256 */
-  int lidx1 = threadIdx.x; /* 16 */
-  int acc0 = 0;
-  for (int ridx0 = 0; ridx0 < 16; ridx0++) {
-    acc0 = (((((gidx0*(-1))+(lidx1*(-16))+(ridx0*(-1)))<(-254))?1:0)+acc0);
-  }
-  *(temp+lidx1) = acc0;
-  __syncthreads();
-  int acc1 = 0;
-  for (int ridx1 = 0; ridx1 < 16; ridx1++) {
-    int val0 = *(temp+ridx1);
-    acc1 = (val0+acc1);
-  }
-  *(data0+gidx0) = (acc1+(-1));
-}
-"""
+  print(k)
+  #k = open("kernel.c").read()
   return k, {}
 
 class OpenCLLanguage(CStyleLanguage):

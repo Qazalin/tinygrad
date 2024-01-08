@@ -1,2 +1,3 @@
 from tinygrad import Tensor
-print(Tensor.arange(256).numpy())
+
+print(Tensor([2,2]).argmax().numpy())
