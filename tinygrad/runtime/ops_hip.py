@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import ctypes, functools, subprocess, io
 from typing import Tuple, TypeVar, List
 import gpuctypes.hip as hip
@@ -17,7 +18,14 @@ def check(status):
 # TODO: remove these helpers, they increase complexity
 def hip_time_execution(cb, enable=False): return time_execution_cuda_style(cb, hip.hipEvent_t, hip.hipEventCreate, hip.hipEventRecord, hip.hipEventSynchronize, hip.hipEventDestroy, hip.hipEventElapsedTime, enable=enable)  # noqa: E501
 
-def compile_hip(prg) -> bytes: return compile_cuda_style(prg, [f'--offload-arch={HIPDevice.default_arch_name}', '-I/opt/rocm/include'], hip.hiprtcProgram, hip.hiprtcCreateProgram, hip.hiprtcCompileProgram, hip.hiprtcGetCode, hip.hiprtcGetCodeSize, hip.hiprtcGetProgramLog, hip.hiprtcGetProgramLogSize, check)  # noqa: E501
+def compile_hip(prg) -> bytes:
+  lib = compile_cuda_style(prg, [f'--offload-arch={HIPDevice.default_arch_name}', '-I/opt/rocm/include'], hip.hiprtcProgram, hip.hiprtcCreateProgram, hip.hiprtcCompileProgram, hip.hiprtcGetCode, hip.hiprtcGetCodeSize, hip.hiprtcGetProgramLog, hip.hiprtcGetProgramLogSize, check)  # noqa: E501
+  asm = subprocess.check_output(["/opt/rocm/llvm/bin/llvm-objdump", '-d', '-'], input=lib)
+  asm = '\n'.join([x for x in asm.decode('utf-8').split("\n") if 's_code_end' not in x])
+  asms = json.load(open("./asms.json"))
+  asms[prg] = asm
+  json.dump(asms, open("./asms.json", "w"))
+  return lib
 
 class HIPProgram:
   def __init__(self, device:int, name:str, lib:bytes):
