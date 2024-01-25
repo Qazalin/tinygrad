@@ -18,7 +18,17 @@ def check(status):
 # TODO: remove these helpers, they increase complexity
 def hip_time_execution(cb, enable=False): return time_execution_cuda_style(cb, hip.hipEvent_t, hip.hipEventCreate, hip.hipEventRecord, hip.hipEventSynchronize, hip.hipEventDestroy, hip.hipEventElapsedTime, enable=enable)  # noqa: E501
 
-def compile_hip(prg:str, arch="gfx1100") -> bytes: return compile_cuda_style(prg, [f'--offload-arch={arch}', '-I/opt/rocm/include'], hip.hiprtcProgram, hip.hiprtcCreateProgram, hip.hiprtcCompileProgram, hip.hiprtcGetCode, hip.hiprtcGetCodeSize, hip.hiprtcGetProgramLog, hip.hiprtcGetProgramLogSize, check)  # noqa: E501
+def compile_hip(prg:str, arch="gfx1100") -> bytes:
+  print("compiling")
+  import http.client, urllib.parse
+  params = urllib.parse.urlencode({'code': prg})
+  headers = {"Content-type": "application/x-www-form-urlencoded", "Accept": "text/plain"}
+  conn = http.client.HTTPConnection("temps-mbp.home", 80)
+  conn.request("POST", "/", params, headers)
+  response = conn.getresponse()
+  asm = response.read().decode()
+  conn.close()
+  return asm.encode("utf-8")
 
 class HIPProgram:
   def __init__(self, device:int, name:str, lib:bytes):
