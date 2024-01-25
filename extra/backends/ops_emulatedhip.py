@@ -16,5 +16,4 @@ class EmulatedHIPProgram:
 class EmulatedHIPDevice(Compiled):
   def __init__(self, device=""):
     self.arch = "gfx1100"
-    super().__init__(MallocAllocator, LinearizerOptions("HIP"), HIPRenderer,
-                     functools.partial(compile_hip,arch=self.arch), f"compile_hip_{self.arch}", functools.partial(EmulatedHIPProgram))
+    super().__init__(device, MallocAllocator, LinearizerOptions("HIP"), HIPRenderer, functools.partial(compile_hip,arch=self.arch), f"compile_hip_{self.arch}", EmulatedHIPProgram)
