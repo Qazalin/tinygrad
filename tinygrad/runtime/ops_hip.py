@@ -1,12 +1,13 @@
 from __future__ import annotations
 import ctypes, functools, subprocess, io
-from typing import Tuple, TypeVar, List
-import gpuctypes.hip as hip
+from typing import Any, Tuple, TypeVar, List
 from tinygrad.helpers import DEBUG, getenv, init_c_var, compile_cuda_style, encode_args_cuda_style, time_execution_cuda_style
 from tinygrad.helpers import from_mv, round_up, to_mv
 from tinygrad.device import Compiled, LRUAllocator
 from tinygrad.renderer.cstyle import HIPRenderer
 from tinygrad.codegen.kernel import LinearizerOptions
+
+hip: Any = None
 
 def check(status):
   if status != 0: raise RuntimeError(f"HIP Error {status}, {ctypes.string_at(hip.hipGetErrorString(status)).decode()}")
