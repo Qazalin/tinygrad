@@ -1,13 +1,13 @@
 from __future__ import annotations
 import ctypes, functools, subprocess, io
 from typing import Tuple, TypeVar, List, Any, cast, Set
-import tinygrad.runtime.autogen.hip as hip
 from tinygrad.helpers import DEBUG, getenv, init_c_var
-from tinygrad.helpers import from_mv, round_up, to_mv, colored, init_c_struct_t
 from tinygrad.device import Compiled, LRUAllocator, BufferOptions, JITRunner, Device, Buffer, update_stats, Compiler
 from tinygrad.renderer.cstyle import HIPRenderer
 from tinygrad.codegen.kernel import LinearizerOptions
 from tinygrad.runtime.compiler.hip_comgr import compile_hip
+
+hip: Any = None
 
 class HIPCompiler(Compiler):
   linearizer_opts = LinearizerOptions("HIP")
