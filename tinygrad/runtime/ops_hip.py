@@ -19,7 +19,6 @@ def check(status):
 def hip_time_execution(cb, enable=False): return time_execution_cuda_style(cb, hip.hipEvent_t, hip.hipEventCreate, hip.hipEventRecord, hip.hipEventSynchronize, hip.hipEventDestroy, hip.hipEventElapsedTime, enable=enable)  # noqa: E501
 
 def compile_hip(prg:str, arch="gfx1100") -> bytes:
-  print("compiling")
   import http.client, urllib.parse
   params = urllib.parse.urlencode({'code': prg})
   headers = {"Content-type": "application/x-www-form-urlencoded", "Accept": "text/plain"}
