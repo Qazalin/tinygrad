@@ -4,7 +4,6 @@ from tinygrad.runtime.ops_hip import HIPCompiler
 
 hip = ctypes.CDLL("/Users/qazal/code/tinygrad/remu/target/release/libremu.dylib")
 
-
 class EmulatedHIPProgram:
   def __init__(self, name:str, lib:bytes):
     self.name, self.lib = name, lib
