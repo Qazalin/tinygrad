@@ -1,5 +1,4 @@
-#type:ignore
-from tinygrad import Tensor
+from tinygrad import Tensor, Device
 from examples.llama import Transformer, MODEL_PARAMS
 from tinygrad.dtype import dtypes
 from tinygrad.nn.state import get_state_dict
@@ -13,4 +12,4 @@ state = get_state_dict(mdl)
 print(state["layers.0.attention.wq.weight"].numpy())
 
 #   def __call__(self, tokens:Tensor, start_pos:Variable, temperature:float=0.0):
-#mdl(Tensor([1, 6601]), 0)
+mdl(Tensor.randn(5,5), 0)

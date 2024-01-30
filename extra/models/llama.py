@@ -117,6 +117,7 @@ class Transformer:
     self.forward_jit = TinyJit(self.forward) if jit else None
 
   def forward(self, tokens:Tensor, start_pos:Union[Variable,int], temperature:float=0.0):
+    print(tokens.shape)
     _bsz, seqlen = tokens.shape
     freqs_cis = self.freqs_cis.shrink((None, (start_pos, start_pos+seqlen),None,None,None))
 
