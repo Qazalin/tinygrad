@@ -50,3 +50,6 @@ quickstart.py
 .hypothesis
 weights
 *.lprof
+experiments/*
+!experiments/*.py
+!experiments/*.cpp
