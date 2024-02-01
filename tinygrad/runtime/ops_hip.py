@@ -172,7 +172,7 @@ class HIPWaitEvent(JITRunner):
 if getenv("HIPCPU"):
   hip = ctypes.CDLL("/usr/local/lib/libremu.so") # type: ignore[assignment]
 
-  class HIPProgram: # type: ignore[no-redef]
+  class HIPProgram:
     def __init__(self, name:str, lib:bytes):
       self.name, self.lib = name, lib
     def __call__(self, *args, global_size, local_size, vals=(), wait=False):
