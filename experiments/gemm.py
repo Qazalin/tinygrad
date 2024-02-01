@@ -51,7 +51,8 @@ def compile_hipold(prg:str, arch="gfx1100") -> bytes:
   status = hip.hiprtcCompileProgram(prog, len(compile_options), to_char_p_p([o.encode() for o in compile_options]))
   if status != 0: raise RuntimeError(f"compile failed: {get_bytes(prog, hip.hiprtcGetProgramLogSize, hip.hiprtcGetProgramLog, check).decode()}")
   return get_bytes(prog, hip.hiprtcGetCodeSize, hip.hiprtcGetCode, check)
-lib = compile_hip(HIPLanguage().kernel_prefix + open("gemm2.cpp").read())
+#lib = compile_hip(HIPLanguage().kernel_prefix + open("gemm2.cpp").read())
+lib = compile_hip(HIPLanguage().kernel_prefix + open("base.cpp").read())
 #lib = compile_hipold(open("gemm.cpp").read())
 
 prog = HIPProgram(device.device, "test", lib)
@@ -63,14 +64,16 @@ def timeit(fxn):
   #print(f"{ret*1e6:.2f} us")
   return et
 
+"""
 if not getenv("HIPCPU"):
   global_size, local_size = [N//(KX*16*2), N//(KY*16*2), 1], [32, 2, 2]
   print("global/local size", global_size, local_size, f"local_size:{prod(local_size)} total_size:{prod(global_size+local_size)}")
-  tm = min([timeit(lambda: prog(a, b, c, global_size=global_size, local_size=local_size, wait=True)) for _ in range(1000)])
+  tm = min([timeit(lambda: prog(a, b, c, global_size=global_size, local_size=local_size, wait=True)) for _ in range(1)])
   hipallocator.copyout(flat_mv(na.data),a)
   na = na.reshape(N,N)
   comp = nb.astype(np.float32) @ nc.astype(np.float32)
   print(f"{N*N:10d} {tm*1e6:9.2f} us, would be {FLOPS*1e-9/tm:9.2f} GFLOPS matmul, {BW*1e-9/tm:.2f} GB/s")
   np.testing.assert_allclose(na, comp, atol=1e-2, rtol=1e-2)
 else:
-  prog(a, b, c, global_size=(1,1,1), local_size=(1,1,1))
+"""
+prog(a, b, c, global_size=(1,1,1), local_size=(1,1,1))

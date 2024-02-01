@@ -11,6 +11,7 @@ extern "C" __global__ void __launch_bounds__ (128, 1) test(float* c, __half* a, 
   const int KX  = 4;
   const int KY = 4;
   const int N = 2048;
+  bool logme = blockIdx.x == 0 && blockIdx.y == 0 && threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0;
 
   c += gx*(KX*16)*(N) + gy*(KY*16) + (lIdx/16)*(N) + lane;
   a += gx*(KX*16)*(N);
