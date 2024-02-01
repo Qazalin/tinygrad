@@ -13,5 +13,5 @@ def get_asm(lib:bytes):
   asm = subprocess.check_output(["/opt/rocm/llvm/bin/llvm-objdump", '-d', '-'], input=lib)
   return '\n'.join([x for x in asm.decode('utf-8').split("\n") if 's_code_end' not in x])
 
-asm = get_asm(open("app-hip-amdgcn-amd-amdhsa-gfx1100.o", "rb").read())
+asm = get_asm(compile_hip(open("./gemm.cpp").read()))
 print(asm)
