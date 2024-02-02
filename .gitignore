@@ -53,3 +53,4 @@ weights
 experiments/*
 !experiments/*.py
 !experiments/*.cpp
+!experiments/*.s

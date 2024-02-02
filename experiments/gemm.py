@@ -25,11 +25,11 @@ else:
 # KY=2 KX=2 N=2048 python3 extra/gemm/hip_matmul.py
 #   4194304    324.76 us, would be  52899.88 GFLOPS matmul, 154.98 GB/s
 
-N = getenv("N", 2048)
-KX = getenv("KX", 4)
-KY = getenv("KY", 4)
-assert N%(16*KX) == 0, f"N must be multiple of {16*KX}"
-assert N%(16*KY) == 0, f"N must be multiple of {16*KY}"
+N = getenv("N", 2)
+#KX = getenv("KX", 4)
+#KY = getenv("KY", 4)
+#assert N%(16*KX) == 0, f"N must be multiple of {16*KX}"
+#assert N%(16*KY) == 0, f"N must be multiple of {16*KY}"
 FLOPS = N*N*N*2
 BW = N*N*3*4
 
@@ -38,8 +38,10 @@ a = hipallocator.alloc(N*N*4)
 b = hipallocator.alloc(N*N*2)
 c = hipallocator.alloc(N*N*2)
 na = np.empty(N*N, np.float32)
-nb = np.random.default_rng(seed=0).standard_normal(size=(N,N), dtype=np.float32).astype(np.float16)
-nc = np.random.default_rng(seed=0).standard_normal(size=(N,N), dtype=np.float32).astype(np.float16)
+#nb = np.random.default_rng(seed=0).standard_normal(size=(N,N), dtype=np.float32).astype(np.float16)
+#nc = np.random.default_rng(seed=1).standard_normal(size=(N,N), dtype=np.float32).astype(np.float16)
+nb = np.array([[4,2], [6,3]], dtype=np.half)
+nc = np.array([[4,2], [5,4]], dtype=np.half)
 hipallocator.copyin(b, bytearray(nb))
 hipallocator.copyin(c, bytearray(nc))
 
@@ -51,9 +53,16 @@ def compile_hipold(prg:str, arch="gfx1100") -> bytes:
   status = hip.hiprtcCompileProgram(prog, len(compile_options), to_char_p_p([o.encode() for o in compile_options]))
   if status != 0: raise RuntimeError(f"compile failed: {get_bytes(prog, hip.hiprtcGetProgramLogSize, hip.hiprtcGetProgramLog, check).decode()}")
   return get_bytes(prog, hip.hiprtcGetCodeSize, hip.hiprtcGetCode, check)
+
 #lib = compile_hip(HIPLanguage().kernel_prefix + open("gemm2.cpp").read())
-lib = compile_hip(HIPLanguage().kernel_prefix + open("base.cpp").read())
+#lib = compile_hip(HIPLanguage().kernel_prefix + open("base.cpp").read())
+lib = compile_hipold(open("base.cpp").read())
 #lib = compile_hipold(open("gemm.cpp").read())
+
+if getenv("ASM"):
+  import subprocess
+  asm = subprocess.check_output(["/opt/rocm/llvm/bin/llvm-objdump", '-d', '-'], input=lib)
+  print('\n'.join([x for x in asm.decode('utf-8').split("\n") if 's_code_end' not in x]))
 
 prog = HIPProgram(device.device, "test", lib)
 
@@ -76,4 +85,14 @@ if not getenv("HIPCPU"):
   np.testing.assert_allclose(na, comp, atol=1e-2, rtol=1e-2)
 else:
 """
-prog(a, b, c, global_size=(1,1,1), local_size=(1,1,1))
+print(na)
+print(nb)
+print(nc)
+global_size=(2,2,1)
+local_size=(1,1,1)
+prog(a, b, c, global_size=global_size, local_size=local_size)
+hipallocator.copyout(flat_mv(na.data),a)
+na = na.reshape(N,N)
+comp = nb.astype(np.float32) @ nc.astype(np.float32)
+print(comp)
+print(na)
