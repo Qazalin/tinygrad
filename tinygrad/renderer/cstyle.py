@@ -170,6 +170,7 @@ def uops_to_cstyle(lang:CStyleLanguage, function_name:str, uops:List[UOp]) -> st
       else: raise RuntimeError(f"failed to render {uop}")
 
   k = lang.render_kernel(function_name, kernel, bufs, local_size)
+  #print(k)
   return k
                                                                                   
 
