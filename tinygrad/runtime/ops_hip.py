@@ -32,9 +32,8 @@ class HIPProgram:
   def __init__(self, device:int, name:str, lib:bytes):
     self.device, self.name, self.lib = device, name, lib
 
-    if DEBUG >= 6:
-      asm = subprocess.check_output(["/opt/rocm/llvm/bin/llvm-objdump", '-d', '-'], input=lib)
-      print('\n'.join([x for x in asm.decode('utf-8').split("\n") if 's_code_end' not in x]))
+    asm = subprocess.check_output(["/opt/rocm/llvm/bin/llvm-objdump", '-d', '-'], input=lib)
+    print('\n'.join([x for x in asm.decode('utf-8').split("\n") if 's_code_end' not in x]))
 
     if MOCKHIP: return
     hip_set_device(self.device)

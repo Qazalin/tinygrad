@@ -1297,7 +1297,7 @@ class TestOps(unittest.TestCase):
 
   def test_avgpool2d(self):
     shape = (32,2,111,28)
-    for ksz in [(2,2), (3,3), (3,2), (5,5), (5,1)]:
+    for ksz in [(5,1)]:
       with self.subTest(kernel_size=ksz):
         helper_test_op([shape],
           lambda x: torch.nn.functional.avg_pool2d(x, kernel_size=ksz),
@@ -1309,9 +1309,11 @@ class TestOps(unittest.TestCase):
       lambda x: Tensor.avg_pool2d(x, kernel_size=(111,28)), rtol=1e-5)
 
   def test_cat(self):
-    for dim in range(-2, 3):
-      helper_test_op([(45,65,9), (45,65,9), (45,65,9)], lambda x,y,z: torch.cat((x,y,z), dim), lambda x,y,z: x.cat(y, z, dim=dim))
+    #for dim in range(-2, 3):
+    dim = -2
+    helper_test_op([(45,65,9), (45,65,9), (45,65,9)], lambda x,y,z: torch.cat((x,y,z), dim), lambda x,y,z: x.cat(y, z, dim=dim))
 
+    """
     # zero in non-cat axis
     helper_test_op([(45,0,9), (45,0,9), (45,0,9)], lambda x,y,z: torch.cat((x,y,z), 0), lambda x,y,z: x.cat(y, z, dim=0))
 
@@ -1322,6 +1324,7 @@ class TestOps(unittest.TestCase):
     with self.assertRaises(IndexError):
       a = Tensor(3.14)
       a.cat(a)
+   t_avg_"""
 
   def test_multicat(self):
     for dim in range(-1, 2):

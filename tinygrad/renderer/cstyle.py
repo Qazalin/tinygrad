@@ -169,7 +169,14 @@ def uops_to_cstyle(lang:CStyleLanguage, function_name:str, uops:List[UOp]) -> st
       elif uop == UOps.GEP: r[u] = f"({r[vin[0]]})[{args}]" if cast(DType, vin[0].dtype).sz > 4 else f"({r[vin[0]]}).{'xyzw'[args]}"
       else: raise RuntimeError(f"failed to render {uop}")
 
-  return lang.render_kernel(function_name, kernel, bufs, local_size)
+  k = lang.render_kernel(function_name, kernel, bufs, local_size)
+  print(f"kernel {function_name}")
+  if not getenv("ISOLATE"):
+    with open(f"/tmp/{function_name}.c", "w") as f: f.write(k)
+  else:
+    with open(f"/tmp/{function_name}.c") as f: k = f.read()
+  return k
+
 
 class OpenCLLanguage(CStyleLanguage):
   kernel_prefix = "__kernel "
