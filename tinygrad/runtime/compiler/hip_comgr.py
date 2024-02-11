@@ -46,13 +46,19 @@ def compile_hip(prg:str, arch="gfx1100") -> bytes:
   check(comgr.amd_comgr_destroy_action_info(action_info))
   return ret
 
-def compile_rdna3(asm:str) -> bytes:
+def compile_rdna3(asm:str, dt) -> bytes:
   import subprocess
   asm = '\n'.join([rf'"{instr}\n"' for instr in  asm.splitlines()])
   code = rf"""
 #include <hip/hip_common.h>
-  extern "C" __attribute__((global)) void kernel(int *c) {{
-      asm volatile ( {asm} );
+#define half _Float16
+typedef long unsigned int size_t;
+extern "C" __attribute__((device)) __attribute__((const)) size_t __ockl_get_local_id(unsigned int);
+extern "C" __attribute__((device)) __attribute__((const)) size_t __ockl_get_group_id(unsigned int);
+extern "C" __attribute__((device)) __attribute__((const)) size_t __ockl_get_local_size(unsigned int);
+extern "C" __attribute__((global)) void kernel({dt.name} *data0, {dt.name} *data1, {dt.name} *data2) {{
+      int gidx0 = __ockl_get_group_id(0);
+      asm ( {asm} );
   }}
   """
   lib = compile_hip(code)

@@ -13,7 +13,6 @@ int main()
     int *dev_c;
     hipMalloc((void**)&dev_c, sizeof(int));
     hipMemcpy(&c, dev_c, sizeof(int), hipMemcpyDeviceToHost);
-    printf("data0=%d\n", c);
     hipFree(dev_c);
     return 0;
 }
