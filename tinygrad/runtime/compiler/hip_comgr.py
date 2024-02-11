@@ -45,3 +45,17 @@ def compile_hip(prg:str, arch="gfx1100") -> bytes:
   for x in [data_set_src, data_set_bc, data_set_reloc, data_set_exec]: check(comgr.amd_comgr_destroy_data_set(x))
   check(comgr.amd_comgr_destroy_action_info(action_info))
   return ret
+
+def compile_rdna3(asm:str) -> bytes:
+  import subprocess
+  asm = '\n'.join([rf'"{instr}\n"' for instr in  asm.splitlines()])
+  code = rf"""
+#include <hip/hip_common.h>
+  extern "C" __attribute__((global)) void kernel(int *c) {{
+      asm volatile ( {asm} );
+  }}
+  """
+  lib = compile_hip(code)
+  asm = subprocess.check_output(["/opt/rocm/llvm/bin/llvm-objdump", '-d', '-'], input=lib)
+  asm = '\n'.join([x for x in asm.decode('utf-8').split("\n") if 's_code_end' not in x])
+  return lib, asm
