@@ -36,7 +36,15 @@ nc = np.random.default_rng().standard_normal(size=(N,N), dtype=np.float32).astyp
 hipallocator.copyin(b, bytearray(nb))
 hipallocator.copyin(c, bytearray(nc))
 
-lib = compile_hip(f"""
+def compile_hipold(prg:str, arch="gfx1100") -> bytes:
+  from tinygrad.runtime.ops_hip import hip, check, ctypes
+  from tinygrad.helpers import to_char_p_p, get_bytes
+  check(hip.hiprtcCreateProgram(ctypes.byref(prog := hip.hiprtcProgram()), prg.encode(), "<null>".encode(), 0, None, None))
+  compile_options = [f'--offload-arch={arch}', '-I/opt/rocm/include']
+  status = hip.hiprtcCompileProgram(prog, len(compile_options), to_char_p_p([o.encode() for o in compile_options]))
+  if status != 0: raise RuntimeError(f"compile failed: {get_bytes(prog, hip.hiprtcGetProgramLogSize, hip.hiprtcGetProgramLog, check).decode()}")
+  return get_bytes(prog, hip.hiprtcGetCodeSize, hip.hiprtcGetCode, check)
+lib = compile_hipold(f"""
 #define F32
 typedef float float8 __attribute__((ext_vector_type(8)));
 typedef _Float16 half16 __attribute__((ext_vector_type(16)));
