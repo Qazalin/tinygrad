@@ -36,7 +36,7 @@ Disassembly of section .text:
 asm = open("./wmma.s").read()
 asm = """
 s_load_b128 s[0:3], s[0:1], null
-v_mov_b32 v1, 42
+v_mov_b32 v1, 69
 v_mov_b32 v0, 0
 s_waitcnt lgkmcnt(0)
 global_store_b32 v0 v1 s[0:1]
@@ -54,7 +54,7 @@ real_bufs[0].copyin(np.zeros((real_bufs[0].size, ), dtype=real_bufs[0].dtype.np)
 data0 = np.frombuffer(real_bufs[0].as_buffer(), real_bufs[0].dtype.np)
 lib, asm = compile_rdna3(asm, dt)
 prg = HIPProgram(0, "kernel", lib)
-prg(*[b._buf for b in real_bufs], global_size=(2,1,1), local_size=(1,1,1))
+prg(*[b._buf for b in real_bufs], global_size=(2,1,1), local_size=(1,1,1), wait=True)
 data0 = np.frombuffer(real_bufs[0].as_buffer(), real_bufs[0].dtype.np)
 data1 = np.frombuffer(real_bufs[1].as_buffer(), real_bufs[1].dtype.np)
 data2 = np.frombuffer(real_bufs[2].as_buffer(), real_bufs[2].dtype.np)

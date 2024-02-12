@@ -30,72 +30,16 @@ hipallocator = HIPAllocator(device)
 a = hipallocator.alloc(N*N*4)
 b = hipallocator.alloc(N*N*2)
 c = hipallocator.alloc(N*N*2)
-na = np.empty(N*N, np.float32)
+na = np.empty(N*N, np.float16)
 nb = np.random.default_rng().standard_normal(size=(N,N), dtype=np.float32).astype(np.float16)
 nc = np.random.default_rng().standard_normal(size=(N,N), dtype=np.float32).astype(np.float16)
 hipallocator.copyin(b, bytearray(nb))
 hipallocator.copyin(c, bytearray(nc))
 
-lib = compile_hip(f"""
-#define F32
-typedef float float8 __attribute__((ext_vector_type(8)));
-typedef _Float16 half16 __attribute__((ext_vector_type(16)));
-extern "C" __global__ void __launch_bounds__ (128, 1) test(float* c, __half* a, __half* b) {{
-  const int gx = blockIdx.x*2 + threadIdx.y;
-  const int gy = blockIdx.y*2 + threadIdx.z;
+with open("/tmp/r_32_8_4_2_16_128_16_8_4_4.c", "r") as f: code = f.read()
+lib = compile_hip(code)
 
-  const int lIdx = threadIdx.x;
-  const int lane = lIdx%16;
-
-  c += gx*{KX*16}*{N} + gy*{KY*16} + (lIdx/16)*{N} + lane;
-  a += gx*{KX*16}*{N};
-  b += gy*{KY*16};
-
-  half16 a_frag[{KX}];
-  half16 b_frag[{KY}];
-  #ifdef F32
-    float8 c_frag[{KY}][{KX}] = {{}};
-  #else
-    half16 c_frag[{KY}][{KX}] = {{}};
-  #endif
-
-  for (int k = 0; k < {N}; k += 16) {{
-    __syncthreads();
-    for (int ele = 0; ele < 16; ++ele) {{
-      for (int x = 0; x < {KX}; x++) {{
-        a_frag[x][ele] = a[(k+ele) + x*{16*N} + {N}*lane];
-      }}
-    }}
-    for (int ele = 0; ele < 16; ++ele) {{
-      for (int y = 0; y < {KY}; y++) {{
-        b_frag[y][ele] = b[(k+ele)*{N} + y*16 + lane];
-      }}
-    }}
-    for (int y = 0; y < {KY}; y++) {{
-      for (int x = 0; x < {KX}; x++) {{
-        #ifdef F32
-          c_frag[y][x] = __builtin_amdgcn_wmma_f32_16x16x16_f16_w32(a_frag[x], b_frag[y], c_frag[y][x]);
-        #else
-          c_frag[y][x] = __builtin_amdgcn_wmma_f16_16x16x16_f16_w32(a_frag[x], b_frag[y], c_frag[y][x], false);
-        #endif
-      }}
-    }}
-  }}
-
-  for (int ele = 0; ele < 8; ++ele) {{
-    for (int y = 0; y < {KY}; y++) {{
-      for (int x = 0; x < {KX}; x++) {{
-        #ifdef F32
-          c[ele*{2*N} + y*16 + x*{16*N}] = c_frag[y][x][ele];
-        #else
-          c[ele*{2*N} + y*16 + x*{16*N}] = c_frag[y][x][ele*2];
-        #endif
-      }}
-    }}
-  }}
-}}""")
-
-prog = HIPProgram(device.device, "test", lib)
+prog = HIPProgram(device.device, "r_32_8_4_2_16_128_16_8_4_4", lib)
 
 def timeit(fxn):
   st = time.perf_counter()
@@ -104,11 +48,11 @@ def timeit(fxn):
   #print(f"{ret*1e6:.2f} us")
   return et
 
-global_size, local_size = [N//(KX*16*2), N//(KY*16*2), 1], [32, 2, 2]
+global_size, local_size = [8, 32, 1], [16, 2, 4]
 print("global/local size", global_size, local_size, f"local_size:{prod(local_size)} total_size:{prod(global_size+local_size)}")
-tm = min([timeit(lambda: prog(a, b, c, global_size=global_size, local_size=local_size, wait=True)) for _ in range(1000)])
+tm = min([timeit(lambda: prog(a, b, c, global_size=global_size, local_size=local_size, wait=True)) for _ in range(10)])
 hipallocator.copyout(flat_mv(na.data),a)
 na = na.reshape(N,N)
-comp = nb.astype(np.float32) @ nc.astype(np.float32)
+comp = (nb.astype(np.float32) @ nc.astype(np.float32)).astype(np.float16)
 print(f"{N*N:10d} {tm*1e6:9.2f} us, would be {FLOPS*1e-9/tm:9.2f} GFLOPS matmul, {BW*1e-9/tm:.2f} GB/s")
 np.testing.assert_allclose(na, comp, atol=1e-2, rtol=1e-2)
