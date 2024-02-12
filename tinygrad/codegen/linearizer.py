@@ -248,6 +248,7 @@ class Linearizer(Kernel):
       acc = self.global_load(0, global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, self.get_reduce_acc(self.reduceop))
 
       if (tc:=self.tensor_core):
+        print("hi there")
         def calc_tc_idxs(local_size: int, aliases: List[List[int]]):
           replace_idxs = []
           for alias in aliases:
