@@ -52,7 +52,6 @@ class LocalBuffer(NamedTuple):
   name: str
   size: int
   dtype: DType = dtypes.float32
-  realized: None = None
   def __str__(self): return f"localbuffer<{self.name}[{self.size}]>"
 
 class LinearizerOptions(NamedTuple):
