@@ -1,15 +1,16 @@
-import unittest, math
+from panic import panic
+import unittest, math, functools
 import numpy as np
 from dataclasses import dataclass
 from graphlib import TopologicalSorter
-from typing import Any, Dict, List, Tuple, cast
+from typing import Any, Dict, List, Tuple, Union, cast
 from tinygrad.codegen.linearizer import expand_node
 from tinygrad.codegen.uops import UOp, UOps
 from tinygrad.device import Buffer, BufferCopy, Device, JITRunner
 from tinygrad.dtype import PtrDType, dtypes
 from tinygrad.lazy import LazyBuffer
 from tinygrad.ops import BinaryOps, BufferOps, ConstBuffer, LazyOp, LoadOps, MemBuffer, Op, ReduceOps
-from tinygrad.shape.symbolic import Variable
+from tinygrad.shape.symbolic import MulNode, Node, NumNode, SumNode, Variable
 from tinygrad.tensor import Tensor
 from tinygrad.helpers import DEBUG, getenv
 
@@ -79,6 +80,7 @@ class Scheduler:
     self.ast.add(op, *srcs)
     return op
 
+
 class MiniLinearizer:
   def __init__(self, ast):
     self.ast = ast
@@ -101,29 +103,36 @@ class MiniLinearizer:
       if dtypes.is_int(dtype): return 0 if dtypes.is_unsigned(dtype) else -2**(dtype.itemsize*8-1)
       return -math.inf if dtypes.is_float(dtype) else False
 
+  def _lower_sym(self, n:Union[Node,int], idx) -> UOp:
+    if isinstance(n,int): return self.const(n)
+    elif isinstance(n,Variable): return self.loop_uops[n.expr]
+    elif isinstance(n,SumNode):
+      assert len(n.nodes) == 2, "todo"
+      a,b = [self._lower_sym(n,idx) for n in n.nodes]
+      uop = UOp(UOps.ALU, dtype=dtypes.int, vin=(a,b), arg=BinaryOps.ADD)
+    elif isinstance(n,MulNode):
+      uop = UOp(UOps.ALU, dtype=dtypes.int, vin=(self._lower_sym(n.a,idx),self._lower_sym(n.b,idx)), arg=BinaryOps.MUL)
+    else: raise Exception(f"TODO sym {type(n)}")
+    idx.append(uop)
+    return uop
+
   def _lower_op(self, op:LazyOp) -> UOp:
     if op.op == BufferOps.LOAD: return self.loaded_bufs[op.arg]
     if op.op == BufferOps.CONST: return self.const(op.arg.val, op.arg.dtype)
     if op.op in ReduceOps:
       buf: MemBuffer = op.src[0].arg
       acc = UOp(UOps.DEFINE_ACC, dtype=buf.dtype, arg=self.get_reduce_acc(buf.dtype,op.op))
-      e_idx = buf.st.expr_idxs()[0]
-      assert isinstance(e_idx, Variable)
-      assert len(expand_node(e_idx)) == 1, "todo!"
+      reduce_idxs = cast(List[Variable],[Variable(f"ridx{i}",0,dim-1) for i,dim in enumerate(buf.st.shape)])
+      for r in reduce_idxs:
+        if r.expr not in self.loop_uops: self.loop_uops[r.expr] = UOp(UOps.LOOP, dtype=dtypes.int, vin=(self.const(r.min),self.const(r.max+1)))
+      loops = [self.loop_uops[r.expr] for r in reduce_idxs]
 
-      if e_idx.expr in self.loop_uops: loop = self.loop_uops[e_idx.expr]
-      else: loop = UOp(UOps.LOOP, dtype=dtypes.int, vin=(self.const(e_idx.min),self.const(e_idx.max+1)))
-
-      src = UOp(UOps.LOAD, dtype=buf.dtype, vin=(self.buf_pointers[buf.idx],loop))
+      idx = self._lower_sym(buf.st.expr_idxs(reduce_idxs)[0], idxs:=[])
+      src = UOp(UOps.LOAD, dtype=buf.dtype, vin=(self.buf_pointers[buf.idx],idx))
       alu = UOp(UOps.ALU, dtype=src.dtype, vin=(acc,src), arg=BinaryOps.ADD if op.op == ReduceOps.SUM else BinaryOps.MAX)
-      ret = UOp(UOps.PHI, dtype=src.dtype, vin=(acc,alu,loop))
+      ret = UOp(UOps.PHI, dtype=src.dtype, vin=(acc,alu,*loops))
 
-      if e_idx.expr in self.loop_uops:
-        idx = self.uops.index(loop)
-        self.uops = self.uops[:idx] + [acc, self.uops[idx]] + [src, alu, ret] + self.uops[idx+1:]
-      else:
-        self.uops += [acc, loop, src, alu, ret, UOp(UOps.ENDLOOP, vin=(loop,))]
-      self.loop_uops[e_idx.expr] = loop
+      self.uops += [acc, *loops, *idxs, src, alu, ret, *[UOp(UOps.ENDLOOP, vin=(l,)) for l in loops]]
       return ret
     srcs = tuple(self._lower_op(src) for src in op.src)
     ret = UOp(UOps.ALU, vin=srcs, dtype=srcs[-1].dtype, arg=op.op)
@@ -181,15 +190,10 @@ class TestLinearizer2(unittest.TestCase):
     expected = [x.numpy() for x in outputs]
     np.testing.assert_equal(ret, expected)
 
-  @unittest.skip("TODO - needs a good scheduler infra, reconsidering if this should be possible")
-  def test_multi_dim_reduce(self):
-    # even though doing two reduces on different shapes might not be profitable, we should be able to linearize it
-    a = Tensor([[2,2], [3,3]])
-    b = Tensor([1,2,3])
-    out0 = a.sum()
-    out1 = b.sum()
-    outputs = [out0, out1]
-
+  def test_nested_reduce(self):
+    x = Tensor([[1,2,3],[4,5,6]]).sum()
+    y = Tensor([[2,3,5],[4,5,4]]).sum()
+    outputs = [x, y]
     ret = self._new_realize(outputs)
     expected = [x.numpy() for x in outputs]
     np.testing.assert_equal(ret, expected)
