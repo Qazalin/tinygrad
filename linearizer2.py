@@ -87,8 +87,8 @@ class MiniLinearizer:
     self.uops: List[UOp] = []
     self.buf_pointers: Dict[int, UOp] = {}
     self.loaded_bufs: Dict[Tuple[MemBuffer,UOp], UOp] = {}
+    self.loops_map: Dict[str, UOp] = {}
     self.alu_cache: Dict[Any, UOp] = {}
-    self.loop_uops = {}
 
   def const(self, val, dtype=dtypes.int):
     existing = [u for u in self.uops if u.uop == UOps.CONST and u.arg == val]
@@ -106,29 +106,29 @@ class MiniLinearizer:
       if dtypes.is_int(dtype): return 0 if dtypes.is_unsigned(dtype) else -2**(dtype.itemsize*8-1)
       return -math.inf if dtypes.is_float(dtype) else False
 
-  def _lower_sym(self, n:Union[UOp,Node,int], loops) -> UOp:
+  def _lower_sym(self, n:Union[UOp,Node,int]) -> UOp:
     if isinstance(n,UOp): return n
-    if isinstance(n,Variable): return loops[n.expr]
+    if isinstance(n,Variable):
+      self.loops_map[n.expr] = self.uop(UOps.LOOP, dtypes.int, (self.const(n.min),self.const(n.max+1)))
+      return self.loops_map[n.expr]
     if isinstance(n,SumNode):
-      return functools.reduce(lambda a,b: self.uop(UOps.ALU, dtypes.int, (self._lower_sym(a,loops),self._lower_sym(b,loops)), BinaryOps.ADD), n.nodes[1:], self._lower_sym(n.nodes[0], loops))
+      return functools.reduce(lambda a,b: self.uop(UOps.ALU, dtypes.int, (self._lower_sym(a),self._lower_sym(b)), BinaryOps.ADD), n.nodes[1:], self._lower_sym(n.nodes[0]))
     if isinstance(n,MulNode):
-      return self.uop(UOps.ALU, dtypes.int, (self._lower_sym(n.a,loops),self._lower_sym(n.b,loops)), BinaryOps.MUL)
+      return self.uop(UOps.ALU, dtypes.int, (self._lower_sym(n.a),self._lower_sym(n.b)), BinaryOps.MUL)
     if isinstance(n,int): return self.const(n,dtypes.int)
     raise Exception(f"TODO sym {type(n)}")
 
   def _lower_op(self, op:LazyOp) -> UOp:
-    if op.op == BufferOps.LOAD: return self.loaded_bufs[op.arg,self.const(0)]
+    if op.op == BufferOps.LOAD: return self.load_buf(op.arg, [])
     if op.op == BufferOps.CONST: return self.const(op.arg.val, op.arg.dtype)
     if op.op in ReduceOps:
       buf: MemBuffer = op.src[0].arg
       acc = self.uop(UOps.DEFINE_ACC, dtype=buf.dtype, arg=self.get_reduce_acc(buf.dtype,op.op))
       reduce_idxs = cast(List[Variable],[Variable(f"ridx{i}",0,dim-1) for i,dim in enumerate(buf.st.shape)])
-      loops = {r.expr: self.uop(UOps.LOOP, dtype=dtypes.int, vin=(self.const(r.min),self.const(r.max+1))) for r in reduce_idxs}
-      idx = self._lower_sym(buf.st.expr_idxs(reduce_idxs)[0], loops)
-      src = self.load_buf(buf,idx)
+      src = self.load_buf(buf, reduce_idxs)
       alu = self.uop(UOps.ALU, dtype=src.dtype, vin=(acc,src), arg=BinaryOps.ADD if op.op == ReduceOps.SUM else BinaryOps.MAX)
-      ret = self.uop(UOps.PHI, dtype=src.dtype, vin=(acc,alu,*loops.values()))
-      for l in loops.values(): self.uop(UOps.ENDLOOP, vin=(l,))
+      ret = self.uop(UOps.PHI, dtype=src.dtype, vin=(acc,alu,*(loops:=[self.loops_map[n.expr] for n in reduce_idxs])))
+      for l in loops: self.uop(UOps.ENDLOOP, vin=(l,))
       return ret
     srcs = tuple(self._lower_op(src) for src in op.src)
     ret = self.uop(UOps.ALU, vin=srcs, dtype=srcs[-1].dtype, arg=op.op)
@@ -137,7 +137,9 @@ class MiniLinearizer:
     self.alu_cache[key] = ret
     return ret
 
-  def load_buf(self, buf:MemBuffer, idx:UOp) -> UOp:
+  def load_buf(self, buf:MemBuffer, idxs:List[Variable]) -> UOp:
+    if buf.st.shape == (1,): idx = self.const(0)
+    else: idx = self._lower_sym(buf.st.expr_idxs(idxs)[0])
     if (buf,idx) in self.loaded_bufs: return self.loaded_bufs[buf,idx]
     u = self.uop(UOps.LOAD, dtype=buf.dtype, vin=(self.buf_pointers[buf.idx],idx))
     self.loaded_bufs[buf,idx] = u
@@ -148,8 +150,7 @@ class MiniLinearizer:
       if not (op.op in BufferOps and isinstance(buf:=op.arg, MemBuffer)): continue
       if buf not in self.buf_pointers:
         self.buf_pointers[buf.idx] = self.uop(UOps.DEFINE_GLOBAL, dtype=PtrDType(buf.dtype), arg=f"data{buf.idx}")
-      if op.op == BufferOps.LOAD: self.load_buf(buf, self.const(0))
-      else:
+      if op.op == BufferOps.STORE:
         ret = self._lower_op(op.src[0])
         self.uop(UOps.STORE, dtype=ret.dtype, vin=(self.buf_pointers[buf.idx],self.const(0),ret))
     return self.uops
@@ -178,7 +179,6 @@ class TestLinearizer2(unittest.TestCase):
 
   def test_multi_output_multi_reduce(self):
     a = Tensor([1,2,3,4])
-    b = Tensor([22])
     out0 = a.sum()
     out2 = a.max()
     outputs = [out0, out2]
@@ -187,7 +187,6 @@ class TestLinearizer2(unittest.TestCase):
     expected = [x.numpy() for x in outputs]
     np.testing.assert_equal(ret, expected)
 
-  @unittest.skip("todo")
   def test_nested_reduce(self):
     x = Tensor([[1,2,3],[4,5,6]]).sum()
     y = Tensor([[2,3,5],[4,5,4]]).sum()
@@ -197,7 +196,7 @@ class TestLinearizer2(unittest.TestCase):
     np.testing.assert_equal(ret, expected)
 
   def test_tiny(self):
-    x = Tensor([[1,2],[3,4]]).sum()
+    x = Tensor([1,2,3,4]).sum()
     outputs = [x]
     ret = self._new_realize(outputs)
     expected = [x.numpy() for x in outputs]
