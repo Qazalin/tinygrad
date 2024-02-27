@@ -1,10 +1,10 @@
+from collections.abc import Iterable
 from panic import panic
 import unittest, math, functools
 import numpy as np
 from dataclasses import dataclass
 from graphlib import TopologicalSorter
-from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
-from tinygrad.codegen.linearizer import expand_node
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 from tinygrad.codegen.uops import UOp, UOps
 from tinygrad.device import Buffer, BufferCopy, Device, JITRunner
 from tinygrad.dtype import DType, PtrDType, dtypes
@@ -19,7 +19,7 @@ class ASTRunner(JITRunner):
     self.ast = ast
     self.device, self.compiler = Device[Device.DEFAULT], Device[Device.DEFAULT].compiler
     super().__init__()
-  def __call__(self, rawbufs: List[Buffer], var_vals, wait=False, jit=False):
+  def __call__(self, rawbufs, var_vals, wait=False, jit=False):
     assert self.compiler
     blueprint = Blueprint(self.ast)
     lin = MiniLinearizer(self.ast, blueprint.launch_idxs)
@@ -31,22 +31,32 @@ class ASTRunner(JITRunner):
     global_size, local_size = blueprint.launch_dims
     prg(*[x._buf for x in rawbufs], global_size=global_size, local_size=local_size)
 
-
-Kernel = Tuple[Tuple[LazyOp,...],List[Buffer]]
+Kernel = Tuple[Tuple[LazyOp,...], List[Buffer]]
 class Graph:
-  def __init__(self, bufs:Set[LazyBuffer]) -> None:
+  def __init__(self, bufs:TopologicalSorter) -> None:
     self.bufs = bufs
     # You can use intermediate buffers, be they local or global, to do less compute.
-    self.global_bufs: Dict[MemBuffer,Buffer] = {}
-    self.asts: List[TopologicalSorter[LazyOp]] = []
+    self.global_bufs: Dict[Buffer,MemBuffer] = {}
+    self.asts: List[Tuple[LazyOp,...]] = []
+    self.ops_map: Dict[LazyBuffer,LazyOp] = {}
 
-  def create_kernels(self) -> List[Kernel]:
-    kernels = []
-    for ast in self.asts:
-      ast = tuple(ast.static_order())
-      rawbufs = [self.global_bufs[op.arg] for op in ast if isinstance(op.arg,MemBuffer)]
-      kernels.append((ast,rawbufs))
-    return kernels
+  def create_kernels(self) -> Iterable[Kernel]:
+    ast: List[LazyOp] = []
+    for lb in self.bufs.static_order():
+      self.ops_map[lb] = self.create_lazyop(lb)
+      if lb.realized is not None and lb.op not in LoadOps: ast.append(LazyOp(BufferOps.STORE, (self.ops_map[lb], ), self.create_membuffer(lb)))
+    self.asts.append(tuple(ast))
+    return [(ast, list(self.global_bufs.keys())) for ast in self.asts]
+
+  def create_lazyop(self, lb:LazyBuffer) -> LazyOp:
+    if lb.op == LoadOps.COPY: return LazyOp(BufferOps.LOAD, (), self.create_membuffer(lb))
+    assert lb.op is not None
+    return LazyOp(lb.op, src=tuple(self.ops_map[src] for src in lb.base.srcs))
+
+  def create_membuffer(self, lb:LazyBuffer) -> MemBuffer:
+    assert (buf:=lb.realized) is not None
+    if buf not in self.global_bufs: self.global_bufs[buf] = MemBuffer(len(self.global_bufs.keys()), lb.dtype, lb.st)
+    return self.global_bufs[buf]
 
 @dataclass(frozen=True)
 class MiniScheduleItem:
@@ -57,7 +67,7 @@ class MiniScheduleItem:
 class Scheduler:
   def __init__(self) -> None:
     self.sched: List[MiniScheduleItem] = []
-    self.bufs: Set[LazyBuffer] = set()
+    self.bufs: TopologicalSorter[LazyBuffer] = TopologicalSorter()
 
   def create_schedule(self, lb:LazyBuffer):
     src = self._recursive_lazybuffer(lb)
@@ -73,8 +83,9 @@ class Scheduler:
       self.sched.append(MiniScheduleItem(BufferCopy(), [device_buf, host_buf]))
       lb.base.realized = device_buf
       return lb
-    for buf in lb.base.srcs: self._recursive_lazybuffer(buf)
-    self.bufs.add(lb)
+
+    srcs = [self._recursive_lazybuffer(buf) for buf in lb.base.srcs]
+    self.bufs.add(lb, *srcs)
     return lb
 
 Dim3 = Tuple[int,int,int]
@@ -158,6 +169,7 @@ class MiniLinearizer:
     return ret
 
   def load_buf(self, buf:MemBuffer, reduce_idxs:List[Variable]=[]) -> UOp:
+    if buf not in self.buf_pointers: self.buf_pointers[buf.idx] = self.uop(UOps.DEFINE_GLOBAL, dtype=PtrDType(buf.dtype), arg=f"data{buf.idx}")
     if (buf,idx:=self.buf_idx(buf, reduce_idxs)) in self.loaded_bufs: return self.loaded_bufs[buf,idx]
     u = self.uop(UOps.LOAD, dtype=buf.dtype, vin=(self.buf_pointers[buf.idx],idx))
     self.loaded_bufs[buf,idx] = u
@@ -169,12 +181,10 @@ class MiniLinearizer:
 
   def linearize(self) -> List[UOp]:
     for op in self.ast:
-      if not (op.op in BufferOps and isinstance(buf:=op.arg, MemBuffer)): continue
-      if buf not in self.buf_pointers:
-        self.buf_pointers[buf.idx] = self.uop(UOps.DEFINE_GLOBAL, dtype=PtrDType(buf.dtype), arg=f"data{buf.idx}")
-      if op.op == BufferOps.STORE:
-        ret = self._lower_op(op.src[0])
-        self.uop(UOps.STORE, dtype=ret.dtype, vin=(self.buf_pointers[buf.idx],self.buf_idx(buf),ret))
+      assert op.op == BufferOps.STORE and isinstance(buf:=op.arg, MemBuffer)
+      ret = self._lower_op(op.src[0])
+      ptr = self.uop(UOps.DEFINE_GLOBAL, dtype=PtrDType(buf.dtype), arg=f"data{buf.idx}")
+      self.uop(UOps.STORE, dtype=ret.dtype, vin=(ptr,self.buf_idx(buf),ret))
     return self.uops
 
 class TestLinearizer2(unittest.TestCase):
@@ -182,8 +192,7 @@ class TestLinearizer2(unittest.TestCase):
   def _new_realize(self, x):
     scheduler = Scheduler()
     scheduler.create_schedule(x.lazydata)
-    for si in scheduler.sched:
-      si.runner(si.rawbufs, var_vals={})
+    for si in scheduler.sched: si.runner(si.rawbufs, var_vals={})
     ret = np.frombuffer(x.lazydata.base.realized.as_buffer(), dtype=x.dtype.np)
     x.lazydata.base.realized = None # reset values for the comparison
     return ret
