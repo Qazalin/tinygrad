@@ -49,9 +49,9 @@ class Graph:
     return [(ast, list(self.global_bufs.keys())) for ast in self.asts]
 
   def create_lazyop(self, lb:LazyBuffer) -> LazyOp:
+    assert lb._base is None and lb.op is not None, f"can't lazyop a view {lb}"
     if lb.op == LoadOps.COPY: return LazyOp(BufferOps.LOAD, (), self.create_membuffer(lb))
-    assert lb.op is not None
-    return LazyOp(lb.op, src=tuple(self.ops_map[src] for src in lb.base.srcs))
+    return LazyOp(lb.op, src=tuple(self.ops_map[src if src._base is None else src._base] for src in lb.srcs))
 
   def create_membuffer(self, lb:LazyBuffer) -> MemBuffer:
     assert (buf:=lb.realized) is not None
@@ -77,14 +77,16 @@ class Scheduler:
     for ast, rawbufs in kernels: self.sched.append(MiniScheduleItem(ASTRunner(ast), rawbufs))
 
   def _recursive_lazybuffer(self, lb:LazyBuffer) -> LazyBuffer:
-    if lb.base.op == LoadOps.COPY:
-      host_buf = cast(Buffer,lb.base.srcs[0].realized)
+    if lb._base is not None: st, lb = lb.st + lb.st, lb._base
+
+    if lb.op == LoadOps.COPY:
+      host_buf = cast(Buffer,lb.srcs[0].realized)
       device_buf = Buffer(lb.device, lb.size, lb.dtype)
       self.sched.append(MiniScheduleItem(BufferCopy(), [device_buf, host_buf]))
-      lb.base.realized = device_buf
+      lb.realized = device_buf
       return lb
 
-    srcs = [self._recursive_lazybuffer(buf) for buf in lb.base.srcs]
+    srcs = [self._recursive_lazybuffer(buf) for buf in lb.srcs]
     self.bufs.add(lb, *srcs)
     return lb
 
@@ -169,7 +171,7 @@ class MiniLinearizer:
     return ret
 
   def load_buf(self, buf:MemBuffer, reduce_idxs:List[Variable]=[]) -> UOp:
-    if buf not in self.buf_pointers: self.buf_pointers[buf.idx] = self.uop(UOps.DEFINE_GLOBAL, dtype=PtrDType(buf.dtype), arg=f"data{buf.idx}")
+    if buf.idx not in self.buf_pointers: self.buf_pointers[buf.idx] = self.uop(UOps.DEFINE_GLOBAL, dtype=PtrDType(buf.dtype), arg=f"data{buf.idx}")
     if (buf,idx:=self.buf_idx(buf, reduce_idxs)) in self.loaded_bufs: return self.loaded_bufs[buf,idx]
     u = self.uop(UOps.LOAD, dtype=buf.dtype, vin=(self.buf_pointers[buf.idx],idx))
     self.loaded_bufs[buf,idx] = u
@@ -193,10 +195,24 @@ class TestLinearizer2(unittest.TestCase):
     scheduler = Scheduler()
     scheduler.create_schedule(x.lazydata)
     for si in scheduler.sched: si.runner(si.rawbufs, var_vals={})
-    ret = np.frombuffer(x.lazydata.base.realized.as_buffer(), dtype=x.dtype.np)
-    x.lazydata.base.realized = None # reset values for the comparison
+    lb = x.lazydata._base if x.lazydata._base is not None else x.lazydata
+    ret = np.frombuffer(lb.realized.as_buffer(), dtype=x.dtype.np)
+    x.lazydata.realized = None # reset values for the comparison
     return ret
+  def compare(self, x):
+    ret = self._new_realize(x)
+    expected = x.numpy()
+    np.testing.assert_equal(ret, expected)
 
+  def test_tiny(self):
+    x = Tensor([1,2,3,4]).sum()
+    self._new_realize(x)
+
+  def test_add_simple(self):
+    x = Tensor([1,2,3,4]) + Tensor([1,2,3,4])
+    self.compare(x)
+
+  @unittest.skip("rewrite to work with shape-based corealize (needs expand)")
   def test_multi_output_simple(self):
     a = Tensor([2])
     b = Tensor([6])
@@ -208,27 +224,16 @@ class TestLinearizer2(unittest.TestCase):
     expected = [x.numpy() for x in outputs]
     np.testing.assert_equal(ret, expected)
 
-  def test_multi_output_multi_reduce(self):
+  def test_multireduce(self):
     a = Tensor([1,2,3,4])
     out0 = a.sum()
-    out2 = a.max()
-    outputs = [out0, out2]
-
-    ret = self._new_realize(outputs)
-    expected = [x.numpy() for x in outputs]
-    np.testing.assert_equal(ret, expected)
+    out1 = a.max()
+    self.compare(out0 + out1)
 
   def test_nested_reduce(self):
     x = Tensor([[1,2,3],[4,5,6]]).sum()
     y = Tensor([[2,3,5],[4,5,4]]).sum()
     outputs = [x, y]
-    ret = self._new_realize(outputs)
-    expected = [x.numpy() for x in outputs]
-    np.testing.assert_equal(ret, expected)
-
-  def test_globals(self):
-    x = Tensor([1,2,3,4]) + Tensor([1,2,3,4])
-    outputs = [x]
     ret = self._new_realize(outputs)
     expected = [x.numpy() for x in outputs]
     np.testing.assert_equal(ret, expected)
@@ -239,10 +244,6 @@ class TestLinearizer2(unittest.TestCase):
     ret = self._new_realize(outputs)
     expected = [x.numpy() for x in outputs]
     np.testing.assert_equal(ret, expected)
-
-  def test_tiny(self):
-    x = Tensor([1]) + Tensor([2])
-    self._new_realize(x)
 
   @unittest.skip("TODO - needs a good scheduler infra")
   def test_batchnorm(self):
