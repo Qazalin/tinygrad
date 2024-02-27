@@ -3,7 +3,7 @@ import unittest, math, functools
 import numpy as np
 from dataclasses import dataclass
 from graphlib import TopologicalSorter
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
 from tinygrad.codegen.linearizer import expand_node
 from tinygrad.codegen.uops import UOp, UOps
 from tinygrad.device import Buffer, BufferCopy, Device, JITRunner
@@ -31,56 +31,51 @@ class ASTRunner(JITRunner):
     global_size, local_size = blueprint.launch_dims
     prg(*[x._buf for x in rawbufs], global_size=global_size, local_size=local_size)
 
+
+Kernel = Tuple[Tuple[LazyOp,...],List[Buffer]]
+class Graph:
+  def __init__(self, bufs:Set[LazyBuffer]) -> None:
+    self.bufs = bufs
+    # You can use intermediate buffers, be they local or global, to do less compute.
+    self.global_bufs: Dict[MemBuffer,Buffer] = {}
+    self.asts: List[TopologicalSorter[LazyOp]] = []
+
+  def create_kernels(self) -> List[Kernel]:
+    kernels = []
+    for ast in self.asts:
+      ast = tuple(ast.static_order())
+      rawbufs = [self.global_bufs[op.arg] for op in ast if isinstance(op.arg,MemBuffer)]
+      kernels.append((ast,rawbufs))
+    return kernels
+
 @dataclass(frozen=True)
 class MiniScheduleItem:
   runner: JITRunner
   rawbufs: List[Buffer]
 
+# NOTE: currently reduce splitting is done in lazy.py and it shouldn't be
 class Scheduler:
   def __init__(self) -> None:
     self.sched: List[MiniScheduleItem] = []
-    self.rawbufs: List[Buffer] = []
-    self.copy_cache: Dict[Buffer, int] = {}
-    self.ast: TopologicalSorter = TopologicalSorter()
+    self.bufs: Set[LazyBuffer] = set()
 
-  def store_output(self, lb: LazyBuffer, src:LazyOp):
-    op = LazyOp(BufferOps.STORE, (src, ), MemBuffer(len(self.rawbufs), lb.dtype, lb.st.simplify().unbind()[0]))
-    store_buf = Buffer(lb.device, lb.size, lb.dtype)
-    lb.base.realized = store_buf
-    self.rawbufs.append(store_buf)
-    self.ast.add(op, src)
+  def create_schedule(self, lb:LazyBuffer):
+    src = self._recursive_lazybuffer(lb)
+    src.realized = Buffer(lb.device, lb.size, lb.dtype)
+    graph = Graph(self.bufs)
+    kernels = graph.create_kernels()
+    for ast, rawbufs in kernels: self.sched.append(MiniScheduleItem(ASTRunner(ast), rawbufs))
 
-  def create_schedule(self, lazy_buffers:List[LazyBuffer]):
-    for lb in lazy_buffers:
-      src = self._recursive_lazyop(lb, out_shape=lb.shape)
-      self.store_output(lb, src)
-    self.sched.append(MiniScheduleItem(ASTRunner(tuple(self.ast.static_order())), self.rawbufs))
-
-  def _recursive_lazyop(self, lb:LazyBuffer, out_shape) -> LazyOp:
-    # LoadOps have special sources
-    if lb.base.op == LoadOps.CONST: # Consts are always generated
-      return LazyOp(BufferOps.CONST, src=(), arg=ConstBuffer(val=lb.base.arg, dtype=lb.base.dtype, st=lb.st.simplify().unbind()[0]))
+  def _recursive_lazybuffer(self, lb:LazyBuffer) -> LazyBuffer:
     if lb.base.op == LoadOps.COPY:
       host_buf = cast(Buffer,lb.base.srcs[0].realized)
-
-      if host_buf in self.copy_cache:
-        idx = self.copy_cache[host_buf]
-        device_buf = self.rawbufs[idx]
-      else:
-        device_buf = Buffer(lb.device, lb.size, lb.dtype)
-        self.sched.append(MiniScheduleItem(BufferCopy(), [device_buf, host_buf]))
-        idx = len(self.rawbufs)
-        self.copy_cache[host_buf] = len(self.rawbufs)
-        self.rawbufs.append(device_buf)
-
-      unbound_st, st_var_vals = lb.st.simplify().unbind()
-      assert st_var_vals == {}, "variables not supported yet"
-      return LazyOp(BufferOps.LOAD, (), MemBuffer(idx, lb.dtype, unbound_st))
-
-    srcs = tuple([self._recursive_lazyop(src, out_shape) for src in lb.base.srcs])
-    op = LazyOp(cast(Op,lb.base.op), src=srcs)
-    self.ast.add(op, *srcs)
-    return op
+      device_buf = Buffer(lb.device, lb.size, lb.dtype)
+      self.sched.append(MiniScheduleItem(BufferCopy(), [device_buf, host_buf]))
+      lb.base.realized = device_buf
+      return lb
+    for buf in lb.base.srcs: self._recursive_lazybuffer(buf)
+    self.bufs.add(lb)
+    return lb
 
 Dim3 = Tuple[int,int,int]
 class Blueprint:
@@ -184,13 +179,13 @@ class MiniLinearizer:
 
 class TestLinearizer2(unittest.TestCase):
   assert getenv("LINEARIZER2"), "please use LINEARIZER2=1 to render the bufs correctly in cstyle"
-  def _new_realize(self, vals):
+  def _new_realize(self, x):
     scheduler = Scheduler()
-    scheduler.create_schedule([x.lazydata for x in vals])
+    scheduler.create_schedule(x.lazydata)
     for si in scheduler.sched:
       si.runner(si.rawbufs, var_vals={})
-    ret = [np.frombuffer(x.lazydata.base.realized.as_buffer(), dtype=x.dtype.np).reshape(x.shape) for x in vals]
-    for x in vals: x.lazydata.base.realized = None # reset values for the comparison
+    ret = np.frombuffer(x.lazydata.base.realized.as_buffer(), dtype=x.dtype.np)
+    x.lazydata.base.realized = None # reset values for the comparison
     return ret
 
   def test_multi_output_simple(self):
@@ -235,6 +230,10 @@ class TestLinearizer2(unittest.TestCase):
     ret = self._new_realize(outputs)
     expected = [x.numpy() for x in outputs]
     np.testing.assert_equal(ret, expected)
+
+  def test_tiny(self):
+    x = Tensor([1]) + Tensor([2])
+    self._new_realize(x)
 
   @unittest.skip("TODO - needs a good scheduler infra")
   def test_batchnorm(self):
