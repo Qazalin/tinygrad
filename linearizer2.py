@@ -51,6 +51,7 @@ class Graph:
   def create_lazyop(self, lb:LazyBuffer) -> LazyOp:
     assert lb._base is None and lb.op is not None, f"can't lazyop a view {lb}"
     if lb.op == LoadOps.COPY: return LazyOp(BufferOps.LOAD, (), self.create_membuffer(lb))
+    if lb.op == LoadOps.CONST: return LazyOp(BufferOps.CONST, (), ConstBuffer(lb.arg, lb.dtype, lb.st))
     return LazyOp(lb.op, src=tuple(self.ops_map[src if src._base is None else src._base] for src in lb.srcs))
 
   def create_membuffer(self, lb:LazyBuffer) -> MemBuffer:
@@ -78,13 +79,14 @@ class Scheduler:
 
   def _recursive_lazybuffer(self, lb:LazyBuffer) -> LazyBuffer:
     if lb._base is not None: st, lb = lb.st + lb.st, lb._base
-
     if lb.op == LoadOps.COPY:
       host_buf = cast(Buffer,lb.srcs[0].realized)
       device_buf = Buffer(lb.device, lb.size, lb.dtype)
       self.sched.append(MiniScheduleItem(BufferCopy(), [device_buf, host_buf]))
       lb.realized = device_buf
       return lb
+    if lb.op == LoadOps.CONST: return lb
+    assert lb.op not in LoadOps, "loadops can't exist in asts"
 
     srcs = [self._recursive_lazybuffer(buf) for buf in lb.srcs]
     self.bufs.add(lb, *srcs)
@@ -226,24 +228,13 @@ class TestLinearizer2(unittest.TestCase):
 
   def test_multireduce(self):
     a = Tensor([1,2,3,4])
-    out0 = a.sum()
-    out1 = a.max()
-    self.compare(out0 + out1)
-
-  def test_nested_reduce(self):
-    x = Tensor([[1,2,3],[4,5,6]]).sum()
-    y = Tensor([[2,3,5],[4,5,4]]).sum()
-    outputs = [x, y]
-    ret = self._new_realize(outputs)
-    expected = [x.numpy() for x in outputs]
-    np.testing.assert_equal(ret, expected)
+    self.compare(a.sum() + a.max())
+    x, y = Tensor([[1,2,3],[4,5,6]]), Tensor([[2,3,5],[4,5,4]])
+    self.compare(x.sum() + y.max())
 
   def test_batchmean(self):
     batch_mean = Tensor(np.random.randn(2, 4, 3, 3), dtype=dtypes.float).mean(axis=(0,2,3))
-    outputs = [batch_mean]
-    ret = self._new_realize(outputs)
-    expected = [x.numpy() for x in outputs]
-    np.testing.assert_equal(ret, expected)
+    self.compare(batch_mean)
 
   @unittest.skip("TODO - needs a good scheduler infra")
   def test_batchnorm(self):
