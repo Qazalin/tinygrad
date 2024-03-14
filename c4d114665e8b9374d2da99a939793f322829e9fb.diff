@@ -1,0 +1,554 @@
+--- 
++++ 
+@@ -3164,7 +3164,7 @@
+     acc0.x = wmma1.x;
+     acc0.y = wmma1.y;
+   }
+-  *((device float2*)(data0+alu0+alu5+alu1+alu4+alu2+alu3)) = acc0;
++  *((device float2*)(data0+alu0+alu5+alu1+alu4+alu2+alu3)) = float2(acc0.x,acc0.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.float, dtypes.float>
+ aliasing buffer ShapeTracker(views=(View(shape=(16, 16, 2, 2, 4, 2, 8, 2, 16), strides=(1024, 0, 512, 0, 128, 0, 1, 0, 8), offset=0, mask=None, contiguous=False),))
+@@ -3356,10 +3356,10 @@
+     acc3.x = wmma7.x;
+     acc3.y = wmma7.y;
+   }
+-  *((device float2*)(data0+alu6)) = acc0;
+-  *((device float2*)(data0+alu6+1024)) = acc1;
+-  *((device float2*)(data0+alu6+2048)) = acc2;
+-  *((device float2*)(data0+alu6+3072)) = acc3;
++  *((device float2*)(data0+alu6)) = float2(acc0.x,acc0.y);
++  *((device float2*)(data0+alu6+1024)) = float2(acc1.x,acc1.y);
++  *((device float2*)(data0+alu6+2048)) = float2(acc2.x,acc2.y);
++  *((device float2*)(data0+alu6+3072)) = float2(acc3.x,acc3.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.float, dtypes.float>
+ aliasing buffer ShapeTracker(views=(View(shape=(4, 4, 2, 2, 4, 2, 8, 8, 2, 4, 4, 2), strides=(4096, 0, 512, 0, 128, 0, 16, 1, 0, 1024, 0, 8), offset=0, mask=None, contiguous=False),))
+@@ -3537,22 +3537,22 @@
+     acc15.x = wmma31.x;
+     acc15.y = wmma31.y;
+   }
+-  *((device float2*)(data0+alu6)) = acc0;
+-  *((device float2*)(data0+alu6+1024)) = acc1;
+-  *((device float2*)(data0+alu6+2048)) = acc2;
+-  *((device float2*)(data0+alu6+3072)) = acc3;
+-  *((device float2*)(data0+alu6+8)) = acc4;
+-  *((device float2*)(data0+alu6+1032)) = acc5;
+-  *((device float2*)(data0+alu6+2056)) = acc6;
+-  *((device float2*)(data0+alu6+3080)) = acc7;
+-  *((device float2*)(data0+alu6+16)) = acc8;
+-  *((device float2*)(data0+alu6+1040)) = acc9;
+-  *((device float2*)(data0+alu6+2064)) = acc10;
+-  *((device float2*)(data0+alu6+3088)) = acc11;
+-  *((device float2*)(data0+alu6+24)) = acc12;
+-  *((device float2*)(data0+alu6+1048)) = acc13;
+-  *((device float2*)(data0+alu6+2072)) = acc14;
+-  *((device float2*)(data0+alu6+3096)) = acc15;
++  *((device float2*)(data0+alu6)) = float2(acc0.x,acc0.y);
++  *((device float2*)(data0+alu6+1024)) = float2(acc1.x,acc1.y);
++  *((device float2*)(data0+alu6+2048)) = float2(acc2.x,acc2.y);
++  *((device float2*)(data0+alu6+3072)) = float2(acc3.x,acc3.y);
++  *((device float2*)(data0+alu6+8)) = float2(acc4.x,acc4.y);
++  *((device float2*)(data0+alu6+1032)) = float2(acc5.x,acc5.y);
++  *((device float2*)(data0+alu6+2056)) = float2(acc6.x,acc6.y);
++  *((device float2*)(data0+alu6+3080)) = float2(acc7.x,acc7.y);
++  *((device float2*)(data0+alu6+16)) = float2(acc8.x,acc8.y);
++  *((device float2*)(data0+alu6+1040)) = float2(acc9.x,acc9.y);
++  *((device float2*)(data0+alu6+2064)) = float2(acc10.x,acc10.y);
++  *((device float2*)(data0+alu6+3088)) = float2(acc11.x,acc11.y);
++  *((device float2*)(data0+alu6+24)) = float2(acc12.x,acc12.y);
++  *((device float2*)(data0+alu6+1048)) = float2(acc13.x,acc13.y);
++  *((device float2*)(data0+alu6+2072)) = float2(acc14.x,acc14.y);
++  *((device float2*)(data0+alu6+3096)) = float2(acc15.x,acc15.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.float, dtypes.float>
+ aliasing buffer ShapeTracker(views=(View(shape=(4, 4, 2, 2, 4, 2, 4, 8, 2, 4, 4, 4), strides=(4096, 0, 512, 0, 128, 0, 32, 1, 0, 1024, 0, 8), offset=0, mask=None, contiguous=False),))
+@@ -3858,22 +3858,22 @@
+     acc15.x = wmma63.x;
+     acc15.y = wmma63.y;
+   }
+-  *((device float2*)(data0+alu6)) = acc0;
+-  *((device float2*)(data0+alu6+1024)) = acc1;
+-  *((device float2*)(data0+alu6+2048)) = acc2;
+-  *((device float2*)(data0+alu6+3072)) = acc3;
+-  *((device float2*)(data0+alu6+8)) = acc4;
+-  *((device float2*)(data0+alu6+1032)) = acc5;
+-  *((device float2*)(data0+alu6+2056)) = acc6;
+-  *((device float2*)(data0+alu6+3080)) = acc7;
+-  *((device float2*)(data0+alu6+16)) = acc8;
+-  *((device float2*)(data0+alu6+1040)) = acc9;
+-  *((device float2*)(data0+alu6+2064)) = acc10;
+-  *((device float2*)(data0+alu6+3088)) = acc11;
+-  *((device float2*)(data0+alu6+24)) = acc12;
+-  *((device float2*)(data0+alu6+1048)) = acc13;
+-  *((device float2*)(data0+alu6+2072)) = acc14;
+-  *((device float2*)(data0+alu6+3096)) = acc15;
++  *((device float2*)(data0+alu6)) = float2(acc0.x,acc0.y);
++  *((device float2*)(data0+alu6+1024)) = float2(acc1.x,acc1.y);
++  *((device float2*)(data0+alu6+2048)) = float2(acc2.x,acc2.y);
++  *((device float2*)(data0+alu6+3072)) = float2(acc3.x,acc3.y);
++  *((device float2*)(data0+alu6+8)) = float2(acc4.x,acc4.y);
++  *((device float2*)(data0+alu6+1032)) = float2(acc5.x,acc5.y);
++  *((device float2*)(data0+alu6+2056)) = float2(acc6.x,acc6.y);
++  *((device float2*)(data0+alu6+3080)) = float2(acc7.x,acc7.y);
++  *((device float2*)(data0+alu6+16)) = float2(acc8.x,acc8.y);
++  *((device float2*)(data0+alu6+1040)) = float2(acc9.x,acc9.y);
++  *((device float2*)(data0+alu6+2064)) = float2(acc10.x,acc10.y);
++  *((device float2*)(data0+alu6+3088)) = float2(acc11.x,acc11.y);
++  *((device float2*)(data0+alu6+24)) = float2(acc12.x,acc12.y);
++  *((device float2*)(data0+alu6+1048)) = float2(acc13.x,acc13.y);
++  *((device float2*)(data0+alu6+2072)) = float2(acc14.x,acc14.y);
++  *((device float2*)(data0+alu6+3096)) = float2(acc15.x,acc15.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.float, dtypes.float>
+ aliasing buffer ShapeTracker(views=(View(shape=(2, 4, 2, 2, 2, 4, 2, 4, 8, 2, 4, 4, 4), strides=(8192, 0, 4096, 512, 0, 128, 0, 32, 1, 0, 1024, 0, 8), offset=0, mask=None, contiguous=False),))
+@@ -4180,22 +4180,22 @@
+     acc15.x = wmma63.x;
+     acc15.y = wmma63.y;
+   }
+-  *((device float2*)(data0+alu7)) = acc0;
+-  *((device float2*)(data0+alu7+1024)) = acc1;
+-  *((device float2*)(data0+alu7+2048)) = acc2;
+-  *((device float2*)(data0+alu7+3072)) = acc3;
+-  *((device float2*)(data0+alu7+8)) = acc4;
+-  *((device float2*)(data0+alu7+1032)) = acc5;
+-  *((device float2*)(data0+alu7+2056)) = acc6;
+-  *((device float2*)(data0+alu7+3080)) = acc7;
+-  *((device float2*)(data0+alu7+16)) = acc8;
+-  *((device float2*)(data0+alu7+1040)) = acc9;
+-  *((device float2*)(data0+alu7+2064)) = acc10;
+-  *((device float2*)(data0+alu7+3088)) = acc11;
+-  *((device float2*)(data0+alu7+24)) = acc12;
+-  *((device float2*)(data0+alu7+1048)) = acc13;
+-  *((device float2*)(data0+alu7+2072)) = acc14;
+-  *((device float2*)(data0+alu7+3096)) = acc15;
++  *((device float2*)(data0+alu7)) = float2(acc0.x,acc0.y);
++  *((device float2*)(data0+alu7+1024)) = float2(acc1.x,acc1.y);
++  *((device float2*)(data0+alu7+2048)) = float2(acc2.x,acc2.y);
++  *((device float2*)(data0+alu7+3072)) = float2(acc3.x,acc3.y);
++  *((device float2*)(data0+alu7+8)) = float2(acc4.x,acc4.y);
++  *((device float2*)(data0+alu7+1032)) = float2(acc5.x,acc5.y);
++  *((device float2*)(data0+alu7+2056)) = float2(acc6.x,acc6.y);
++  *((device float2*)(data0+alu7+3080)) = float2(acc7.x,acc7.y);
++  *((device float2*)(data0+alu7+16)) = float2(acc8.x,acc8.y);
++  *((device float2*)(data0+alu7+1040)) = float2(acc9.x,acc9.y);
++  *((device float2*)(data0+alu7+2064)) = float2(acc10.x,acc10.y);
++  *((device float2*)(data0+alu7+3088)) = float2(acc11.x,acc11.y);
++  *((device float2*)(data0+alu7+24)) = float2(acc12.x,acc12.y);
++  *((device float2*)(data0+alu7+1048)) = float2(acc13.x,acc13.y);
++  *((device float2*)(data0+alu7+2072)) = float2(acc14.x,acc14.y);
++  *((device float2*)(data0+alu7+3096)) = float2(acc15.x,acc15.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.float, dtypes.float>
+ aliasing buffer ShapeTracker(views=(View(shape=(4, 4, 2, 2, 4, 2, 16, 8, 2, 4, 4), strides=(4096, 0, 512, 0, 128, 0, 8, 1, 0, 0, 1024), offset=0, mask=None, contiguous=False),))
+@@ -4398,10 +4398,10 @@
+     acc3.x = wmma7.x;
+     acc3.y = wmma7.y;
+   }
+-  *((device float2*)(data0+alu6)) = acc0;
+-  *((device float2*)(data0+alu6+1024)) = acc1;
+-  *((device float2*)(data0+alu6+2048)) = acc2;
+-  *((device float2*)(data0+alu6+3072)) = acc3;
++  *((device float2*)(data0+alu6)) = float2(acc0.x,acc0.y);
++  *((device float2*)(data0+alu6+1024)) = float2(acc1.x,acc1.y);
++  *((device float2*)(data0+alu6+2048)) = float2(acc2.x,acc2.y);
++  *((device float2*)(data0+alu6+3072)) = float2(acc3.x,acc3.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.float, dtypes.float>
+ aliasing buffer ShapeTracker(views=(View(shape=(4, 4, 2, 2, 4, 2, 8, 8, 2, 4, 2, 4), strides=(4096, 0, 512, 0, 128, 0, 16, 1, 0, 1024, 8, 0), offset=0, mask=None, contiguous=False),))
+@@ -4579,22 +4579,22 @@
+     acc15.x = wmma31.x;
+     acc15.y = wmma31.y;
+   }
+-  *((device float2*)(data0+alu6)) = acc0;
+-  *((device float2*)(data0+alu6+1024)) = acc1;
+-  *((device float2*)(data0+alu6+2048)) = acc2;
+-  *((device float2*)(data0+alu6+3072)) = acc3;
+-  *((device float2*)(data0+alu6+8)) = acc4;
+-  *((device float2*)(data0+alu6+1032)) = acc5;
+-  *((device float2*)(data0+alu6+2056)) = acc6;
+-  *((device float2*)(data0+alu6+3080)) = acc7;
+-  *((device float2*)(data0+alu6+16)) = acc8;
+-  *((device float2*)(data0+alu6+1040)) = acc9;
+-  *((device float2*)(data0+alu6+2064)) = acc10;
+-  *((device float2*)(data0+alu6+3088)) = acc11;
+-  *((device float2*)(data0+alu6+24)) = acc12;
+-  *((device float2*)(data0+alu6+1048)) = acc13;
+-  *((device float2*)(data0+alu6+2072)) = acc14;
+-  *((device float2*)(data0+alu6+3096)) = acc15;
++  *((device float2*)(data0+alu6)) = float2(acc0.x,acc0.y);
++  *((device float2*)(data0+alu6+1024)) = float2(acc1.x,acc1.y);
++  *((device float2*)(data0+alu6+2048)) = float2(acc2.x,acc2.y);
++  *((device float2*)(data0+alu6+3072)) = float2(acc3.x,acc3.y);
++  *((device float2*)(data0+alu6+8)) = float2(acc4.x,acc4.y);
++  *((device float2*)(data0+alu6+1032)) = float2(acc5.x,acc5.y);
++  *((device float2*)(data0+alu6+2056)) = float2(acc6.x,acc6.y);
++  *((device float2*)(data0+alu6+3080)) = float2(acc7.x,acc7.y);
++  *((device float2*)(data0+alu6+16)) = float2(acc8.x,acc8.y);
++  *((device float2*)(data0+alu6+1040)) = float2(acc9.x,acc9.y);
++  *((device float2*)(data0+alu6+2064)) = float2(acc10.x,acc10.y);
++  *((device float2*)(data0+alu6+3088)) = float2(acc11.x,acc11.y);
++  *((device float2*)(data0+alu6+24)) = float2(acc12.x,acc12.y);
++  *((device float2*)(data0+alu6+1048)) = float2(acc13.x,acc13.y);
++  *((device float2*)(data0+alu6+2072)) = float2(acc14.x,acc14.y);
++  *((device float2*)(data0+alu6+3096)) = float2(acc15.x,acc15.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.float, dtypes.float>
+ aliasing buffer ShapeTracker(views=(View(shape=(4, 4, 2, 2, 4, 2, 2, 8, 2, 2, 4, 4, 4), strides=(4096, 0, 512, 0, 128, 0, 64, 1, 0, 8, 0, 1024, 16), offset=0, mask=None, contiguous=False),))
+@@ -5156,22 +5156,22 @@
+     acc15.x = wmma127.x;
+     acc15.y = wmma127.y;
+   }
+-  *((device float2*)(data0+alu6)) = acc0;
+-  *((device float2*)(data0+alu6+8)) = acc1;
+-  *((device float2*)(data0+alu6+16)) = acc2;
+-  *((device float2*)(data0+alu6+24)) = acc3;
+-  *((device float2*)(data0+alu6+1024)) = acc4;
+-  *((device float2*)(data0+alu6+1032)) = acc5;
+-  *((device float2*)(data0+alu6+1040)) = acc6;
+-  *((device float2*)(data0+alu6+1048)) = acc7;
+-  *((device float2*)(data0+alu6+2048)) = acc8;
+-  *((device float2*)(data0+alu6+2056)) = acc9;
+-  *((device float2*)(data0+alu6+2064)) = acc10;
+-  *((device float2*)(data0+alu6+2072)) = acc11;
+-  *((device float2*)(data0+alu6+3072)) = acc12;
+-  *((device float2*)(data0+alu6+3080)) = acc13;
+-  *((device float2*)(data0+alu6+3088)) = acc14;
+-  *((device float2*)(data0+alu6+3096)) = acc15;
++  *((device float2*)(data0+alu6)) = float2(acc0.x,acc0.y);
++  *((device float2*)(data0+alu6+8)) = float2(acc1.x,acc1.y);
++  *((device float2*)(data0+alu6+16)) = float2(acc2.x,acc2.y);
++  *((device float2*)(data0+alu6+24)) = float2(acc3.x,acc3.y);
++  *((device float2*)(data0+alu6+1024)) = float2(acc4.x,acc4.y);
++  *((device float2*)(data0+alu6+1032)) = float2(acc5.x,acc5.y);
++  *((device float2*)(data0+alu6+1040)) = float2(acc6.x,acc6.y);
++  *((device float2*)(data0+alu6+1048)) = float2(acc7.x,acc7.y);
++  *((device float2*)(data0+alu6+2048)) = float2(acc8.x,acc8.y);
++  *((device float2*)(data0+alu6+2056)) = float2(acc9.x,acc9.y);
++  *((device float2*)(data0+alu6+2064)) = float2(acc10.x,acc10.y);
++  *((device float2*)(data0+alu6+2072)) = float2(acc11.x,acc11.y);
++  *((device float2*)(data0+alu6+3072)) = float2(acc12.x,acc12.y);
++  *((device float2*)(data0+alu6+3080)) = float2(acc13.x,acc13.y);
++  *((device float2*)(data0+alu6+3088)) = float2(acc14.x,acc14.y);
++  *((device float2*)(data0+alu6+3096)) = float2(acc15.x,acc15.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.float, dtypes.float>
+ aliasing buffer ShapeTracker(views=(View(shape=(2, 4, 2, 2, 2, 4, 2, 8, 8, 2, 4, 2, 4), strides=(8192, 0, 1024, 512, 0, 128, 0, 16, 1, 0, 0, 8, 2048), offset=0, mask=None, contiguous=False),))
+@@ -5350,22 +5350,22 @@
+     acc15.x = wmma31.x;
+     acc15.y = wmma31.y;
+   }
+-  *((device float2*)(data0+alu7)) = acc0;
+-  *((device float2*)(data0+alu7+8)) = acc1;
+-  *((device float2*)(data0+alu7+16)) = acc2;
+-  *((device float2*)(data0+alu7+24)) = acc3;
+-  *((device float2*)(data0+alu7+2048)) = acc4;
+-  *((device float2*)(data0+alu7+2056)) = acc5;
+-  *((device float2*)(data0+alu7+2064)) = acc6;
+-  *((device float2*)(data0+alu7+2072)) = acc7;
+-  *((device float2*)(data0+alu7+4096)) = acc8;
+-  *((device float2*)(data0+alu7+4104)) = acc9;
+-  *((device float2*)(data0+alu7+4112)) = acc10;
+-  *((device float2*)(data0+alu7+4120)) = acc11;
+-  *((device float2*)(data0+alu7+6144)) = acc12;
+-  *((device float2*)(data0+alu7+6152)) = acc13;
+-  *((device float2*)(data0+alu7+6160)) = acc14;
+-  *((device float2*)(data0+alu7+6168)) = acc15;
++  *((device float2*)(data0+alu7)) = float2(acc0.x,acc0.y);
++  *((device float2*)(data0+alu7+8)) = float2(acc1.x,acc1.y);
++  *((device float2*)(data0+alu7+16)) = float2(acc2.x,acc2.y);
++  *((device float2*)(data0+alu7+24)) = float2(acc3.x,acc3.y);
++  *((device float2*)(data0+alu7+2048)) = float2(acc4.x,acc4.y);
++  *((device float2*)(data0+alu7+2056)) = float2(acc5.x,acc5.y);
++  *((device float2*)(data0+alu7+2064)) = float2(acc6.x,acc6.y);
++  *((device float2*)(data0+alu7+2072)) = float2(acc7.x,acc7.y);
++  *((device float2*)(data0+alu7+4096)) = float2(acc8.x,acc8.y);
++  *((device float2*)(data0+alu7+4104)) = float2(acc9.x,acc9.y);
++  *((device float2*)(data0+alu7+4112)) = float2(acc10.x,acc10.y);
++  *((device float2*)(data0+alu7+4120)) = float2(acc11.x,acc11.y);
++  *((device float2*)(data0+alu7+6144)) = float2(acc12.x,acc12.y);
++  *((device float2*)(data0+alu7+6152)) = float2(acc13.x,acc13.y);
++  *((device float2*)(data0+alu7+6160)) = float2(acc14.x,acc14.y);
++  *((device float2*)(data0+alu7+6168)) = float2(acc15.x,acc15.y);
+ }
+ reduced UOp count from 23 to 22
+ #include <metal_stdlib>
+@@ -8354,7 +8354,7 @@
+     acc0.x = wmma1.x;
+     acc0.y = wmma1.y;
+   }
+-  *((device half2*)(data0+alu0+alu5+alu1+alu4+alu2+alu3)) = acc0;
++  *((device half2*)(data0+alu0+alu5+alu1+alu4+alu2+alu3)) = half2(acc0.x,acc0.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.half, dtypes.half>
+ aliasing buffer ShapeTracker(views=(View(shape=(16, 16, 2, 2, 4, 2, 8, 2, 16), strides=(1024, 0, 512, 0, 128, 0, 1, 0, 8), offset=0, mask=None, contiguous=False),))
+@@ -8546,10 +8546,10 @@
+     acc3.x = wmma7.x;
+     acc3.y = wmma7.y;
+   }
+-  *((device half2*)(data0+alu6)) = acc0;
+-  *((device half2*)(data0+alu6+1024)) = acc1;
+-  *((device half2*)(data0+alu6+2048)) = acc2;
+-  *((device half2*)(data0+alu6+3072)) = acc3;
++  *((device half2*)(data0+alu6)) = half2(acc0.x,acc0.y);
++  *((device half2*)(data0+alu6+1024)) = half2(acc1.x,acc1.y);
++  *((device half2*)(data0+alu6+2048)) = half2(acc2.x,acc2.y);
++  *((device half2*)(data0+alu6+3072)) = half2(acc3.x,acc3.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.half, dtypes.half>
+ aliasing buffer ShapeTracker(views=(View(shape=(4, 4, 2, 2, 4, 2, 8, 8, 2, 4, 4, 2), strides=(4096, 0, 512, 0, 128, 0, 16, 1, 0, 1024, 0, 8), offset=0, mask=None, contiguous=False),))
+@@ -8727,22 +8727,22 @@
+     acc15.x = wmma31.x;
+     acc15.y = wmma31.y;
+   }
+-  *((device half2*)(data0+alu6)) = acc0;
+-  *((device half2*)(data0+alu6+1024)) = acc1;
+-  *((device half2*)(data0+alu6+2048)) = acc2;
+-  *((device half2*)(data0+alu6+3072)) = acc3;
+-  *((device half2*)(data0+alu6+8)) = acc4;
+-  *((device half2*)(data0+alu6+1032)) = acc5;
+-  *((device half2*)(data0+alu6+2056)) = acc6;
+-  *((device half2*)(data0+alu6+3080)) = acc7;
+-  *((device half2*)(data0+alu6+16)) = acc8;
+-  *((device half2*)(data0+alu6+1040)) = acc9;
+-  *((device half2*)(data0+alu6+2064)) = acc10;
+-  *((device half2*)(data0+alu6+3088)) = acc11;
+-  *((device half2*)(data0+alu6+24)) = acc12;
+-  *((device half2*)(data0+alu6+1048)) = acc13;
+-  *((device half2*)(data0+alu6+2072)) = acc14;
+-  *((device half2*)(data0+alu6+3096)) = acc15;
++  *((device half2*)(data0+alu6)) = half2(acc0.x,acc0.y);
++  *((device half2*)(data0+alu6+1024)) = half2(acc1.x,acc1.y);
++  *((device half2*)(data0+alu6+2048)) = half2(acc2.x,acc2.y);
++  *((device half2*)(data0+alu6+3072)) = half2(acc3.x,acc3.y);
++  *((device half2*)(data0+alu6+8)) = half2(acc4.x,acc4.y);
++  *((device half2*)(data0+alu6+1032)) = half2(acc5.x,acc5.y);
++  *((device half2*)(data0+alu6+2056)) = half2(acc6.x,acc6.y);
++  *((device half2*)(data0+alu6+3080)) = half2(acc7.x,acc7.y);
++  *((device half2*)(data0+alu6+16)) = half2(acc8.x,acc8.y);
++  *((device half2*)(data0+alu6+1040)) = half2(acc9.x,acc9.y);
++  *((device half2*)(data0+alu6+2064)) = half2(acc10.x,acc10.y);
++  *((device half2*)(data0+alu6+3088)) = half2(acc11.x,acc11.y);
++  *((device half2*)(data0+alu6+24)) = half2(acc12.x,acc12.y);
++  *((device half2*)(data0+alu6+1048)) = half2(acc13.x,acc13.y);
++  *((device half2*)(data0+alu6+2072)) = half2(acc14.x,acc14.y);
++  *((device half2*)(data0+alu6+3096)) = half2(acc15.x,acc15.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.half, dtypes.half>
+ aliasing buffer ShapeTracker(views=(View(shape=(4, 4, 2, 2, 4, 2, 4, 8, 2, 4, 4, 4), strides=(4096, 0, 512, 0, 128, 0, 32, 1, 0, 1024, 0, 8), offset=0, mask=None, contiguous=False),))
+@@ -9048,22 +9048,22 @@
+     acc15.x = wmma63.x;
+     acc15.y = wmma63.y;
+   }
+-  *((device half2*)(data0+alu6)) = acc0;
+-  *((device half2*)(data0+alu6+1024)) = acc1;
+-  *((device half2*)(data0+alu6+2048)) = acc2;
+-  *((device half2*)(data0+alu6+3072)) = acc3;
+-  *((device half2*)(data0+alu6+8)) = acc4;
+-  *((device half2*)(data0+alu6+1032)) = acc5;
+-  *((device half2*)(data0+alu6+2056)) = acc6;
+-  *((device half2*)(data0+alu6+3080)) = acc7;
+-  *((device half2*)(data0+alu6+16)) = acc8;
+-  *((device half2*)(data0+alu6+1040)) = acc9;
+-  *((device half2*)(data0+alu6+2064)) = acc10;
+-  *((device half2*)(data0+alu6+3088)) = acc11;
+-  *((device half2*)(data0+alu6+24)) = acc12;
+-  *((device half2*)(data0+alu6+1048)) = acc13;
+-  *((device half2*)(data0+alu6+2072)) = acc14;
+-  *((device half2*)(data0+alu6+3096)) = acc15;
++  *((device half2*)(data0+alu6)) = half2(acc0.x,acc0.y);
++  *((device half2*)(data0+alu6+1024)) = half2(acc1.x,acc1.y);
++  *((device half2*)(data0+alu6+2048)) = half2(acc2.x,acc2.y);
++  *((device half2*)(data0+alu6+3072)) = half2(acc3.x,acc3.y);
++  *((device half2*)(data0+alu6+8)) = half2(acc4.x,acc4.y);
++  *((device half2*)(data0+alu6+1032)) = half2(acc5.x,acc5.y);
++  *((device half2*)(data0+alu6+2056)) = half2(acc6.x,acc6.y);
++  *((device half2*)(data0+alu6+3080)) = half2(acc7.x,acc7.y);
++  *((device half2*)(data0+alu6+16)) = half2(acc8.x,acc8.y);
++  *((device half2*)(data0+alu6+1040)) = half2(acc9.x,acc9.y);
++  *((device half2*)(data0+alu6+2064)) = half2(acc10.x,acc10.y);
++  *((device half2*)(data0+alu6+3088)) = half2(acc11.x,acc11.y);
++  *((device half2*)(data0+alu6+24)) = half2(acc12.x,acc12.y);
++  *((device half2*)(data0+alu6+1048)) = half2(acc13.x,acc13.y);
++  *((device half2*)(data0+alu6+2072)) = half2(acc14.x,acc14.y);
++  *((device half2*)(data0+alu6+3096)) = half2(acc15.x,acc15.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.half, dtypes.half>
+ aliasing buffer ShapeTracker(views=(View(shape=(2, 4, 2, 2, 2, 4, 2, 4, 8, 2, 4, 4, 4), strides=(8192, 0, 4096, 512, 0, 128, 0, 32, 1, 0, 1024, 0, 8), offset=0, mask=None, contiguous=False),))
+@@ -9370,22 +9370,22 @@
+     acc15.x = wmma63.x;
+     acc15.y = wmma63.y;
+   }
+-  *((device half2*)(data0+alu7)) = acc0;
+-  *((device half2*)(data0+alu7+1024)) = acc1;
+-  *((device half2*)(data0+alu7+2048)) = acc2;
+-  *((device half2*)(data0+alu7+3072)) = acc3;
+-  *((device half2*)(data0+alu7+8)) = acc4;
+-  *((device half2*)(data0+alu7+1032)) = acc5;
+-  *((device half2*)(data0+alu7+2056)) = acc6;
+-  *((device half2*)(data0+alu7+3080)) = acc7;
+-  *((device half2*)(data0+alu7+16)) = acc8;
+-  *((device half2*)(data0+alu7+1040)) = acc9;
+-  *((device half2*)(data0+alu7+2064)) = acc10;
+-  *((device half2*)(data0+alu7+3088)) = acc11;
+-  *((device half2*)(data0+alu7+24)) = acc12;
+-  *((device half2*)(data0+alu7+1048)) = acc13;
+-  *((device half2*)(data0+alu7+2072)) = acc14;
+-  *((device half2*)(data0+alu7+3096)) = acc15;
++  *((device half2*)(data0+alu7)) = half2(acc0.x,acc0.y);
++  *((device half2*)(data0+alu7+1024)) = half2(acc1.x,acc1.y);
++  *((device half2*)(data0+alu7+2048)) = half2(acc2.x,acc2.y);
++  *((device half2*)(data0+alu7+3072)) = half2(acc3.x,acc3.y);
++  *((device half2*)(data0+alu7+8)) = half2(acc4.x,acc4.y);
++  *((device half2*)(data0+alu7+1032)) = half2(acc5.x,acc5.y);
++  *((device half2*)(data0+alu7+2056)) = half2(acc6.x,acc6.y);
++  *((device half2*)(data0+alu7+3080)) = half2(acc7.x,acc7.y);
++  *((device half2*)(data0+alu7+16)) = half2(acc8.x,acc8.y);
++  *((device half2*)(data0+alu7+1040)) = half2(acc9.x,acc9.y);
++  *((device half2*)(data0+alu7+2064)) = half2(acc10.x,acc10.y);
++  *((device half2*)(data0+alu7+3088)) = half2(acc11.x,acc11.y);
++  *((device half2*)(data0+alu7+24)) = half2(acc12.x,acc12.y);
++  *((device half2*)(data0+alu7+1048)) = half2(acc13.x,acc13.y);
++  *((device half2*)(data0+alu7+2072)) = half2(acc14.x,acc14.y);
++  *((device half2*)(data0+alu7+3096)) = half2(acc15.x,acc15.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.half, dtypes.half>
+ aliasing buffer ShapeTracker(views=(View(shape=(4, 4, 2, 2, 4, 2, 16, 8, 2, 4, 4), strides=(4096, 0, 512, 0, 128, 0, 8, 1, 0, 0, 1024), offset=0, mask=None, contiguous=False),))
+@@ -9588,10 +9588,10 @@
+     acc3.x = wmma7.x;
+     acc3.y = wmma7.y;
+   }
+-  *((device half2*)(data0+alu6)) = acc0;
+-  *((device half2*)(data0+alu6+1024)) = acc1;
+-  *((device half2*)(data0+alu6+2048)) = acc2;
+-  *((device half2*)(data0+alu6+3072)) = acc3;
++  *((device half2*)(data0+alu6)) = half2(acc0.x,acc0.y);
++  *((device half2*)(data0+alu6+1024)) = half2(acc1.x,acc1.y);
++  *((device half2*)(data0+alu6+2048)) = half2(acc2.x,acc2.y);
++  *((device half2*)(data0+alu6+3072)) = half2(acc3.x,acc3.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.half, dtypes.half>
+ aliasing buffer ShapeTracker(views=(View(shape=(4, 4, 2, 2, 4, 2, 8, 8, 2, 4, 2, 4), strides=(4096, 0, 512, 0, 128, 0, 16, 1, 0, 1024, 8, 0), offset=0, mask=None, contiguous=False),))
+@@ -9769,22 +9769,22 @@
+     acc15.x = wmma31.x;
+     acc15.y = wmma31.y;
+   }
+-  *((device half2*)(data0+alu6)) = acc0;
+-  *((device half2*)(data0+alu6+1024)) = acc1;
+-  *((device half2*)(data0+alu6+2048)) = acc2;
+-  *((device half2*)(data0+alu6+3072)) = acc3;
+-  *((device half2*)(data0+alu6+8)) = acc4;
+-  *((device half2*)(data0+alu6+1032)) = acc5;
+-  *((device half2*)(data0+alu6+2056)) = acc6;
+-  *((device half2*)(data0+alu6+3080)) = acc7;
+-  *((device half2*)(data0+alu6+16)) = acc8;
+-  *((device half2*)(data0+alu6+1040)) = acc9;
+-  *((device half2*)(data0+alu6+2064)) = acc10;
+-  *((device half2*)(data0+alu6+3088)) = acc11;
+-  *((device half2*)(data0+alu6+24)) = acc12;
+-  *((device half2*)(data0+alu6+1048)) = acc13;
+-  *((device half2*)(data0+alu6+2072)) = acc14;
+-  *((device half2*)(data0+alu6+3096)) = acc15;
++  *((device half2*)(data0+alu6)) = half2(acc0.x,acc0.y);
++  *((device half2*)(data0+alu6+1024)) = half2(acc1.x,acc1.y);
++  *((device half2*)(data0+alu6+2048)) = half2(acc2.x,acc2.y);
++  *((device half2*)(data0+alu6+3072)) = half2(acc3.x,acc3.y);
++  *((device half2*)(data0+alu6+8)) = half2(acc4.x,acc4.y);
++  *((device half2*)(data0+alu6+1032)) = half2(acc5.x,acc5.y);
++  *((device half2*)(data0+alu6+2056)) = half2(acc6.x,acc6.y);
++  *((device half2*)(data0+alu6+3080)) = half2(acc7.x,acc7.y);
++  *((device half2*)(data0+alu6+16)) = half2(acc8.x,acc8.y);
++  *((device half2*)(data0+alu6+1040)) = half2(acc9.x,acc9.y);
++  *((device half2*)(data0+alu6+2064)) = half2(acc10.x,acc10.y);
++  *((device half2*)(data0+alu6+3088)) = half2(acc11.x,acc11.y);
++  *((device half2*)(data0+alu6+24)) = half2(acc12.x,acc12.y);
++  *((device half2*)(data0+alu6+1048)) = half2(acc13.x,acc13.y);
++  *((device half2*)(data0+alu6+2072)) = half2(acc14.x,acc14.y);
++  *((device half2*)(data0+alu6+3096)) = half2(acc15.x,acc15.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.half, dtypes.half>
+ aliasing buffer ShapeTracker(views=(View(shape=(4, 4, 2, 2, 4, 2, 2, 8, 2, 2, 4, 4, 4), strides=(4096, 0, 512, 0, 128, 0, 64, 1, 0, 8, 0, 1024, 16), offset=0, mask=None, contiguous=False),))
+@@ -10346,22 +10346,22 @@
+     acc15.x = wmma127.x;
+     acc15.y = wmma127.y;
+   }
+-  *((device half2*)(data0+alu6)) = acc0;
+-  *((device half2*)(data0+alu6+8)) = acc1;
+-  *((device half2*)(data0+alu6+16)) = acc2;
+-  *((device half2*)(data0+alu6+24)) = acc3;
+-  *((device half2*)(data0+alu6+1024)) = acc4;
+-  *((device half2*)(data0+alu6+1032)) = acc5;
+-  *((device half2*)(data0+alu6+1040)) = acc6;
+-  *((device half2*)(data0+alu6+1048)) = acc7;
+-  *((device half2*)(data0+alu6+2048)) = acc8;
+-  *((device half2*)(data0+alu6+2056)) = acc9;
+-  *((device half2*)(data0+alu6+2064)) = acc10;
+-  *((device half2*)(data0+alu6+2072)) = acc11;
+-  *((device half2*)(data0+alu6+3072)) = acc12;
+-  *((device half2*)(data0+alu6+3080)) = acc13;
+-  *((device half2*)(data0+alu6+3088)) = acc14;
+-  *((device half2*)(data0+alu6+3096)) = acc15;
++  *((device half2*)(data0+alu6)) = half2(acc0.x,acc0.y);
++  *((device half2*)(data0+alu6+8)) = half2(acc1.x,acc1.y);
++  *((device half2*)(data0+alu6+16)) = half2(acc2.x,acc2.y);
++  *((device half2*)(data0+alu6+24)) = half2(acc3.x,acc3.y);
++  *((device half2*)(data0+alu6+1024)) = half2(acc4.x,acc4.y);
++  *((device half2*)(data0+alu6+1032)) = half2(acc5.x,acc5.y);
++  *((device half2*)(data0+alu6+1040)) = half2(acc6.x,acc6.y);
++  *((device half2*)(data0+alu6+1048)) = half2(acc7.x,acc7.y);
++  *((device half2*)(data0+alu6+2048)) = half2(acc8.x,acc8.y);
++  *((device half2*)(data0+alu6+2056)) = half2(acc9.x,acc9.y);
++  *((device half2*)(data0+alu6+2064)) = half2(acc10.x,acc10.y);
++  *((device half2*)(data0+alu6+2072)) = half2(acc11.x,acc11.y);
++  *((device half2*)(data0+alu6+3072)) = half2(acc12.x,acc12.y);
++  *((device half2*)(data0+alu6+3080)) = half2(acc13.x,acc13.y);
++  *((device half2*)(data0+alu6+3088)) = half2(acc14.x,acc14.y);
++  *((device half2*)(data0+alu6+3096)) = half2(acc15.x,acc15.y);
+ }
+ TENSOR CORES [(1, 128, 1)] [(0, 128, 128)] tensor_core<[8, 8, 8], dtypes.half, dtypes.half>
+ aliasing buffer ShapeTracker(views=(View(shape=(2, 4, 2, 2, 2, 4, 2, 8, 8, 2, 4, 2, 4), strides=(8192, 0, 1024, 512, 0, 128, 0, 16, 1, 0, 0, 8, 2048), offset=0, mask=None, contiguous=False),))
+@@ -10540,22 +10540,22 @@
+     acc15.x = wmma31.x;
+     acc15.y = wmma31.y;
+   }
+-  *((device half2*)(data0+alu7)) = acc0;
+-  *((device half2*)(data0+alu7+8)) = acc1;
+-  *((device half2*)(data0+alu7+16)) = acc2;
+-  *((device half2*)(data0+alu7+24)) = acc3;
+-  *((device half2*)(data0+alu7+2048)) = acc4;
+-  *((device half2*)(data0+alu7+2056)) = acc5;
+-  *((device half2*)(data0+alu7+2064)) = acc6;
+-  *((device half2*)(data0+alu7+2072)) = acc7;
+-  *((device half2*)(data0+alu7+4096)) = acc8;
+-  *((device half2*)(data0+alu7+4104)) = acc9;
+-  *((device half2*)(data0+alu7+4112)) = acc10;
+-  *((device half2*)(data0+alu7+4120)) = acc11;
+-  *((device half2*)(data0+alu7+6144)) = acc12;
+-  *((device half2*)(data0+alu7+6152)) = acc13;
+-  *((device half2*)(data0+alu7+6160)) = acc14;
+-  *((device half2*)(data0+alu7+6168)) = acc15;
++  *((device half2*)(data0+alu7)) = half2(acc0.x,acc0.y);
++  *((device half2*)(data0+alu7+8)) = half2(acc1.x,acc1.y);
++  *((device half2*)(data0+alu7+16)) = half2(acc2.x,acc2.y);
++  *((device half2*)(data0+alu7+24)) = half2(acc3.x,acc3.y);
++  *((device half2*)(data0+alu7+2048)) = half2(acc4.x,acc4.y);
++  *((device half2*)(data0+alu7+2056)) = half2(acc5.x,acc5.y);
++  *((device half2*)(data0+alu7+2064)) = half2(acc6.x,acc6.y);
++  *((device half2*)(data0+alu7+2072)) = half2(acc7.x,acc7.y);
++  *((device half2*)(data0+alu7+4096)) = half2(acc8.x,acc8.y);
++  *((device half2*)(data0+alu7+4104)) = half2(acc9.x,acc9.y);
++  *((device half2*)(data0+alu7+4112)) = half2(acc10.x,acc10.y);
++  *((device half2*)(data0+alu7+4120)) = half2(acc11.x,acc11.y);
++  *((device half2*)(data0+alu7+6144)) = half2(acc12.x,acc12.y);
++  *((device half2*)(data0+alu7+6152)) = half2(acc13.x,acc13.y);
++  *((device half2*)(data0+alu7+6160)) = half2(acc14.x,acc14.y);
++  *((device half2*)(data0+alu7+6168)) = half2(acc15.x,acc15.y);
+ }
+ reduced UOp count from 16 to 15
+ #include <metal_stdlib>
+@@ -10679,3 +10679,5 @@
+ reduced UOp count from 34 to 33
+ .reduced UOp count from 62 to 54
+ reduced UOp count from 54 to 52
++.reduced UOp count from 378 to 314
++reduced UOp count from 314 to 282

@@ -1,0 +1,8 @@
+--- 
++++ 
+@@ -10679,3 +10679,5 @@
+ reduced UOp count from 34 to 33
+ .reduced UOp count from 62 to 54
+ reduced UOp count from 54 to 52
++.reduced UOp count from 378 to 314
++reduced UOp count from 314 to 282
