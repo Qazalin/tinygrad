@@ -4,7 +4,7 @@ import itertools, math, functools
 from collections import defaultdict
 
 from tinygrad.dtype import ImageDType, dtypes, DType, PtrDType
-from tinygrad.helpers import colored, DEBUG, prod, getenv, to_function_name
+from tinygrad.helpers import colored, DEBUG, dedup, prod, getenv, to_function_name
 from tinygrad.ops import LazyOp, UnaryOps, BinaryOps, TernaryOps, ReduceOps, ConstBuffer, MemBuffer, BufferOps, get_lazyop_info
 from tinygrad.shape.shapetracker import ShapeTracker
 from tinygrad.shape.symbolic import Variable, NumNode, Node, SumNode, MulNode, DivNode, ModNode, LtNode, AndNode, create_lt_node
@@ -191,8 +191,8 @@ class Linearizer(Kernel):
     self.loop_uops: Dict[str, UOp] = {}
 
     # add global buffers (first stores, then the loads)
-    global_bufs = sorted([x for x in self.bufs if isinstance(x, MemBuffer)], key=lambda x: x.idx)
-    for buf in global_bufs:
+    global_bufs = {x.idx:x for x in self.bufs if isinstance(x, MemBuffer)}
+    for buf in global_bufs.values():
       self.buf_uops[self.bufs.index(buf)] = self.uops.add(UOps.DEFINE_GLOBAL, buf.dtype if isinstance(buf.dtype, ImageDType) else PtrDType(buf.dtype),
                                              (), (buf.idx, f"data{buf.idx}",True if buf in self.outbufs else False))
     # add var vals
