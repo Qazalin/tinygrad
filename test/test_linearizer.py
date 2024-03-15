@@ -36,10 +36,10 @@ class TestLinearizer(unittest.TestCase):
 
   def test_multioutput(self):
     dtype, st = dtypes.int, ShapeTracker.from_shape((8,))
-    a = LazyOp(op=BufferOps.LOAD, src=(), arg=MemBuffer(idx=2, dtype=dtype, st=st))
-    b = LazyOp(op=BufferOps.LOAD, src=(), arg=MemBuffer(idx=3, dtype=dtype, st=st))
-    out0 = LazyOp(op=BufferOps.STORE, src=(LazyOp(op=BinaryOps.ADD, src=(a,b)),), arg=MemBuffer(idx=0, dtype=dtype, st=st))
-    out1 = LazyOp(op=BufferOps.STORE, src=(LazyOp(op=BinaryOps.MUL, src=(a,b)),), arg=MemBuffer(idx=1, dtype=dtype, st=st))
+    a = LazyOp(BufferOps.LOAD, arg=MemBuffer(idx=2, dtype=dtype, st=st))
+    b = LazyOp(BufferOps.LOAD, arg=MemBuffer(idx=3, dtype=dtype, st=st))
+    out0 = LazyOp(BufferOps.STORE, (LazyOp(op=BinaryOps.ADD, src=(a,b)),), MemBuffer(idx=0, dtype=dtype, st=st))
+    out1 = LazyOp(BufferOps.STORE, (LazyOp(op=BinaryOps.MUL, src=(a,b)),), MemBuffer(idx=1, dtype=dtype, st=st))
 
     lin = Linearizer(out0, out1)
     lin.linearize()
