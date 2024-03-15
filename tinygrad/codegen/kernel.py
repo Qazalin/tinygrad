@@ -92,7 +92,6 @@ class Kernel:
                          LinearizerOptions(Device.DEFAULT))
     assert all(op.op is BufferOps.STORE for op in ast), f"kernels must have stores as the output, got {ast}"
     assert len(set(op.arg.st.size for op in ast)) == 1, f"all outbufs should have the same size, got {[op.arg.st for op in ast]}"
-    assert len(ast) == 1, "max one output per kernel"
     self.ast = ast
     self.lazyops = flatten([op.lazyops for op in self.ast])
 
@@ -107,7 +106,6 @@ class Kernel:
     self.outbufs = [x.arg for x in self.ast]
     loadops = [BufferOps.LOAD, BufferOps.CONST]
     self.bufs: List[Union[MemBuffer, ConstBuffer, LocalBuffer]] = self.outbufs + [x.arg for x in self.lazyops if x.op in loadops]
-    assert isinstance(self.bufs[0], MemBuffer) and self.bufs[0].idx == 0, f"buffer 0 is not the store buffer {self.bufs[0]}"
 
     # get earlybufs, before the one reduce op
     self.earlybufs = [x.arg for x in self.reduceop.lazyops if x.op in BufferOps] if self.reduceop else []
