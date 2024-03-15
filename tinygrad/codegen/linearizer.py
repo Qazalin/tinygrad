@@ -191,14 +191,10 @@ class Linearizer(Kernel):
     self.loop_uops: Dict[str, UOp] = {}
 
     # add global buffers (first stores, then the loads)
-    for buf in self.outbufs:
-      self.buf_uops[buf.idx] = self.uops.add(UOps.DEFINE_GLOBAL, buf.dtype if isinstance(buf.dtype, ImageDType) else PtrDType(buf.dtype),
-                                             (), (buf.idx, f"data{buf.idx}",True))
-    for i,buf in enumerate(self.bufs):
-      if isinstance(buf, MemBuffer) and buf not in self.outbufs:
-        self.buf_uops[i] = self.uops.add(UOps.DEFINE_GLOBAL,
-                                         buf.dtype if isinstance(buf.dtype, ImageDType) else PtrDType(buf.dtype), (),
-                                         (buf.idx, f"data{buf.idx}", buf.idx == 0))
+    global_bufs = sorted([x for x in self.bufs if isinstance(x, MemBuffer)], key=lambda x: x.idx)
+    for buf in global_bufs:
+      self.buf_uops[self.bufs.index(buf)] = self.uops.add(UOps.DEFINE_GLOBAL, buf.dtype if isinstance(buf.dtype, ImageDType) else PtrDType(buf.dtype),
+                                             (), (buf.idx, f"data{buf.idx}",True if buf in self.outbufs else False))
     # add var vals
     for i,var in enumerate(self.ast[0].vars()): # TODO support multi-output symbolic with tests
       assert var.expr is not None
