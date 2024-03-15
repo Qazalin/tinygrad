@@ -4,7 +4,7 @@ from typing import NamedTuple, Optional, List, Tuple, cast, Dict, Union
 from tinygrad.ops import LazyOp, FlopCounter, get_lazyop_info, UnaryOps, BinaryOps, ReduceOps, MemBuffer, ConstBuffer, BufferOps
 from tinygrad.device import Device, Compiled
 from tinygrad.dtype import dtypes, ImageDType, DType
-from tinygrad.helpers import dedup, colored, ansilen, flatten, getenv, prod, DEBUG, round_up, all_int, get_contraction
+from tinygrad.helpers import dedup, colored, ansilen, flatten, getenv, merge_dicts, prod, DEBUG, round_up, all_int, get_contraction
 from tinygrad.shape.shapetracker import ShapeTracker
 from tinygrad.shape.symbolic import sint
 from tinygrad.shape.view import View, strides_for_shape
@@ -103,7 +103,7 @@ class Kernel:
     assert len(dedup(reduceops)) <= 1, "max one reduce op in an ast"
     self.reduceop = reduceops[0] if reduceops else None
 
-    self.outbufs = [x.arg for x in self.ast]
+    self.outbufs, self.vars = [x.arg for x in self.ast], flatten([x.vars() for x in self.ast])
     loadops = [BufferOps.LOAD, BufferOps.CONST]
     self.bufs: List[Union[MemBuffer, ConstBuffer, LocalBuffer]] = self.outbufs + [x.arg for x in self.lazyops if x.op in loadops]
 
@@ -494,7 +494,7 @@ class Kernel:
       check(self.local_dims == 0 and self.group_for_reduces == 0, "can't have no locals with locals")
       self.dont_use_locals = True
     elif opt.op == OptOps.PADTO:
-      check(not self.ast[0].vars(), "does not work with symbolic shape")
+      check(not self.vars, "does not work with symbolic shape")
       check(axis < self.first_reduce, "cannot pad a reduce axis")
       padded = False
       for i,st in enumerate(self.sts):

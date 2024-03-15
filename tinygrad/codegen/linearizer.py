@@ -196,7 +196,7 @@ class Linearizer(Kernel):
       self.buf_uops[self.bufs.index(buf)] = self.uops.add(UOps.DEFINE_GLOBAL, buf.dtype if isinstance(buf.dtype, ImageDType) else PtrDType(buf.dtype),
                                              (), (buf.idx, f"data{buf.idx}",True if buf in self.outbufs else False))
     # add var vals
-    for i,var in enumerate(self.ast[0].vars()): # TODO support multi-output symbolic with tests
+    for i,var in enumerate(self.vars):
       assert var.expr is not None
       self.loop_uops[var.expr] = self.uops.add(UOps.DEFINE_VAR, dtypes.int32, (), var)
     # define local buffers
