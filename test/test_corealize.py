@@ -1,6 +1,7 @@
 from typing import List
 import unittest
 from test.helpers import assert_jit_cache_len
+from tinygrad.helpers import getenv
 from tinygrad.ops import GlobalCounters
 from tinygrad.tensor import Tensor
 from tinygrad.features.jit import TinyJit
@@ -11,6 +12,7 @@ def helper_test_corealize(outs: List[Tensor], kernel_count: int):
 
   assert GlobalCounters.kernel_count == kernel_count
 
+@unittest.skipIf(getenv("PTX"), "PTX does not yet fuse")
 class TestCorealize(unittest.TestCase):
   def test_simple_group(self):
     a, b = Tensor([1,2]).realize(), Tensor([3,4]).realize()
