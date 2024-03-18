@@ -174,6 +174,7 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Set[LazyBuffer]) -> bool:
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
 def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> List[ScheduleItem]:
+  print("------------------")
   if seen is None: seen = set()
 
   # start by just realizing the buffers passed in
@@ -256,15 +257,21 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   sorted_realizes: DefaultDict[Tuple,List[LazyBuffer]] = defaultdict(list)
   while queue:
     level, buf = queue.popleft()
+    key: Tuple = (level,buf.size,buf.device)
+    if buf.op in LoadOps or buf.op in ReduceOps or buf.forced_realize or buf in reduce_for_op or \
+        buf.device.startswith("DISK") or getenv("PTX"): key += (buf,)
     if buf.op != LoadOps.CONST and buf in realizes and buf not in seen:
-      key: Tuple = (level,buf.shape,buf.device)
-      if buf.op in LoadOps or buf.op in ReduceOps or buf.forced_realize or buf in reduce_for_op or \
-          buf.device.startswith("DISK") or getenv("PTX") or buf.device == "METAL": key = (buf,)
       sorted_realizes[key].append(buf)
     for x in graph[buf]:
       in_degree[x] -= 1
-      if in_degree[x] == 0: queue.append((level+1,x))
+      if in_degree[x] == 0:
+        gg2 = x.op != LoadOps.CONST and x in realizes and x not in seen or key[1] == buf
+        gg = level+1 if (gg2) else level
+        gg = level+1
+        print(gg, x, gg2)
+        queue.append((gg,x))
 
   sched:List[ScheduleItem] = []
-  for outbufs in sorted_realizes.values(): sched.append(_schedule_group(tuple(outbufs), realizes, reduce_for_op, seen))
+  for k, outbufs in sorted_realizes.items():
+    sched.append(_schedule_group(tuple(outbufs), realizes, reduce_for_op, seen))
   return sched
