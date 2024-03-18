@@ -4,6 +4,7 @@
 
 import unittest
 from typing import List, Optional
+from tinygrad.device import Device
 from tinygrad.tensor import Tensor
 from tinygrad.ops import LoadOps
 from tinygrad.helpers import DEBUG, GRAPH, getenv
@@ -336,8 +337,7 @@ class TestSchedule(unittest.TestCase):
     out = bn1(conv1(x)).relu()
     out = bn2(conv2(out))
     out = (out + x).relu()
-    # TODO ptx doesn't yet fuse
-    check_schedule(out, 4 if getenv("PTX") else 3)
+    check_schedule(out, 4 if getenv("PTX") or Device.DEFAULT == "METAL" else 3)
 
   def test_contiguous_while_contiguous(self):
     x = Tensor.empty(1, 64, 32, 32)
