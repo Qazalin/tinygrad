@@ -1,4 +1,5 @@
 from typing import List
+import numpy as np
 import unittest
 from test.helpers import assert_jit_cache_len
 from tinygrad.device import Device
@@ -17,7 +18,10 @@ def helper_test_corealize(outs: List[Tensor], kernel_count: int):
 class TestCorealize(unittest.TestCase):
   def test_simple_group(self):
     a, b = Tensor([1,2]).realize(), Tensor([3,4]).realize()
-    helper_test_corealize([a+b, a*b], 1)
+    helper_test_corealize(outs:=[a+b, a*b], 1)
+
+    np.testing.assert_equal(outs[0].numpy(), a.numpy()+b.numpy())
+    np.testing.assert_equal(outs[1].numpy(), a.numpy()*b.numpy())
 
   def test_ungroup_reduce(self):
     a, b = Tensor([1]).realize(), Tensor([3,4]).realize()
@@ -28,7 +32,9 @@ class TestCorealize(unittest.TestCase):
     def fxn(a, b): return a + b, a * b
     for i in range(3):
       a, b = Tensor([i, 1, 2]), Tensor([i])
-      fxn(a, b)
+      outs = fxn(a, b)
+      np.testing.assert_equal(outs[0].numpy(), a.numpy()+b.numpy())
+      np.testing.assert_equal(outs[1].numpy(), a.numpy()*b.numpy())
     assert_jit_cache_len(fxn, 1)
 
   def test_jit_ungroup_reduce(self):
