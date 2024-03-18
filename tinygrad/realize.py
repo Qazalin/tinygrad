@@ -166,6 +166,12 @@ def _recurse_lb(buf:LazyBuffer, realizes:Set[LazyBuffer], allbufs:Dict[LazyBuffe
     children[x.base][buf] = None
     _recurse_lb(x, realizes, allbufs, simple_pads, children)
 
+def _deep_realizes(outbuf: LazyBuffer, realizes:Set[LazyBuffer]):
+  def _recurse_realize(x: LazyBuffer, first=True):
+    if not first and (x.realized or x in realizes): return [x]
+    return sum((_recurse_realize(src.base, first=False) for src in x.srcs), [])
+  return _recurse_realize(outbuf)
+
 UNSAFE_PAD_OPS = {BinaryOps.DIV, BinaryOps.CMPLT, BinaryOps.CMPEQ, UnaryOps.LOG2, UnaryOps.EXP2}
 def _is_padding_okay(buf:LazyBuffer, realizes:Set[LazyBuffer]) -> bool:
   if buf in realizes or buf.realized: return True
@@ -245,10 +251,10 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   graph: DefaultDict[LazyBuffer,List[LazyBuffer]] = defaultdict(list)
   in_degree: DefaultDict[LazyBuffer,int] = defaultdict(int)
   queue: Deque[Tuple[int,LazyBuffer]] = deque()
-  for buf in allbufs:
-    if buf.realized: continue
-    for x in buf.srcs:
-      if x.base.realized: continue
+  for buf in realizes:
+    if buf.realized or buf.op is LoadOps.CONST or buf in seen: continue
+    for x in _deep_realizes(buf, realizes):
+      if x.realized or x.op is LoadOps.CONST or x in seen: continue
       graph[x.base].append(buf)
       in_degree[buf] += 1
     if in_degree[buf] == 0: queue.append((0,buf))
@@ -256,11 +262,10 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   sorted_realizes: DefaultDict[Tuple,List[LazyBuffer]] = defaultdict(list)
   while queue:
     level, buf = queue.popleft()
-    if buf.op != LoadOps.CONST and buf in realizes and buf not in seen:
-      key: Tuple = (level,buf.shape,buf.device)
-      if buf.op in LoadOps or buf.op in ReduceOps or buf.forced_realize or buf in reduce_for_op or \
-          buf.device.startswith("DISK") or getenv("PTX") or buf.device == "METAL": key = (buf,)
-      sorted_realizes[key].append(buf)
+    key: Tuple = (level,buf.shape,buf.device)
+    if buf.op in LoadOps or buf.op in ReduceOps or buf.forced_realize or buf in reduce_for_op or \
+        buf.device.startswith("DISK") or getenv("PTX") or buf.device == "METAL": key = (buf,)
+    sorted_realizes[key].append(buf)
     for x in graph[buf]:
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append((level+1,x))

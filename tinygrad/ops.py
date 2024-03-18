@@ -39,7 +39,7 @@ class ConstBuffer:
   dtype: DType
   st: ShapeTracker
 
-@dataclass(frozen=True)
+@dataclass()
 class ScheduleItem:
   ast: Tuple[LazyOp, ...]
   outputs: Tuple[LazyBuffer, ...]
