@@ -262,9 +262,9 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   sorted_realizes: DefaultDict[Tuple,List[LazyBuffer]] = defaultdict(list)
   while queue:
     level, buf = queue.popleft()
-    key: Tuple = (level,buf.shape,buf.device)
+    key: Tuple = (level,buf.size,buf.device)
     if buf.op in LoadOps or buf.op in ReduceOps or buf.forced_realize or buf in reduce_for_op or \
-        buf.device.startswith("DISK") or getenv("PTX") or buf.device == "METAL": key = (buf,)
+        buf.device.startswith("DISK") or getenv("PTX"): key = (buf,)
     sorted_realizes[key].append(buf)
     for x in graph[buf]:
       in_degree[x] -= 1
