@@ -4,7 +4,7 @@ from typing import Deque, List, Dict, Optional, cast, Set, DefaultDict
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, GlobalCounters, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.device import Device, Buffer, BufferCopy, BufferXfer, BufferRead, JITRunner, update_stats, Compiled, BufferOptions
 from tinygrad.features.graph import realized_lazybuffer, log_lazybuffer
-from tinygrad.helpers import colored, getenv, GRAPH, cpu_time_execution, DEBUG, prod, dedup, all_int
+from tinygrad.helpers import colored, flatten, getenv, GRAPH, cpu_time_execution, DEBUG, prod, dedup, all_int
 from tinygrad.shape.symbolic import Variable
 from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.lazy import LazyBuffer
@@ -168,6 +168,12 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Set[LazyBuffer]) -> bool:
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
+def _deep_realizes(outbuf: LazyBuffer, realizes:Set[LazyBuffer]):
+  def _recurse_realize(x: LazyBuffer, first=True):
+    if not first and (x.realized or x in realizes): return [x]
+    return sum((_recurse_realize(src.base, first=False) for src in x.srcs), [])
+  return _recurse_realize(outbuf)
+
 def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> List[ScheduleItem]:
   if seen is None: seen = set()
 
@@ -240,18 +246,19 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   graph: DefaultDict[LazyBuffer,List[LazyBuffer]] = defaultdict(list)
   in_degree: DefaultDict[LazyBuffer,int] = defaultdict(int)
   queue: Deque[LazyBuffer] = deque()
-  for buf in allbufs:
-    if buf.realized: continue
-    for x in buf.srcs:
-      if x.base.realized: continue
-      graph[x.base].append(buf)
+  for buf in realizes:
+    if buf.realized or buf.op is LoadOps.CONST or buf in seen: continue
+    deep = _deep_realizes(buf, realizes)
+    for x in deep:
+      if x.realized or x.op is LoadOps.CONST or x in seen: continue
+      graph[x].append(buf)
       in_degree[buf] += 1
     if in_degree[buf] == 0: queue.append(buf)
 
   sorted_realizes: List[LazyBuffer] = []
   while queue:
     buf = queue.popleft()
-    if buf.op != LoadOps.CONST and buf in realizes and buf not in seen: sorted_realizes.append(buf)
+    sorted_realizes.append(buf)
     for x in graph[buf]:
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append(x)
