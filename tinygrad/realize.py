@@ -166,10 +166,12 @@ def _recurse_lb(buf:LazyBuffer, realizes:Set[LazyBuffer], allbufs:Dict[LazyBuffe
     children[x.base][buf] = None
     _recurse_lb(x, realizes, allbufs, simple_pads, children)
 
-def _deep_realizes(outbuf: LazyBuffer, realizes:Set[LazyBuffer]):
+def _deep_realizes(outbuf: LazyBuffer, realizes:Set[LazyBuffer], cache):
   def _recurse_realize(x: LazyBuffer, first=True):
+    if x in cache: return cache[x]
     if not first and (x.realized or x in realizes): return [x]
-    return sum((_recurse_realize(src.base, first=False) for src in x.srcs), [])
+    cache[x] = ret = sum((_recurse_realize(src.base, first=False) for src in x.srcs), [])
+    return ret
   return _recurse_realize(outbuf)
 
 UNSAFE_PAD_OPS = {BinaryOps.DIV, BinaryOps.CMPLT, BinaryOps.CMPEQ, UnaryOps.LOG2, UnaryOps.EXP2}
@@ -251,9 +253,10 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   graph: DefaultDict[LazyBuffer,List[LazyBuffer]] = defaultdict(list)
   in_degree: DefaultDict[LazyBuffer,int] = defaultdict(int)
   queue: Deque[Tuple[int,LazyBuffer]] = deque()
+  cache = {}
   for buf in realizes:
     if buf.realized or buf.op is LoadOps.CONST or buf in seen: continue
-    for x in _deep_realizes(buf, realizes):
+    for x in _deep_realizes(buf, realizes, cache):
       if x.realized or x.op is LoadOps.CONST or x in seen: continue
       graph[x.base].append(buf)
       in_degree[buf] += 1
