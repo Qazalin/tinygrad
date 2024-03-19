@@ -271,4 +271,8 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
 
   sched:List[ScheduleItem] = []
   for outbufs in sorted_realizes.values(): sched.append(_schedule_group(tuple(outbufs), realizes, reduce_for_op, seen))
+  for si in sched:
+    if si.ast[0].op in LoadOps: continue
+    GlobalCounters.k2 += 1
+    if len(si.outputs) > 1: GlobalCounters.multi += 1
   return sched
