@@ -267,8 +267,6 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       if in_degree[x] == 0:
         gg2 = x.op != LoadOps.CONST and x in realizes and x not in seen or key[1] == buf
         gg = level+1 if (gg2) else level
-        gg = level+1
-        print(gg, x, gg2)
         queue.append((gg,x))
 
   sched:List[ScheduleItem] = []
