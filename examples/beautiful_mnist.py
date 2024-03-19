@@ -1,8 +1,11 @@
 # model based off https://towardsdatascience.com/going-beyond-99-mnist-handwritten-digits-recognition-cfff96337392
 from typing import List, Callable
+from extra.models.resnet import Linear
 from tinygrad import Tensor, TinyJit, nn, GlobalCounters
 from extra.datasets import fetch_mnist
 from tqdm import trange
+
+from tinygrad.codegen.linearizer import Linearizer
 
 class Model:
   def __init__(self):
@@ -38,7 +41,9 @@ if __name__ == "__main__":
 
   test_acc = float('nan')
   for i in (t:=trange(70)):
-    GlobalCounters.reset()   # NOTE: this makes it nice for DEBUG=2 timing
     loss = train_step()
     if i%10 == 9: test_acc = get_test_acc().item()
     t.set_description(f"loss: {loss.item():6.2f} test_accuracy: {test_acc:5.2f}%")
+
+  print(GlobalCounters.multi)
+  print(GlobalCounters.k2)

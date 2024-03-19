@@ -265,4 +265,9 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     if x in seen: continue
     sched.append(_schedule_one(x, realizes, reduce_for_op))
     seen.add(x)
+
+  for si in sched:
+    if si.ast[0].op in LoadOps: continue
+    GlobalCounters.k2 += 1
+    if len(si.outputs) > 1: GlobalCounters.multi += 1
   return sched
