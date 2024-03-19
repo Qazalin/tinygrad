@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import List, Tuple, Any, Optional, cast, DefaultDict, Dict, Union, Final, Iterator, Sequence
 import itertools, math, functools
 from collections import defaultdict
+from tinygrad.device import Device
 
 from tinygrad.dtype import ImageDType, dtypes, DType, PtrDType
 from tinygrad.helpers import colored, DEBUG, prod, getenv, to_function_name
@@ -403,6 +404,7 @@ class Linearizer(Kernel):
 
     # set cache and return
     self.applied_opts_cache = self.applied_opts[:]
+    #if len(self.ast) > 1: print(Device[Device.DEFAULT].compiler.render(to_function_name(self.name), self.uops))
     return self
 
   def ast_parse(self, x:LazyOp, acc: List[UOp], offs:Optional[List[int]], loaded_buffers:Dict[Union[MemBuffer, ConstBuffer, LocalBuffer], List[UOp]], do_reduce=False, loop_ctx=tuple(), cache=None) -> List[UOp]:  # noqa: E501
