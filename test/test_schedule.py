@@ -4,10 +4,9 @@
 
 import unittest
 from typing import List, Optional
-from tinygrad.device import Device
 from tinygrad.tensor import Tensor
 from tinygrad.ops import LoadOps
-from tinygrad.helpers import DEBUG, GRAPH, getenv
+from tinygrad.helpers import DEBUG, GRAPH
 from tinygrad.codegen.linearizer import Linearizer
 from tinygrad.features.graph import print_tree, realized_lazybuffer
 from tinygrad.realize import create_schedule

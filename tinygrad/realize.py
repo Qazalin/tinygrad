@@ -261,13 +261,13 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   while queue:
     level, buf = queue.popleft()
     if buf.op != LoadOps.CONST and buf in realizes and buf not in seen:
-      key: Tuple = (level,buf.shape,buf.device)
-      if buf.op in LoadOps or buf.op in ReduceOps or buf.forced_realize or buf in reduce_for_op or \
+      key: Tuple = (level,tuple(s for s in buf.shape if s != 1),buf.device)
+      if buf.op in LoadOps or buf.op in ReduceOps or buf in reduce_for_op or buf.forced_realize or \
           buf.device.startswith("DISK") or getenv("PTX") or buf.device == "METAL": key = (buf,)
       sorted_realizes[key].append(buf)
     for x in graph[buf]:
       in_degree[x] -= 1
-      if in_degree[x] == 0: queue.append((level+1,x))
+      if in_degree[x] == 0: queue.append((level+1 if x.op != LoadOps.CONST and x in realizes and x not in seen else level,x))
 
   sched:List[ScheduleItem] = []
   for outbufs in sorted_realizes.values(): sched.append(_schedule_group(tuple(outbufs), realizes, reduce_for_op, seen))
