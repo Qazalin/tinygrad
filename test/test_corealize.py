@@ -3,6 +3,7 @@ import numpy as np
 import unittest
 from test.helpers import assert_jit_cache_len
 from tinygrad.device import Device
+from tinygrad.helpers import getenv
 from tinygrad.nn import optim
 from tinygrad.nn.state import get_parameters
 from tinygrad.ops import GlobalCounters
@@ -15,6 +16,7 @@ def helper_test_corealize(outs: List[Tensor], kernel_count: int):
   assert GlobalCounters.kernel_count == kernel_count
 
 @unittest.skipIf(Device.DEFAULT == "METAL", "grouping is skipped for METAL due to the buffer count limit")
+@unittest.skipIf(getenv("PTX"), "Some PTX kernels don't compile with multioutput")
 class TestCorealize(unittest.TestCase):
   def test_simple_group(self):
     a, b = Tensor([1,2]).realize(), Tensor([3,4]).realize()

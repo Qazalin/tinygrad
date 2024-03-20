@@ -263,7 +263,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     if buf.op != LoadOps.CONST and buf in realizes and buf not in seen:
       key: Tuple = (level,tuple(s for s in buf.shape if s != 1),buf.device)
       if buf.op in LoadOps or buf.op in ReduceOps or buf in reduce_for_op or buf.forced_realize or \
-          buf.device.startswith("DISK") or buf.device == "METAL": key = (buf,)
+          buf.device.startswith("DISK") or buf.device == "METAL" or getenv("PTX"): key = (buf,)
       sorted_realizes[key].append(buf)
     for x in graph[buf]:
       in_degree[x] -= 1
