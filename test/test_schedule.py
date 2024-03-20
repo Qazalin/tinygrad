@@ -3,9 +3,10 @@
 # NOTE: this has overlap with external_test_opt.py
 
 import unittest
+import numpy as np
 from typing import List, Optional
 from tinygrad.tensor import Tensor
-from tinygrad.ops import LoadOps
+from tinygrad.ops import GlobalCounters, LoadOps
 from tinygrad.helpers import DEBUG, GRAPH
 from tinygrad.codegen.linearizer import Linearizer
 from tinygrad.features.graph import print_tree, realized_lazybuffer
@@ -428,6 +429,19 @@ class TestSchedule(unittest.TestCase):
     y = Tensor(2) + Tensor(2)
     out = x.contiguous() + y.contiguous()
     check_schedule(out, 2)
+
+def test_multioutput(outs:List[Tensor], kernel_count: int, compare:List[np.ndarray]):
+  GlobalCounters.reset()
+  Tensor.corealize(outs)
+  assert GlobalCounters.kernel_count == kernel_count
+  for tiny_out, np_out in zip(outs, compare): np.testing.assert_equal(tiny_out.numpy(), np_out)
+
+class TestMultioutput(unittest.TestCase):
+  def test_multioutput_simple(self):
+    a, b = Tensor([1,2]).realize(), Tensor([3,4]).realize()
+    out0, out1 = a+b, a*b
+    out0_np, out1_np = a.numpy()+b.numpy(), a.numpy()*b.numpy()
+    test_multioutput([out0, out1], 1, [out0_np, out1_np])
 
 if __name__ == '__main__':
   unittest.main(verbosity=2)

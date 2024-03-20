@@ -246,24 +246,26 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
 
   graph: DefaultDict[LazyBuffer,List[LazyBuffer]] = defaultdict(list)
   in_degree: DefaultDict[LazyBuffer,int] = defaultdict(int)
-  queue: Deque[LazyBuffer] = deque()
+  queue: Deque[Tuple[int,LazyBuffer]] = deque()
   for buf in allbufs:
     if buf.realized: continue
     for x in buf.srcs:
       if x.base.realized: continue
       graph[x.base].append(buf)
       in_degree[buf] += 1
-    if in_degree[buf] == 0: queue.append(buf)
+    if in_degree[buf] == 0: queue.append((0,buf))
 
   sorted_realizes: DefaultDict[Tuple,List[LazyBuffer]] = defaultdict(list)
   while queue:
-    buf = queue.popleft()
+    level, buf = queue.popleft()
     if buf.op != LoadOps.CONST and buf in realizes and buf not in seen:
-      sorted_realizes[(buf,)].append(buf)
+      if buf.op in ReduceOps or buf in reduce_for_op or buf.device in ["DISK", "METAL"] or getenv("PTX") or buf.forced_realize: key = (buf,)
+      else: key = (level, buf.shape, buf.device)
+      sorted_realizes[key].append(buf)
       seen.add(buf)
     for x in graph[buf]:
       in_degree[x] -= 1
-      if in_degree[x] == 0: queue.append(x)
+      if in_degree[x] == 0: queue.append((level+1,x))
 
   sched:List[ScheduleItem] = []
   for outs in sorted_realizes.values(): sched.append(_schedule_group(tuple(outs), realizes, reduce_for_op))
