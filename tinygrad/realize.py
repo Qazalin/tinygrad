@@ -1,6 +1,6 @@
 import sys
 from collections import defaultdict, deque
-from typing import Deque, List, Dict, Optional, cast, Set, DefaultDict
+from typing import Deque, List, Dict, Optional, Tuple, cast, Set, DefaultDict
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, GlobalCounters, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.device import Device, Buffer, BufferCopy, BufferXfer, BufferRead, JITRunner, update_stats, Compiled, BufferOptions
 from tinygrad.features.graph import realized_lazybuffer, log_lazybuffer
@@ -252,17 +252,18 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       in_degree[buf] += 1
     if in_degree[buf] == 0: queue.append(buf)
 
-  sorted_realizes: List[LazyBuffer] = []
+  sorted_realizes: DefaultDict[Tuple,List[LazyBuffer]] = defaultdict(list)
   while queue:
     buf = queue.popleft()
-    if buf.op != LoadOps.CONST and buf in realizes and buf not in seen: sorted_realizes.append(buf)
+    if buf.op != LoadOps.CONST and buf in realizes and buf not in seen: sorted_realizes[(buf,)].append(buf)
     for x in graph[buf]:
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append(x)
 
   sched:List[ScheduleItem] = []
-  for x in sorted_realizes:
-    if x in seen: continue
-    sched.append(_schedule_one(x, realizes, reduce_for_op))
-    seen.add(x)
+  for outs in sorted_realizes.values():
+    for x in outs:
+      if x in seen: continue
+      sched.append(_schedule_one(x, realizes, reduce_for_op))
+      seen.add(x)
   return sched
