@@ -126,6 +126,15 @@ def _recursive_lazyop(buf:LazyBuffer, inputs:List[LazyBuffer], var_vals:Dict[Var
     LazyOp(buf.op, tuple(_recursive_lazyop(x, inputs, var_vals, st, realizes, cache, False, assign_to) for x in buf.srcs), buf.arg)
   return ret
 
+def _schedule_group(outs:Tuple[LazyBuffer,...], realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer],
+                    seen:Set[LazyBuffer]) -> List[ScheduleItem]:
+  sched: List[ScheduleItem] = []
+  for x in outs:
+    if x in seen: continue
+    sched.append(_schedule_one(x, realizes, reduce_for_op))
+    seen.add(x)
+  return sched
+
 def _schedule_one(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
   inputs: List[LazyBuffer] = []
   var_vals: Dict[Variable, int] = out.st.var_vals.copy()
@@ -261,9 +270,5 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       if in_degree[x] == 0: queue.append(x)
 
   sched:List[ScheduleItem] = []
-  for outs in sorted_realizes.values():
-    for x in outs:
-      if x in seen: continue
-      sched.append(_schedule_one(x, realizes, reduce_for_op))
-      seen.add(x)
+  for outs in sorted_realizes.values(): sched += _schedule_group(tuple(outs), realizes, reduce_for_op, seen)
   return sched
