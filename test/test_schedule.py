@@ -5,10 +5,11 @@
 import unittest
 import numpy as np
 from typing import List, Optional
+from tinygrad.device import Device
 from tinygrad.features.jit import TinyJit
 from tinygrad.tensor import Tensor
 from tinygrad.ops import GlobalCounters, LoadOps
-from tinygrad.helpers import DEBUG, GRAPH
+from tinygrad.helpers import DEBUG, GRAPH, getenv
 from tinygrad.codegen.linearizer import Linearizer
 from tinygrad.features.graph import print_tree, realized_lazybuffer
 from tinygrad.realize import create_schedule
@@ -437,6 +438,8 @@ def check_multioutput(outs:List[Tensor], kernel_count: int, compare:List[np.ndar
   assert GlobalCounters.kernel_count == kernel_count
   for tiny_out, np_out in zip(outs, compare): np.testing.assert_equal(tiny_out.numpy(), np_out)
 
+@unittest.skipIf(Device.DEFAULT == "METAL", "METAL kernels are single output because of the 32 buffer limitation")
+@unittest.skipIf(getenv("PTX"), "Some PTX kernels don't compile with multioutput")
 class TestMultioutput(unittest.TestCase):
   def test_multioutput_simple(self):
     a, b = Tensor([1,2]).realize(), Tensor([3,4]).realize()
