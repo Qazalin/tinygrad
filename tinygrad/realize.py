@@ -104,7 +104,7 @@ def _recursive_lazyop(buf:LazyBuffer, inputs:List[LazyBuffer], var_vals:Dict[Var
           raise RuntimeError(f"must be contiguous for assign {unbound_st}")
       return LazyOp(BufferOps.LOAD, (), MemBuffer(0, buf.dtype, unbound_st))
     if buf not in inputs: inputs.append(buf)
-    return LazyOp(BufferOps.LOAD, (), MemBuffer(inputs.index(buf)+1, buf.dtype, unbound_st))
+    return LazyOp(BufferOps.LOAD, (), MemBuffer(inputs.index(buf), buf.dtype, unbound_st))
 
   # if a CONTIGUOUS or ASSIGN made it all the way here, just skip it
   if buf.op is LoadOps.CONTIGUOUS:
@@ -126,14 +126,19 @@ def _recursive_lazyop(buf:LazyBuffer, inputs:List[LazyBuffer], var_vals:Dict[Var
     LazyOp(buf.op, tuple(_recursive_lazyop(x, inputs, var_vals, st, realizes, cache, False, assign_to) for x in buf.srcs), buf.arg)
   return ret
 
-def _schedule_group(outs:Tuple[LazyBuffer,...], realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer],
-                    seen:Set[LazyBuffer]) -> List[ScheduleItem]:
-  sched: List[ScheduleItem] = []
-  for x in outs:
-    if x in seen: continue
-    sched.append(_schedule_one(x, realizes, reduce_for_op))
-    seen.add(x)
-  return sched
+def _schedule_group(outs:Tuple[LazyBuffer,...], realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
+  if outs[0].op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.WAIT, LoadOps.COPY, LoadOps.EMPTY}:
+    assert len(outs) == 1, "LoadOps must have a single output"
+    return ScheduleItem((LazyOp(outs[0].op, (), (out:=outs[0]).arg),), outs, out.srcs, out.st.var_vals.copy())
+
+  var_vals = outs[0].st.var_vals.copy() # TODO multioutput symbolic
+  membufs = [*outs]
+  ops: List[LazyOp] = []
+  for i, out in enumerate(outs):
+    output_st = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape)
+    op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache={})
+    ops.append(LazyOp(BufferOps.STORE, (op,), MemBuffer(i, out.dtype, output_st.simplify().unbind()[0])))
+  return ScheduleItem(tuple(ops), outs, tuple(x for x in membufs if x not in outs), var_vals)
 
 def _schedule_one(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
   inputs: List[LazyBuffer] = []
@@ -264,11 +269,13 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   sorted_realizes: DefaultDict[Tuple,List[LazyBuffer]] = defaultdict(list)
   while queue:
     buf = queue.popleft()
-    if buf.op != LoadOps.CONST and buf in realizes and buf not in seen: sorted_realizes[(buf,)].append(buf)
+    if buf.op != LoadOps.CONST and buf in realizes and buf not in seen:
+      sorted_realizes[(buf,)].append(buf)
+      seen.add(buf)
     for x in graph[buf]:
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append(x)
 
   sched:List[ScheduleItem] = []
-  for outs in sorted_realizes.values(): sched += _schedule_group(tuple(outs), realizes, reduce_for_op, seen)
+  for outs in sorted_realizes.values(): sched.append(_schedule_group(tuple(outs), realizes, reduce_for_op))
   return sched
