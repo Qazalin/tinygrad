@@ -267,7 +267,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       seen.add(buf)
     for x in graph[buf]:
       in_degree[x] -= 1
-      if in_degree[x] == 0: queue.append((level+1,x))
+      if in_degree[x] == 0: queue.append((level+1 if x in realizes else level,x))
 
   sched:List[ScheduleItem] = []
   for outs in sorted_realizes.values(): sched.append(_schedule_group(tuple(outs), realizes, reduce_for_op))
