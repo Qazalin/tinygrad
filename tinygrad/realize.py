@@ -248,9 +248,9 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   in_degree: DefaultDict[LazyBuffer,int] = defaultdict(int)
   queue: Deque[Tuple[int,LazyBuffer]] = deque()
   for buf in allbufs:
-    if buf.realized: continue
+    if buf.realized or buf.op is LoadOps.CONST: continue
     for x in buf.srcs:
-      if x.base.realized: continue
+      if x.base.realized or x.base.op is LoadOps.CONST: continue
       graph[x.base].append(buf)
       in_degree[buf] += 1
     if in_degree[buf] == 0: queue.append((0,buf))
