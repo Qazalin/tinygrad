@@ -6,7 +6,6 @@ import unittest
 import numpy as np
 from typing import List, Optional
 from tinygrad.device import Device
-from tinygrad.features.jit import TinyJit
 from tinygrad.tensor import Tensor
 from tinygrad.ops import GlobalCounters, LoadOps
 from tinygrad.helpers import DEBUG, GRAPH, getenv
@@ -443,21 +442,9 @@ def check_multioutput(outs:List[Tensor], kernel_count: int, compare:List[np.ndar
 class TestMultioutput(unittest.TestCase):
   def test_multioutput_simple(self):
     a, b = Tensor([1,2]).realize(), Tensor([3,4]).realize()
-    out0, out1 = a+b, a*b
+    out0, out1 = (a+a)*b, (b+2)*a
     out0_np, out1_np = a.numpy()+b.numpy(), a.numpy()*b.numpy()
     check_multioutput([out0, out1], 1, [out0_np, out1_np])
-
-  def test_multioutput_jit(self):
-    @TinyJit
-    def fxn(a, b): return a+b, a*b
-
-    for i in range(5):
-      a, b = Tensor([i]).realize(), Tensor([i+1]).realize()
-      GlobalCounters.reset()
-      out0, out1 = fxn(a, b)
-      np.testing.assert_equal(out0.numpy(), a.numpy()+b.numpy())
-      np.testing.assert_equal(out1.numpy(), a.numpy()*b.numpy())
-      assert GlobalCounters.kernel_count == 1
 
 if __name__ == '__main__':
   unittest.main(verbosity=2)

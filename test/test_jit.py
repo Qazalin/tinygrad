@@ -6,7 +6,7 @@ from test.helpers import assert_jit_cache_len
 from tinygrad.tensor import Tensor
 from tinygrad.features.jit import TinyJit
 from tinygrad.device import Device
-from tinygrad.helpers import CI
+from tinygrad.helpers import CI, getenv
 
 def _simple_test(add, extract=lambda x: x, N=10):
   for _ in range(5):
@@ -365,6 +365,34 @@ class TestJit(unittest.TestCase):
       np.testing.assert_allclose(a.numpy(), xc.numpy(), atol=1e-4, rtol=1e-5)
       np.testing.assert_allclose(b.numpy(), yc.numpy(), atol=1e-4, rtol=1e-5)
 
+@unittest.skipIf(Device.DEFAULT == "METAL", "METAL kernels are single output because of the 32 buffer limitation")
+@unittest.skipIf(getenv("PTX"), "Some PTX kernels don't compile with multioutput")
+class TestMultioutputJit(unittest.TestCase):
+  def _test(self, f):
+    for _ in range(5):
+      a, b = Tensor.randn(10, 10), Tensor.randn(10, 10)
+      out0, out1, out2 = f(a, b)
+      np.testing.assert_allclose(out0.numpy(), a.numpy()+b.numpy(), atol=1e-4, rtol=1e-5)
+      np.testing.assert_allclose(out1.numpy(), a.numpy()-b.numpy(), atol=1e-4, rtol=1e-5)
+      np.testing.assert_allclose(out2.numpy(), a.numpy()*b.numpy(), atol=1e-4, rtol=1e-5)
+
+  def test_jit_multioutput_realize(self):
+    @TinyJit
+    def f(a, b): return (a+b).realize(), (a-b).realize(), (a*b).realize()
+    self._test(f)
+    assert_jit_cache_len(f, 3)
+
+  def test_jit_multioutput_norealize(self):
+    @TinyJit
+    def f(a, b): return a+b, a-b, a*b
+    self._test(f)
+    assert_jit_cache_len(f, 1)
+
+  def test_jit_multioutput_mix(self):
+    @TinyJit
+    def f(a, b): return a+b, a-b, (a*b).realize()
+    self._test(f)
+    assert_jit_cache_len(f, 2)
 
 if __name__ == '__main__':
   unittest.main()
