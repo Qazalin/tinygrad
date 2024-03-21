@@ -205,7 +205,6 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       for tr,st in child_set.items():
         if tr in realizes:
           realized_children[tr] = st
-          # can only have one output buffer
           # can only reduce contiguous
           # max one reduceop per kernel
           if len(realized_children) > 1 or not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r):
@@ -259,10 +258,11 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   while queue:
     level, buf = queue.popleft()
     if buf.op != LoadOps.CONST and buf in realizes and buf not in seen:
-      key: Tuple = (level, buf.shape, buf.device)
-      # These break multioutput fusion
+      # single output
       if buf.op in LoadOps or buf.device == "METAL" or buf.device.startswith("DISK") or getenv("PTX") or \
-        buf.op in ReduceOps or buf in reduce_for_op or buf.forced_realize: key = (buf,)
+        buf.op in ReduceOps or buf in reduce_for_op or buf.forced_realize: key: Tuple = (buf,)
+      # multi output
+      else: key = (level, buf.shape, buf.device)
       sorted_realizes[key].append(buf)
       seen.add(buf)
     for x in graph[buf]:

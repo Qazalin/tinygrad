@@ -434,7 +434,7 @@ class TestSchedule(unittest.TestCase):
 def check_multioutput(outs:List[Tensor], kernel_count: int, compare:List[np.ndarray]):
   GlobalCounters.reset()
   Tensor.corealize(outs)
-  assert GlobalCounters.kernel_count == kernel_count
+  assert GlobalCounters.kernel_count == kernel_count, f"expecting {kernel_count} kernels, got {GlobalCounters.kernel_count}"
   for tiny_out, np_out in zip(outs, compare): np.testing.assert_equal(tiny_out.numpy(), np_out)
 
 @unittest.skipIf(Device.DEFAULT == "METAL", "METAL kernels are single output because of the 32 buffer limitation")
@@ -442,9 +442,30 @@ def check_multioutput(outs:List[Tensor], kernel_count: int, compare:List[np.ndar
 class TestMultioutput(unittest.TestCase):
   def test_multioutput_simple(self):
     a, b = Tensor([1,2]).realize(), Tensor([3,4]).realize()
-    out0, out1 = (a+a)*b, (b+2)*a
+    out0, out1 = a+b, a*b
     out0_np, out1_np = a.numpy()+b.numpy(), a.numpy()*b.numpy()
     check_multioutput([out0, out1], 1, [out0_np, out1_np])
+
+  def test_multi_reduce(self):
+    a, b = Tensor([1,2]).realize(), Tensor([3,4]).realize()
+    out0, out1 = a.sum(), b.sum()
+    out0_np, out1_np = a.numpy().sum(), b.numpy().sum()
+    check_multioutput([out0, out1], 2, [out0_np, out1_np]) # NOTE: linearizer limitation
+
+  def test_mixed_group(self):
+    a, b = Tensor([1,2]).realize(), Tensor([3,4]).realize()
+    out0, out1, out2 = a.sum(), a+b, a*b
+    out0_np, out1_np, out2_np = a.numpy().sum(), a.numpy()+b.numpy(), a.numpy()*b.numpy()
+    check_multioutput([out0, out1, out2], 2, [out0_np, out1_np, out2_np])
+
+  # multioutput limitations:
+  def test_multilevel_grouping(self):
+    a, b = Tensor([1,2]).realize(), Tensor([3,4]).realize()
+    out0 = a + b
+    out1, out2 = out0+a, out0+b # out0 _could_ be realized on the spot with out1 and out2
+    out0_np = a.numpy()+b.numpy()
+    out1_np, out2_np = out0_np+a.numpy(), out0_np+b.numpy()
+    check_multioutput([out0, out1, out2], 2, [out0_np, out1_np, out2_np])
 
 if __name__ == '__main__':
   unittest.main(verbosity=2)
