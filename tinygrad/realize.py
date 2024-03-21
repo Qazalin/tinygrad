@@ -257,7 +257,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   sorted_realizes: DefaultDict[Tuple,List[LazyBuffer]] = defaultdict(list)
   while queue:
     level, buf = queue.popleft()
-    if buf.op != LoadOps.CONST and buf in realizes and buf not in seen:
+    if buf in realizes and buf not in seen:
       # single output
       if buf.op in LoadOps or buf.device == "METAL" or buf.device.startswith("DISK") or getenv("PTX") or \
         buf.op in ReduceOps or buf in reduce_for_op or buf.forced_realize: key: Tuple = (buf,)
