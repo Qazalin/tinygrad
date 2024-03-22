@@ -67,7 +67,8 @@ class TestDType(unittest.TestCase):
 
   def test_to_np(self): _test_to_np(Tensor(self.DATA, dtype=self.DTYPE), self.DTYPE.np, np.array(self.DATA, dtype=self.DTYPE.np))
 
-  def test_casts_to(self): list(map(
+  def test_casts_to(self):
+    list(map(
     lambda dtype: _test_cast(Tensor(self.DATA, dtype=dtype), self.DTYPE),
     get_available_cast_dtypes(self.DTYPE)
   ))
