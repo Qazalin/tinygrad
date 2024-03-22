@@ -467,5 +467,10 @@ class TestMultioutput(unittest.TestCase):
     out1_np, out2_np = out0_np+a.numpy(), out0_np+b.numpy()
     check_multioutput([out0, out1, out2], 2, [out0_np, out1_np, out2_np])
 
+  def test_linearizable_group(self):
+    a, b = Tensor.arange(4).reshape(4,1).realize(), Tensor.arange(4).realize()
+    out0, out1 = a+2, b+2 # these have the same kernel shape because of simplify_ones
+    check_multioutput([out0, out1], 2, [a.numpy()+2, b.numpy()+2])
+
 if __name__ == '__main__':
   unittest.main(verbosity=2)
