@@ -6,6 +6,7 @@ import unittest
 import numpy as np
 from typing import List, Optional
 from tinygrad.device import Device
+from tinygrad.shape.symbolic import Variable
 from tinygrad.tensor import Tensor
 from tinygrad.ops import GlobalCounters, LoadOps
 from tinygrad.helpers import DEBUG, GRAPH, getenv
@@ -431,11 +432,11 @@ class TestSchedule(unittest.TestCase):
     out = x.contiguous() + y.contiguous()
     check_schedule(out, 2)
 
-def check_multioutput(outs:List[Tensor], kernel_count: int, compare:List[np.ndarray]):
+def check_multioutput(outs:List[Tensor], kernel_count: int, compare:List[np.ndarray], extract=lambda x: x.numpy()):
   GlobalCounters.reset()
   Tensor.corealize(outs)
   assert GlobalCounters.kernel_count == kernel_count, f"expecting {kernel_count} kernels, got {GlobalCounters.kernel_count}"
-  for tiny_out, np_out in zip(outs, compare): np.testing.assert_equal(tiny_out.numpy(), np_out)
+  for tiny_out, np_out in zip(outs, compare): np.testing.assert_equal(extract(tiny_out), np_out)
 
 @unittest.skipIf(Device.DEFAULT == "METAL", "METAL kernels are single output because of the 32 buffer limitation")
 @unittest.skipIf(getenv("PTX"), "Some PTX kernels don't compile with multioutput")
@@ -457,6 +458,16 @@ class TestMultioutput(unittest.TestCase):
     out0, out1, out2 = a.sum(), a+b, a*b
     out0_np, out1_np, out2_np = a.numpy().sum(), a.numpy()+b.numpy(), a.numpy()*b.numpy()
     check_multioutput([out0, out1, out2], 2, [out0_np, out1_np, out2_np])
+
+  def test_simple_symbolic(self):
+    def f(a, b): return a+b, a*b
+    for i in range(1, 5):
+      vi = Variable("i", 1, 10).bind(i)
+      a = Tensor(np.arange(3*i)).reshape(3, i)
+      b = Tensor(np.arange(3*i)).reshape(3, i)
+      out0, out1 = f(a.reshape(3, vi), b.reshape(3, vi))
+      expected = f(a, b)
+      check_multioutput([out0, out1], 1, [expected[0].numpy(), expected[1].numpy()], extract=lambda x: x.reshape(3, i).numpy())
 
   # multioutput limitations:
   def test_multilevel_grouping(self):

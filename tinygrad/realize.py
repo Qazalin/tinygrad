@@ -4,7 +4,7 @@ from typing import Deque, List, Dict, Optional, Tuple, cast, Set, DefaultDict
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, GlobalCounters, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.device import Device, Buffer, BufferCopy, BufferXfer, BufferRead, JITRunner, update_stats, Compiled, BufferOptions
 from tinygrad.features.graph import realized_lazybuffer, log_lazybuffer
-from tinygrad.helpers import colored, getenv, GRAPH, cpu_time_execution, DEBUG, prod, dedup, all_int
+from tinygrad.helpers import colored, getenv, GRAPH, cpu_time_execution, DEBUG, merge_dicts, prod, dedup, all_int
 from tinygrad.shape.symbolic import Variable
 from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.lazy import LazyBuffer
@@ -130,8 +130,7 @@ def _schedule_group(outs:Tuple[LazyBuffer,...], realizes:Set[LazyBuffer], reduce
     assert len(outs) == 1, "LoadOps must have a single output"
     return ScheduleItem((LazyOp(outs[0].op, (), (out:=outs[0]).arg),), outs, out.srcs, out.st.var_vals.copy())
 
-  var_vals = outs[0].st.var_vals.copy() # TODO multioutput symbolic
-  membufs = [*outs]
+  var_vals, membufs = merge_dicts([out.st.var_vals.copy() for out in outs]), [*outs]
   ops: List[LazyOp] = []
   for i, out in enumerate(outs):
     output_st = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape)
