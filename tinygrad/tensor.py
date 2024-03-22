@@ -168,7 +168,7 @@ class Tensor:
   def _data(self) -> memoryview:
     if 0 in self.shape: return memoryview(bytearray(0))
     t = self if isinstance(self.device, str) else self.to(self.device[0])   # deal with multitensor
-    return cast(Buffer, t.cast(t.dtype.scalar()).contiguous().realize().lazydata.base.realized).as_buffer()
+    return cast(Buffer, t.cast(t.dtype).contiguous().realize().lazydata.base.realized).as_buffer()
 
   def data(self) -> memoryview:
     assert self.dtype.fmt is not None, f"no fmt dtype for {self.dtype}"
