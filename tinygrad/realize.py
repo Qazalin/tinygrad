@@ -1,7 +1,7 @@
 import sys
 from collections import defaultdict, deque
 from typing import Deque, List, Dict, Optional, cast, Set, DefaultDict
-from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, GlobalCounters, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
+from tinygrad.ops import LoadOps, Op, ScheduleItem, BufferOps, GlobalCounters, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.device import Device, Buffer, BufferCopy, BufferXfer, BufferRead, JITRunner, update_stats
 from tinygrad.features.graph import realized_lazybuffer, log_lazybuffer
 from tinygrad.helpers import colored, getenv, GRAPH, cpu_time_execution, DEBUG, prod, dedup, all_int
@@ -237,38 +237,32 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       assert len(realized_children) == 1
       reduce_for_op[next(iter(realized_children.keys()))] = r
 
-  # preschedule all buffers in realizes
-  prescheduled = {x:_schedule_one(x, realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
-  assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
+  def skip(x: LazyBuffer): return x.realized or x.op == LoadOps.CONST or x in seen
+  def _find_inputs(out: LazyBuffer) -> Set[LazyBuffer]:
+    inputs = set()
+    def dfs(x):
+      if skip(x): return
+      if x in realizes: inputs.add(x)
+      for s in x.srcs: dfs(s.base)
+    for x in out.srcs: dfs(x.base)
+    return inputs
 
-  # breadth first ordering
+  # precompute what all the kernels will be
   graph: DefaultDict[LazyBuffer,List[LazyBuffer]] = defaultdict(list)
   in_degree: DefaultDict[LazyBuffer,int] = defaultdict(int)
   queue: Deque[LazyBuffer] = deque()
-  for buf in allbufs:
-    if buf.realized or buf.op is LoadOps.CONST: continue
-    if buf in prescheduled:
-      for inp in prescheduled[buf].inputs:
-        if inp in assign_targets:
-          graph[buf].append(assign_targets[inp])
-          in_degree[assign_targets[inp]] += 1
-    for x in buf.srcs:
-      if x.base.realized or x.base.op is LoadOps.CONST: continue
-      graph[x.base].append(buf)
-      in_degree[buf] += 1
-    if in_degree[buf] == 0: queue.append(buf)
+  for out in realizes:
+    if skip(out): continue
+    for x in _find_inputs(out):
+      graph[x].append(out)
+      in_degree[out] += 1
+    if in_degree[out] == 0: queue.append(out)
 
-  schedule: List[ScheduleItem] = []
+  sched: List[ScheduleItem] = []
   while queue:
-    buf = queue.popleft()
-    if buf in realizes and buf not in seen:
-      schedule.append(prescheduled[buf])
-      seen.add(buf)
+    buf = queue.pop()
+    sched.append(_schedule_one(buf, realizes, reduce_for_op))
     for x in graph[buf]:
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append(x)
-
-  # confirm everything was scheduled
-  assert len(prescheduled) == len(schedule), f"prescheduled {len(prescheduled)} but only scheduled {len(schedule)}"
-  return schedule
-
+  return sched
