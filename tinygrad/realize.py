@@ -237,29 +237,33 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       assert len(realized_children) == 1
       reduce_for_op[next(iter(realized_children.keys()))] = r
 
-  def skip(x: LazyBuffer): return x.realized or x.op == LoadOps.CONST or x in seen
+  # precompute what all the kernels will be
   def _find_inputs(out: LazyBuffer) -> Set[LazyBuffer]:
     inputs = set()
     def dfs(x):
       if x.op is LoadOps.CONST: return
-      if x.realized or x in realizes: inputs.add(x)
-      if x.realized is None:
-        for s in x.srcs: dfs(s.base)
-    for x in out.srcs: dfs(x.base)
+      if (x.realized or x in realizes): return inputs.add(x)
+      for s in x.srcs: dfs(s.base)
+    if out.op is LoadOps.ASSIGN: dfs(out.srcs[0].base)
+    else:
+      for x in out.srcs: dfs(x.base)
     return inputs
-
-  # precompute what all the kernels will be
+  assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
   graph: DefaultDict[LazyBuffer,List[LazyBuffer]] = defaultdict(list)
   in_degree: DefaultDict[LazyBuffer,int] = defaultdict(int)
   queue: Deque[LazyBuffer] = deque()
   for out in realizes:
-    if skip(out): continue
+    if out.realized or out.op is LoadOps.CONST: continue
     inputs = _find_inputs(out)
     for x in inputs:
+      if x in assign_targets:
+        graph[out].append(assign_targets[x])
+        in_degree[assign_targets[x]] += 1
       graph[x].append(out)
       if x.realized is None: in_degree[out] += 1
     if in_degree[out] == 0: queue.append(out)
 
+  # schedule
   sched: List[ScheduleItem] = []
   while queue:
     buf = queue.pop()
