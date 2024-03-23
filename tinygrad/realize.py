@@ -241,9 +241,10 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   def _find_inputs(out: LazyBuffer) -> Set[LazyBuffer]:
     inputs = set()
     def dfs(x):
-      if skip(x): return
-      if x in realizes: inputs.add(x)
-      for s in x.srcs: dfs(s.base)
+      if x.op is LoadOps.CONST: return
+      if x.realized or x in realizes: inputs.add(x)
+      if x.realized is None:
+        for s in x.srcs: dfs(s.base)
     for x in out.srcs: dfs(x.base)
     return inputs
 
@@ -253,9 +254,10 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   queue: Deque[LazyBuffer] = deque()
   for out in realizes:
     if skip(out): continue
-    for x in _find_inputs(out):
+    inputs = _find_inputs(out)
+    for x in inputs:
       graph[x].append(out)
-      in_degree[out] += 1
+      if x.realized is None: in_degree[out] += 1
     if in_degree[out] == 0: queue.append(out)
 
   sched: List[ScheduleItem] = []
