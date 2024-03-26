@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, Union, Type, Tuple, Any, List, Dict, Callable, ClassVar
+from typing import TYPE_CHECKING, DefaultDict, Union, Type, Tuple, Any, List, Dict, Callable, ClassVar
 import functools, hashlib
 from enum import Enum, auto
 from tinygrad.helpers import prod, dedup
@@ -27,11 +27,12 @@ if TYPE_CHECKING:
   from tinygrad.shape.shapetracker import ShapeTracker
   from tinygrad.lazy import LazyBuffer
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class MemBuffer:
   idx: int
   dtype: DType
   st: ShapeTracker
+  def __hash__(self) -> int: return hash((self.idx, self.dtype, self.st))
 
 @dataclass(frozen=True)
 class ConstBuffer:
@@ -44,6 +45,13 @@ class ScheduleItem:
   ast: Tuple[LazyOp, ...]
   outputs: Tuple[LazyBuffer, ...]
   inputs: Tuple[LazyBuffer, ...]
+  var_vals: Dict[Variable, int]
+
+@dataclass(frozen=True)
+class RealizeItem:
+  op: LazyOp
+  output: LazyBuffer
+  inputs: DefaultDict[LazyBuffer, List[LazyOp]]
   var_vals: Dict[Variable, int]
 
 @dataclass(frozen=True, eq=False)
