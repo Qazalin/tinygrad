@@ -172,6 +172,10 @@ class UOpGraph:
       self.uops = nu
     self.saved_exprs = {k:v for k,v in self.saved_exprs.items() if v in nu}
 
+  def fix_global_idxs(self):
+    for i,x in enumerate(self.uops):
+      if x.uop is UOps.DEFINE_GLOBAL: x.arg = (i, f"data{i}", x.arg[2])
+
   # optional
   def type_verify(self):
     for u in self.uops:
@@ -353,8 +357,10 @@ class UOpGraph:
     self.simplify_phi_loops(get_recursive_parents)
 
     # (recursively) remove childless uops
-    # TODO: remove DEFINE_GLOBAL from here
-    self.remove_childless(set(x for x in self.uops if x.uop in {UOps.DEFINE_GLOBAL, UOps.STORE}))
+    self.remove_childless(set(x for x in self.uops if x.uop in {UOps.STORE}))
+
+    # fix global idxs if childless loads got removed
+    self.fix_global_idxs()
 
     # store float4 upcasts directly if possible
     self.fix_to_store_directly()

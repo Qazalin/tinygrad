@@ -919,6 +919,19 @@ class TestLinearizerUOptimize(unittest.TestCase):
     out = [u for u in k.uops if u.uop == UOps.STORE][0]
     assert out.vin[-1].uop is UOps.CAST and out.vin[-1].dtype == dtypes.float.vec(2)
 
+  def test_childless_load(self):
+    dtype, st = dtypes.int, ShapeTracker.from_shape((8,))
+    a, b = LazyOp(BufferOps.LOAD, arg=MemBuffer(1, dtype, st)), LazyOp(BufferOps.LOAD, arg=MemBuffer(2, dtype, st))
+    zero = LazyOp(BufferOps.CONST, arg=ConstBuffer(0, dtype, st))
+    noop = LazyOp(BinaryOps.MUL, src=(a,zero)) # a is childless now
+    out = LazyOp(BufferOps.STORE, (LazyOp(op=BinaryOps.ADD, src=(noop,b)),), MemBuffer(0, dtype, st))
+
+    lin = Linearizer(out)
+    lin.linearize()
+
+    global_bufs = [uop for uop in lin.uops if uop.uop is UOps.DEFINE_GLOBAL]
+    assert len(global_bufs) == 2
+    assert [buf.arg[0] for buf in global_bufs] == [0, 1]
 
 if __name__ == '__main__':
   unittest.main()
