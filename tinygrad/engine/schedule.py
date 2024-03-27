@@ -1,6 +1,8 @@
 import sys
 from collections import defaultdict, deque
 from typing import Deque, List, Dict, Optional, Set, DefaultDict, Tuple
+from tinygrad.codegen.linearizer import Linearizer
+from tinygrad.device import Device
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.features.graph import log_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, DISALLOW_MULTIOUT, flatten, merge_dicts, prod, dedup, all_int
@@ -13,7 +15,7 @@ from tinygrad.shape.shapetracker import ShapeTracker
 sys.setrecursionlimit(10000)
 
 # recursively create a lazyop
-def _recursive_lazyop(buf:LazyBuffer, inputs:List[LazyBuffer], var_vals:Dict[Variable, int], st:ShapeTracker,
+def _recursive_lazyop(buf:LazyBuffer, out_idx:int, inputs:List[LazyBuffer], var_vals:Dict[Variable, int], st:ShapeTracker,
                       realizes:Set[LazyBuffer], cache, first=True, assign_to:Optional[LazyBuffer]=None) -> LazyOp:
   if (buf, st) in cache: return cache[(buf, st)]
   if buf != buf.base:
@@ -38,19 +40,19 @@ def _recursive_lazyop(buf:LazyBuffer, inputs:List[LazyBuffer], var_vals:Dict[Var
         if not (len(unbound_st.views) == 1 and unbound_st.views[0].mask is not None and
             ShapeTracker.from_shape(unbound_st.shape).shrink(unbound_st.views[0].mask) == unbound_st.shrink(unbound_st.views[0].mask)):
           raise RuntimeError(f"must be contiguous for assign {unbound_st}")
-      return LazyOp(BufferOps.LOAD, (), MemBuffer(0, buf.dtype, unbound_st))
+      return LazyOp(BufferOps.LOAD, (), MemBuffer(out_idx, buf.dtype, unbound_st))
     if buf not in inputs: inputs.append(buf)
     return LazyOp(BufferOps.LOAD, (), MemBuffer(inputs.index(buf), buf.dtype, unbound_st))
 
   # if a CONTIGUOUS or ASSIGN made it all the way here, just skip it
   if buf.op is LoadOps.CONTIGUOUS:
     assert first
-    return _recursive_lazyop(buf.srcs[0], inputs, var_vals, st, realizes, cache, False)
+    return _recursive_lazyop(buf.srcs[0], out_idx, inputs, var_vals, st, realizes, cache, False)
   if buf.op is LoadOps.ASSIGN:
     assert first
     assert buf.srcs[1].base is buf.srcs[1], "assign must be to base"
     assert buf.srcs[1].realized is not None, f"assign must be already realized to schedule {buf.srcs[1]}"
-    return _recursive_lazyop(buf.srcs[0], inputs, var_vals, st, realizes, cache, False, assign_to=buf.srcs[1])
+    return _recursive_lazyop(buf.srcs[0], out_idx, inputs, var_vals, st, realizes, cache, False, assign_to=buf.srcs[1])
 
   # if it's a reduce, we have to change the shapetracker
   if buf.op in ReduceOps:
@@ -59,7 +61,7 @@ def _recursive_lazyop(buf:LazyBuffer, inputs:List[LazyBuffer], var_vals:Dict[Var
 
   # otherwise we fuse it like normal
   cache[(buf, st)] = ret = \
-    LazyOp(buf.op, tuple(_recursive_lazyop(x, inputs, var_vals, st, realizes, cache, False, assign_to) for x in buf.srcs), buf.arg)
+    LazyOp(buf.op, tuple(_recursive_lazyop(x, out_idx, inputs, var_vals, st, realizes, cache, False, assign_to) for x in buf.srcs), buf.arg)
   return ret
 
 def _schedule_one(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
@@ -69,7 +71,7 @@ def _schedule_one(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[
     op, inputs = LazyOp(out.op, (), out.arg), list(out.srcs)
   else:
     output_st, inputs = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape), [out]
-    op = _recursive_lazyop(out, inputs, var_vals, output_st, realizes, cache={})
+    op = _recursive_lazyop(out, 0, inputs, var_vals, output_st, realizes, cache={})
     op, inputs = LazyOp(BufferOps.STORE, (op, ), MemBuffer(0, out.dtype, output_st.simplify().unbind()[0])), inputs[1:]
   return ScheduleItem((op,), (out,), tuple(inputs), var_vals)
 
@@ -80,7 +82,7 @@ def _merge_realizes(nodes: List[ScheduleItem], reduce_for_op: Dict[LazyBuffer, L
   ast: List[LazyOp] = []
   for i, si in enumerate(nodes):
     output_st = ShapeTracker.from_shape(reduce_for_op[out].shape if (out:=si.outputs[0]) in reduce_for_op else out.shape)
-    op = _recursive_lazyop(out, outputs+list(inputs), var_vals, output_st, set(inputs), {})
+    op = _recursive_lazyop(out, i, outputs+list(inputs), var_vals, output_st, set(inputs), {})
     ast.append(LazyOp(BufferOps.STORE, (op, ), MemBuffer(i, out.dtype, output_st.simplify().unbind()[0])))
   return ScheduleItem(tuple(ast), tuple(outputs), tuple(inputs), var_vals)
 
@@ -209,7 +211,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     level, buf = queue.popleft()
     seen.add(buf)
     # single output
-    if buf.op in LoadOps or buf.device.startswith("DISK") or buf.device == "METAL" or \
+    if (buf.op in LoadOps and buf.op != LoadOps.ASSIGN) or buf.device.startswith("DISK") or buf.device == "METAL" or \
         buf.op in ReduceOps or buf in reduce_for_op or buf.forced_realize or DISALLOW_MULTIOUT: key: Tuple = (buf,)
     # multioutput
     else: key = (level, buf.shape, buf.device)
