@@ -53,6 +53,14 @@ class TestAssign(unittest.TestCase):
     f(x)
     assert x.item() == 2
 
+  def test_assign_unrealized(self):
+    a = Tensor([1])
+    b = a + 2
+    b += 4
+    b = b.contiguous()
+    b += b
+    np.testing.assert_allclose(b.numpy(), 14)
+
   def test_assign_add_double(self):
     def f(x):
       x += 1
