@@ -1,6 +1,6 @@
 import sys
 from collections import defaultdict, deque
-from typing import List, Dict, Optional, Set, DefaultDict
+from typing import Deque, List, Dict, Optional, Set, DefaultDict, Tuple
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.features.graph import log_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, prod, dedup, all_int
@@ -192,15 +192,25 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
         in_degree[assign_targets[x]] += 1
       if x in prescheduled: in_degree[out] += 1
 
-  queue = deque(out for out in prescheduled if in_degree[out] == 0)
+  queue: Deque[Tuple[int,LazyBuffer]] = deque((0,out) for out in prescheduled if in_degree[out] == 0)
   schedule: List[ScheduleItem] = []
+  levels: DefaultDict[int, List[ScheduleItem]] = defaultdict(list)
   while queue:
-    buf = queue.popleft()
+    level, buf = queue.popleft()
     seen.add(buf)
     schedule.append(prescheduled[buf])
+    levels[level].append(prescheduled[buf])
     for x in graph[buf]:
       in_degree[x] -= 1
-      if in_degree[x] == 0: queue.append(x)
+      if in_degree[x] == 0: queue.append((level+1,x))
+
+  from tinygrad.engine.realize import lower_schedule_item
+  for level, items in levels.items():
+    print(f"{level} ------------")
+    for si in items:
+      if si.outputs[0].op in LoadOps: continue
+      runner = lower_schedule_item(si)
+      print(runner.prg)
 
   # confirm everything was scheduled correctly
   if not all(degree == 0 for degree in in_degree.values()) or len(prescheduled) != len(schedule):
