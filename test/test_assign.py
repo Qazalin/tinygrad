@@ -70,6 +70,23 @@ class TestAssign(unittest.TestCase):
     np.testing.assert_allclose(a.numpy(), 2)
     np.testing.assert_allclose(times_a.numpy(), 15)
 
+  def test_assign_fork_multirealize_no_contiguous(self):
+    a = Tensor.ones(4).contiguous().realize()
+    times_a = a*3
+    a.assign(Tensor.full((4,), 2.)).realize()
+    # times_a would be calculated with the new assigned a now
+    np.testing.assert_allclose(times_a.numpy(), 6)
+    np.testing.assert_allclose(a.numpy(), 2)
+
+  def test_assign_fork_multirealize_with_contiguous(self):
+    a = Tensor.ones(4).contiguous().realize()
+    times_a = (a*3).contiguous()
+    a.assign(Tensor.full((4,), 2.).contiguous()).realize()
+    # times_a should use the old a
+    with self.assertRaises(AssertionError):
+      np.testing.assert_allclose(times_a.numpy(), 3)
+      np.testing.assert_allclose(a.numpy(), 2)
+
   def test_assign_add_double(self):
     def f(x):
       x += 1
