@@ -94,6 +94,18 @@ class TestAssign(unittest.TestCase):
     a += a * 4
     np.testing.assert_allclose(a.numpy(), 15)
 
+  def test_assign_fib(self):
+    # test that things happen in the correct order
+    a = Tensor.ones(4).contiguous().realize()
+    b = Tensor.ones(4).contiguous().realize()
+    a += b
+    b += a
+    a += b
+    b += a
+    Tensor.corealize([a, b])
+    np.testing.assert_allclose(a.numpy(), 5)
+    np.testing.assert_allclose(b.numpy(), 8)
+
   def test_assign_add_double(self):
     def f(x):
       x += 1
