@@ -208,7 +208,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   for level, items in levels.items():
     print(f"{level} ------------")
     for si in items:
-      if si.outputs[0].op in LoadOps: continue
+      if si.ast[0].op in LoadOps: continue
       runner = lower_schedule_item(si)
       print(runner.prg)
 

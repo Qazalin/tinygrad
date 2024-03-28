@@ -61,6 +61,15 @@ class TestAssign(unittest.TestCase):
     b += b
     np.testing.assert_allclose(b.numpy(), 14)
 
+  def test_assign_fork(self):
+    a = Tensor.ones(4).contiguous().realize()
+    times_a = a*3
+    a.assign(Tensor.full((4,), 2.).contiguous())
+    times_a = times_a * 5  # should be toposorted before the assign
+    Tensor.corealize([a, times_a])
+    np.testing.assert_allclose(a.numpy(), 2)
+    np.testing.assert_allclose(times_a.numpy(), 15)
+
   def test_assign_add_double(self):
     def f(x):
       x += 1
