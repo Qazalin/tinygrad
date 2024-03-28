@@ -87,6 +87,13 @@ class TestAssign(unittest.TestCase):
       np.testing.assert_allclose(times_a.numpy(), 3)
       np.testing.assert_allclose(a.numpy(), 2)
 
+  def test_assign_twice(self):
+    # eg if we do multiple steps in 1 schedule
+    a = Tensor.ones(4).contiguous().realize()
+    a += a * 2
+    a += a * 4
+    np.testing.assert_allclose(a.numpy(), 15)
+
   def test_assign_add_double(self):
     def f(x):
       x += 1
