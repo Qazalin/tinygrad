@@ -63,7 +63,7 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
     LazyOp(buf.op, tuple(_recursive_lazyop(x, membufs, var_vals, st, realizes, cache, False, assign_to, assign_idx) for x in buf.srcs), buf.arg)
   return ret
 
-def _schedule_group(outs:Tuple[LazyBuffer], realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
+def _schedule_group(outs:Tuple[LazyBuffer,...], realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
   if outs[0].op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.WAIT, LoadOps.COPY, LoadOps.EMPTY}:
     return ScheduleItem((LazyOp(outs[0].op, (), outs[0].arg),), outs, outs[0].srcs, outs[0].st.var_vals.copy())
   ast: List[LazyOp] = []
@@ -181,19 +181,20 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     else: reduce_for_op.update((tr, r) for tr in realized_children)
 
   # preschedule all buffers in realizes
-  prescheduled = {x:_schedule_group((x,), realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
+  prescheduled = {x:_schedule_group(tuple(out for out,r in reduce_for_op.items() if r == reduce_for_op[x]) if x in reduce_for_op else (x,), realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
   # breadth first ordering
   graph: DefaultDict[LazyBuffer,List[LazyBuffer]] = defaultdict(list)
   in_degree: DefaultDict[LazyBuffer,int] = defaultdict(int)
-  for out, si in prescheduled.items():
-    for x in si.inputs:
-      graph[x].append(out)
-      if x in assign_targets:
-        graph[out].append(assign_targets[x])
-        in_degree[assign_targets[x]] += 1
-      if x in prescheduled: in_degree[out] += 1
+  for si in prescheduled.values():
+    for out in si.outputs:
+      for x in si.inputs:
+        graph[x].append(out)
+        if x in assign_targets:
+          graph[out].append(assign_targets[x])
+          in_degree[assign_targets[x]] += 1
+        if x in prescheduled: in_degree[out] += 1
 
   queue = deque(out for out in prescheduled if in_degree[out] == 0)
   schedule: List[ScheduleItem] = []
