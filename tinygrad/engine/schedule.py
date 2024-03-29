@@ -185,8 +185,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
           tr = tr_next
         reduce_for_op[tr] = r
       realizes.add(tr)
-    else:
-      for child in realized_children: reduce_for_op[child] = r
+    else: reduce_for_op.update((tr, r) for tr in realized_children)
 
   # preschedule all buffers in realizes
   prescheduled = {x:_schedule_one(x, realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
@@ -211,10 +210,8 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     # single output
     if (buf.op in LoadOps and buf.op is not LoadOps.ASSIGN) or buf.device.startswith("DISK") or buf.device == "METAL" or \
         buf.op in ReduceOps or buf.forced_realize or getenv("DISALLOW_MULTIOUT"): key: Tuple = (buf,)
-    # multioutput reduce paires
-    elif buf in reduce_for_op: key = (level, reduce_for_op[buf])
-    # non-reduce multioutput
-    else: key = (level, buf.shape, buf.device)
+    # multioutput
+    else: key = (level, reduce_for_op[buf]) if buf in reduce_for_op else (level, buf.shape, buf.device)
     groups[key].append(prescheduled[buf])
     for x in graph[buf]:
       in_degree[x] -= 1
