@@ -180,31 +180,32 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       realizes.add(tr)
     else: reduce_for_op.update((tr, r) for tr in realized_children)
 
+  def get_group(x: LazyBuffer): return tuple(out for out,r in reduce_for_op.items() if r == reduce_for_op[x]) if x in reduce_for_op else (x,)
+
   # preschedule all buffers in realizes
-  prescheduled = {x:_schedule_group(tuple(out for out,r in reduce_for_op.items() if r == reduce_for_op[x]) if x in reduce_for_op else (x,), realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
+  prescheduled = {get_group(x):_schedule_group(get_group(x), realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
   # breadth first ordering
-  graph: DefaultDict[LazyBuffer,List[LazyBuffer]] = defaultdict(list)
-  in_degree: DefaultDict[LazyBuffer,int] = defaultdict(int)
+  graph: DefaultDict[Tuple[LazyBuffer,...],List[ScheduleItem]] = defaultdict(list)
+  in_degree: DefaultDict[Tuple[LazyBuffer,...],int] = defaultdict(int)
   for si in prescheduled.values():
-    for out in si.outputs:
-      for x in si.inputs:
-        graph[x].append(out)
-        if x in assign_targets:
-          graph[out].append(assign_targets[x])
-          in_degree[assign_targets[x]] += 1
-        if x in prescheduled: in_degree[out] += 1
+    for x in si.inputs:
+      if (group:=get_group(x)) in prescheduled:
+        graph[group].append(si)
+        in_degree[si.outputs] += 1
+      if x in assign_targets:
+        graph[si.outputs].append(prescheduled[(assign_target_group:=get_group(assign_targets[x]))])
+        in_degree[assign_target_group] += 1
 
-  queue = deque(out for out in prescheduled if in_degree[out] == 0)
+  queue = deque(si for si in prescheduled.values() if in_degree[si.outputs] == 0)
   schedule: List[ScheduleItem] = []
   while queue:
-    buf = queue.popleft()
-    seen.add(buf)
-    schedule.append(prescheduled[buf])
-    for x in graph[buf]:
-      in_degree[x] -= 1
-      if in_degree[x] == 0: queue.append(x)
+    schedule.append(si:=queue.popleft())
+    for out in si.outputs: seen.add(out)
+    for x in graph[si.outputs]:
+      in_degree[x.outputs] -= 1
+      if in_degree[x.outputs] == 0: queue.append(x)
 
   # confirm everything was scheduled correctly
   if not all(degree == 0 for degree in in_degree.values()) or len(prescheduled) != len(schedule):
