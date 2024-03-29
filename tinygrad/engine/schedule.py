@@ -3,7 +3,7 @@ from collections import defaultdict, deque
 from typing import Deque, List, Dict, Optional, Set, DefaultDict, Tuple
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.features.graph import log_lazybuffer
-from tinygrad.helpers import GRAPH, DEBUG, flatten, getenv, merge_dicts, prod, dedup, all_int
+from tinygrad.helpers import GRAPH, DEBUG, flatten, getenv, merge_dicts, prod, all_int
 from tinygrad.shape.symbolic import Variable
 from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.lazy import LazyBuffer
@@ -63,25 +63,25 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
     LazyOp(buf.op, tuple(_recursive_lazyop(x, membufs, var_vals, st, realizes, cache, False, assign_to, assign_idx) for x in buf.srcs), buf.arg)
   return ret
 
-def _schedule_one(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
+def _schedule_one(out:LazyBuffer, realizes:Set[LazyBuffer]) -> ScheduleItem:
   inputs: List[LazyBuffer] = []
   var_vals: Dict[Variable, int] = out.st.var_vals.copy()
   if out.op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.WAIT, LoadOps.COPY, LoadOps.EMPTY}:
     op, inputs = LazyOp(out.op, (), out.arg), list(out.srcs)
   else:
-    output_st, membufs = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape), [out]
+    output_st, membufs = ShapeTracker.from_shape(out.shape), [out]
     op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache={})
     op, inputs = LazyOp(BufferOps.STORE, (op, ), MemBuffer(0, out.dtype, output_st.simplify().unbind()[0])), membufs[1:]
   return ScheduleItem((op,), (out,), tuple(inputs), var_vals)
 
-def _fuse_group(group:List[ScheduleItem], reduce_for_op:Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
+def _fuse_group(group:List[ScheduleItem]) -> ScheduleItem:
   if len(group) == 1: return group[0]
   # sort the group before fusion
   group = sorted(group, key=lambda x: x.ast[0].src[0].key)
   inputs, outputs, var_vals = {x: None for n in group for x in n.inputs}, [n.outputs[0] for n in group], merge_dicts([n.var_vals for n in group])
   ast: List[LazyOp] = []
   for i, out in enumerate(outputs):
-    output_st = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape)
+    output_st = ShapeTracker.from_shape(out.shape)
     op = _recursive_lazyop(out, outputs+list(inputs), var_vals, output_st, set(inputs), {})
     ast.append(LazyOp(BufferOps.STORE, (op, ), MemBuffer(i, out.dtype, output_st.simplify().unbind()[0])))
   return ScheduleItem(tuple(ast), tuple(outputs), tuple(inputs), var_vals)
@@ -104,12 +104,14 @@ def _recurse_lb(buf:LazyBuffer, realizes:Set[LazyBuffer], allbufs:Dict[LazyBuffe
       else:
         realizes.add(buf.base)
     return _recurse_lb(buf.base, realizes, allbufs, simple_pads, children)
-  if buf.forced_realize: realizes.add(buf)
+  if buf.forced_realize:
+    realizes.add(buf)
   allbufs[buf] = None
   if buf.op in LoadOps: realizes.add(buf.base)
   if buf.op == LoadOps.COPY:
     assert buf.srcs[0].st.contiguous and buf.srcs[0].size == buf.srcs[0].base.size, "can only copy contig"
     realizes.add(buf.srcs[0].base)
+  if buf.op in ReduceOps: realizes.add(buf)
   for x in buf.srcs:
     children[x.base][buf] = None
     _recurse_lb(x, realizes, allbufs, simple_pads, children)
@@ -136,62 +138,8 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     if not _is_padding_okay(p, realizes):
       realizes.add(p)
 
-  # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
-  reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
-  for r in allbufs.keys():
-    if r != r.base or r.op not in ReduceOps or r in realizes: continue
-
-    # follow the reduce down
-    child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
-    realized_children: Dict[LazyBuffer, ShapeTracker] = {}
-    forced_realize = False
-    can_chase = True
-    while not forced_realize and len(child_set):
-      next_child_set = {}
-      for tr,st in child_set.items():
-        if tr in realizes:
-          realized_children[tr] = st
-          # can only have one output buffer
-          # can only reduce contiguous
-          # max one reduceop per kernel
-          if len(realized_children) > 1 or not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r):
-            can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
-            forced_realize = True
-            break
-          continue
-        for tr_next in children[tr].keys():
-          if not tr_next.realized:
-            # max one reduceop per kernel
-            if tr_next.op in ReduceOps:
-              forced_realize = True
-              break
-            st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
-            if len(st_childs) > 1:
-              forced_realize = True
-              break
-            next_child_set[tr_next] = st + st_childs[0].st
-      child_set = next_child_set
-    if forced_realize:
-      tr = r
-      if can_chase:
-        # can chase this down to contiguous children
-        st = tr.st
-        while len(children[tr]) == 1:
-          tr_next = next(iter(children[tr].keys()))
-          st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
-          if len(st_childs) > 1: break
-          if st.size != st_childs[0].st.size: break
-          st = st + st_childs[0].st
-          if not st.contiguous or tr_next.op in ReduceOps: break
-          tr = tr_next
-        reduce_for_op[tr] = r
-      realizes.add(tr)
-    else:
-      assert len(realized_children) == 1
-      reduce_for_op[next(iter(realized_children.keys()))] = r
-
   # preschedule all buffers in realizes
-  prescheduled = {x:_schedule_one(x, realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
+  prescheduled = {x:_schedule_one(x, realizes) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
   # breadth first ordering
@@ -210,16 +158,23 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   while queue:
     level, buf = queue.popleft()
     seen.add(buf)
+    # max one kernel per reduceop, pair with contiguous children if possible
+    if buf.op in ReduceOps:
+      contig_child = None
+      for child in graph[buf]:
+        if child.size == buf.size and child.device == buf.device:
+          realizes.remove(child)
+          contig_child = child
+      key = (buf,) if contig_child is None else (level+1, contig_child.shape, contig_child.device)
     # single output
-    if (buf.op in LoadOps and buf.op is not LoadOps.ASSIGN) or buf.device.startswith("DISK") or buf.device == "METAL" or \
-        buf.op in ReduceOps or buf in reduce_for_op or buf.forced_realize or getenv("DISALLOW_MULTIOUT"): key: Tuple = (buf,)
+    elif (buf.op in LoadOps and buf.op is not LoadOps.ASSIGN) or buf.device.startswith("DISK"): key: Tuple = (buf,)
     # multioutput
     else: key = (level, buf.shape, buf.device)
     groups[key].append(prescheduled[buf])
     for x in graph[buf]:
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append((level+1,x))
-  schedule: List[ScheduleItem] = [_fuse_group(group, reduce_for_op) for group in groups.values()]
+  schedule: List[ScheduleItem] = [_fuse_group(group) for group in groups.values()]
 
   # confirm everything was scheduled correctly
   if not all(degree == 0 for degree in in_degree.values()) or len(prescheduled) != len(flatten(si.outputs for si in schedule)):
