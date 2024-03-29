@@ -131,8 +131,9 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
 
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
-  for r in allbufs.keys():
-    if r != r.base or r.op not in ReduceOps or r in realizes: continue
+  for r in allbufs:
+    assert r == r.base
+    if r.op not in ReduceOps or r in realizes: continue
 
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
