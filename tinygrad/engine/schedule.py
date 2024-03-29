@@ -1,9 +1,10 @@
+from collections.abc import Iterable
 import sys
 from collections import defaultdict, deque
 from typing import List, Dict, Optional, Set, DefaultDict, Tuple
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.features.graph import log_lazybuffer
-from tinygrad.helpers import GRAPH, DEBUG, prod, dedup, all_int
+from tinygrad.helpers import GRAPH, DEBUG, merge_dicts, prod, dedup, all_int
 from tinygrad.shape.symbolic import Variable
 from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.lazy import LazyBuffer
@@ -63,16 +64,19 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
     LazyOp(buf.op, tuple(_recursive_lazyop(x, membufs, var_vals, st, realizes, cache, False, assign_to, assign_idx) for x in buf.srcs), buf.arg)
   return ret
 
-def _schedule_one(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
+def _schedule_group(outputs:Tuple[LazyBuffer,...], realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
   inputs: List[LazyBuffer] = []
-  var_vals: Dict[Variable, int] = out.st.var_vals.copy()
-  if out.op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.WAIT, LoadOps.COPY, LoadOps.EMPTY}:
-    op, inputs = LazyOp(out.op, (), out.arg), list(out.srcs)
+  var_vals: Dict[Variable, int] = merge_dicts([out.st.var_vals.copy() for out in outputs])
+  if outputs[0].op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.WAIT, LoadOps.COPY, LoadOps.EMPTY}:
+    ast, inputs = [LazyOp(outputs[0].op, (), outputs[0].arg)], list(outputs[0].srcs)
   else:
-    output_st, membufs = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape), [out]
-    op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache={})
-    op, inputs = LazyOp(BufferOps.STORE, (op, ), MemBuffer(0, out.dtype, output_st.simplify().unbind()[0])), membufs[1:]
-  return ScheduleItem((op,), (out,), tuple(inputs), var_vals)
+    membufs, ast = [*outputs], []
+    for i, out in enumerate(outputs):
+      output_st = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape)
+      op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache={})
+      ast.append(LazyOp(BufferOps.STORE, (op, ), MemBuffer(i, out.dtype, output_st.simplify().unbind()[0])))
+    inputs = membufs[len(outputs):]
+  return ScheduleItem(tuple(ast), outputs, tuple(inputs), var_vals)
 
 # recursively search the entire graph for all LazyBuffers, insert realizes after expands
 def _recurse_lb(buf:LazyBuffer, realizes:Set[LazyBuffer], allbufs:Dict[LazyBuffer, None],
@@ -119,7 +123,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
 
   # start by just realizing the buffers passed in
   realizes: Set[LazyBuffer] = set([x.base for x in outs if not x.base.realized])
-  realize_groups: List[Tuple[LazyBuffer, ...]] = []
+  realize_groups: Dict[LazyBuffer, Iterable[LazyBuffer]] = {}
   allbufs: Dict[LazyBuffer, None] = {}
   simple_pads: Set[LazyBuffer] = set()
   children: DefaultDict[LazyBuffer, Dict[LazyBuffer, None]] = defaultdict(dict)
@@ -180,37 +184,41 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
         reduce_for_op[tr] = r
       realizes.add(tr)
     else:
-      for tr in realized_children: reduce_for_op[tr] = r
-      realize_groups.append(tuple(realized_children.keys()))
+      for tr in realized_children:
+        reduce_for_op[tr] = r
+        realize_groups[tr] = realized_children.keys()
+
+  def get_group(x: LazyBuffer): return tuple(realize_groups[x]) if x in realize_groups else (x,)
 
   # preschedule all buffers in realizes
-  prescheduled: Dict[LazyBuffer, ScheduleItem] = {}
+  prescheduled: Dict[Tuple[LazyBuffer, ...], ScheduleItem] = {}
   for x in realizes:
     if x.realized or x.op is LoadOps.CONST or x in seen: continue
-    prescheduled[x] = _schedule_one(x, realizes, reduce_for_op)
-
+    group = get_group(x)
+    prescheduled[group] = _schedule_group(group, realizes, reduce_for_op)
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
   # breadth first ordering
-  graph: DefaultDict[LazyBuffer,List[LazyBuffer]] = defaultdict(list)
-  in_degree: DefaultDict[LazyBuffer,int] = defaultdict(int)
-  for out, si in prescheduled.items():
+  graph: DefaultDict[Tuple[LazyBuffer,...],List[ScheduleItem]] = defaultdict(list)
+  in_degree: DefaultDict[Tuple[LazyBuffer,...],int] = defaultdict(int)
+  for outputs, si in prescheduled.items():
     for x in si.inputs:
-      graph[x].append(out)
+      if (group:=get_group(x)) in prescheduled:
+        graph[get_group(x)].append(si)
+        in_degree[outputs] += 1
       if x in assign_targets:
-        graph[out].append(assign_targets[x])
-        in_degree[assign_targets[x]] += 1
-      if x in prescheduled: in_degree[out] += 1
+        assign_target_group = get_group(assign_targets[x])
+        graph[outputs].append(prescheduled[assign_target_group])
+        in_degree[assign_target_group] += 1
 
-  queue = deque(out for out in prescheduled if in_degree[out] == 0)
+  queue = deque(si for si in prescheduled.values() if in_degree[si.outputs] == 0)
   schedule: List[ScheduleItem] = []
   while queue:
-    buf = queue.popleft()
-    seen.add(buf)
-    schedule.append(prescheduled[buf])
-    for x in graph[buf]:
-      in_degree[x] -= 1
-      if in_degree[x] == 0: queue.append(x)
+    schedule.append(si:=queue.popleft())
+    for out in si.outputs: seen.add(out)
+    for x in graph[si.outputs]:
+      in_degree[x.outputs] -= 1
+      if in_degree[x.outputs] == 0: queue.append(x)
 
   # confirm everything was scheduled correctly
   if not all(degree == 0 for degree in in_degree.values()) or len(prescheduled) != len(schedule):
