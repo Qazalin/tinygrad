@@ -1,4 +1,4 @@
-import sys
+import sys, functools
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
@@ -20,6 +20,9 @@ class _LBScheduleItem:
   outputs: Tuple[LazyBuffer, ...]
   inputs: Tuple[LazyBuffer, ...]
   var_vals: Dict[Variable, int]
+  @functools.cached_property
+  def hash(self): return hash((self.ast, self.outputs, self.inputs))
+  def __hash__(self): return self.hash
 
 # recursively create a lazyop
 def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Variable, int], st:ShapeTracker,
@@ -193,33 +196,33 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       reduce_for_op[next(iter(realized_children.keys()))] = r
 
   # preschedule all buffers in realizes
-  prescheduled = {x:_schedule_one(x, realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
+  prescheduled = [_schedule_one(x, realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST]
+  lb_schedules = {out:si for si in prescheduled for out in si.outputs}
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
   # breadth first ordering
-  graph: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
-  in_degree: DefaultDict[LazyBuffer, int] = defaultdict(int)
-  for out, si in prescheduled.items():
-    for x in si.inputs:
-      graph[x].append(out)
+  graph: DefaultDict[_LBScheduleItem, List[_LBScheduleItem]] = defaultdict(list)
+  in_degree: DefaultDict[_LBScheduleItem, int] = defaultdict(int)
+  for ps in prescheduled:
+    for x in ps.inputs:
+      if x in lb_schedules:
+        graph[lb_schedules[x]].append(ps)
+        in_degree[ps] += 1
       if x in assign_targets:
-        graph[out].append(assign_targets[x])
-        in_degree[assign_targets[x]] += 1
-      if x in prescheduled: in_degree[out] += 1
-    del out.srcs  # can only schedule once
+        graph[ps].append(lb_schedules[assign_targets[x]])
+        in_degree[lb_schedules[assign_targets[x]]] += 1
+    for out in ps.outputs: del out.srcs  # can only schedule once
 
-  queue = deque(out for out in prescheduled if in_degree[out] == 0)
+  queue = deque(ps for ps in prescheduled if in_degree[ps] == 0)
   schedule: List[ScheduleItem] = []
   kernel_number = GlobalCounters.kernel_count
   while queue:
-    buf = queue.popleft()
-    seen.add(buf)
-    ps = prescheduled[buf]
+    for output in (ps:=queue.popleft()).outputs: seen.add(output)
     if GRAPH:
       kernel_number += 1
       for out in ps.outputs: realized_lazybuffer(out, kernel_number)
     schedule.append(ScheduleItem(ps.ast, tuple(x.buffer for x in ps.outputs), tuple(x.buffer for x in ps.inputs), ps.var_vals))
-    for x in graph[buf]:
+    for x in graph[ps]:
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append(x)
 
