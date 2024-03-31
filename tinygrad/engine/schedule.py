@@ -1,6 +1,6 @@
 import sys
 from collections import defaultdict, deque
-from typing import List, Dict, Optional, Set, DefaultDict
+from typing import Deque, List, Dict, Optional, Set, DefaultDict, Tuple
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, flatten, prod, dedup, all_int
@@ -62,7 +62,8 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
     LazyOp(buf.op, tuple(_recursive_lazyop(x, membufs, var_vals, st, cache, False, assign_to, assign_idx) for x in buf.srcs), buf.arg)
   return ret
 
-def _schedule_one(out:LazyBuffer, inputs:List[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
+def _schedule_group(outs:List[LazyBuffer], inputs:List[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
+  out = outs[0] # fake
   var_vals: Dict[Variable, int] = out.st.var_vals.copy()
   if out.op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.COPY, LoadOps.EMPTY}:
     op, inputs = LazyOp(out.op, (), out.arg), list(out.srcs)
@@ -207,20 +208,24 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
         in_degree[assign_targets[x]] += 1
       if x in realize_inputs: in_degree[out] += 1
 
-  queue = deque(out for out in realize_inputs if in_degree[out] == 0)
-  schedule: List[ScheduleItem] = []
-  kernel_number = GlobalCounters.kernel_count
+  queue: Deque[Tuple[int, LazyBuffer]] = deque((0, out) for out in realize_inputs if in_degree[out] == 0)
+  output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   while queue:
-    buf = queue.popleft()
+    level, buf = queue.popleft()
     seen.add(buf)
-    if GRAPH:
-      kernel_number += 1
-      realized_lazybuffer(buf, kernel_number)
-    schedule.append(_schedule_one(buf, realize_inputs[buf], reduce_for_op))
-    del buf.srcs  # can only schedule once
+    output_groups[(buf,)].append(buf)
     for x in graph[buf]:
       in_degree[x] -= 1
-      if in_degree[x] == 0: queue.append(x)
+      if in_degree[x] == 0: queue.append((level+1,x))
+
+  kernel_number = GlobalCounters.kernel_count
+  schedule: List[ScheduleItem] = []
+  for outs in output_groups.values():
+    if GRAPH:
+      kernel_number += 1
+      for out in outs: realized_lazybuffer(out, kernel_number)
+    schedule.append(_schedule_group(outs, flatten(realize_inputs[out] for out in outs), reduce_for_op))
+    for out in outs: del out.srcs  # can only schedule once
 
   # confirm everything was scheduled correctly
   if not all(degree == 0 for degree in in_degree.values()) or len(realize_inputs) != len(flatten(si.outputs for si in schedule)):
