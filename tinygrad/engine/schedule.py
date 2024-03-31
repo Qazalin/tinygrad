@@ -81,14 +81,12 @@ def _preschedule(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[L
 
 def _schedule_realize(ri:RealizeItem, realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
   out = ri.output
-  inputs: List[LazyBuffer] = []
-  var_vals: Dict[Variable, int] = out.st.var_vals.copy()
+  var_vals = out.st.var_vals.copy()
   if out.op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.COPY, LoadOps.EMPTY}:
-    op, inputs = LazyOp(out.op, (), out.arg), list(out.srcs)
-  else:
-    output_st, membufs = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape), [out]
-    op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache={})
-    op, inputs = LazyOp(BufferOps.STORE, (op, ), MemBuffer(0, out.dtype, output_st.simplify().unbind()[0])), membufs[1:]
+    return ScheduleItem((ri.op,), (out.buffer,), tuple(x.buffer for x in ri.inputs), var_vals)
+  output_st, membufs = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape), [out]
+  op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache={})
+  op, inputs = LazyOp(BufferOps.STORE, (op, ), MemBuffer(0, out.dtype, output_st.simplify().unbind()[0])), membufs[1:]
   si = ScheduleItem((op,), (out.buffer,), tuple(x.buffer for x in inputs), var_vals)
   return si
 
