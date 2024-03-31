@@ -17,6 +17,8 @@ sys.setrecursionlimit(10000)
 class RealizeItem:
   output: LazyBuffer
   inputs: Tuple[LazyBuffer, ...]
+  op: LazyOp
+  ops_map: Dict[Tuple[LazyBuffer, ShapeTracker], LazyOp]
 
 # recursively create a lazyop
 def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Variable, int], st:ShapeTracker,
@@ -70,13 +72,12 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
   return ret
 
 def _preschedule(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> RealizeItem:
-  inputs: List[LazyBuffer] = []
+  ops_map: Dict[Tuple[LazyBuffer, ShapeTracker], LazyOp] = {}
+  if out.op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.COPY, LoadOps.EMPTY}: return RealizeItem(out, out.srcs, LazyOp(out.op, (), out.arg), ops_map)
   var_vals: Dict[Variable, int] = out.st.var_vals.copy()
-  if out.op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.COPY, LoadOps.EMPTY}: return RealizeItem(out, out.srcs)
   output_st, membufs = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape), [out]
-  op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache={})
-  op, inputs = LazyOp(BufferOps.STORE, (op, ), MemBuffer(0, out.dtype, output_st.simplify().unbind()[0])), membufs[1:]
-  return RealizeItem(out, tuple(inputs))
+  op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache=ops_map)
+  return RealizeItem(out, tuple(membufs[1:]), op, ops_map)
 
 def _schedule_realize(ri:RealizeItem, realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
   out = ri.output
