@@ -14,7 +14,7 @@ sys.setrecursionlimit(10000)
 
 # recursively create a lazyop
 def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Variable, int], st:ShapeTracker,
-                      realizes:Set[LazyBuffer], cache, first=True, assign_to:Optional[LazyBuffer]=None, assign_idx:Optional[int]=None) -> LazyOp:
+                      cache, first=True, assign_to:Optional[LazyBuffer]=None, assign_idx:Optional[int]=None) -> LazyOp:
   if (buf, st) in cache: return cache[(buf, st)]
   if buf != buf.base:
     st = buf.st + st
@@ -29,7 +29,7 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
     return LazyOp(BufferOps.CONST, (), ConstBuffer(buf.arg, buf.dtype, unbound_st))
 
   # if we aren't fusing it, it's a load and we add it to the inputs
-  if buf.realized or (buf in realizes and not first):
+  if buf.realized or (buf in membufs and not first):
     unbound_st, st_var_vals = st.simplify().unbind()
     var_vals.update(st_var_vals)
     if assign_to is not None and buf is assign_to:
@@ -40,18 +40,17 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
             ShapeTracker.from_shape(unbound_st.shape).shrink(unbound_st.views[0].mask) == unbound_st.shrink(unbound_st.views[0].mask)):
           raise RuntimeError(f"must be contiguous for assign {unbound_st}")
       return LazyOp(BufferOps.LOAD, (), MemBuffer(assign_idx, buf.dtype, unbound_st))
-    if buf not in membufs: membufs.append(buf)
     return LazyOp(BufferOps.LOAD, (), MemBuffer(membufs.index(buf), buf.dtype, unbound_st))
 
   # if a CONTIGUOUS or ASSIGN made it all the way here, just skip it
   if buf.op is LoadOps.CONTIGUOUS:
     assert first
-    return _recursive_lazyop(buf.srcs[0], membufs, var_vals, st, realizes, cache, False)
+    return _recursive_lazyop(buf.srcs[0], membufs, var_vals, st, cache, False)
   if buf.op is LoadOps.ASSIGN:
     assert first
     assert buf.srcs[1].base is buf.srcs[1], "assign must be to base"
     assert buf.srcs[1].realized is not None, f"assign must be already realized to schedule {buf.srcs[1]}"
-    return _recursive_lazyop(buf.srcs[0], membufs, var_vals, st, realizes, cache, False, assign_to=buf.srcs[1], assign_idx=membufs.index(buf))
+    return _recursive_lazyop(buf.srcs[0], membufs, var_vals, st, cache, False, assign_to=buf.srcs[1], assign_idx=membufs.index(buf))
 
   # if it's a reduce, we have to change the shapetracker
   if buf.op in ReduceOps:
@@ -60,17 +59,16 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
 
   # otherwise we fuse it like normal
   cache[(buf, st)] = ret = \
-    LazyOp(buf.op, tuple(_recursive_lazyop(x, membufs, var_vals, st, realizes, cache, False, assign_to, assign_idx) for x in buf.srcs), buf.arg)
+    LazyOp(buf.op, tuple(_recursive_lazyop(x, membufs, var_vals, st, cache, False, assign_to, assign_idx) for x in buf.srcs), buf.arg)
   return ret
 
-def _schedule_one(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
-  inputs: List[LazyBuffer] = []
+def _schedule_one(out:LazyBuffer, inputs:List[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
   var_vals: Dict[Variable, int] = out.st.var_vals.copy()
   if out.op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.COPY, LoadOps.EMPTY}:
     op, inputs = LazyOp(out.op, (), out.arg), list(out.srcs)
   else:
-    output_st, membufs = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape), [out]
-    op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache={})
+    output_st, membufs = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape), [out, *inputs]
+    op = _recursive_lazyop(out, membufs, var_vals, output_st, cache={})
     op, inputs = LazyOp(BufferOps.STORE, (op, ), MemBuffer(0, out.dtype, output_st.simplify().unbind()[0])), membufs[1:]
   return ScheduleItem((op,), (out.buffer,), tuple(x.buffer for x in inputs), var_vals)
 
@@ -218,7 +216,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     if GRAPH:
       kernel_number += 1
       realized_lazybuffer(buf, kernel_number)
-    schedule.append(_schedule_one(buf, realizes, reduce_for_op))
+    schedule.append(_schedule_one(buf, realize_inputs[buf], reduce_for_op))
     del buf.srcs  # can only schedule once
     for x in graph[buf]:
       in_degree[x] -= 1
