@@ -13,13 +13,10 @@ from tinygrad.shape.shapetracker import ShapeTracker
 # creation can recurse a lot
 sys.setrecursionlimit(10000)
 
-# TODO: it's unfortunate this needs to exist, but because of ASSIGN, we have to retain the LazyBuffer structure until post toposort
 @dataclass(frozen=True)
-class _LBScheduleItem:
-  ast: Tuple[LazyOp, ...]
-  outputs: Tuple[LazyBuffer, ...]
+class RealizeItem:
+  output: LazyBuffer
   inputs: Tuple[LazyBuffer, ...]
-  var_vals: Dict[Variable, int]
 
 # recursively create a lazyop
 def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Variable, int], st:ShapeTracker,
@@ -72,7 +69,17 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
     LazyOp(buf.op, tuple(_recursive_lazyop(x, membufs, var_vals, st, realizes, cache, False, assign_to, assign_idx) for x in buf.srcs), buf.arg)
   return ret
 
-def _schedule_one(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> _LBScheduleItem:
+def _preschedule(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> RealizeItem:
+  inputs: List[LazyBuffer] = []
+  var_vals: Dict[Variable, int] = out.st.var_vals.copy()
+  if out.op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.COPY, LoadOps.EMPTY}: return RealizeItem(out, out.srcs)
+  output_st, membufs = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape), [out]
+  op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache={})
+  op, inputs = LazyOp(BufferOps.STORE, (op, ), MemBuffer(0, out.dtype, output_st.simplify().unbind()[0])), membufs[1:]
+  return RealizeItem(out, tuple(inputs))
+
+def _schedule_realize(ri:RealizeItem, realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
+  out = ri.output
   inputs: List[LazyBuffer] = []
   var_vals: Dict[Variable, int] = out.st.var_vals.copy()
   if out.op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.COPY, LoadOps.EMPTY}:
@@ -81,7 +88,8 @@ def _schedule_one(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[
     output_st, membufs = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape), [out]
     op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache={})
     op, inputs = LazyOp(BufferOps.STORE, (op, ), MemBuffer(0, out.dtype, output_st.simplify().unbind()[0])), membufs[1:]
-  return _LBScheduleItem((op,), (out,), tuple(inputs), var_vals)
+  si = ScheduleItem((op,), (out.buffer,), tuple(x.buffer for x in inputs), var_vals)
+  return si
 
 # recursively search the entire graph for all LazyBuffers, insert realizes after expands
 def _recurse_lb(buf:LazyBuffer, realizes:Set[LazyBuffer], allbufs:Dict[LazyBuffer, None],
@@ -193,7 +201,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       reduce_for_op[next(iter(realized_children.keys()))] = r
 
   # preschedule all buffers in realizes
-  prescheduled = {x:_schedule_one(x, realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
+  prescheduled = {x:_preschedule(x, realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
   # breadth first ordering
@@ -206,7 +214,6 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
         graph[out].append(assign_targets[x])
         in_degree[assign_targets[x]] += 1
       if x in prescheduled: in_degree[out] += 1
-    del out.srcs  # can only schedule once
 
   queue = deque(out for out in prescheduled if in_degree[out] == 0)
   schedule: List[ScheduleItem] = []
@@ -217,8 +224,9 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     ps = prescheduled[buf]
     if GRAPH:
       kernel_number += 1
-      for out in ps.outputs: realized_lazybuffer(out, kernel_number)
-    schedule.append(ScheduleItem(ps.ast, tuple(x.buffer for x in ps.outputs), tuple(x.buffer for x in ps.inputs), ps.var_vals))
+      realized_lazybuffer(ps.output, kernel_number)
+    schedule.append(_schedule_realize(ps, realizes, reduce_for_op))
+    del ps.output.srcs  # can only schedule once
     for x in graph[buf]:
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append(x)
