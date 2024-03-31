@@ -79,15 +79,14 @@ def _preschedule(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[L
   op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache=ops_map)
   return RealizeItem(out, tuple(membufs[1:]), op, ops_map)
 
-def _schedule_realize(ri:RealizeItem, realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
+def _schedule_realize(ri:RealizeItem, reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
   out = ri.output
   var_vals = out.st.var_vals.copy()
   if out.op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.COPY, LoadOps.EMPTY}:
     return ScheduleItem((ri.op,), (out.buffer,), tuple(x.buffer for x in ri.inputs), var_vals)
-  output_st, membufs = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape), [out]
-  op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache={})
-  op, inputs = LazyOp(BufferOps.STORE, (op, ), MemBuffer(0, out.dtype, output_st.simplify().unbind()[0])), membufs[1:]
-  si = ScheduleItem((op,), (out.buffer,), tuple(x.buffer for x in inputs), var_vals)
+  output_st = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape)
+  op = LazyOp(BufferOps.STORE, (ri.op, ), MemBuffer(0, out.dtype, output_st.simplify().unbind()[0]))
+  si = ScheduleItem((op,), (out.buffer,), tuple(x.buffer for x in ri.inputs), var_vals)
   return si
 
 # recursively search the entire graph for all LazyBuffers, insert realizes after expands
@@ -224,7 +223,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     if GRAPH:
       kernel_number += 1
       realized_lazybuffer(ps.output, kernel_number)
-    schedule.append(_schedule_realize(ps, realizes, reduce_for_op))
+    schedule.append(_schedule_realize(ps, reduce_for_op))
     del ps.output.srcs  # can only schedule once
     for x in graph[buf]:
       in_degree[x] -= 1
