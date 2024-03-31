@@ -15,7 +15,7 @@ sys.setrecursionlimit(10000)
 
 # recursively create a lazyop
 def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Variable, int], st:ShapeTracker,
-                      realizes:Set[LazyBuffer], cache, first=True, assign_to:Optional[LazyBuffer]=None, assign_idx:Optional[int]=None) -> LazyOp:
+                      realizes:Dict[LazyBuffer, None], cache, first=True, assign_to:Optional[LazyBuffer]=None, assign_idx:Optional[int]=None) -> LazyOp:
   if (buf, st) in cache: return cache[(buf, st)]
   if buf != buf.base:
     st = buf.st + st
@@ -64,7 +64,7 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
     LazyOp(buf.op, tuple(_recursive_lazyop(x, membufs, var_vals, st, realizes, cache, False, assign_to, assign_idx) for x in buf.srcs), buf.arg)
   return ret
 
-def _schedule_group(outputs:List[LazyBuffer]) -> ScheduleItem:
+def _schedule_group(outputs:List[LazyBuffer], realizes:Dict[LazyBuffer, None]) -> ScheduleItem:
   var_vals = merge_dicts([out.st.var_vals.copy() for out in outputs])
   if outputs[0].op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.COPY, LoadOps.EMPTY}:
     ast, inputs = [LazyOp(outputs[0].op, (), outputs[0].arg)], outputs[0].srcs
@@ -72,7 +72,8 @@ def _schedule_group(outputs:List[LazyBuffer]) -> ScheduleItem:
     membufs, ast = [*outputs], []
     for i, out in enumerate(outputs):
       output_st = ShapeTracker.from_shape(out.shape)
-      ast.append(LazyOp(BufferOps.STORE, tuple(), MemBuffer(i, out.dtype, output_st.simplify().unbind()[0])))
+      op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, {})
+      ast.append(LazyOp(BufferOps.STORE, (op,), MemBuffer(i, out.dtype, output_st.simplify().unbind()[0])))
     inputs = tuple(x for x in membufs if x not in outputs)
   return ScheduleItem(tuple(ast), tuple(x.buffer for x in outputs), tuple(x.buffer for x in inputs), var_vals)
 
@@ -135,8 +136,24 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       if in_degree[child] == 0: queue.append(child)
 
   # find points of realizes
+  realizes: Dict[LazyBuffer, None] = {}
+  for buf in graph:
+    if buf.realized: continue
+    if buf.op in LoadOps or buf.forced_realize or buf in outs: realizes[buf] = None
+    if buf.op is LoadOps.COPY:
+      assert buf.srcs[0].st.contiguous and buf.srcs[0].size == buf.srcs[0].base.size, "can only copy contig"
+      if not buf.srcs[0].realized: realizes[buf.srcs[0].base] = None
 
   # group the realizes
+  out_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
+  for out in realizes:
+    if (out.op in LoadOps and out.op is not LoadOps.ASSIGN): key:Tuple = (out,)
+    else: key = (out.shape, out.device)
+    out_groups[key].append(out)
 
   # create kernels in a straight line.
-  return [_schedule_group([buf]) for buf in sorted_bufs]
+  schedule: List[ScheduleItem] = []
+  for group in out_groups.values():
+    schedule.append(_schedule_group(group, realizes))
+    for out in group: del out.srcs # can only schedule once
+  return schedule
