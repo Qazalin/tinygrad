@@ -3,7 +3,7 @@ from collections import defaultdict, deque
 from typing import Deque, List, Dict, Optional, Set, DefaultDict, Tuple
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
-from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, flatten, prod, dedup, all_int
+from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, flatten, getenv, merge_dicts, prod, dedup, all_int
 from tinygrad.shape.symbolic import Variable
 from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.lazy import LazyBuffer
@@ -62,16 +62,17 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
     LazyOp(buf.op, tuple(_recursive_lazyop(x, membufs, var_vals, st, cache, False, assign_to, assign_idx) for x in buf.srcs), buf.arg)
   return ret
 
-def _schedule_group(outs:List[LazyBuffer], inputs:List[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
-  out = outs[0] # fake
-  var_vals: Dict[Variable, int] = out.st.var_vals.copy()
-  if out.op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.COPY, LoadOps.EMPTY}:
-    op, inputs = LazyOp(out.op, (), out.arg), list(out.srcs)
+def _schedule_group(outs:List[LazyBuffer], realize_inputs:Dict[LazyBuffer, List[LazyBuffer]], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
+  var_vals, bufs = merge_dicts([x.st.var_vals.copy() for x in outs]), outs+[x for out in outs for x in realize_inputs[out]]
+  if outs[0].op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.COPY, LoadOps.EMPTY}:
+    ast, bufs = [LazyOp(outs[0].op, (), outs[0].arg)], list(outs[0].srcs)
   else:
-    output_st, membufs = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape), [out, *inputs]
-    op = _recursive_lazyop(out, membufs, var_vals, output_st, cache={})
-    op, inputs = LazyOp(BufferOps.STORE, (op, ), MemBuffer(0, out.dtype, output_st.simplify().unbind()[0])), membufs[1:]
-  return ScheduleItem((op,), (out.buffer,), tuple(x.buffer for x in inputs), var_vals)
+    ast: List[LazyOp] = []
+    for i, out in enumerate(outs):
+      output_st = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape)
+      op = _recursive_lazyop(out, bufs, var_vals, output_st, cache={})
+      ast.append(LazyOp(BufferOps.STORE, (op, ), MemBuffer(i, out.dtype, output_st.simplify().unbind()[0])))
+  return ScheduleItem(tuple(ast), tuple(x.buffer for x in outs), tuple(x.buffer for x in bufs if x not in outs), var_vals)
 
 def _gather_inputs(out:LazyBuffer, realizes:Set[LazyBuffer]) -> List[LazyBuffer]:
   inputs: Dict[LazyBuffer, None] = {}
@@ -143,7 +144,6 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
-
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
     realized_children: Dict[LazyBuffer, ShapeTracker] = {}
@@ -213,7 +213,10 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   while queue:
     level, buf = queue.popleft()
     seen.add(buf)
-    output_groups[(buf,)].append(buf)
+    if (buf.op in LoadOps and buf.op is not LoadOps.ASSIGN) or buf.device.startswith("DISK") or buf.device == "METAL" or \
+        buf.op in ReduceOps or buf in reduce_for_op or buf.forced_realize or getenv("DISALLOW_MULTIOUT"): key: Tuple = (buf,)
+    else: key = (level, buf.shape, buf.device)
+    output_groups[key].append(buf)
     for x in graph[buf]:
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append((level+1,x))
@@ -224,7 +227,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     if GRAPH:
       kernel_number += 1
       for out in outs: realized_lazybuffer(out, kernel_number)
-    schedule.append(_schedule_group(outs, flatten(realize_inputs[out] for out in outs), reduce_for_op))
+    schedule.append(_schedule_group(outs, realize_inputs, reduce_for_op))
     for out in outs: del out.srcs  # can only schedule once
 
   # confirm everything was scheduled correctly
