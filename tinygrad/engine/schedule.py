@@ -116,6 +116,21 @@ def _recurse_lb(buf:LazyBuffer, realizes:Set[LazyBuffer], allbufs:Dict[LazyBuffe
     children[x.base][buf] = None
     _recurse_lb(x, realizes, allbufs, simple_pads, children)
 
+# search all LazyBuffer and find the realized srcs for a realized LazyBuffer.
+def _recurse_realizes(node:LazyBuffer, output:LazyBuffer, realized_srcs:DefaultDict[LazyBuffer, List[LazyBuffer]]):
+  if node.realized: return
+  def _append_realize(x:LazyBuffer):
+    if x not in realized_srcs[output]: realized_srcs[output].append(x)
+    _recurse_realizes(x, x, realized_srcs)
+
+  for x in node.srcs:
+    if x.base.op is LoadOps.CONST: continue
+    # realize loadops
+    if x.base.op in LoadOps: _append_realize(x.base)
+    elif x.base != x: _append_realize(x.base)
+    elif x.forced_realize: _append_realize(x.base)
+    else: _recurse_realizes(x.base, output, realized_srcs)
+
 UNSAFE_PAD_OPS = {BinaryOps.DIV, BinaryOps.CMPLT, BinaryOps.CMPEQ, UnaryOps.LOG2, UnaryOps.EXP2}
 def _is_padding_okay(buf:LazyBuffer, realizes:Set[LazyBuffer]) -> bool:
   if buf in realizes or buf.realized: return True
@@ -195,6 +210,18 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   # preschedule all buffers in realizes
   prescheduled = {x:_schedule_one(x, realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
+
+  realized_srcs: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
+  for out in outs: _recurse_realizes(out.base, out.base, realized_srcs)
+
+  print("***")
+  for out, si in prescheduled.items():
+    if si.inputs == tuple(realized_srcs[out]): continue
+    print("--")
+    print(out)
+    print("real", [x.op for x in si.inputs])
+    print([x.op for x in realized_srcs[out]])
+    assert si.inputs == tuple(realized_srcs[out])
 
   # breadth first ordering
   graph: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
