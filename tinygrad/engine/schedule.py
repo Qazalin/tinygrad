@@ -165,9 +165,9 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
 
     def can_fuse_children():
       if len(realized_children) == 1: return True
-      print(r)
-      print(realized_children)
-      print("-----------")
+      #print(r)
+      #print(realized_children)
+      #print("-----------")
       return True
 
     while not forced_realize and len(child_set):
@@ -215,6 +215,29 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   # preschedule all buffers in realizes
   prescheduled = {x:_schedule_one(x, realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
+
+  def _gather_inputs(out:LazyBuffer) -> List[LazyBuffer]:
+    inputs: Dict[LazyBuffer, None] = {}
+    visited: Set[LazyBuffer] = set()
+    def _recurse(lb:LazyBuffer):
+      if lb.op is LoadOps.CONST or lb in visited: return
+      visited.add(lb)
+      if lb.realized or (lb in realizes and lb != out): return inputs.update(((lb,None),))
+      for x in lb.srcs: _recurse(x.base)
+    for x in out.srcs: _recurse(x.base)
+    return list(inputs)
+
+
+  def get_depth(node: LazyBuffer, visited=set()):
+    if node.realized: return 0
+    # find all realized inputs
+    if not (srcs:=_gather_inputs(node.base)): return 0
+    visited.add(node)
+    return 1 + max(get_depth(src.base, visited) for src in srcs)
+
+  for out, si in prescheduled.items():
+    inputs = _gather_inputs(out)
+    assert tuple(inputs) == si.inputs
 
   # breadth first ordering
   graph: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
