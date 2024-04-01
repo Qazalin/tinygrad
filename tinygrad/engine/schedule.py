@@ -86,11 +86,11 @@ def _schedule_one(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[
 def _schedule_outputs(outs:List[_LBScheduleItem], reduce_for_op:Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
   if len(outs) == 1: return ScheduleItem((r:=outs[0]).ast, (r.outputs[0].buffer,), tuple(x.buffer for x in r.inputs), r.var_vals)
   # sort the outputs before fusing
-  outputs = [x.outputs[0] for x in sorted(outs, key=lambda x: x.ast[0].src[0].key)]
-  inputs, var_vals = {x: None for n in outs for x in n.inputs}, merge_dicts([out.st.var_vals.copy() for out in outputs])
+  outs = sorted(outs, key=lambda x: x.ast[0].src[0].key)
+  inputs, var_vals = {x: None for n in outs for x in n.inputs}, merge_dicts([n.outputs[0].st.var_vals.copy() for n in outs])
   # recreate the multi output AST
   ast: List[LazyOp] = []
-  for i, out in enumerate(outputs):
+  for i, out in enumerate(outputs:=[x.outputs[0] for x in outs]):
     output_st = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape)
     op = _recursive_lazyop(out, outputs+list(inputs), var_vals, output_st, set(inputs), {})
     ast.append(LazyOp(BufferOps.STORE, (op, ), MemBuffer(i, out.dtype, output_st.simplify().unbind()[0])))

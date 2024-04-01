@@ -3,20 +3,20 @@
 # NOTE: this has overlap with external_test_opt.py
 
 import unittest
-from test.helpers import assert_jit_cache_len
-from tinygrad.engine.jit import TinyJit
 import torch
 import numpy as np
 from typing import List, Optional
 from tinygrad.device import Device
-from tinygrad.engine.realize import run_schedule
 from tinygrad.tensor import Tensor
 from tinygrad.ops import LoadOps
 from tinygrad.helpers import DEBUG, GRAPH
 from tinygrad.codegen.linearizer import Linearizer
 from tinygrad.features.graph import print_tree, realized_lazybuffer
 from tinygrad.engine.schedule import create_schedule
+from tinygrad.engine.realize import run_schedule
+from tinygrad.engine.jit import TinyJit
 from tinygrad import nn, dtypes
+from test.helpers import assert_jit_cache_len
 
 def check_schedule(t:Tensor, allowed:int, to_prerealize:Optional[List[Tensor]]=None, filter_loadops=True):
   seen = set()
