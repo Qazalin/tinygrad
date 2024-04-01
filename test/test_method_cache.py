@@ -30,6 +30,16 @@ class TestMethodCache(unittest.TestCase):
     Device[Device.DEFAULT].compiler = None
     ((c+d)+(a+b)).realize()
 
+  @unittest.skipIf(Device.DEFAULT == "METAL", "METAL doesn't have multi output")
+  def test_multioutput_cache_fuzz(self):
+    # multi output ASTs have deterministic order
+    for _ in range(20):
+      a = Tensor([1])
+      out0, out1 = a+(-2),a+(-1)
+      Tensor.corealize([out0, out1])
+      Device[Device.DEFAULT].compiler = None
+      Tensor.corealize([out0, out1])
+
   @unittest.skip("incorrect use of transformer")
   def test_small_transformer(self):
     args_tiny = {"dim": 16, "n_heads": 8, "n_layers": 8, "norm_eps": 1e-05, "vocab_size": 10}

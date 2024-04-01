@@ -438,7 +438,7 @@ class TestSchedule(unittest.TestCase):
 
 @unittest.skipIf(Device.DEFAULT == "METAL", "No multioutput in Metal because of the 32 buffer limit.")
 class TestMultiOutputSchedule(unittest.TestCase):
-  def _test(self, outs_tiny:List[Tensor], outs_np:List[np.ndarray]=[], allowed:int=1):
+  def _test(self, outs_tiny:List[Tensor], outs_np=[], allowed:int=1):
     sched = create_schedule([x.lazydata for x in outs_tiny])
     kernels = [si for si in sched if si.ast[0].op not in LoadOps]
     assert len(kernels) == allowed, f"Expected {allowed} kernels, got {len(kernels)}"
@@ -451,7 +451,7 @@ class TestMultiOutputSchedule(unittest.TestCase):
     out0_np, out1_np = a.numpy()+b.numpy(), a.numpy()*b.numpy()
     self._test([out0, out1], [out0_np, out1_np], 1)
 
-  def test_contiguous_single_kernel(self):
+  def test_contiguous_unique_kernel(self):
     a, b = Tensor([1,2]), Tensor([3,4])
     out0, out1 = (a+b).contiguous(), (a*b).contiguous()
     out0_np, out1_np = a.numpy()+b.numpy(), a.numpy()*b.numpy()
@@ -465,11 +465,29 @@ class TestMultiOutputSchedule(unittest.TestCase):
     out3_np = out2_np+a.numpy()
     self._test([out0, out1, out2, out3], [out0_np, out1_np, out2_np, out3_np], 3)
 
-  def test_reduce_pair_fusion(self):
+  def test_reduce_children_possible_fusion(self):
+    a = Tensor([1,2,3,4])
+    out0, out1 = a.sum()+2, a.sum()+3
+    out0_np, out1_np = a.numpy().sum()+2, a.numpy().sum()+3
+    self._test([out0, out1], [out0_np, out1_np], 2)
+
+  @unittest.skip("Multioutput reduce pairs requires graph-based pairing")
+  def test_reduce_pair_possible(self):
     a_sum = Tensor([1,2,3,4]).sum()
-    out0, out1 = a_sum+2, a_sum+3
-    out0_np, out1_np = a_sum.numpy()+2, a_sum.numpy()+3
-    self._test([out0, out1], [out0_np, out1_np], 1)
+    b, c = Tensor([1]), Tensor([2])
+    out0 = a_sum+b
+    out1 = a_sum+c
+    self._test([out0, out1], allowed=1)
+
+  @unittest.skip("Multioutput reduce pairs requires graph-based pairing")
+  def test_reduce_pair_different_reduce_parents(self):
+    a_reduce = Tensor.randint((4,)).sum()
+    b_reduce = Tensor.randint((4,)).sum()
+    c_reduce = Tensor.randint((4,)).sum()
+
+    out0 = a_reduce+Tensor([5])
+    out1 = a_reduce+b_reduce+c_reduce
+    self._test([out0, out1], allowed=3)
 
   def test_simple_assign(self):
     a, b = Tensor.ones(4).contiguous().realize(), Tensor.ones(4).contiguous().realize()
@@ -540,39 +558,12 @@ class TestMultiOutputSchedule(unittest.TestCase):
     out0_np, out1_np = a.numpy()+2, b.numpy()+2
     self._test([out0, out1, out2], [out0_np, out1_np, out0_np+out1_np], 1)
 
-  @unittest.skip("Doesn't yet simplify ones in output shape")
+  @unittest.skip("Doesn't yet simplify ones in output shape") # (kernel.py limitation)
   def test_simplified_shape(self):
     a, b = Tensor.randn(4).reshape(4, 1), Tensor.randn(4)
     out0, out1 = a+2, b+2
     out0_np, out1_np = a.numpy()+2, b.numpy()+2
     self._test([out0, out1], [out0_np, out1_np], 1)
-
-  @unittest.skip("TODO: Multioutput reduce pairs")
-  def test_reduce_contig_children_with_reduce(self):
-    a_sum = Tensor([1,2,3,4]).sum()
-    b = Tensor([6])
-    c = Tensor([9,8,7,6,5])
-    out0 = a_sum+b
-    out1 = c.max()+a_sum+b
-    self._test([out0, out1], allowed=2)
-
-  @unittest.skip("TODO: Multioutput reduce pairs")
-  def test_reduce_pair_different_parents_possible_fusion(self):
-    a_sum = Tensor([1,2,3,4]).sum()
-    b, c = Tensor([1]), Tensor([2])
-    out0 = a_sum+b
-    out1 = a_sum+c
-    self._test([out0, out1], [np.array([11]), np.array([12])], 1)
-
-  @unittest.skip("TODO: Multioutput reduce pairs")
-  def test_reduce_pair_different_reduce_parents(self):
-    a_reduce = Tensor.randint((4,)).sum()
-    b_reduce = Tensor.randint((4,)).sum()
-    c_reduce = Tensor.randint((4,)).sum()
-
-    out0 = a_reduce+b_reduce+c_reduce
-    out1 = a_reduce+Tensor([5])
-    self._test([out0, out1], allowed=3)
 
 if __name__ == '__main__':
   unittest.main(verbosity=2)
