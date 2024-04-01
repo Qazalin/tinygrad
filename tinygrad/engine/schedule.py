@@ -199,6 +199,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     if out.realized is not None or out.op is LoadOps.CONST or out in seen: continue
     # multi output reduce pairs
     if out in reduce_for_op: key = (reduce_for_op[out],)
+    # single output
     else: key = (out,)
     output_groups[key].append(out)
 
@@ -229,9 +230,9 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       kernel_number += 1
       for out in ps.outputs: realized_lazybuffer(out, kernel_number)
     schedule.append(ScheduleItem(ps.ast, tuple(x.buffer for x in ps.outputs), tuple(x.buffer for x in ps.inputs), ps.var_vals))
-    for x in graph[ps]:
-      in_degree[x] -= 1
-      if in_degree[x] == 0: queue.append(x)
+    for child in graph[ps]:
+      in_degree[child] -= 1
+      if in_degree[child] == 0: queue.append(child)
 
   # confirm everything was scheduled correctly
   if not all(degree == 0 for degree in in_degree.values()) or len(prescheduled) != len(schedule):

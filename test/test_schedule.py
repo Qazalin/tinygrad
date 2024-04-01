@@ -3,6 +3,7 @@
 # NOTE: this has overlap with external_test_opt.py
 
 import unittest
+import numpy as np
 from typing import List, Optional
 from tinygrad.tensor import Tensor
 from tinygrad.ops import LoadOps
@@ -10,6 +11,7 @@ from tinygrad.helpers import DEBUG, GRAPH
 from tinygrad.codegen.linearizer import Linearizer
 from tinygrad.features.graph import print_tree, realized_lazybuffer
 from tinygrad.engine.schedule import create_schedule
+from tinygrad.engine.realize import run_schedule
 from tinygrad import nn, dtypes
 
 def check_schedule(t:Tensor, allowed:int, to_prerealize:Optional[List[Tensor]]=None, filter_loadops=True):
@@ -429,5 +431,49 @@ class TestSchedule(unittest.TestCase):
     out = x.contiguous() + y.contiguous()
     check_schedule(out, 2)
 
+class TestMultiOutputSchedule(unittest.TestCase):
+  def _test(self, outs_tiny:List[Tensor], outs_np:List[np.ndarray]=[], allowed:int=1):
+    sched = create_schedule([x.lazydata for x in outs_tiny])
+    kernels = [si for si in sched if si.ast[0].op not in LoadOps]
+    assert len(kernels) == allowed, f"Expected {allowed} kernels, got {len(kernels)}"
+    run_schedule(sched)
+    for out_tiny, out_np in zip(outs_tiny, outs_np): np.testing.assert_equal(out_tiny.numpy(), out_np)
+
+  def test_multioutput_reduce_pair_possible(self):
+    a = Tensor([1,2]).sum()
+    out0, out1 = a+2, a*4
+    self._test([out0, out1], [np.array([1,2]).sum()+2, np.array([1,2]).sum()*4], 1)
+
+  def test_adam_end_to_end(self):
+    import torch
+    from tinygrad.engine.jit import TinyJit
+    from test.helpers import assert_jit_cache_len
+
+    init_x = Tensor.randn((1, 4)).numpy()
+    init_W = Tensor.randn((4, 4)).numpy()
+
+    class Model:
+      def __init__(self, tensor):
+        self.x = tensor(init_x, requires_grad=True)
+        self.W = tensor(init_W, requires_grad=True)
+      def forward(self): return (self.x * self.W).sum()
+
+    tiny_model = Model(Tensor)
+    tiny_adam = nn.optim.Adam([tiny_model.x, tiny_model.W], lr=0.001)
+    torch_model = Model(torch.tensor)
+    torch_adam = torch.optim.Adam([torch_model.x, torch_model.W], lr=0.001)
+
+    def train_step(model, optimizer):
+      out = model.forward()
+      optimizer.zero_grad()
+      out.backward()
+      optimizer.step()
+    jitted_step = TinyJit(train_step)
+
+    for _ in range(4):
+      jitted_step(tiny_model, tiny_adam)
+      train_step(torch_model, torch_adam)
+    assert_jit_cache_len(jitted_step, 8) # NOTE: can do more here
+    np.testing.assert_allclose(tiny_model.x.detach().numpy(), torch_model.x.detach().numpy(), atol=1e-4, rtol=1e-4)
 if __name__ == '__main__':
   unittest.main(verbosity=2)
