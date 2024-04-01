@@ -556,7 +556,6 @@ class TestMultiOutputSchedule(unittest.TestCase):
     out1 = c.max()+a_sum+b
     self._test([out0, out1], allowed=2)
 
-  @unittest.skip("TODO: Multioutput reduce pairs")
   def test_reduce_pair_different_parents_possible_fusion(self):
     a_sum = Tensor([1,2,3,4]).sum()
     b, c = Tensor([1]), Tensor([2])
