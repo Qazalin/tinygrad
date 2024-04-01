@@ -3,7 +3,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
-from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
+from tinygrad.features.graph import log_lazybuffer, print_tree, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, prod, dedup, all_int
 from tinygrad.shape.symbolic import Variable
 from tinygrad.dtype import ImageDType, dtypes
@@ -117,10 +117,9 @@ def _recurse_lb(buf:LazyBuffer, realizes:Set[LazyBuffer], allbufs:Dict[LazyBuffe
     _recurse_lb(x, realizes, allbufs, simple_pads, children)
 
 # search all LazyBuffer and find the realized srcs for a realized LazyBuffer.
-def _recurse_realizes(node:LazyBuffer, output:LazyBuffer, realized_srcs:Dict[LazyBuffer, List[LazyBuffer]]):
+def _recurse_realizes(node:LazyBuffer, output:LazyBuffer, realized_srcs:DefaultDict[LazyBuffer, List[LazyBuffer]]):
   if node.realized: return
   def _append_realize(x:LazyBuffer):
-    if output not in realized_srcs: realized_srcs[output] = []
     if x not in realized_srcs[output]: realized_srcs[output].append(x)
     _recurse_realizes(x, x, realized_srcs)
 
@@ -218,13 +217,16 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   prescheduled = {x:_schedule_one(x, realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
-  realized_srcs: Dict[LazyBuffer, List[LazyBuffer]] = {} # TODO use defaultdict
-  for out in outs:
-    realized_srcs[out] = []
+  realized_srcs: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
+  for out in outs: _recurse_realizes(out.base, out.base, realized_srcs)
+  for out in reduce_for_op:
+    if out in realized_srcs: del realized_srcs[out]
     _recurse_realizes(out.base, out.base, realized_srcs)
+
 
   print("***")
   for out, si in prescheduled.items():
+    #print_tree(si.ast[0])
     if si.inputs == tuple(realized_srcs[out]): continue
     print("--")
     print(out)
