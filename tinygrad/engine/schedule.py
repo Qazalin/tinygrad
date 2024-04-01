@@ -118,7 +118,7 @@ def _recurse_lb(buf:LazyBuffer, realizes:Set[LazyBuffer], allbufs:Dict[LazyBuffe
 
 UNSAFE_PAD_OPS = {BinaryOps.DIV, BinaryOps.CMPLT, BinaryOps.CMPEQ, UnaryOps.LOG2, UnaryOps.EXP2}
 def _is_padding_okay(buf:LazyBuffer, realizes:Set[LazyBuffer]) -> bool:
-  if buf in realizes or buf.realized: return True
+  if buf in realizes: return True
   # NOTE: this broke to_image_idx and coder with JIT
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
@@ -193,8 +193,8 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       reduce_for_op[next(iter(realized_children.keys()))] = r
 
   # preschedule all buffers in realizes
-  prescheduled = {x:_schedule_one(x, realizes, reduce_for_op) for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST}
-  assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
+  prescheduled = {x:_schedule_one(x, realizes, reduce_for_op) for x in realizes if x not in seen and x.op is not LoadOps.CONST}
+  assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen}
 
   # breadth first ordering
   graph: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
