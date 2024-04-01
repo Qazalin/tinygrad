@@ -1,10 +1,10 @@
 import sys
 from collections import defaultdict, deque
+from dataclasses import dataclass
 from typing import Deque, List, Dict, Optional, Set, DefaultDict, Tuple
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, flatten, getenv, merge_dicts, prod, dedup, all_int
-from dataclasses import dataclass
 from tinygrad.shape.symbolic import Variable
 from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.lazy import LazyBuffer
@@ -85,16 +85,16 @@ def _schedule_one(out:LazyBuffer, realizes:Set[LazyBuffer], reduce_for_op: Dict[
 
 def _schedule_outputs(outs:List[_LBScheduleItem], reduce_for_op:Dict[LazyBuffer, LazyBuffer]) -> ScheduleItem:
   if len(outs) == 1: return ScheduleItem((r:=outs[0]).ast, (r.outputs[0].buffer,), tuple(x.buffer for x in r.inputs), r.var_vals)
-  # sort the outputs before fusion
-  outs = sorted(outs, key=lambda x: x.ast[0].src[0].key)
-  inputs, outbufs, var_vals = {x: None for n in outs for x in n.inputs}, [n.outputs[0] for n in outs], merge_dicts([n.var_vals for n in outs])
+  # sort the outputs before fusing
+  outputs = [x.outputs[0] for x in sorted(outs, key=lambda x: x.ast[0].src[0].key)]
+  inputs, var_vals = {x: None for n in outs for x in n.inputs}, merge_dicts([out.st.var_vals.copy() for out in outputs])
   # recreate the multi output AST
   ast: List[LazyOp] = []
-  for i, lb in enumerate(outbufs):
-    output_st = ShapeTracker.from_shape(reduce_for_op[lb].shape if lb in reduce_for_op else lb.shape)
-    op = _recursive_lazyop(lb, outbufs+list(inputs), var_vals, output_st, set(inputs), {})
-    ast.append(LazyOp(BufferOps.STORE, (op, ), MemBuffer(i, lb.dtype, output_st.simplify().unbind()[0])))
-  return ScheduleItem(tuple(ast), tuple(x.buffer for x in outbufs), tuple(x.buffer for x in inputs), var_vals)
+  for i, out in enumerate(outputs):
+    output_st = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape)
+    op = _recursive_lazyop(out, outputs+list(inputs), var_vals, output_st, set(inputs), {})
+    ast.append(LazyOp(BufferOps.STORE, (op, ), MemBuffer(i, out.dtype, output_st.simplify().unbind()[0])))
+  return ScheduleItem(tuple(ast), tuple(x.buffer for x in outputs), tuple(x.buffer for x in inputs), var_vals)
 
 # recursively search the entire graph for all LazyBuffers, insert realizes after expands
 def _recurse_lb(buf:LazyBuffer, realizes:Set[LazyBuffer], allbufs:Dict[LazyBuffer, None],
@@ -212,32 +212,33 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   # breadth first ordering
   graph: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
   in_degree: DefaultDict[LazyBuffer, int] = defaultdict(int)
-  for out, ps in prescheduled.items():
-    for x in ps.inputs:
+  for out, si in prescheduled.items():
+    for x in si.inputs:
       graph[x].append(out)
       if x in assign_targets:
         graph[out].append(assign_targets[x])
         in_degree[assign_targets[x]] += 1
       if x in prescheduled: in_degree[out] += 1
 
-  queue: Deque[Tuple[int,LazyBuffer]] = deque((0,out) for out in prescheduled if in_degree[out] == 0)
-  groups: DefaultDict[Tuple,List[_LBScheduleItem]] = defaultdict(list)
+  queue: Deque[Tuple[int, LazyBuffer]] = deque((0, out) for out in prescheduled if in_degree[out] == 0)
+  output_groups: DefaultDict[Tuple, List[_LBScheduleItem]] = defaultdict(list)
   while queue:
     level, buf = queue.popleft()
     seen.add(buf)
+    ps = prescheduled[buf]
     # single output
-    if (buf.op in LoadOps and buf.op is not LoadOps.ASSIGN) or buf.device.startswith("DISK") or buf.device == "METAL" or \
-        buf.op in ReduceOps or buf in reduce_for_op or buf.forced_realize or getenv("DISALLOW_MULTIOUT"): key: Tuple = (buf,)
+    if ps.ast[0].op is not BufferOps.STORE or buf.device.startswith("DISK") or buf.device == "METAL" or getenv("DISALLOW_MULTIOUT") \
+        or buf.op in ReduceOps or buf in reduce_for_op or buf.forced_realize: key: Tuple = (buf,)
     # multi output
     else: key = (level, buf.shape, buf.device)
-    groups[key].append(prescheduled[buf])
+    output_groups[key].append(ps)
     for x in graph[buf]:
       in_degree[x] -= 1
-      if in_degree[x] == 0: queue.append((level+1,x))
+      if in_degree[x] == 0: queue.append((level+1, x))
 
   kernel_number = GlobalCounters.kernel_count
   schedule: List[ScheduleItem] = []
-  for group in groups.values():
+  for group in output_groups.values():
     if GRAPH:
       kernel_number += 1
       for ps in group: realized_lazybuffer(ps.outputs[0], kernel_number)
@@ -245,6 +246,6 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     for ps in group: del ps.outputs[0].srcs  # can only schedule once
 
   # confirm everything was scheduled correctly
-  if not all(degree == 0 for degree in in_degree.values()) or len(prescheduled) != len(flatten(si.outputs for si in schedule)):
+  if not all(degree == 0 for degree in in_degree.values()) or len(prescheduled) != len(flatten(s.outputs for s in schedule)):
     raise RuntimeError(f"cycle detected in graph, prescheduled {len(prescheduled)} but only scheduled {len(schedule)}")
   return schedule
