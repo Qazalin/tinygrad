@@ -76,7 +76,7 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
   return ret
 
 def _schedule_group(outs:Tuple[LazyBuffer,...], realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> _LBScheduleItem:
-  if outs[0].op in {LoadOps.CUSTOM, LoadOps.SYNC, LoadOps.COPY, LoadOps.EMPTY}:
+  if outs[0].op in {LoadOps.CUSTOM, LoadOps.COPY, LoadOps.EMPTY}:
     return _LBScheduleItem((LazyOp(outs[0].op, (), outs[0].arg),), outs, outs[0].srcs, outs[0].st.var_vals.copy())
   ast: List[LazyOp] = []
   membufs, var_vals = [*outs], merge_dicts([out.st.var_vals.copy() for out in outs])
@@ -229,7 +229,8 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     if GRAPH:
       kernel_number += 1
       for out in ps.outputs: realized_lazybuffer(out, kernel_number)
-    schedule.append(ScheduleItem(ps.ast, tuple(x.buffer for x in ps.outputs), tuple(x.buffer for x in ps.inputs), ps.var_vals))
+    schedule.append(ScheduleItem(ps.ast, tuple(x.buffer for x in ps.outputs if x.size != 0),
+                                 tuple(x.buffer for x in ps.inputs if x.size != 0), ps.var_vals))
     for child in graph[ps]:
       in_degree[child] -= 1
       if in_degree[child] == 0: queue.append(child)
