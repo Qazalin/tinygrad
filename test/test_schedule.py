@@ -444,6 +444,13 @@ class TestMultiOutputSchedule(unittest.TestCase):
     out0, out1 = a+2, a*4
     self._test([out0, out1], [np.array([1,2]).sum()+2, np.array([1,2]).sum()*4], 1)
 
+  def test_multioutput_reduce_pair_not_possible(self):
+    a = Tensor([1,2]).sum()
+    b = Tensor([3,4]).sum()
+    out0 = a+2
+    out1 = out0*b+a # out1 depends on out0
+    self._test([out0, out1], allowed=3)
+
   def test_adam_end_to_end(self):
     import torch
     from tinygrad.engine.jit import TinyJit

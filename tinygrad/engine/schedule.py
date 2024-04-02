@@ -126,6 +126,11 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Set[LazyBuffer]) -> bool:
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
+def _deepwalk(buf: LazyBuffer, realizes:Set[LazyBuffer], realized_parents:Set[LazyBuffer]):
+  if buf.realized or buf.op is LoadOps.CONST: return
+  if buf in realizes: return realized_parents.add(buf)
+  for x in buf.srcs: _deepwalk(x.base, realizes, realized_parents)
+
 def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> List[ScheduleItem]:
   if seen is None: seen = set()
 
@@ -149,6 +154,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
     realized_children: Dict[LazyBuffer, ShapeTracker] = {}
+    children_inputs: DefaultDict[LazyBuffer, Set[LazyBuffer]] = defaultdict(set)
     forced_realize = False
     can_chase = True
     while not forced_realize and len(child_set):
@@ -156,13 +162,22 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
       for tr,st in child_set.items():
         if tr in realizes:
           realized_children[tr] = st
-          # can only have one output buffer
           # can only reduce contiguous
           # max one reduceop per kernel
           if not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r):
             can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
             forced_realize = True
             break
+
+          # can only fuse multi output realized_children wih no self dependencies
+          if len(realized_children) > 1:
+            for rc in realized_children:
+              if rc not in children_inputs:
+                for x in rc.srcs: _deepwalk(x.base, realizes, children_inputs[rc])
+              if children_inputs[rc].intersection(realized_children):
+                forced_realize = True
+                break
+
           continue
         for tr_next in children[tr].keys():
           if not tr_next.realized:
