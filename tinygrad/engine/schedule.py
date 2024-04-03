@@ -226,23 +226,25 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
   # breadth first ordering
+
+  # breadth first ordering
   graph: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
   in_degree: DefaultDict[LazyBuffer, int] = defaultdict(int)
-  for k, si in prescheduled.items():
+  for key, si in prescheduled.items():
     for x in si.inputs:
-      graph[x].append(k)
+      graph[x].append(key)
       if x in assign_targets:
-        graph[k].append(assign_targets[x])
+        graph[key].append(assign_targets[x])
         in_degree[assign_targets[x]] += 1
-      if x in prescheduled: in_degree[k] += 1
+      if x in prescheduled: in_degree[key] += 1
     for out in si.outputs: del out.srcs  # can only schedule once
 
-  queue = deque(ps for k, ps in prescheduled.items() if in_degree[k] == 0)
+  queue = deque(si for key, si in prescheduled.items() if in_degree[key] == 0)
   schedule: List[ScheduleItem] = []
   kernel_number = GlobalCounters.kernel_count
   while queue:
     ps = queue.popleft()
-    for out in ps.outputs: seen.add(out)
+    for buf in ps.outputs: seen.add(buf)
     if GRAPH:
       kernel_number += 1
       for out in ps.outputs: realized_lazybuffer(out, kernel_number)
