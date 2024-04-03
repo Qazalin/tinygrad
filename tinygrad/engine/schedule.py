@@ -229,36 +229,35 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
     output_groups[key].append(out)
 
   # preschedule all buffers in realizes
-  prescheduled = [_schedule_group(tuple(x), realizes, reduce_for_op) for x in output_groups.values()]
-  lb_schedules = {out:si for si in prescheduled for out in si.outputs}
+  prescheduled = {x[0]:_schedule_group(tuple(x), realizes, reduce_for_op) for x in output_groups.values()}
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
   # breadth first ordering
-  graph: DefaultDict[_LBScheduleItem, List[_LBScheduleItem]] = defaultdict(list)
-  in_degree: DefaultDict[_LBScheduleItem, int] = defaultdict(int)
-  for ps in prescheduled:
-    for x in ps.inputs:
-      if x in lb_schedules:
-        graph[lb_schedules[x]].append(ps)
-        in_degree[ps] += 1
+  graph: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
+  in_degree: DefaultDict[LazyBuffer, int] = defaultdict(int)
+  for key, si in prescheduled.items():
+    for x in si.inputs:
+      graph[x].append(key)
       if x in assign_targets:
-        graph[ps].append(lb_schedules[assign_targets[x]])
-        in_degree[lb_schedules[assign_targets[x]]] += 1
-    for out in ps.outputs: del out.srcs  # can only schedule once
+        graph[key].append(assign_targets[x])
+        in_degree[assign_targets[x]] += 1
+      if x in prescheduled: in_degree[key] += 1
+    for out in si.outputs: del out.srcs  # can only schedule once
 
-  queue = deque(ps for ps in prescheduled if in_degree[ps] == 0)
+  queue = deque(ps for key, ps in prescheduled.items() if in_degree[key] == 0)
   schedule: List[ScheduleItem] = []
   kernel_number = GlobalCounters.kernel_count
   while queue:
-    for output in (ps:=queue.popleft()).outputs: seen.add(output)
+    ps = queue.popleft()
+    for out in ps.outputs: seen.add(out)
     if GRAPH:
       kernel_number += 1
       for out in ps.outputs: realized_lazybuffer(out, kernel_number)
     schedule.append(ScheduleItem(ps.ast, tuple(x.buffer for x in ps.outputs if x.size != 0),
                                  tuple(x.buffer for x in ps.inputs if x.size != 0), ps.var_vals))
-    for child in graph[ps]:
-      in_degree[child] -= 1
-      if in_degree[child] == 0: queue.append(child)
+    for x in graph[ps.outputs[0]]:
+      in_degree[x] -= 1
+      if in_degree[x] == 0: queue.append(prescheduled[x])
 
   # confirm everything was scheduled correctly
   if not all(degree == 0 for degree in in_degree.values()) or len(prescheduled) != len(schedule):
