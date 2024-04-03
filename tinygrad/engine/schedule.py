@@ -213,17 +213,16 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
 
   # group the realizes into multi output kernels
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
-  for out in realizes:
-    if out.realized is not None or out.op is LoadOps.CONST or out in seen: continue
+  for out in (all_outputs:=sorted([x for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST], key=lambda x: x.key)):
     # multi output reduce pairs
-    if out in reduce_for_op: key = (reduce_for_op[out],)
+    if out in reduce_for_op: group_key = (reduce_for_op[out],)
     # single output
-    else: key = (out,)
-    output_groups[key].append(out)
+    else: group_key = (out,)
+    output_groups[group_key].append(out)
 
   # preschedule all buffers in realizes
   prescheduled = {outputs[0]:_schedule_group(tuple(outputs), realizes, reduce_for_op) for outputs in output_groups.values()}
-  assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
+  assign_targets = {x.srcs[1]:x for x in all_outputs if x.op is LoadOps.ASSIGN}
 
   # breadth first ordering
 
