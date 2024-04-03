@@ -481,7 +481,7 @@ class TestMultiOutputSchedule(unittest.TestCase):
     for _ in range(4):
       jitted_step(tiny_model, tiny_adam)
       train_step(torch_model, torch_adam)
-    assert_jit_cache_len(jitted_step, 8) # NOTE: can do more here
+    assert_jit_cache_len(jitted_step, 10) # NOTE: once we fuse expands this will decrease
     np.testing.assert_allclose(tiny_model.x.detach().numpy(), torch_model.x.detach().numpy(), atol=1e-4, rtol=1e-4)
 if __name__ == '__main__':
   unittest.main(verbosity=2)
