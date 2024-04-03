@@ -432,7 +432,7 @@ class TestSchedule(unittest.TestCase):
     check_schedule(out, 2)
 
 class TestMultiOutputSchedule(unittest.TestCase):
-  def _test(self, outs_tiny:List[Tensor], outs_np:List[np.ndarray]=[], allowed:int=1):
+  def _test(self, outs_tiny:List[Tensor], outs_np=[], allowed:int=1):
     sched = create_schedule([x.lazydata for x in outs_tiny])
     kernels = [si for si in sched if si.ast[0].op not in LoadOps]
     assert len(kernels) == allowed, f"Expected {allowed} kernels, got {len(kernels)}"
@@ -449,7 +449,7 @@ class TestMultiOutputSchedule(unittest.TestCase):
     b = Tensor([3,4]).sum()
     out0 = a+2
     out1 = out0*b+a # out1 depends on out0
-    self._test([out0, out1], allowed=3)
+    self._test([out0, out1], [5, 38], allowed=3)
 
   def test_adam_end_to_end(self):
     import torch
