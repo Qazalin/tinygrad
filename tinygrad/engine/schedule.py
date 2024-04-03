@@ -124,13 +124,16 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Set[LazyBuffer]) -> bool:
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
 # walk back the LazyBuffer graph to find realized parents
-def _gather_parents(out:LazyBuffer, realizes:Set[LazyBuffer], realized_parents:DefaultDict[LazyBuffer, Set[LazyBuffer]]) -> Set[LazyBuffer]:
-  def _deepwalk(buf:LazyBuffer):
-    if buf.realized or buf.op is LoadOps.CONST: return
-    if buf is not out and buf in realizes: return realized_parents[out].add(buf)
-    for x in buf.srcs: _deepwalk(x.base)
-  if out not in realized_parents: _deepwalk(out)
-  return realized_parents[out]
+def _deepwalk(buf:LazyBuffer, realizes:Set[LazyBuffer], realized_parents:Set[LazyBuffer]):
+  if buf.realized or buf.op is LoadOps.CONST: return
+  if buf in realizes: return realized_parents.add(buf)
+  for x in buf.srcs: _deepwalk(x.base, realizes, realized_parents)
+
+def _gather_parents(buf:LazyBuffer, realizes:Set[LazyBuffer], cache:Dict[LazyBuffer, Set[LazyBuffer]]) -> Set[LazyBuffer]:
+  if buf not in cache:
+    cache[buf] = set()
+    for x in buf.srcs: _deepwalk(x.base, realizes, cache[buf])
+  return cache[buf]
 
 def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> List[ScheduleItem]:
   if seen is None: seen = set()
@@ -140,7 +143,7 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   allbufs: Dict[LazyBuffer, None] = {}
   simple_pads: Set[LazyBuffer] = set()
   children: DefaultDict[LazyBuffer, Dict[LazyBuffer, None]] = defaultdict(dict)
-  realized_parents: DefaultDict[LazyBuffer, Set[LazyBuffer]] = defaultdict(set)
+  realized_parents: Dict[LazyBuffer, Set[LazyBuffer]] = {}
   for out in outs: _recurse_lb(out.base, realizes, allbufs, simple_pads, children, scheduled=True)
 
   # check if we have to realize pads
@@ -223,8 +226,6 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   # preschedule all buffers in realizes
   prescheduled = {outputs[0]:_schedule_group(tuple(outputs), realizes, reduce_for_op) for outputs in output_groups.values()}
   assign_targets = {x.srcs[1]:x for x in all_outputs if x.op is LoadOps.ASSIGN}
-
-  # breadth first ordering
 
   # breadth first ordering
   graph: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
