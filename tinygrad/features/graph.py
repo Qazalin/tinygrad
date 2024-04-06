@@ -115,5 +115,5 @@ def save_schedule_graph(sched: List[ScheduleItem]):
       source_index = schedule.index(buf_schedules[x]) + 1
       edge_id = f"{source_index}-{i+1}"
       edges.append({'source': str(source_index), 'target': str(i+1), 'id': edge_id, 'label': edge_id})
-  with open(fp:="/Users/qazal/code/tinygrad/graph/schedule.tiny", "wb") as f: pickle.dump((nodes, edges), f)
+  with open(fp:=Path.home()/"schedule.tiny", "wb") as f: pickle.dump((nodes, edges), f)
   print(f"Saved {len(schedule)} ScheduleItems to {fp}")
