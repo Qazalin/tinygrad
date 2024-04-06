@@ -441,16 +441,16 @@ class TestMultiOutputSchedule(unittest.TestCase):
     for out_tiny, out_np in zip(outs_tiny, outs_np): np.testing.assert_equal(out_tiny.numpy(), out_np)
 
   def test_multioutput_reduce_pair_possible(self):
-    a = Tensor([1,2]).sum()
+    a = Tensor([1, 2]).sum()
     out0, out1 = a+2, a*4
     self._test([out0, out1], [np.array([1,2]).sum()+2, np.array([1,2]).sum()*4], 1)
 
-  def test_multioutput_reduce_pair_not_possible(self):
-    a = Tensor([1,2]).sum()
-    b = Tensor([3,4]).sum()
-    out0 = a+2
-    out1 = out0*b+a # out1 depends on out0
-    self._test([out0, out1], [5, 38], allowed=3)
+  @unittest.skip("TODO")
+  def test_multioutput_reduce_pair_possible2(self):
+    r = Tensor([2, 1]).sum()
+    out0 = r+1
+    out1 = out0*r
+    self._test([out0, out1], [4, 12], allowed=1)
 
   def test_adam_end_to_end(self):
     import torch

@@ -22,8 +22,8 @@ class _LBScheduleItem:
   var_vals: Dict[Variable, int]
 
 # recursively create a lazyop
-def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Variable, int], st:ShapeTracker,
-                      realizes:Set[LazyBuffer], cache, first=True, assign_to:Optional[LazyBuffer]=None, assign_idx:Optional[int]=None) -> LazyOp:
+def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], outbufs:Tuple[LazyBuffer, ...], var_vals:Dict[Variable, int], st:ShapeTracker,
+                      realizes:Set[LazyBuffer], cache, assign_to:Optional[LazyBuffer]=None, assign_idx:Optional[int]=None) -> LazyOp:
   if (buf, st) in cache: return cache[(buf, st)]
   if buf != buf.base:
     st = buf.st + st
@@ -38,7 +38,7 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
     return LazyOp(BufferOps.CONST, (), ConstBuffer(buf.arg, buf.dtype, unbound_st))
 
   # if we aren't fusing it, it's a load and we add it to the inputs
-  if buf.realized or (buf in realizes and not first):
+  if buf.realized or (buf in realizes and buf not in outbufs):
     unbound_st, st_var_vals = st.simplify().unbind()
     var_vals.update(st_var_vals)
     if assign_to is not None and buf is assign_to:
@@ -54,13 +54,13 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
 
   # if a CONTIGUOUS or ASSIGN made it all the way here, just skip it
   if buf.op is LoadOps.CONTIGUOUS:
-    assert first
-    return _recursive_lazyop(buf.srcs[0], membufs, var_vals, st, realizes, cache, False)
+    assert buf in outbufs
+    return _recursive_lazyop(buf.srcs[0], membufs, outbufs, var_vals, st, realizes, cache)
   if buf.op is LoadOps.ASSIGN:
-    assert first
+    assert buf in outbufs
     assert buf.srcs[1].base is buf.srcs[1], "assign must be to base"
     assert buf.srcs[1].realized is not None, f"assign must be already realized to schedule {buf.srcs[1]}"
-    return _recursive_lazyop(buf.srcs[0], membufs, var_vals, st, realizes, cache, False, assign_to=buf.srcs[1], assign_idx=membufs.index(buf))
+    return _recursive_lazyop(buf.srcs[0], membufs, outbufs, var_vals, st, realizes, cache, assign_to=buf.srcs[1], assign_idx=membufs.index(buf))
 
   # if it's a reduce, we have to change the shapetracker
   if buf.op in ReduceOps:
@@ -69,7 +69,7 @@ def _recursive_lazyop(buf:LazyBuffer, membufs:List[LazyBuffer], var_vals:Dict[Va
 
   # otherwise we fuse it like normal
   cache[(buf, st)] = ret = \
-    LazyOp(buf.op, tuple(_recursive_lazyop(x, membufs, var_vals, st, realizes, cache, False, assign_to, assign_idx) for x in buf.srcs), buf.arg)
+    LazyOp(buf.op, tuple(_recursive_lazyop(x, membufs, outbufs, var_vals, st, realizes, cache, assign_to, assign_idx) for x in buf.srcs), buf.arg)
   return ret
 
 def _schedule_group(outs:Tuple[LazyBuffer,...], realizes:Set[LazyBuffer], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> _LBScheduleItem:
@@ -77,9 +77,10 @@ def _schedule_group(outs:Tuple[LazyBuffer,...], realizes:Set[LazyBuffer], reduce
     return _LBScheduleItem((LazyOp(outs[0].op, (), outs[0].arg),), outs, outs[0].srcs, outs[0].st.var_vals.copy())
   ast: List[LazyOp] = []
   membufs, var_vals = [*outs], merge_dicts([out.st.var_vals.copy() for out in outs])
+  if len(outs) > 1: outs = tuple(sorted(outs, key=lambda x: x.key))
   for i, out in enumerate(outs):
     output_st = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape)
-    op = _recursive_lazyop(out, membufs, var_vals, output_st, realizes, cache={})
+    op = _recursive_lazyop(out, membufs, outs, var_vals, output_st, realizes, cache={})
     ast.append(LazyOp(BufferOps.STORE, (op, ), MemBuffer(i, out.dtype, output_st.simplify().unbind()[0])))
   return _LBScheduleItem(tuple(ast), outs, tuple(membufs[len(outs):]), var_vals)
 
