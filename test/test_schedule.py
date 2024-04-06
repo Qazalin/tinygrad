@@ -445,7 +445,6 @@ class TestMultiOutputSchedule(unittest.TestCase):
     out0, out1 = a+2, a*4
     self._test([out0, out1], [np.array([1,2]).sum()+2, np.array([1,2]).sum()*4], 1)
 
-  @unittest.skip("TODO")
   def test_multioutput_reduce_pair_possible2(self):
     r = Tensor([2, 1]).sum()
     out0 = r+1

@@ -173,16 +173,20 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
             can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
             forced_realize = True
             break
-          # can only fuse multi output realized_children wih no self dependencies
+          # break fusion if a reduce and a realized child are in the way of realizing the other child
           if len(realized_children) > 1:
             for rc in realized_children:
               parents_set = _gather_parents(rc, realizes, realized_parents)
+              realize_path = set()
               while parents_set and not forced_realize:
                 next_parents_set: Set[LazyBuffer] = set()
                 for next_buf in parents_set:
+                  realize_path.add(next_buf)
                   if next_buf in realized_children:
-                    forced_realize = True
-                    break
+                    # max one reduceop per kernel
+                    if any(x.op in ReduceOps for x in realize_path):
+                      forced_realize = True
+                      break
                   for p in _gather_parents(next_buf, realizes, realized_parents): next_parents_set.add(p)
                   parents_set = next_parents_set
           continue
