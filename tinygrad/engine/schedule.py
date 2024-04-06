@@ -2,6 +2,7 @@ import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
+from tinygrad.device import Device
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, merge_dicts, prod, dedup, all_int
@@ -217,7 +218,9 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
           tr = tr_next
         reduce_for_op[tr] = r
       realizes.add(tr)
-    else: reduce_for_op.update((tr, r) for tr in realized_children)
+    else:
+      if len(realized_children) > 1: print("gruoped", r, list(realized_children))
+      reduce_for_op.update((tr, r) for tr in realized_children)
 
   # group the realizes into multi output kernels
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
@@ -236,6 +239,9 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   graph: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
   in_degree: DefaultDict[LazyBuffer, int] = defaultdict(int)
   for key, si in prescheduled.items():
+    if len(si.outputs) > 1:
+      prg = Device["METAL"].get_runner(*si.ast)
+      print(prg.prg)
     for x in si.inputs:
       graph[x].append(key)
       if x in assign_targets:
