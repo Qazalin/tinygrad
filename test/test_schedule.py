@@ -451,6 +451,15 @@ class TestMultiOutputSchedule(unittest.TestCase):
     out1 = out0*r
     self._test([out0, out1], [4, 12], allowed=1)
 
+  def test_fusion_sort(self):
+    r = Tensor([2, 1]).sum()
+    e0 = r+1
+    e1 = e0*r
+    out0 = e0.reshape((1, 1)).expand((4, 4)) * 4
+    out1 = e1.reshape((1, 1)).expand((4, 4)) + 6
+    out2 = e0.reshape((1, )).expand((8, )) - e1.reshape((1, )).expand((8, ))
+    self._test([out0, out1, out2], [np.full((4, 4), 16), np.full((4, 4), 18), np.full((8, ), 4-12)], 4)
+
   def test_adam_end_to_end(self):
     import torch
     from tinygrad.engine.jit import TinyJit
