@@ -124,18 +124,6 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Set[LazyBuffer]) -> bool:
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
-# walk back the LazyBuffer graph to find realized parents
-def _deepwalk(buf:LazyBuffer, realizes:Set[LazyBuffer], realized_parents:Set[LazyBuffer]):
-  if buf.realized or buf.op is LoadOps.CONST: return
-  if buf in realizes: return realized_parents.add(buf)
-  for x in buf.srcs: _deepwalk(x.base, realizes, realized_parents)
-
-def _gather_parents(buf:LazyBuffer, realizes:Set[LazyBuffer], cache:Dict[LazyBuffer, Set[LazyBuffer]]) -> Set[LazyBuffer]:
-  if buf not in cache:
-    cache[buf] = set()
-    for x in buf.srcs: _deepwalk(x.base, realizes, cache[buf])
-  return cache[buf]
-
 def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> List[ScheduleItem]:
   if seen is None: seen = set()
 
@@ -144,7 +132,6 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   allbufs: Dict[LazyBuffer, None] = {}
   simple_pads: Set[LazyBuffer] = set()
   children: DefaultDict[LazyBuffer, Dict[LazyBuffer, None]] = defaultdict(dict)
-  realized_parents: Dict[LazyBuffer, Set[LazyBuffer]] = {}
   for out in outs: _recurse_lb(out.base, realizes, allbufs, simple_pads, children, scheduled=True)
 
   # check if we have to realize pads
@@ -173,22 +160,20 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
             can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
             forced_realize = True
             break
-          # break fusion if a reduce and a realized child are in the way of realizing the other child
+          # break fusion if a reduce is between the realized_children
           if len(realized_children) > 1:
             for rc in realized_children:
-              parents_set = _gather_parents(rc, realizes, realized_parents)
-              realize_path = set()
-              while parents_set and not forced_realize:
-                next_parents_set: Set[LazyBuffer] = set()
-                for next_buf in parents_set:
-                  realize_path.add(next_buf)
-                  if next_buf in realized_children:
-                    # max one reduceop per kernel
-                    if any(x.op in ReduceOps for x in realize_path):
-                      forced_realize = True
-                      break
-                  for p in _gather_parents(next_buf, realizes, realized_parents): next_parents_set.add(p)
-                  parents_set = next_parents_set
+              parent_set = set(x.base for x in rc.srcs if x.base.realized is None)
+              while not forced_realize and len(parent_set):
+                next_parent_set: Set[LazyBuffer] = set()
+                for curr in parent_set:
+                  if curr.op in ReduceOps and curr != r:
+                    forced_realize = True
+                    break
+                  for next_parent in curr.srcs:
+                    if next_parent.base.realized is None: next_parent_set.add(next_parent.base)
+                parent_set = next_parent_set
+            pass
           continue
         for tr_next in children[tr].keys():
           if not tr_next.realized:
