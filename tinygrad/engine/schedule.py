@@ -2,6 +2,7 @@ import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
+from tinygrad.device import Device
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, merge_dicts, prod, dedup, all_int
@@ -127,6 +128,19 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Set[LazyBuffer]) -> bool:
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
+# walk back the LazyBuffer graph to find realized parents
+def _deepwalk(buf:LazyBuffer, realizes:Set[LazyBuffer], realized_parents:Set[LazyBuffer], allbufs:Set[LazyBuffer]):
+  if buf.realized or buf.op is LoadOps.CONST: return
+  allbufs.add(buf)
+  if buf in realizes: return realized_parents.add(buf)
+  for x in buf.srcs: _deepwalk(x.base, realizes, realized_parents, allbufs)
+
+def _gather_parents(buf:LazyBuffer, realizes:Set[LazyBuffer], cache:Dict[LazyBuffer, Set[LazyBuffer]], allbufs_cache:Dict[LazyBuffer, Set[LazyBuffer]]) -> Set[LazyBuffer]:
+  if buf not in cache:
+    cache[buf], allbufs_cache[buf] = set(), set()
+    for x in buf.srcs: _deepwalk(x.base, realizes, cache[buf], allbufs_cache[buf])
+  return cache[buf]
+
 def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> List[ScheduleItem]:
   if seen is None: seen = set()
 
@@ -135,6 +149,8 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
   allbufs: Dict[LazyBuffer, None] = {}
   simple_pads: Set[LazyBuffer] = set()
   children: DefaultDict[LazyBuffer, Dict[LazyBuffer, None]] = defaultdict(dict)
+  realized_parents: Dict[LazyBuffer, Set[LazyBuffer]] = {}
+  allbufs_cache: Dict[LazyBuffer, Set[LazyBuffer]] = {}
   for out in outs: _recurse_lb(out.base, realizes, allbufs, simple_pads, children, scheduled=True)
 
   # check if we have to realize pads
@@ -163,19 +179,23 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
             can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
             forced_realize = True
             break
-          # break fusion if a reduce is between the realized_children
+          # break fusion if there is an indirect connection between the realized_children
           if len(realized_children) > 1:
             for rc in realized_children:
-              parent_set = set(x.base for x in rc.srcs if x.base.realized is None)
-              while not forced_realize and len(parent_set):
-                next_parent_set: Set[LazyBuffer] = set()
-                for curr in parent_set:
-                  if curr.op in ReduceOps and curr != r:
-                    forced_realize = True
-                    break
-                  for next_parent in curr.srcs:
-                    if next_parent.base.realized is None: next_parent_set.add(next_parent.base)
-                parent_set = next_parent_set
+              # does one child depend on the other child?
+              parents_set = _gather_parents(rc, realizes, realized_parents, allbufs_cache)
+              realize_path = set()
+              while parents_set and not forced_realize:
+                next_parents_set: Set[LazyBuffer] = set()
+                for next_buf in parents_set:
+                  realize_path.add(next_buf)
+                  # is the connection between next_buf and rc direct?
+                  if next_buf in realized_children:
+                    if not any(x is next_buf for x in realized_parents[rc]):
+                      forced_realize = True
+                      break
+                  for p in _gather_parents(next_buf, realizes, realized_parents, allbufs_cache): next_parents_set.add(p)
+                  parents_set = next_parents_set
             pass
           continue
         for tr_next in children[tr].keys():
