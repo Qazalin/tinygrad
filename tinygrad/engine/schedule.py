@@ -80,8 +80,11 @@ def _schedule_group(outs:Tuple[LazyBuffer,...], realizes:Set[LazyBuffer], reduce
   if len(outs) > 1: outs = tuple(sorted(outs, key=lambda x: x.key))
   for i, out in enumerate(outs):
     output_st = ShapeTracker.from_shape(reduce_for_op[out].shape if out in reduce_for_op else out.shape)
+    output_view = out.arg[0] if out.op is LoadOps.ASSIGN and out.arg else output_st
     op = _recursive_lazyop(out, membufs, outs, var_vals, output_st, realizes, cache={})
-    ast.append(LazyOp(BufferOps.STORE, (op, ), MemBuffer(i, out.dtype, output_st.simplify().unbind()[0])))
+    output_view, vv = output_view.simplify().unbind()
+    if vv: var_vals.update(vv)
+    ast.append(LazyOp(BufferOps.STORE, (op, ), MemBuffer(i, out.dtype, output_view)))
   return _LBScheduleItem(tuple(ast), outs, tuple(membufs[len(outs):]), var_vals)
 
 # recursively search the entire graph for all LazyBuffers, insert realizes after expands
