@@ -24,6 +24,9 @@ def lower_schedule_item(si:ScheduleItem) -> Optional[JITRunner]:
 
 logops = open(getenv("LOGOPS", ""), "a") if getenv("LOGOPS", "") else None
 def run_schedule(schedule:List[ScheduleItem]):
+  if getenv("GRAPHSCHEDULE"):
+    from tinygrad.features.graph import save_schedule_graph
+    save_schedule_graph(schedule)
   while len(schedule):
     si = schedule.pop(0)
     if logops and si.ast[0].op not in LoadOps and not any(i.device.startswith("DISK:") for i in si.inputs): logops.write(str(si.ast)+"\n")
