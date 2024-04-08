@@ -440,16 +440,26 @@ class TestMultiOutputSchedule(unittest.TestCase):
     run_schedule(sched)
     for out_tiny, out_np in zip(outs_tiny, outs_np): np.testing.assert_equal(out_tiny.numpy(), out_np)
 
-  def test_multioutput_reduce_pair_possible(self):
-    a = Tensor([1, 2]).sum()
-    out0, out1 = a+2, a*4
-    self._test([out0, out1], [np.array([1,2]).sum()+2, np.array([1,2]).sum()*4], 1)
+  # r -> out0, r -> out1
+  def test_fused_reduce_pair_simple(self):
+    r = Tensor([1, 2]).sum()
+    out0, out1 = r + 2, r * 2
+    self._test([out0, out1], [(r_np:=np.array([1,2]).sum())+2, r_np*2], allowed=1)
 
-  def test_multioutput_reduce_pair_possible2(self):
-    r = Tensor([2, 1]).sum()
-    out0 = r+1
-    out1 = out0*r
-    self._test([out0, out1], [4, 12], allowed=1)
+  # r -> out0, r -> out0 -> out1
+  def test_reduce_pair_with_inner_dependency_direct(self):
+    r = Tensor([1, 2]).sum()
+    out0 = r + 2
+    out1 = out0 + 3 + r
+    self._test([out0, out1], [(r_np:=np.array([1,2]).sum())+2, r_np+3+r_np+2], allowed=1)
+
+  # r0 -> out0, r0 -> out0 -> r1 -> out1
+  def test_reduce_pair_with_inner_dependency_indirect_reduce(self):
+    r0 = Tensor([1, 2]).sum()
+    out0 = r0 + 2
+    r1 = out0.reshape((1, )).expand((2, )).sum()
+    out1 = out0 * 3 * r0 * r1
+    self._test([out0, out1], [5, 450], allowed=3)
 
   def test_fusion_sort(self):
     r = Tensor([2, 1]).sum()

@@ -2,7 +2,6 @@ import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
-from tinygrad.device import Device
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, BinaryOps, UnaryOps
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, merge_dicts, prod, dedup, all_int
@@ -135,7 +134,8 @@ def _deepwalk(buf:LazyBuffer, realizes:Set[LazyBuffer], realized_parents:Set[Laz
   if buf in realizes: return realized_parents.add(buf)
   for x in buf.srcs: _deepwalk(x.base, realizes, realized_parents, allbufs)
 
-def _gather_parents(buf:LazyBuffer, realizes:Set[LazyBuffer], cache:Dict[LazyBuffer, Set[LazyBuffer]], allbufs_cache:Dict[LazyBuffer, Set[LazyBuffer]]) -> Set[LazyBuffer]:
+def _gather_parents(buf:LazyBuffer, realizes:Set[LazyBuffer], cache:Dict[LazyBuffer, Set[LazyBuffer]],
+                    allbufs_cache:Dict[LazyBuffer, Set[LazyBuffer]]) -> Set[LazyBuffer]:
   if buf not in cache:
     cache[buf], allbufs_cache[buf] = set(), set()
     for x in buf.srcs: _deepwalk(x.base, realizes, cache[buf], allbufs_cache[buf])
@@ -194,6 +194,10 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
                     if not any(x is next_buf for x in realized_parents[rc]):
                       forced_realize = True
                       break
+                    for buf in allbufs_cache[rc]:
+                      if buf.op in ReduceOps and buf is not r:
+                        forced_realize = True
+                        break
                   for p in _gather_parents(next_buf, realizes, realized_parents, allbufs_cache): next_parents_set.add(p)
                   parents_set = next_parents_set
             pass
