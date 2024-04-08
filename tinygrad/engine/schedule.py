@@ -194,6 +194,10 @@ def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) 
                     if not any(x is next_buf for x in realized_parents[rc]):
                       forced_realize = True
                       break
+                    for buf in allbufs_cache[rc]:
+                      if buf.op in ReduceOps and buf is not r:
+                        forced_realize = True
+                        break
                   for p in _gather_parents(next_buf, realizes, realized_parents, allbufs_cache): next_parents_set.add(p)
                   parents_set = next_parents_set
             pass
