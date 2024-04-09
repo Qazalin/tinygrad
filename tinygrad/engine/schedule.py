@@ -158,6 +158,16 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
     if not _is_padding_okay(p, realizes):
       realizes.add(p)
 
+  all_outputs = sorted([x for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST], key=lambda x: x.key)
+  # group the realizes into multi output kernels
+  output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
+  for out in all_outputs:
+    group_key = (out, ) if out.op in {LoadOps.CUSTOM, LoadOps.COPY, LoadOps.EMPTY} or out.op in ReduceOps else (out.shape, out.device)
+    output_groups[group_key].append(out)
+
+  for key, outs in output_groups.items():
+    if len(outs) > 1: print("tried fusing", key, outs)
+
   # find all reduces, try to cleanly pair with as many contig realized children as possible. Otherwise, force realize the reduce
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
@@ -228,20 +238,16 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
           if not st.contiguous or tr_next.op in ReduceOps: break
           tr = tr_next
         reduce_for_op[tr] = r
+      output_groups[(tr, )].append(tr)
       realizes.add(tr)
-    else: reduce_for_op.update((tr, r) for tr in realized_children)
-
-  # group the realizes into multi output kernels
-  output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
-  for out in (all_outputs:=sorted([x for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST], key=lambda x: x.key)):
-    # multi output reduce pairs
-    if out in reduce_for_op: group_key = (reduce_for_op[out],)
-    # single output
-    else: group_key = (out,)
-    output_groups[group_key].append(out)
+    else:
+      for tr in realized_children:
+        reduce_for_op[tr] = r
+        output_groups[(tr.shape, tr.device)].remove(tr)
+        output_groups[(r, )].append(tr)
 
   # preschedule all buffers in realizes
-  prescheduled = {outputs[0]:_schedule_group(tuple(outputs), realizes, reduce_for_op) for outputs in output_groups.values()}
+  prescheduled = {outputs[0]:_schedule_group(tuple(outputs), realizes, reduce_for_op) for outputs in output_groups.values() if outputs}
   schedule_targets = {out:ps for ps in prescheduled.values() for out in ps.outputs}
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
