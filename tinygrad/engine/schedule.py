@@ -145,6 +145,13 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
     if not _is_padding_okay(p, realizes):
       realizes.add(p)
 
+  output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
+  for r in realizes:
+    if r.realized is not None or r.op is LoadOps.CONST or r in seen: continue
+
+    key = (r, )
+    output_groups[key].append(r)
+
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
@@ -195,13 +202,13 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
           tr = tr_next
         reduce_for_op[tr] = r
       realizes.add(tr)
+      output_groups[(tr, )].append(tr)
     else:
       assert len(realized_children) == 1
       reduce_for_op[next(iter(realized_children.keys()))] = r
 
   # preschedule all buffers in realizes
-  output_groups = ([x] for x in realizes if x not in seen and x.realized is None and x.op is not LoadOps.CONST)
-  prescheduled = {outs[0]:_schedule_group(tuple(outs), realizes, reduce_for_op) for outs in output_groups}
+  prescheduled = {outs[0]:_schedule_group(tuple(outs), realizes, reduce_for_op) for outs in output_groups.values()}
   schedule_targets = {out:ps for ps in prescheduled.values() for out in ps.outputs}
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
