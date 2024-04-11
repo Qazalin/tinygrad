@@ -1,8 +1,8 @@
 import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Tuple, List, Dict, Optional, Set, DefaultDict
-from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS
+from typing import Tuple, List, Dict, Optional, Set, DefaultDict, Union
+from tinygrad.ops import BinaryOps, LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, prod, dedup, all_int, merge_dicts, getenv
 from tinygrad.shape.symbolic import Variable
@@ -130,11 +130,12 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Set[LazyBuffer]) -> bool:
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
-def _deepwalk(buf:LazyBuffer, realizes:Set[LazyBuffer], parents:Set[LazyBuffer], first=True):
-  if buf.realized or buf.op is LoadOps.CONST: return
-  if not first: parents.add(buf)
-  if buf not in realizes:
-    for x in buf.srcs: _deepwalk(x.base, realizes, parents, first=False)
+def _deepwalk(buf:LazyBuffer, realizes:Set[LazyBuffer], parents:Set[LazyBuffer], realized_parents:Set[LazyBuffer], first=True):
+  if buf.realized is not None or buf.op is LoadOps.CONST: return
+  if not first:
+    parents.add(buf)
+    if buf in realizes: return realized_parents.add(buf)
+  for x in buf.srcs: _deepwalk(x.base, realizes, parents, realized_parents, first=False)
 
 def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
   if seen is None: seen = set()
@@ -151,16 +152,29 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
     if not _is_padding_okay(p, realizes):
       realizes.add(p)
 
-  output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
+  realize_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
     if r.realized is not None or r.op is LoadOps.CONST or r in seen: continue
-    if r.op in LoadOps or r.op in ReduceOps: key = (r, )
-    else:
-      _deepwalk(r, realizes, parents:=set())
-      print(parents)
+    if r.op in LoadOps or r.op in ReduceOps: realize_groups[(r, )].append(r)
+    else: realize_groups[(r.shape, r.device)].append(r)
 
-    key = (r, )
-    output_groups[key].append(r)
+
+  output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
+  for key, group in realize_groups.items():
+    if len(group) == 1:
+      output_groups[key].append(group[0])
+      continue
+
+    for r in group:
+      _deepwalk(r, realizes, parents:=set(), realized_parents:=set())
+      if len(realized_parents) != 0:
+        output_groups[(r, )].append(r)
+        continue
+      output_groups[key].append(r)
+
+  for key, outs in output_groups.items():
+    if len(outs) > 1: print("fuse!", key, outs)
+    pass
 
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
