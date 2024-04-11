@@ -1064,7 +1064,7 @@ if IMAGE:
 
 # TODO: eventually remove this
 def custom_random(out:Buffer):
-  Tensor._seed += 1
+  Tensor._seed = 0
   if DEBUG >= 2: print(f"*** {out.device}   rand  seed {Tensor._seed} size {out.size:<15d} dtype {out.dtype}")
   rng = np.random.default_rng(Tensor._seed)
   if out.dtype == dtypes.half: rng_np_buffer = (rng.integers(low=0, high=2047, size=out.size) / 2048).astype(np.half, copy=False)

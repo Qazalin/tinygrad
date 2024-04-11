@@ -194,12 +194,12 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
       output_groups.append(group);
       continue
     
-    print(f"{key[0].shape} ---------------------")
+    if DEBUG >= 1: print(f"{key[0].shape} ---------------------")
     output_pairs = {*pairs}
     fused_bufs: Set[LazyBuffer] = set()
     for x, y in pairs:
-      print(colored(f"considering {x.op}, {y.op}", "yellow"))
-      parents_set, can_fuse = _gather_parents(x, realizes, realized_parents, allbufs_cache), True
+      parents_set = _gather_parents(x, realizes, realized_parents, allbufs_cache)
+      can_fuse = True
       realize_path: Set[LazyBuffer] = set()
       # does x depend on y?
       while parents_set and can_fuse:
@@ -211,25 +211,40 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
             break
           for p in _gather_parents(next_buf, realizes, realized_parents, allbufs_cache): next_parents_set.add(p)
         parents_set = next_parents_set
+
+      if can_fuse:
+        # does y depend on x?
+        parents_set = _gather_parents(y, realizes, realized_parents, allbufs_cache)
+        while parents_set and can_fuse:
+          next_parents_set: Set[LazyBuffer] = set()
+          for next_buf in parents_set:
+            realize_path.add(next_buf)
+            if x in realize_path:
+              can_fuse = False
+              break
+            for p in _gather_parents(next_buf, realizes, realized_parents, allbufs_cache): next_parents_set.add(p)
+          parents_set = next_parents_set
+
       if not can_fuse:
-        print(colored(f"broke {x.shape} {x.op}, {y.op}", "red"))
+        if DEBUG >= 1: print(colored(f"broke {x.shape} {x.op}, {y.op}", "red"))
         output_pairs.remove((x, y)) 
       else:
-        print(colored(f"fused {x.shape} {x.op}, {y.op}", "green"))
+        if DEBUG >= 1: print(colored(f"fused {x.shape} {x.op}, {y.op}", "green"))
         fused_bufs.update((x, y))
 
     for fused_group in find_groups(output_pairs): output_groups.append(fused_group)
     for r in set(group) - fused_bufs: output_groups.append([r])
 
-  for outs in output_groups:
-    if len(outs) > 1: print("fuse!", outs[0].shape, [x.op for x in outs], len(outs))
-    pass
+  if DEBUG >= 1:
+    for outs in output_groups:
+      if len(outs) > 1: print("FUSION GROUP", outs[0].shape, [x.op for x in outs], len(outs))
 
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
     realizes.add(r)
+    output_groups.append([r])
     continue
 
     # follow the reduce down
