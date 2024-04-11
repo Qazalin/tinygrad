@@ -130,6 +130,12 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Set[LazyBuffer]) -> bool:
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
+def _deepwalk(buf:LazyBuffer, realizes:Set[LazyBuffer], parents:Set[LazyBuffer], first=True):
+  if buf.realized or buf.op is LoadOps.CONST: return
+  if not first: parents.add(buf)
+  if buf not in realizes:
+    for x in buf.srcs: _deepwalk(x.base, realizes, parents, first=False)
+
 def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
   if seen is None: seen = set()
 
@@ -148,6 +154,10 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
     if r.realized is not None or r.op is LoadOps.CONST or r in seen: continue
+    if r.op in LoadOps or r.op in ReduceOps: key = (r, )
+    else:
+      _deepwalk(r, realizes, parents:=set())
+      print(parents)
 
     key = (r, )
     output_groups[key].append(r)
