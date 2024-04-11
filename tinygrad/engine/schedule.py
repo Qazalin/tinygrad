@@ -187,7 +187,7 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
     if r.op in LoadOps or r.op in ReduceOps: realize_groups[(r, )].append(r)
     else: realize_groups[(r.st, r.device)].append(r)
 
-  # i want infra to be able to pair each realize in realize_groups seperatly, then, delete the pair if i find them to be unfusable
+  # "optimistically" pair the realizes by shape, delete the pair if infusible
   output_groups: List[List[LazyBuffer]] = []
   for key, group in realize_groups.items():
     if not (pairs:=tuple(combinations(group, 2))):
@@ -198,32 +198,24 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
     output_pairs = {*pairs}
     fused_bufs: Set[LazyBuffer] = set()
     for x, y in pairs:
-      parents_set = _gather_parents(x, realizes, realized_parents, allbufs_cache)
-      can_fuse = True
-      realize_path: Set[LazyBuffer] = set()
-      # does x depend on y?
-      while parents_set and can_fuse:
-        next_parents_set: Set[LazyBuffer] = set()
-        for next_buf in parents_set:
-          realize_path.add(next_buf)
-          if y in realize_path:
-            can_fuse = False
-            break
-          for p in _gather_parents(next_buf, realizes, realized_parents, allbufs_cache): next_parents_set.add(p)
-        parents_set = next_parents_set
 
-      if can_fuse:
-        # does y depend on x?
-        parents_set = _gather_parents(y, realizes, realized_parents, allbufs_cache)
+      def deep_depends(src:LazyBuffer, target:LazyBuffer):
+        parents_set = _gather_parents(src, realizes, realized_parents, allbufs_cache)
+        can_fuse = True
+        realize_path: DefaultDict[LazyBuffer, int] = defaultdict(int)
         while parents_set and can_fuse:
           next_parents_set: Set[LazyBuffer] = set()
           for next_buf in parents_set:
-            realize_path.add(next_buf)
-            if x in realize_path:
+            realize_path[next_buf] += 1
+            if next_buf is target:
               can_fuse = False
               break
             for p in _gather_parents(next_buf, realizes, realized_parents, allbufs_cache): next_parents_set.add(p)
           parents_set = next_parents_set
+        return can_fuse
+
+      can_fuse = deep_depends(x, y)
+      if can_fuse: can_fuse = deep_depends(y, x)
 
       if not can_fuse:
         if DEBUG >= 1: print(colored(f"broke {x.shape} {x.op}, {y.op}", "red"))
