@@ -130,12 +130,19 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Set[LazyBuffer]) -> bool:
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
-def _deepwalk(buf:LazyBuffer, realizes:Set[LazyBuffer], parents:Set[LazyBuffer], realized_parents:Set[LazyBuffer], first=True):
-  if buf.realized is not None or buf.op is LoadOps.CONST: return
-  if not first:
-    parents.add(buf)
-    if buf in realizes: return realized_parents.add(buf)
-  for x in buf.srcs: _deepwalk(x.base, realizes, parents, realized_parents, first=False)
+# walk back the LazyBuffer graph to find realized parents
+def _deepwalk(buf:LazyBuffer, realizes:Set[LazyBuffer], realized_parents:Set[LazyBuffer], allbufs:Set[LazyBuffer]):
+  if buf.realized or buf.op is LoadOps.CONST: return
+  allbufs.add(buf)
+  if buf in realizes: return realized_parents.add(buf)
+  for x in buf.srcs: _deepwalk(x.base, realizes, realized_parents, allbufs)
+
+def _gather_parents(buf:LazyBuffer, realizes:Set[LazyBuffer], cache:Dict[LazyBuffer, Set[LazyBuffer]],
+                    allbufs_cache:Dict[LazyBuffer, Set[LazyBuffer]]) -> Set[LazyBuffer]:
+  if buf not in cache:
+    cache[buf], allbufs_cache[buf] = set(), set()
+    for x in buf.srcs: _deepwalk(x.base, realizes, cache[buf], allbufs_cache[buf])
+  return cache[buf]
 
 def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
   if seen is None: seen = set()
@@ -145,6 +152,8 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
   allbufs: Dict[LazyBuffer, None] = {}
   simple_pads: Set[LazyBuffer] = set()
   children: DefaultDict[LazyBuffer, Dict[LazyBuffer, None]] = defaultdict(dict)
+  realized_parents: Dict[LazyBuffer, Set[LazyBuffer]] = {}
+  allbufs_cache: Dict[LazyBuffer, Set[LazyBuffer]] = {}
   for out in outs: _recurse_lb(out.base, realizes, allbufs, simple_pads, children, scheduled=True)
 
   # check if we have to realize pads
@@ -156,7 +165,7 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
   for r in realizes:
     if r.realized is not None or r.op is LoadOps.CONST or r in seen: continue
     if r.op in LoadOps or r.op in ReduceOps: realize_groups[(r, )].append(r)
-    else: realize_groups[(r.shape, r.device)].append(r)
+    else: realize_groups[(r.st, r.device)].append(r)
 
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
@@ -166,14 +175,31 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
       continue
 
     for r in group:
-      _deepwalk(r, realizes, parents:=set(), realized_parents:=set())
-      if len(realized_parents) != 0:
-        output_groups[(r, )].append(r)
-        continue
-      output_groups[key].append(r)
+      # does one child depend on the other child?
+      parents_set = _gather_parents(r, realizes, realized_parents, allbufs_cache)
+      realize_path: Set[LazyBuffer] = set()
+      forced_realize = False
+      while parents_set and not forced_realize:
+        next_parents_set: Set[LazyBuffer] = set()
+        for next_buf in parents_set:
+          realize_path.add(next_buf)
+          # if there is a self-dependency, make sure fusion doesn't create a cycle
+          if next_buf in group:
+            # is the connection between next_buf and rc direct?
+            print(f"FOUND {next_buf} in {r}")
+
+            # can't fuse if an expand depends on the buf in the group
+            for parent_buf in realized_parents[r]:
+              print(parent_buf)
+            print("----------")
+          #if next_buf in group: print("hi!!")
+          for p in _gather_parents(next_buf, realizes, realized_parents, allbufs_cache): next_parents_set.add(p)
+          parents_set = next_parents_set
+      output_groups[(r, ) if forced_realize else key].append(r)
+
 
   for key, outs in output_groups.items():
-    if len(outs) > 1: print("fuse!", key, outs)
+    if len(outs) > 1: print("fuse!", key[0].shape, [x.op for x in outs], len(outs))
     pass
 
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
