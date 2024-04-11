@@ -1,10 +1,11 @@
+from itertools import combinations
 import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict, Union
 from tinygrad.ops import BinaryOps, LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
-from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, prod, dedup, all_int, merge_dicts, getenv
+from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, colored, flatten, prod, dedup, all_int, merge_dicts, getenv
 from tinygrad.shape.symbolic import Variable
 from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.lazy import LazyBuffer
@@ -144,6 +145,25 @@ def _gather_parents(buf:LazyBuffer, realizes:Set[LazyBuffer], cache:Dict[LazyBuf
     for x in buf.srcs: _deepwalk(x.base, realizes, cache[buf], allbufs_cache[buf])
   return cache[buf]
 
+def find_groups(pairs):
+  graph = defaultdict(list)
+  for a, b in pairs:
+    graph[a].append(b)
+    graph[b].append(a)
+  
+  def dfs(node, visited, group):
+    visited.add(node)
+    group.append(node)
+    for neighbor in graph[node]:
+      if neighbor not in visited: dfs(neighbor, visited, group)
+  
+  visited, groups = set(), []
+  for node in graph:
+    if node not in visited:
+      dfs(node, visited, group:=[])
+      groups.append(group)
+  return groups
+
 def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
   if seen is None: seen = set()
 
@@ -167,45 +187,50 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
     if r.op in LoadOps or r.op in ReduceOps: realize_groups[(r, )].append(r)
     else: realize_groups[(r.st, r.device)].append(r)
 
-
-  output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
+  # i want infra to be able to pair each realize in realize_groups seperatly, then, delete the pair if i find them to be unfusable
+  output_groups: List[List[LazyBuffer]] = []
   for key, group in realize_groups.items():
-    if len(group) == 1:
-      output_groups[key].append(group[0])
+    if not (pairs:=tuple(combinations(group, 2))):
+      output_groups.append(group);
       continue
-
-    for r in group:
-      # does one child depend on the other child?
-      parents_set = _gather_parents(r, realizes, realized_parents, allbufs_cache)
+    
+    print(f"{key[0].shape} ---------------------")
+    output_pairs = {*pairs}
+    fused_bufs: Set[LazyBuffer] = set()
+    for x, y in pairs:
+      print(colored(f"considering {x.op}, {y.op}", "yellow"))
+      parents_set, can_fuse = _gather_parents(x, realizes, realized_parents, allbufs_cache), True
       realize_path: Set[LazyBuffer] = set()
-      forced_realize = False
-      while parents_set and not forced_realize:
+      # does x depend on y?
+      while parents_set and can_fuse:
         next_parents_set: Set[LazyBuffer] = set()
         for next_buf in parents_set:
           realize_path.add(next_buf)
-          # if there is a self-dependency, make sure fusion doesn't create a cycle
-          if next_buf in group:
-            # is the connection between next_buf and rc direct?
-            print(f"FOUND {next_buf} in {r}")
-
-            # can't fuse if an expand depends on the buf in the group
-            for parent_buf in realized_parents[r]:
-              print(parent_buf)
-            print("----------")
-          #if next_buf in group: print("hi!!")
+          if y in realize_path:
+            can_fuse = False
+            break
           for p in _gather_parents(next_buf, realizes, realized_parents, allbufs_cache): next_parents_set.add(p)
-          parents_set = next_parents_set
-      output_groups[(r, ) if forced_realize else key].append(r)
+        parents_set = next_parents_set
+      if not can_fuse:
+        print(colored(f"broke {x.shape} {x.op}, {y.op}", "red"))
+        output_pairs.remove((x, y)) 
+      else:
+        print(colored(f"fused {x.shape} {x.op}, {y.op}", "green"))
+        fused_bufs.update((x, y))
 
+    for fused_group in find_groups(output_pairs): output_groups.append(fused_group)
+    for r in set(group) - fused_bufs: output_groups.append([r])
 
-  for key, outs in output_groups.items():
-    if len(outs) > 1: print("fuse!", key[0].shape, [x.op for x in outs], len(outs))
+  for outs in output_groups:
+    if len(outs) > 1: print("fuse!", outs[0].shape, [x.op for x in outs], len(outs))
     pass
 
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
+    realizes.add(r)
+    continue
 
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
@@ -252,13 +277,13 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
           tr = tr_next
         reduce_for_op[tr] = r
       realizes.add(tr)
-      output_groups[(tr, )].append(tr)
+      output_groups.append([tr])
     else:
       assert len(realized_children) == 1
       reduce_for_op[next(iter(realized_children.keys()))] = r
 
   # preschedule all buffers in realizes
-  prescheduled = {outs[0]:_schedule_group(tuple(outs), realizes, reduce_for_op) for outs in output_groups.values()}
+  prescheduled = {outs[0]:_schedule_group(tuple(outs), realizes, reduce_for_op) for outs in output_groups}
   schedule_targets = {out:ps for ps in prescheduled.values() for out in ps.outputs}
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
