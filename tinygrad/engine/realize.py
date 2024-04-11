@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional
-from tinygrad.helpers import colored
+from tinygrad.helpers import colored, getenv
 from tinygrad.ops import ScheduleItem, BufferOps, LoadOps
 from tinygrad.device import JITRunner, Device, BufferCopy, BufferXfer, update_stats
 from tinygrad.buffer import Buffer
@@ -28,6 +28,9 @@ def lower_schedule_item(si:ScheduleItem) -> JITRunner:
   raise RuntimeError(f"don't know how to lower {ast}")
 
 def run_schedule(schedule:List[ScheduleItem], var_vals:Optional[Dict[Variable, int]] = None):
+  if getenv("GRAPHSCHEDULE"):
+    from tinygrad.features.graph import save_schedule_graph
+    save_schedule_graph(schedule)
   while len(schedule):
     si = schedule.pop(0)
 
