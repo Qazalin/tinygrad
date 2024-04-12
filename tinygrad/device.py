@@ -39,7 +39,7 @@ Device = _Device()
 
 # **************** base Runner + helpers ****************
 
-class JITRunner:
+class Runner:
   def __init__(self):
     self.op_estimate:sint = 0
     self.mem_estimate:sint = 0
@@ -67,10 +67,10 @@ def update_stats(name:str, op_estimate:sint, mem_estimate:sint, var_vals: Option
 
 # **************** Buffer / Allocator ****************
 
-class BufferCopy(JITRunner):
+class BufferCopy(Runner):
   def copy(self, dest, src):
-    if src.device.startswith("DISK") and hasattr(dest.allocator, 'copy_from_fd') and src.nbytes >= 4096 and src._buf.ud.fd is not None:
-      dest.allocator.copy_from_fd(dest._buf, src._buf.ud.fd, src._buf.offset, src.nbytes)
+    if src.device.startswith("DISK") and hasattr(dest.allocator, 'copy_from_fd') and src.nbytes >= 4096 and hasattr(src.allocator.device, 'fd'):
+      dest.allocator.copy_from_fd(dest._buf, src.allocator.device.fd, src._buf.offset, src.nbytes)
     elif src.device.startswith("DISK") and hasattr(dest.allocator, 'as_buffer'):
       # fast(ish) path, uses readinto in diskbuffers
       src.allocator.copyout(dest.allocator.as_buffer(dest._buf), src._buf)
@@ -158,7 +158,7 @@ class Compiler:
       if self.cachekey is not None: diskcache_put(self.cachekey, src, lib)
     return lib
 
-class CompiledASTRunner(JITRunner):
+class CompiledRunner(Runner):
   def __init__(self, name:str, prg:str, dname:str, global_size:Optional[List[int]]=None, local_size:Optional[List[int]]=None,
                variables:Optional[List[Variable]]=None, op_estimate:sint=0, mem_estimate:sint=0, precompiled:Optional[bytes]=None, outcount:int=1):
     super().__init__()
@@ -201,7 +201,7 @@ class CompiledASTRunner(JITRunner):
     self.first_run = False
     return et
 
-class MultiDeviceJITGraph(JITRunner):
+class MultiDeviceJITGraph(Runner):
   def __call__(self, rawbufs:List[Buffer], var_vals:Dict[Variable, int], wait=False, jit=False) -> Optional[float]:
     raise NotImplementedError("override this")
 
@@ -211,14 +211,14 @@ class Compiled:
     self.dname, self.allocator, self.compiler, self.runtime, self.graph = device, allocator, compiler, runtime, graph
   def synchronize(self): pass  # override this in your device
 
-  def to_program(self, k:Linearizer) -> CompiledASTRunner:
+  def to_program(self, k:Linearizer) -> CompiledRunner:
     assert self.compiler is not None, "compiler is required to run AST"
     k.linearize()
     info = get_lazyop_info(k.ast[0])
     ops, mem = k.uops.flops_mem()
     run_count = prod((k.global_size if k.global_size else []) + (k.local_size if k.local_size else []))
     # NOTE: we use min here to ignore the indexing FLOPS
-    ret = CompiledASTRunner(k.name, self.compiler.render(to_function_name(k.name), k.uops), self.dname, k.global_size, k.local_size,
+    ret = CompiledRunner(k.name, self.compiler.render(to_function_name(k.name), k.uops), self.dname, k.global_size, k.local_size,
                             k.uops.vars(), min(info.flops, ops * run_count), min(info.mem_estimate, mem * run_count), outcount=len(k.outbufs))
     return ret
 
@@ -233,22 +233,25 @@ class Compiled:
     if not NOOPT:
       if not (used_tensor_cores:=k.apply_tensor_cores(getenv("TC", 1))): k.hand_coded_optimizations()
       if BEAM >= 1:
-        lins = [(("tc" if used_tensor_cores else "hc"), k)]
-        if used_tensor_cores:
-          lins.append(("hc", Linearizer(*ast, opts=self.compiler.compiler_opts)))
-          lins[-1][1].hand_coded_optimizations()
-        kb = Linearizer(*ast, opts=self.compiler.compiler_opts)
-        kb.required_optimizations()
         from tinygrad.features.search import beam_search, time_linearizer, bufs_from_lin
-        test_rawbuffers = bufs_from_lin(kb)    # allocate scratch buffers for optimization
-        lins.append((f"beam{BEAM.value}", beam_search(kb, test_rawbuffers, BEAM.value, bool(getenv("BEAM_ESTIMATE", 1)))))
-        timed = sorted([(nm, tk, time_linearizer(tk, test_rawbuffers, allow_test_size=False, clear_l2=True)) for nm, tk in lins], key=lambda x: x[2])
-        if DEBUG >= 1: print("  <  ".join(f"{nm:6s} : {lin.colored_shape(30, dense=True)} : {tm*1e6:8.2f} us" for nm, lin, tm in timed))
-        k = timed[0][1]
-        if logkern is not None and logkern_level > 1: logkern.writelines([f"{(lin.ast, lin.applied_opts)}\n" for (_,lin,_) in timed[1:]])
+        kb, k_opt = Linearizer(*ast, opts=self.compiler.compiler_opts), k
+        kb.required_optimizations()
+        rawbufs = bufs_from_lin(kb, allocate=False)
+        k = beam_search(kb, rawbufs, BEAM.value, bool(getenv("BEAM_ESTIMATE", 1)))
+        if getenv("BEAM_COMPARE", 1):
+          # TODO: move the HC/TC/BEAM compare to beam_search so it can be optionally cached which choice is better
+          lins: List[Tuple[str, Linearizer]] = [(f"beam{BEAM.value}", k), (("tc" if used_tensor_cores else "hc"), k_opt)]
+          if used_tensor_cores:
+            lins.append(("hc", Linearizer(*ast, opts=self.compiler.compiler_opts)))
+            lins[-1][1].hand_coded_optimizations()
+          timed = sorted([(nm, tk, time_linearizer(tk, rawbufs, allow_test_size=False, clear_l2=True)) for nm, tk in lins], key=lambda x: x[2])
+          if DEBUG >= 1: print("  <  ".join(f"{nm:6s} : {lin.colored_shape(30, dense=True)} : {tm*1e6:8.2f} us" for nm, lin, tm in timed))
+          k = timed[0][1]
+          if logkern is not None and logkern_level > 1: logkern.writelines([f"{(lin.ast, lin.applied_opts)}\n" for (_,lin,_) in timed[1:]])
     # TODO: check the correctness inline once compare_linearizer is in core
     if logkern is not None: logkern.writelines([f"{(k.ast, k.applied_opts)}\n"])
+    if DEBUG >= 4: print((k.ast, k.applied_opts)) # print here to show final applied_opts for all kernels instead of just in beam_search
     return k
 
   @functools.lru_cache(None)    # pylint: disable=method-cache-max-size-none
-  def get_runner(self, *ast:LazyOp) -> CompiledASTRunner: return self.to_program(self.get_linearizer(*ast))
+  def get_runner(self, *ast:LazyOp) -> CompiledRunner: return self.to_program(self.get_linearizer(*ast))
