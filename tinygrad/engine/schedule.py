@@ -2,7 +2,7 @@ from itertools import combinations
 import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Tuple, List, Dict, Optional, Set, DefaultDict, Union
+from typing import Tuple, List, Dict, Optional, Set, DefaultDict, TypeVar, Union
 from tinygrad.ops import BinaryOps, LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, colored, flatten, prod, dedup, all_int, merge_dicts, getenv
@@ -145,23 +145,32 @@ def _gather_parents(buf:LazyBuffer, realizes:Set[LazyBuffer], cache:Dict[LazyBuf
     for x in buf.srcs: _deepwalk(x.base, realizes, cache[buf], allbufs_cache[buf])
   return cache[buf]
 
-def find_groups(pairs):
-  graph = defaultdict(list)
-  for a, b in pairs:
-    graph[a].append(b)
-    graph[b].append(a)
-  
-  def dfs(node, visited, group):
-    visited.add(node)
-    group.append(node)
-    for neighbor in graph[node]:
-      if neighbor not in visited: dfs(neighbor, visited, group)
-  
-  visited, groups = set(), []
-  for node in graph:
-    if node not in visited:
-      dfs(node, visited, group:=[])
-      groups.append(group)
+T = TypeVar("T")
+def find_groups(*pairs: Tuple[T,T]) -> List[List[T]]:
+  graph: DefaultDict[T, Set[T]] = defaultdict(set)
+  for x, y in pairs:
+    graph[x].add(y)
+    graph[y].add(x)
+
+  def bron_kerbosch(r:Set[T], p:Set[T], x:Set[T], graph:DefaultDict[T, Set[T]], cliques:List[Set[T]]):
+    if not p and not x: return cliques.append(r)
+    for v in p.copy():
+      bron_kerbosch(r | {v}, p & graph[v], x & graph[v], graph, cliques)
+      p.remove(v)
+      x.add(v)
+  bron_kerbosch(set(), set(graph.keys()), set(), graph, cliques:=[])
+
+  cliques: List[Set[T]] = list(sorted(cliques, key=lambda x:len(x), reverse=True))
+  groups: List[List[T]] = []
+  visited: Set[T] = set()
+  for c in cliques:
+    group = [*c]
+    for v in c:
+      if v in visited:
+        group.remove(v)
+        continue
+      visited.add(v)
+    if group: groups.append(group)
   return groups
 
 def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
@@ -194,7 +203,7 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
       output_groups.append(group);
       continue
     
-    if DEBUG >= 1: print(f"{key[0].shape} ---------------------")
+    if DEBUG >= 2: print(f"{key[0].shape} ---------------------")
     output_pairs = {*pairs}
     fused_bufs: Set[LazyBuffer] = set()
     for x, y in pairs:
@@ -218,16 +227,16 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
       if can_fuse: can_fuse = deep_depends(y, x)
 
       if not can_fuse:
-        if DEBUG >= 1: print(colored(f"broke {x.shape} {x.op}, {y.op}", "red"))
+        if DEBUG >= 2: print(colored(f"broke {x.op}, {y.op}", "red"))
         output_pairs.remove((x, y)) 
       else:
-        if DEBUG >= 1: print(colored(f"fused {x.shape} {x.op}, {y.op}", "green"))
+        if DEBUG >= 2: print(colored(f"fused {x.op}, {y.op}", "green"))
         fused_bufs.update((x, y))
 
-    for fused_group in find_groups(output_pairs): output_groups.append(fused_group)
+    for fused_group in find_groups(*output_pairs): output_groups.append(fused_group)
     for r in set(group) - fused_bufs: output_groups.append([r])
 
-  if DEBUG >= 1:
+  if DEBUG >= 2:
     for outs in output_groups:
       if len(outs) > 1: print("FUSION GROUP", outs[0].shape, [x.op for x in outs], len(outs))
 
