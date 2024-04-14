@@ -37,6 +37,9 @@ def lower_schedule_item(si:ScheduleItem) -> Runner:
   raise RuntimeError(f"don't know how to lower {ast}")
 
 def lower_schedule(schedule:List[ScheduleItem]) -> Generator[ExecItem, None, None]:
+  if getenv("GRAPHSCHEDULE"):
+    from tinygrad.features.graph import save_schedule_graph
+    save_schedule_graph(schedule)
   while len(schedule): yield ExecItem(lower_schedule_item(si:=schedule.pop(0)), list(si.outputs+si.inputs))
 
 capturing: List = []  # put classes with an add method in here
