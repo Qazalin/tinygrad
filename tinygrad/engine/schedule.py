@@ -153,9 +153,12 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
     realized_children: Dict[LazyBuffer, ShapeTracker] = {}
     forced_realize = False
     can_chase = True
+    visited_children: Set[LazyBuffer] = set()
     while not forced_realize and len(child_set):
       next_child_set = {}
       for tr,st in child_set.items():
+        if tr in visited_children: continue
+        visited_children.add(tr)
         if tr in realizes:
           realized_children[tr] = st
           # can only have one output buffer
