@@ -158,10 +158,14 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
       for tr,st in child_set.items():
         if tr in realizes:
           realized_children[tr] = st
-          # can only have one output buffer
           # can only reduce contiguous
           # max one reduceop per kernel
-          if len(realized_children) > 1 or not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r):
+          if not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r):
+            can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
+            forced_realize = True
+            break
+          # can only have one output buffer
+          if len(realized_children) > 1:
             can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
             forced_realize = True
             break
