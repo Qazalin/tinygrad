@@ -150,6 +150,8 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
 
+    D = r.shape == (2, 56, 56, 64, 1)
+
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
     realized_children: Dict[LazyBuffer, ShapeTracker] = {}
@@ -170,6 +172,15 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
           if len(realized_children) > 1:
             can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
             forced_realize = True
+            if not D: break
+            for rc in realized_children:
+              print(f"------- {rc}")
+              stack: List[LazyBuffer] = [x.base for x in rc.srcs]
+              while stack:
+                if (e:=stack.pop()).realized is not None or e.op is LoadOps.CONST: continue
+                if e in realizes: print(e, e in realized_children)
+                if e is r: break
+                for x in e.srcs: stack.append(x.base)
             break
           continue
         for tr_next in children[tr].keys():
