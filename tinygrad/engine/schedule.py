@@ -159,25 +159,26 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
       next_child_set = {}
       for tr,st in child_set.items():
         if tr in realizes:
-          realized_children[tr] = st
           # can only reduce contiguous
           # max one reduceop per kernel
           if not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r):
             can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
             forced_realize = True
             break
-          if len(realized_children) > 1:
-            for rc in realized_children:
-              rc_parents = deque(x.base for x in rc.srcs)
-              while rc_parents:
-                if (p:=rc_parents.pop()).realized or p.op is LoadOps.CONST: continue
-                if p is r: continue
-                # max one reduceop per kernel
-                if p.op in ReduceOps:
-                  can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
-                  forced_realize = True
-                  break
-                for x in p.srcs: rc_parents.append(x.base)
+          # check if tr can be grouped with the other children
+          if realized_children:
+            tr_parents = deque(x.base for x in tr.srcs)
+            while tr_parents:
+              if (p:=tr_parents.pop()).realized or p.op is LoadOps.CONST: continue
+              # follow down tr up to this reduce
+              if p is r: continue
+              # max one reduceop per kernel
+              if p.op in ReduceOps:
+                can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
+                forced_realize = True
+                break
+              for src in p.srcs: tr_parents.append(src.base)
+          realized_children[tr] = st
           continue
         for tr_next in children[tr].keys():
           if not tr_next.realized:

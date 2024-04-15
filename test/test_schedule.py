@@ -435,7 +435,8 @@ class TestSchedule(unittest.TestCase):
     a = Tensor.empty((4, 4))
     out0 = a.sum() + 2
     out1 = a.sum() + 4
-    check_schedule([out0, out1], 1)
+    out2 = a.sum() + 5
+    check_schedule([out0, out1, out2], 1)
 
   def test_group_inner_deps_fuse(self):
     a = Tensor.empty((4, 4))
