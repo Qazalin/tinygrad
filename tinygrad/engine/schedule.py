@@ -153,6 +153,7 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
     realized_children: Dict[LazyBuffer, ShapeTracker] = {}
+    can_group: Set[LazyBuffer] = set()
     forced_realize = False
     can_chase = True
     while not forced_realize and len(child_set):
@@ -168,6 +169,7 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
             break
           if len(realized_children) > 1:
             for rc in realized_children:
+              if rc in can_group: continue
               rc_parents = deque(x.base for x in rc.srcs)
               while rc_parents:
                 if (p:=rc_parents.pop()).realized or p.op is LoadOps.CONST: continue
@@ -178,6 +180,7 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
                   forced_realize = True
                   break
                 for x in p.srcs: rc_parents.append(x.base)
+              can_group.add(rc)
           continue
         for tr_next in children[tr].keys():
           if not tr_next.realized:
