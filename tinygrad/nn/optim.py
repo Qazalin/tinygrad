@@ -1,5 +1,6 @@
 # sorted in order of increasing complexity
 from typing import List, Optional
+from tinygrad.engine.schedule import create_schedule
 from tinygrad.helpers import dedup, flatten, getenv
 from tinygrad.tensor import Tensor
 
@@ -22,6 +23,9 @@ class Optimizer:
     Tensor.corealize(extra + self.params + self.buffers if extra is not None else self.params + self.buffers)
 
   def step(self, extra:Optional[List[Tensor]]=None): self.realize(self._step() + (extra if extra is not None else []))
+  def sched_step(self, extra:Optional[List[Tensor]]=None):
+    lbs = flatten([x.lazydata.lbs for x in self._step() + (extra if extra is not None else [])])
+    return create_schedule(lbs)
   def _step(self) -> List[Tensor]: raise NotImplementedError
 
 class OptimizerGroup(Optimizer):
