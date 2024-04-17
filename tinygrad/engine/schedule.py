@@ -2,7 +2,7 @@ import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
-from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS
+from tinygrad.ops import BinaryOps, LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, GlobalCounters, prod, dedup, all_int, merge_dicts, getenv
 from tinygrad.shape.symbolic import Variable
@@ -93,7 +93,8 @@ def _schedule_group(outs:Tuple[LazyBuffer, ...], realizes:Dict[LazyBuffer, None]
 
 # recursively search the entire graph for all LazyBuffers, insert realizes after expands
 def _recurse_lb(buf:LazyBuffer, realizes:Dict[LazyBuffer, None], allbufs:Dict[LazyBuffer, None],
-                simple_pads:Set[LazyBuffer], children:DefaultDict[LazyBuffer, Dict[LazyBuffer, None]], scheduled=False):
+                simple_pads:Set[LazyBuffer], children:DefaultDict[LazyBuffer, Dict[LazyBuffer, None]],
+                e_groups: DefaultDict[ShapeTracker, List[LazyBuffer]], scheduled=False):
   if buf in allbufs or buf.base.realized: return
   if GRAPH: log_lazybuffer(buf, scheduled)
   if isinstance(buf.dtype, ImageDType) and (prod(buf.shape) != prod(buf.dtype.shape) or
@@ -113,16 +114,19 @@ def _recurse_lb(buf:LazyBuffer, realizes:Dict[LazyBuffer, None], allbufs:Dict[La
         simple_pads.add(buf.base)
       else:
         realizes[buf.base] = None
-    return _recurse_lb(buf.base, realizes, allbufs, simple_pads, children)
+        e_groups[buf.base.st].append(buf.base)
+    return _recurse_lb(buf.base, realizes, allbufs, simple_pads, children, e_groups)
   if buf.forced_realize: realizes[buf] = None
   allbufs[buf] = None
-  if buf.op in LoadOps: realizes[buf.base] = None
+  if buf.op in LoadOps:
+    realizes[buf.base] = None
+    if buf.op in [LoadOps.ASSIGN, LoadOps.CONTIGUOUS]: e_groups[buf.base.st].append(buf.base)
   if buf.op is LoadOps.COPY:
     assert buf.srcs[0].st.contiguous and buf.srcs[0].size == buf.srcs[0].base.size, "can only copy contig"
     realizes[buf.srcs[0].base] = None
   for x in buf.srcs:
     children[x.base][buf] = None
-    _recurse_lb(x, realizes, allbufs, simple_pads, children)
+    _recurse_lb(x, realizes, allbufs, simple_pads, children, e_groups)
 
 def _is_padding_okay(buf:LazyBuffer, realizes:Dict[LazyBuffer, None]) -> bool:
   if buf in realizes or buf.realized: return True
@@ -138,7 +142,27 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
   allbufs: Dict[LazyBuffer, None] = {}
   simple_pads: Set[LazyBuffer] = set()
   children: DefaultDict[LazyBuffer, Dict[LazyBuffer, None]] = defaultdict(dict)
-  for out in outs: _recurse_lb(out.base, realizes, allbufs, simple_pads, children, scheduled=True)
+  e_groups: DefaultDict[ShapeTracker, List[LazyBuffer]] = defaultdict(list)
+  for out in outs:
+    e_groups[out.st].append(out.base)
+    _recurse_lb(out.base, realizes, allbufs, simple_pads, children, e_groups, scheduled=True)
+
+  group_for_output: Dict[LazyBuffer, Tuple] = {}
+  for st, bufs in e_groups.items():
+    if len(outs) != 7 or st.shape != (784, 128): continue
+    print(st.shape, len(bufs))
+    # walk back the graph of each buf until you hit: 1. root 2. one of the other bufs in the group
+    for buf in bufs:
+      can_group = True
+      buf_parents = deque(x.base for x in buf.srcs)
+      while buf_parents:
+        if (p:=buf_parents.pop()).realized is not None or p.op is LoadOps.CONST or p in seen: continue
+        if p in bufs: break
+        if p.op in ReduceOps:
+          can_group = False
+          break
+        for x in p.srcs: buf_parents.append(x.base)
+      if can_group: group_for_output[buf] = (st.shape, )
 
   # check if we have to realize pads
   for p in simple_pads:
@@ -211,7 +235,9 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
     if r.realized is not None or r.op is LoadOps.CONST or r in seen: continue
-    output_groups[(reduce_for_op[r], ) if r in reduce_for_op else (r, )].append(r)
+    key = (reduce_for_op[r], ) if r in reduce_for_op else (r, )
+    if r in group_for_output: key = (group_for_output[r], )
+    output_groups[key].append(r)
 
   # preschedule all buffers in realizes
   prescheduled = {group[0]:_schedule_group(tuple(group), realizes, reduce_for_op) for group in output_groups.values()}
