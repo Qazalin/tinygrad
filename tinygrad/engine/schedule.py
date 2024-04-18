@@ -109,7 +109,8 @@ def _recurse_lb(buf:LazyBuffer, realizes:Dict[LazyBuffer, None], allbufs:Dict[La
       if len(buf.st.views) == 1 and buf.st.views[-1].mask and all_int(buf.base.st.shape) and \
           prod(buf.base.st.shape) >= prod([y-x for x,y in buf.st.views[-1].mask]):
         simple_pads.add(buf.base)
-      elif all([x.op not in ReduceOps for x in buf.base.srcs if hasattr(x, "op")]):
+      else:
+        print("expanding ", buf, buf.base)
         realizes[buf.base] = None
     return _recurse_lb(buf.base, realizes, allbufs, simple_pads, children)
   if buf.forced_realize: realizes[buf] = None
