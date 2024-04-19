@@ -212,11 +212,15 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
 
   group_for_output: Dict[LazyBuffer, LazyBuffer] = {}
   for r in realizes:
-    if r.realized is not None or r.op is LoadOps.CONST or r in reduce_for_op or r in seen or (r.op in LoadOps and r.op is not LoadOps.ASSIGN): continue
+    if r.realized is not None or r.op is LoadOps.CONST or r in reduce_for_op or r in seen or (r.op in LoadOps and r.op is not LoadOps.ASSIGN) or r.op in ReduceOps: continue
+    if r.shape != (1,): continue
     children_q = deque(children[r])
     while children_q:
       if (c:=children_q.pop()).realized or c.op is LoadOps.CONST or c in seen: continue
-      if c.shape == r.shape: group_for_output[c] = r
+      if c.shape != r.shape: break
+      if c in realizes:
+        group_for_output[c] = r
+        print(f"{c}")
       for next_c in children[c]: children_q.append(next_c.base)
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
