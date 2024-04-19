@@ -210,10 +210,20 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
       realizes[tr] = None
     else: reduce_for_op.update((tr, r) for tr in realized_children)
 
+  group_for_output: Dict[LazyBuffer, LazyBuffer] = {}
+  for r in realizes:
+    if r.realized is not None or r.op is LoadOps.CONST or r in reduce_for_op or r in seen or (r.op in LoadOps and r.op is not LoadOps.ASSIGN): continue
+    children_q = deque(children[r])
+    while children_q:
+      if (c:=children_q.pop()).realized or c.op is LoadOps.CONST or c in seen: continue
+      if c.shape == r.shape: group_for_output[c] = r
+      for next_c in children[c]: children_q.append(next_c.base)
+
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
     if r.realized is not None or r.op is LoadOps.CONST or r in seen: continue
-    output_groups[(reduce_for_op[r], ) if r in reduce_for_op and MULTIOUTPUT else (r, )].append(r)
+    group_key = (reduce_for_op[r], ) if r in reduce_for_op else (group_for_output[r], ) if r in group_for_output else (r,)
+    output_groups[group_key if MULTIOUTPUT else (r, )].append(r)
 
   # preschedule all buffers in realizes
   prescheduled = {group[0]:_schedule_group(tuple(group), realizes, reduce_for_op) for group in output_groups.values()}
