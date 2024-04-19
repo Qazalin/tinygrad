@@ -210,6 +210,21 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
       realizes[tr] = None
     else: reduce_for_op.update((tr, r) for tr in realized_children)
 
+  group_for_output: Dict[LazyBuffer, Tuple] = {}
+  for r in realizes:
+    r_parents = deque([r])
+    realized_parents: List[LazyBuffer] = []
+    while r_parents:
+      if (p:=r_parents.pop()).realized is not None or p.base.shape != r.shape or p.op in ReduceOps or p in reduce_for_op or p.op in LoadOps: continue
+      if p in realizes and p is not r:
+        realized_parents.append(p)
+        continue
+      for x in p.srcs: r_parents.append(x.base)
+    if not realized_parents: continue
+    print()
+    print(r)
+    print(realized_parents)
+
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
     if r.realized is not None or r.op is LoadOps.CONST or r in seen: continue
