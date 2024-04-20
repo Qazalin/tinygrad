@@ -213,7 +213,6 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   group_for_output: Dict[LazyBuffer, LazyBuffer] = {}
   for r in realizes:
     if r.forced_realize or r.realized is not None or r.op is LoadOps.CONST or r.op in LoadOps: continue
-    if r.shape != (784, 128): continue
     r_parents = deque([r])
     realized_parents: Set[LazyBuffer] = set()
     while r_parents:
@@ -225,9 +224,24 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
       for x in p.srcs: r_parents.append(x.base)
 
     if not realized_parents: continue
-    print()
-    print(r)
-    for rp in realized_parents: print("  ", rp)
+    parents_group = list(realized_parents)
+    for rp in realized_parents:
+      path_q = deque([(r, [r])])
+      all_paths: List[List[LazyBuffer]] = []
+      while path_q:
+        curr_node, path = path_q.pop()
+        if curr_node.realized is not None or curr_node.op is LoadOps.CONST: continue
+        if curr_node is rp:
+          full_path = path[::-1]
+          if any(x.op in ReduceOps or x in reduce_for_op for x in path):
+            parents_group.remove(rp)
+            break
+          all_paths.append(full_path)
+          continue
+        for p in curr_node.srcs:
+          new_path = path + [p] if p in realizes else path
+          path_q.append((p.base, new_path))
+    for p in parents_group: group_for_output[p] = r
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
