@@ -212,36 +212,33 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
 
   group_for_output: Dict[LazyBuffer, LazyBuffer] = {}
   for r in realizes:
-    if r.shape != (8, 1, 3, 3): continue
     r_parents = deque([r])
     realized_parents: Set[LazyBuffer] = set()
     while r_parents:
-      if (p:=r_parents.pop()).realized is not None or p.base.shape != r.shape or p.op in ReduceOps or p in reduce_for_op or p.op in LoadOps or r in group_for_output: continue
-      print(p)
+      p = r_parents.pop()
+      if p.realized is not None or p.base.shape != r.shape or p.op in ReduceOps or p in reduce_for_op or p.op in LoadOps or r in group_for_output: continue
       if p in realizes and p is not r:
         realized_parents.add(p)
         continue
       for x in p.srcs: r_parents.append(x.base)
     if not realized_parents: continue
 
-    print()
-    print(r)
-    print(realized_parents)
-
+    groupable = list(realized_parents)
     for rp in realized_parents:
       rp_children = deque(children[rp])
       realize_path: List[LazyBuffer] = []
       while rp_children:
-        if (c:=rp_children.pop()).realized is not None: continue
+        c = rp_children.pop()
+        if c.realized is not None: continue
         if c is r: continue
         if c in realizes:
           if c in reduce_for_op:
-            realized_parents.remove(rp)
+            groupable.remove(rp)
             break
           realize_path.append(c)
           continue
         for next_c in children[c]: rp_children.append(next_c.base)
-    for rp in realized_parents: group_for_output[rp] = r
+    for rp in groupable: group_for_output[rp] = r
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
