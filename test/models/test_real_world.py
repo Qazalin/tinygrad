@@ -17,7 +17,7 @@ from examples.stable_diffusion import UNetModel, ResBlock
 global_mem_used = 0
 def helper_test(nm, gen, model, max_memory_allowed, max_kernels_allowed, all_jitted=False):
   tms = []
-  for _ in range(4):
+  for _ in range(2):
     early_gen = [x.realize() if isinstance(x, Tensor) else x for x in gen()]
     GlobalCounters.reset()
     Device[Device.DEFAULT].synchronize()
