@@ -512,6 +512,14 @@ class TestSchedule(unittest.TestCase):
       out = a + a_prev
       check_schedule([a, out], 0)
 
+  def test_double_assign_nofuse(self):
+    a = Tensor.full((4, 4), 4).contiguous().realize()
+    a_prev = a + 2
+    a += a
+    out = a * a_prev.contiguous()
+    a += a
+    check_schedule([out, a], 4)
+
   @unittest.skip("todo")
   def test_group_multiple_children(self):
     a = Tensor.empty(4, 4) + 4
