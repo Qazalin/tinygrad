@@ -213,29 +213,20 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   group_for_output: Dict[LazyBuffer, LazyBuffer] = {}
   for r in realizes:
     if r in reduce_for_op or r.op in ReduceOps or r in group_for_output: continue
-    r_parents = deque([r])
-    realized_parents: Set[LazyBuffer] = set()
     visited: Set[LazyBuffer] = set()
-    while r_parents:
-      if (p:=r_parents.pop()).realized is None and ((p.op in LoadOps and p.op is not LoadOps.ASSIGN) or p in visited): continue
-      visited.add(p)
-      if p.realized is not None or (p in realizes and p is not r):
-        if not p.forced_realize and p not in reduce_for_op and p.shape == r.shape: realized_parents.add(p)
-        continue
-      for next_p in p.srcs: r_parents.append(next_p.base)
-
-    for rp in realized_parents:
-      if rp.realized is not None or (rp.op is LoadOps.ASSIGN and rp.srcs[1] in realized_parents): continue
-      visited.clear()
-      rp_children, can_group = deque(children[rp]), True
-      while rp_children and can_group:
-        if (c:=rp_children.pop()).realized or c.op is LoadOps.CONST or c in visited or c is r: continue
-        visited.add(c)
-        if c in realizes:
+    r_children, can_group, realized_children = deque([r]), True, {}
+    while r_children:
+      if (c:=r_children.pop()).realized or (c.op in LoadOps and c.op is not LoadOps.ASSIGN) or c in visited or r.forced_realize: continue
+      visited.add(c)
+      if c in realizes and c is not r:
+        if c.shape != r.shape or c.forced_realize or c in reduce_for_op:
           can_group = False
           break
-        for next_c in children[c]: rp_children.append(next_c.base)
-      if can_group: group_for_output[rp] = r
+        realized_children[c] = c.st
+        continue
+      for next_c in children[c]: r_children.append(next_c.base)
+    if can_group:
+      for rc in realized_children: group_for_output[r] = rc
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:

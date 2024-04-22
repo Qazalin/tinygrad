@@ -502,15 +502,13 @@ class TestSchedule(unittest.TestCase):
     check_schedule([a, out], 2) # (a_prev), (out, a.assign)
 
   def test_diamond_assign_nofuse_cycle(self):
-    with self.assertRaises(RuntimeError):
-      a = Tensor.full((4, 4), 4).contiguous().realize()
-      b = Tensor.full_like(a, 2).contiguous().realize()
+    a = Tensor.full((4, 4), 4).contiguous().realize()
+    b = Tensor.full_like(a, 2).contiguous().realize()
 
-      a_prev = a + 2
-      a.assign(b)
-      # this is a cycle!
-      out = a + a_prev
-      check_schedule([a, out], 0)
+    a_prev = a + 2
+    a.assign(b)
+    out = a + a_prev
+    check_schedule([a, out], 1)
 
   def test_double_assign_nofuse(self):
     a = Tensor.full((4, 4), 4).contiguous().realize()
@@ -518,7 +516,7 @@ class TestSchedule(unittest.TestCase):
     a += a
     out = a * a_prev.contiguous()
     a += a
-    check_schedule([out, a], 4)
+    check_schedule([out, a], 3)
 
   @unittest.skip("todo")
   def test_group_multiple_children(self):
