@@ -217,22 +217,15 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     realized_parents: Set[LazyBuffer] = set()
     visited: Set[LazyBuffer] = set()
     while r_parents:
-      if (p:=r_parents.pop()).realized:
-        realized_parents.add(p)
-        continue
-      if (p.op in LoadOps and p.op is not LoadOps.ASSIGN) or p in visited: continue
+      if (p:=r_parents.pop()).realized is None and ((p.op in LoadOps and p.op is not LoadOps.ASSIGN) or p in visited): continue
       visited.add(p)
-      if p in realizes and p is not r:
+      if p.realized is not None or (p in realizes and p is not r):
         if not p.forced_realize and p not in reduce_for_op and p.shape == r.shape: realized_parents.add(p)
         continue
-      if p.op is LoadOps.ASSIGN:
-        r_parents.append(r.srcs[0].base)
-        continue
-      for next_p in p.srcs: r_parents.append(next_p.base)
+      for next_p in ((p.srcs[0], ) if p.op is LoadOps.ASSIGN else p.srcs): r_parents.append(next_p.base)
 
     for rp in realized_parents:
-      if rp.realized is not None: continue
-      if rp.op is LoadOps.ASSIGN and rp.srcs[1] in realized_parents: continue
+      if rp.realized is not None or (rp.op is LoadOps.ASSIGN and rp.srcs[1] in realized_parents): continue
       visited.clear()
       rp_children, can_group = deque(children[rp]), True
       while rp_children and can_group:
