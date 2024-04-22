@@ -146,8 +146,10 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
 
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
+  group_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
-    if r != r.base or r.op not in ReduceOps or r in realizes: continue
+    #if r != r.base or r.op not in ReduceOps or r in realizes: continue
+    if r.realized or (r.op in LoadOps and r.op is not LoadOps.ASSIGN): continue
 
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
@@ -157,7 +159,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     while not forced_realize and len(child_set):
       next_child_set = {}
       for tr,st in child_set.items():
-        if tr in realizes:
+        if tr in realizes and tr is not r:
           realized_children[tr] = st
           # can only reduce contiguous
           # max one reduceop per kernel
@@ -190,6 +192,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
               break
             next_child_set[tr_next] = st + st_childs[0].st
       child_set = next_child_set
+    print(r, forced_realize)
     if forced_realize:
       tr = r
       if can_chase:
@@ -208,42 +211,20 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
           tr = tr.srcs[0].base
         reduce_for_op[tr] = r
       realizes[tr] = None
-    else: reduce_for_op.update((tr, r) for tr in realized_children)
-
-  group_for_output: Dict[LazyBuffer, LazyBuffer] = {}
-  for r in realizes:
-    if r in reduce_for_op or r.op in ReduceOps or r in group_for_output: continue
-    r_parents = deque([r])
-    realized_parents: Set[LazyBuffer] = set()
-    visited: Set[LazyBuffer] = set()
-    while r_parents:
-      if (p:=r_parents.pop()).realized: realized_parents.add(p)
+    else:
+      if r.op in ReduceOps:
+        for tr in realized_children: reduce_for_op[tr] = r
       else:
-        if (p.op in LoadOps and p.op is not LoadOps.ASSIGN) or p in visited: continue
-        visited.add(p)
-        if p in realizes and p is not r:
-          if not p.forced_realize and p not in reduce_for_op and p.shape == r.shape: realized_parents.add(p)
-          continue
-        for next_p in p.srcs: r_parents.append(next_p.base)
-    # the parent should have only one child and not assign to another parent
-    for rp in realized_parents:
-      if rp.realized is not None or (rp.op is LoadOps.ASSIGN and rp.srcs[1] in realized_parents): continue
-      visited.clear()
-      rp_children, can_group = deque(children[rp]), True
-      while rp_children and can_group:
-        if (c:=rp_children.pop()).realized or c.op is LoadOps.CONST or c in visited: continue
-        visited.add(c)
-        if c in realizes and c is not r and c.op not in LoadOps:
-          can_group = False
-          break
-        for next_c in children[c]: rp_children.append(next_c.base)
-      if can_group: group_for_output[rp] = r
+        for tr in realized_children:
+          if tr not in group_for_op: group_for_op[tr] = r
+          else: group_for_op[r] = group_for_op[tr]
+
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
     if r.realized is not None or r.op is LoadOps.CONST or r in seen: continue
-    group_key = reduce_for_op[r] if r in reduce_for_op else group_for_output[r] if r in group_for_output else None
-    output_groups[(group_key if MULTIOUTPUT and group_key is not None else r, )].append(r)
+    group_key = reduce_for_op[r] if r in reduce_for_op else group_for_op[r] if r in group_for_op else r
+    output_groups[(group_key if MULTIOUTPUT else r, )].append(r)
 
   # preschedule all buffers in realizes
   prescheduled = {group[0]:_schedule_group(tuple(group), realizes, reduce_for_op) for group in output_groups.values()}
@@ -263,9 +244,8 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     # realize outputs before a parent is assigned to
     parents_assigns = set(schedule_targets[assign_targets[x]].outputs[0] for x in lsi.inputs if x in assign_targets)
     for assign in parents_assigns:
-      if assign not in lsi.outputs:
-        graph[key].append(assign)
-        in_degree[assign] += 1
+      graph[key].append(assign)
+      in_degree[assign] += 1
 
   return graph, in_degree, prescheduled
 
