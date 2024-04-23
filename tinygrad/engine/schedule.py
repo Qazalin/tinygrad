@@ -2,7 +2,7 @@ import sys, pickle, atexit
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
-from tinygrad.ops import BinaryOps, LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS, UnaryOps
+from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS, UnaryOps
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, prod, dedup, all_int, merge_dicts, getenv
 from tinygrad.shape.symbolic import Variable
@@ -147,7 +147,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
-    if r != r.base or r.op not in ReduceOps or r.realized is not None: continue
+    if r != r.base or r.op not in ReduceOps or r.realized is not None or r.forced_realize: continue
 
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
@@ -161,7 +161,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
           realized_children[tr] = st
           # can only reduce contiguous
           # max one reduceop per kernel
-          if not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r) or tr.device != r.device:
+          if not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r) or tr.device != r.device or tr.forced_realize:
             can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
             forced_realize = True
             break
@@ -182,9 +182,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
               # fuse assign if its target isn't used outside of the local graph
               if rc.op is LoadOps.ASSIGN:
                 for child in children[rc.srcs[1]]:
-                  if child not in fused:
-                    forced_realize = True
-                    break
+                  if child not in fused: forced_realize = True
           continue
         for tr_next in children[tr].keys():
           if not tr_next.realized:
