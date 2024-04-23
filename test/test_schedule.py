@@ -493,7 +493,7 @@ class TestSchedule(unittest.TestCase):
     si = check_schedule([a, out0, out1], 1)[-1]
     assert len(si.outputs) == 3
 
-  def test_reduce_child_nofuse(self):
+  def test_reduce_output_child_nofuse(self):
     a = Tensor.empty(4, 4).sum()
     b = Tensor.empty(4, 4).sum()
     out0 = a + 2
@@ -504,6 +504,52 @@ class TestSchedule(unittest.TestCase):
     assert len([x for x in stores if x.src[0].op in ReduceOps]) == 2
     reduceops = dedup([x for si in schedule for out in si.ast for x in out.lazyops if x.op in ReduceOps])
     assert len(reduceops) == 2
+
+  def test_reduce_output_contiguous_nofuse(self):
+    a = Tensor.empty(4, 4)
+    child = a.sum() + 4
+    check_schedule([a, child], 1)
+
+    a = Tensor.empty(4, 4)
+    child = a.sum().contiguous() + 4
+    check_schedule([a, child], 2)
+
+  def test_reduce_assign_fuse(self):
+    a = Tensor.full((4, 4), 4.).contiguous().realize()
+    b = Tensor.full((1, 1), 2.).contiguous().realize()
+    r = a.sum(keepdim=True)
+    b += r
+    check_schedule([r, b], 1)
+
+  def test_reduce_diamond_assign_local_fuse(self):
+    a = Tensor.full((4, 4), 4.).contiguous().realize()
+    b = Tensor.full((1, 1), 2.).contiguous().realize()
+    c = Tensor.full((1, 1), 6.).contiguous().realize()
+    b_prev = b + 4
+    r = a.sum(keepdim=True)
+    b += r + 4
+    c += r + b_prev
+    check_schedule([r, b], 1)
+
+  def test_diamond_result_fused(self):
+    a = Tensor.full((4, 4), 4.).contiguous().realize()
+    b = Tensor.full((1, 1), 2.).contiguous().realize()
+    c = Tensor.full((4, 4, 4), 6.).contiguous().realize()
+    b_prev = b + 4
+    r = a.sum(keepdim=True)
+    b += r + 2
+    c += b_prev + r
+    check_schedule([r, b, c], 2) # (r, b_prev, b), (c, ) ?
+
+
+  def test_diamond_assign_nofuse(self):
+    a = Tensor.full((4, 4), 4.).contiguous().realize()
+    b = Tensor.full((1, 1), 2.).contiguous().realize()
+    c = Tensor.full((4, 4, 4), 6.).contiguous().realize()
+    r = a.sum(keepdim=True)
+    b += r + 2
+    c += b + r
+    check_schedule([r, b], 1) # ?
 
   @unittest.skipUnless(is_dtype_supported(dtypes.half), "need half")
   def test_prefer_half_buffer(self):

@@ -179,10 +179,6 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
                   break
                 fused.add(p)
                 for x in p.srcs: rc_parents.append(x.base)
-              # fuse assign if its target isn't used outside of the local graph
-              if rc.op is LoadOps.ASSIGN:
-                for child in children[rc.srcs[1]]:
-                  if child not in fused: forced_realize = True
           continue
         for tr_next in children[tr].keys():
           if not tr_next.realized:
@@ -239,8 +235,9 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     # realize outputs before a parent is assigned to
     parents_assigns = set(schedule_targets[assign_targets[x]].outputs[0] for x in lsi.inputs if x in assign_targets)
     for assign in parents_assigns:
-      graph[key].append(assign)
-      in_degree[assign] += 1
+      if assign not in lsi.outputs:
+        graph[key].append(assign)
+        in_degree[assign] += 1
 
   return graph, in_degree, prescheduled
 
