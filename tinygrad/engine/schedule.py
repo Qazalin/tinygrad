@@ -147,7 +147,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
-    if r != r.base or r.op not in ReduceOps or r in realizes: continue
+    if r != r.base or r.op not in ReduceOps or r.realized is not None: continue
 
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
@@ -157,7 +157,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     while not forced_realize and len(child_set):
       next_child_set = {}
       for tr,st in child_set.items():
-        if tr in realizes:
+        if tr in realizes and tr.device == r.device and tr is not r:
           realized_children[tr] = st
           # can only reduce contiguous
           # max one reduceop per kernel
@@ -190,7 +190,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
               break
             next_child_set[tr_next] = st + st_childs[0].st
       child_set = next_child_set
-    if forced_realize:
+    if forced_realize and r not in realizes:
       tr = r
       if can_chase:
         # can chase this down to contiguous children
@@ -208,7 +208,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
           tr = tr.srcs[0].base
         reduce_for_op[tr] = r
       realizes[tr] = None
-    else: reduce_for_op.update((tr, r) for tr in realized_children)
+    elif not forced_realize: reduce_for_op.update((tr, r) for tr in realized_children)
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:

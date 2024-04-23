@@ -6,7 +6,7 @@ import unittest
 from typing import List, Optional, Union
 from tinygrad.tensor import Tensor
 from tinygrad.ops import LoadOps, ReduceOps
-from tinygrad.helpers import DEBUG, GRAPH, flatten
+from tinygrad.helpers import DEBUG, GRAPH, dedup, flatten
 from tinygrad.codegen.linearizer import Linearizer
 from tinygrad.features.graph import print_tree, realized_lazybuffer
 from tinygrad.engine.schedule import create_schedule
@@ -485,6 +485,25 @@ class TestSchedule(unittest.TestCase):
     out0 = a.sum() + b[0]
     out1 = a.sum() + 2
     check_schedule([out0, out1], 1)
+
+  def test_group_reduce_output(self):
+    a = Tensor.empty(4, 4).sum()
+    out0 = a + 2
+    out1 = a * 4
+    si = check_schedule([a, out0, out1], 1)[-1]
+    assert len(si.outputs) == 3
+
+  def test_reduce_child_nofuse(self):
+    a = Tensor.empty(4, 4).sum()
+    b = Tensor.empty(4, 4).sum()
+    out0 = a + 2
+    out1 = a + b + 4
+    schedule = check_schedule([a, b, out0, out1], 3)
+    stores = [out for si in schedule for out in si.ast]
+    assert len(stores) == 4
+    assert len([x for x in stores if x.src[0].op in ReduceOps]) == 2
+    reduceops = dedup([x for si in schedule for out in si.ast for x in out.lazyops if x.op in ReduceOps])
+    assert len(reduceops) == 2
 
   @unittest.skipUnless(is_dtype_supported(dtypes.half), "need half")
   def test_prefer_half_buffer(self):
