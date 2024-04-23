@@ -167,7 +167,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
             break
           if len(realized_children) > 1:
             for rc in realized_children:
-              rc_parents = deque(x.base for x in rc.srcs)
+              rc_parents = deque([rc])
               while rc_parents:
                 if (p:=rc_parents.pop()).realized or p.op is LoadOps.CONST: continue
                 if p is r: continue
