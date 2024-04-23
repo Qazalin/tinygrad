@@ -146,6 +146,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
 
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
+  group_for_output: Dict[LazyBuffer, Tuple] = {}
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r.realized is not None or r.forced_realize: continue
 
@@ -159,12 +160,6 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
       for tr,st in child_set.items():
         if tr in realizes and tr is not r:
           realized_children[tr] = st
-          # can only reduce contiguous
-          # max one reduceop per kernel
-          if not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r) or tr.device != r.device:
-            can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
-            forced_realize = True
-            break
           if len(realized_children) > 1:
             for rc in realized_children:
               rc_parents = deque(x.base for x in rc.srcs)
@@ -190,6 +185,13 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
               break
             next_child_set[tr_next] = st + st_childs[0].st
       child_set = next_child_set
+    for tr, st in realized_children.items():
+      # can only reduce contiguous
+      # max one reduceop per kernel
+      if not st.contiguous or (tr in reduce_for_op and reduce_for_op[tr] != r) or tr.device != r.device:
+        can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
+        forced_realize = True
+        break
     if forced_realize and r not in realizes:
       tr = r
       if can_chase:
@@ -208,12 +210,14 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
           tr = tr.srcs[0].base
         reduce_for_op[tr] = r
       realizes[tr] = None
+      if len(realized_children) > 1: group_for_output.update((rc, (tr, r)) for rc in realized_children)
     elif not forced_realize: reduce_for_op.update((tr, r) for tr in realized_children)
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
     if r.realized is not None or r.op is LoadOps.CONST or r in seen: continue
-    output_groups[(reduce_for_op[r], ) if r in reduce_for_op and MULTIOUTPUT else (r, )].append(r)
+    group_key = reduce_for_op[r] if r in reduce_for_op else group_for_output[r] if r in group_for_output else r
+    output_groups[(group_key if MULTIOUTPUT else r, )].append(r)
 
   # preschedule all buffers in realizes
   prescheduled = {group[0]:_schedule_group(tuple(group), realizes, reduce_for_op) for group in output_groups.values()}
