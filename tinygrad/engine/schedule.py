@@ -276,7 +276,6 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
       pickle.dump(SCHEDULES, open(fp, "wb"))
     if len(SCHEDULES) == 0: atexit.register(_save)
     SCHEDULES.extend(schedule)
-  with open("schedule.pkl", "wb") as f: pickle.dump((graph, prescheduled), f)
 
   return schedule, var_vals
 
