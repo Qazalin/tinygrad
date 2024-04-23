@@ -525,11 +525,12 @@ class TestSchedule(unittest.TestCase):
     a = Tensor.full((4, 4), 4.).contiguous().realize()
     b = Tensor.full((1, 1), 2.).contiguous().realize()
     c = Tensor.full((1, 1), 6.).contiguous().realize()
+    # children of b_prev and b are all in the "local" / fused graph
     b_prev = b + 4
     r = a.sum(keepdim=True)
     b += r + 4
     c += r + b_prev
-    check_schedule([r, b], 1)
+    check_schedule([r, b, c], 1)
 
   def test_diamond_result_fused(self):
     a = Tensor.full((4, 4), 4.).contiguous().realize()
@@ -539,8 +540,7 @@ class TestSchedule(unittest.TestCase):
     r = a.sum(keepdim=True)
     b += r + 2
     c += b_prev + r
-    check_schedule([r, b, c], 2) # (r, b_prev, b), (c, ) ?
-
+    check_schedule([r, b, c], 2) # (r, b_prev+r, b), (c, )
 
   def test_assign_target_nonlocal(self):
     a = Tensor.full((4, 4), 4.).contiguous().realize()
