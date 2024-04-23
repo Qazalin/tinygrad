@@ -161,7 +161,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
           realized_children[tr] = st
           # can only reduce contiguous
           # max one reduceop per kernel
-          if not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r) or tr.device != r.device or tr.forced_realize:
+          if not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r) or tr.device != r.device:
             can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
             forced_realize = True
             break
@@ -276,7 +276,6 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
       pickle.dump(SCHEDULES, open(fp, "wb"))
     if len(SCHEDULES) == 0: atexit.register(_save)
     SCHEDULES.extend(schedule)
-
   return schedule, var_vals
 
 def create_schedule(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> List[ScheduleItem]:
