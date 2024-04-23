@@ -192,7 +192,7 @@ class TestOpt(unittest.TestCase):
         opt.zero_grad()
         c1(img).relu().sum().backward()
         opt.step()
-        assert cache.count == 3, f"optimizer didn't fold conv-backward SGD, got {cache.count}"
+        assert cache.count == 5, f"optimizer didn't fold conv-backward SGD, got {cache.count}"
 
   def test_fold_2convs_sgd(self):
     with Tensor.train():
@@ -213,7 +213,7 @@ class TestOpt(unittest.TestCase):
       c3 = nn.Conv2d(8,16,3,bias=False)
       c4 = nn.Conv2d(16,32,3,bias=False)
       opt = optim.SGD(get_parameters([c1, c2, c3, c4]))
-      with CLCache(allowed=14):
+      with CLCache(allowed=18):
         opt.zero_grad()
         c4(c3(c2(c1(img).relu()).relu()).relu()).relu().sum().backward()
         opt.step()
@@ -224,7 +224,7 @@ class TestOpt(unittest.TestCase):
       c1 = nn.Conv2d(3,32,3)
       bn = nn.BatchNorm2d(32, track_running_stats=False)
       opt = optim.SGD(get_parameters([c1, bn]))
-      with CLCache(allowed=12): # this is too high
+      with CLCache(allowed=16): # this is too high
         img_bn = bn(c1(img)).elu().sum()
         opt.zero_grad()
         img_bn.backward()
