@@ -2,7 +2,7 @@ import sys, pickle, atexit
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
-from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS, UnaryOps
+from tinygrad.ops import BinaryOps, LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS, UnaryOps
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, prod, dedup, all_int, merge_dicts, getenv
 from tinygrad.shape.symbolic import Variable
@@ -166,10 +166,8 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
             forced_realize = True
             break
           if len(realized_children) > 1:
+            fused = set([r, *realized_children])
             for rc in realized_children:
-              if rc.op is LoadOps.ASSIGN:
-                forced_realize = True
-                break
               rc_parents = deque([rc])
               while rc_parents:
                 if (p:=rc_parents.pop()).realized or p.op is LoadOps.CONST: continue
@@ -179,7 +177,14 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
                   can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
                   forced_realize = True
                   break
+                fused.add(p)
                 for x in p.srcs: rc_parents.append(x.base)
+              # fuse assign if its target isn't used outside of the local graph
+              if rc.op is LoadOps.ASSIGN:
+                for child in children[rc.srcs[1]]:
+                  if child not in fused:
+                    forced_realize = True
+                    break
           continue
         for tr_next in children[tr].keys():
           if not tr_next.realized:
