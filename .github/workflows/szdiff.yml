@@ -35,6 +35,22 @@ jobs:
           else
             echo "stat=false" >> "$GITHUB_OUTPUT"
           fi
+      - name: Check no new noqa E501
+        run: |
+          has_noqa=false
+          git diff upstream/master...new-dd -- . ':(exclude)test/*' --unified=0 | grep -E '^\+|^\-' | while read -r line; do
+            if [[ $line == \-* ]]; then
+                if [[ "$line" == *"# noqa: E501"* ]]; then
+                  has_noqa=true
+                fi
+            else
+              if [[ "$line" == *"# noqa: E501"* ]] && ! $has_noqa; then
+                 echo "found a new # noqa: E501"
+                 exit 1
+              fi
+             has_noqa=false
+           fi
+          done
 
   szdiff:
     name: Core Library Line Difference
