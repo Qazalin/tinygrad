@@ -542,14 +542,14 @@ class TestSchedule(unittest.TestCase):
     check_schedule([r, b, c], 2) # (r, b_prev, b), (c, ) ?
 
 
-  def test_diamond_assign_nofuse(self):
+  def test_assign_target_nonlocal(self):
     a = Tensor.full((4, 4), 4.).contiguous().realize()
     b = Tensor.full((1, 1), 2.).contiguous().realize()
     c = Tensor.full((4, 4, 4), 6.).contiguous().realize()
     r = a.sum(keepdim=True)
-    b += r + 2
     c += b + r
-    check_schedule([r, b], 1) # ?
+    b += r + 2
+    check_schedule([r, b, c], 2)
 
   @unittest.skipUnless(is_dtype_supported(dtypes.half), "need half")
   def test_prefer_half_buffer(self):
