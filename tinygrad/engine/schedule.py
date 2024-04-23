@@ -166,7 +166,6 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
             forced_realize = True
             break
           if len(realized_children) > 1:
-            fused = set([r, *realized_children])
             for rc in realized_children:
               rc_parents = deque(x.base for x in rc.srcs)
               while rc_parents:
@@ -177,7 +176,6 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
                   can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
                   forced_realize = True
                   break
-                fused.add(p)
                 for x in p.srcs: rc_parents.append(x.base)
           continue
         for tr_next in children[tr].keys():
