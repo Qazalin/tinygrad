@@ -551,6 +551,68 @@ class TestSchedule(unittest.TestCase):
     b += r + 2
     check_schedule([r, b, c], 2)
 
+  def test_group_parents(self):
+    a = Tensor.empty(4, 4) + 4
+    b = Tensor.empty(4, 4) + 2
+    c = a + b
+    check_schedule([a, b, c], 1)
+
+  def test_group_parents_reduce_child(self):
+    a = Tensor.empty(4, 4) + 4
+    b = Tensor.empty(4, 4) + 2
+    out = a + b
+    r = b.sum() + 1
+    check_schedule([a, b, r, out], 3) # (a, out), (b), (r)
+
+  def test_parents_midreduce_group(self):
+    a = Tensor.empty(4, 4) + 4
+    b = Tensor.empty(4, 4) + 2
+    r = (a + b).sum()
+    out = r + a + b
+    check_schedule(out, 2) # (r2_), (out)
+
+  def test_contiguous_parent_nofuse(self):
+    a = Tensor.empty(4, 4) + 4
+    b = Tensor.empty(4, 4) + 2
+    out = a + b.contiguous()
+    check_schedule([a, b, out], 2) # (a, out), (b)
+
+  def test_diamond_assign_fuse(self):
+    a = Tensor.full((4, 4), 4).contiguous().realize()
+    b = Tensor.full_like(a, 2).contiguous().realize()
+
+    a_prev = a + 2
+    a.assign(b)
+    out = a + a_prev.contiguous()
+    check_schedule([a, out], 2) # (a_prev), (out, a.assign)
+
+  def test_diamond_assign_fuse_no_contiguous(self):
+    a = Tensor.full((4, 4), 4).contiguous().realize()
+    b = Tensor.full_like(a, 2).contiguous().realize()
+
+    a_prev = a + 2
+    a.assign(b)
+    out = a + a_prev
+    check_schedule([a, out], 1) # (out, a.assign)
+
+  def test_diamond_assign_nofuse_cycle(self):
+    with self.assertRaises(RuntimeError):
+      a = Tensor.full((4, 4), 4).contiguous().realize()
+      b = Tensor.full_like(a, 2).contiguous().realize()
+
+      a_prev = a + 2
+      a.assign(b)
+      out = a.max() + a_prev
+      check_schedule([a, out], 0)
+
+  @unittest.skip("todo")
+  def test_group_multiple_children(self):
+    a = Tensor.empty(4, 4) + 4
+    b = Tensor.empty(4, 4) + 2
+    out0 = a + b
+    out1 = a * b
+    check_schedule([out0, out1], 1)
+
   @unittest.skipUnless(is_dtype_supported(dtypes.half), "need half")
   def test_prefer_half_buffer(self):
     x = Tensor.ones(4).contiguous().realize()
