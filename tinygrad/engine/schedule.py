@@ -154,6 +154,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
     realized_children: Dict[LazyBuffer, ShapeTracker] = {}
+    visited: Set[LazyBuffer] = set()
     forced_realize = False
     can_chase = True
     while not forced_realize and len(child_set):
@@ -168,20 +169,20 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
             forced_realize = True
             break
           if len(realized_children) > 1:
-            for rc in realized_children:
-              rc_parents = deque(x.base for x in rc.srcs)
-              while rc_parents:
-                if (p:=rc_parents.pop()).realized or p.op is LoadOps.CONST: continue
-                if p is r: continue
-                # max one reduceop per kernel
-                if p.op in ReduceOps:
-                  can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
-                  forced_realize = True
-                  break
-                for x in p.srcs: rc_parents.append(x.base)
+            rc_parents = deque(x.base for x in tr.srcs)
+            while rc_parents:
+              if (p:=rc_parents.pop()).realized or p.op is LoadOps.CONST: continue
+              if p is r: continue
+              # max one reduceop per kernel
+              if p.op in ReduceOps:
+                can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
+                forced_realize = True
+                break
+              for x in p.srcs: rc_parents.append(x.base)
           continue
         for tr_next in children[tr].keys():
-          if not tr_next.realized:
+          if not tr_next.realized and tr_next not in visited:
+            visited.add(tr_next)
             # max one reduceop per kernel
             if tr_next.op in ReduceOps:
               forced_realize = True
