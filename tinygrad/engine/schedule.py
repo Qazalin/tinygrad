@@ -190,7 +190,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
               break
             next_child_set[tr_next] = st + st_childs[0].st
       child_set = next_child_set
-    if forced_realize and r not in realizes:
+    if forced_realize:
       tr = r
       if can_chase:
         # can chase this down to contiguous children
