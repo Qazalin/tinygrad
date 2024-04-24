@@ -115,13 +115,21 @@ class TestAssign(unittest.TestCase):
     new = a + old_a
     np.testing.assert_allclose(new.numpy(), 4)
 
-  def test_assign_diamond_cycle(self):
+  def test_assign_diamond_possible_fuse(self):
+    a = Tensor.ones(4).contiguous().realize()
+    times_a = a*3
+    a.assign(Tensor.full((4,), 2.).contiguous())
+    new = a + (times_a-1)
+    np.testing.assert_allclose(new.numpy(), 4)
+
+  def test_assign_diamond_cycle_no_fuse(self):
     # NOTE: should *not* raise AssertionError from numpy
     with self.assertRaises(RuntimeError):
       a = Tensor.ones(4).contiguous().realize()
       times_a = a*3
       a.assign(Tensor.full((4,), 2.).contiguous())
-      new = a + (times_a-1)
+      # reduceop breaks fusion
+      new = a.sum() + (times_a-1)
       np.testing.assert_allclose(new.numpy(), 4)
 
   def test_assign_diamond_contiguous_cycle(self):
