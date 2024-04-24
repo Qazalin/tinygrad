@@ -153,7 +153,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
     realized_children: Dict[LazyBuffer, ShapeTracker] = {}
-    forced_realize = False
+    forced_realize, can_group = False, True
     can_chase = True
     while not forced_realize and len(child_set):
       next_child_set = {}
@@ -169,7 +169,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
                 # max one reduceop per kernel
                 if p.op in ReduceOps:
                   can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
-                  forced_realize = True
+                  forced_realize, can_group = True, False
                   break
                 for x in p.srcs: rc_parents.append(x.base)
           continue
@@ -210,7 +210,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
           tr = tr.srcs[0].base
         reduce_for_op[tr] = r
       realizes[tr] = None
-      if len(realized_children) > 1: group_for_output.update((rc, (tr, r)) for rc in realized_children)
+      if len(realized_children) > 1 and can_group: group_for_output.update((rc, (tr, r)) for rc in realized_children)
     elif not forced_realize: reduce_for_op.update((tr, r) for tr in realized_children)
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
