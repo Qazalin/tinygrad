@@ -1,7 +1,7 @@
 import sys, pickle, atexit
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Tuple, List, Dict, Optional, Set, DefaultDict
+from typing import Any, Tuple, List, Dict, Optional, Set, DefaultDict
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS, UnaryOps
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, prod, dedup, all_int, merge_dicts, getenv
@@ -146,9 +146,10 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
 
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
-  group_for_output: Dict[LazyBuffer, Tuple] = {}
+  group_for_output: Dict[LazyBuffer, Any] = {}
   for r in allbufs.keys():
     if r != r.base or (r.op in LoadOps and r.op is not LoadOps.ASSIGN) or r.realized is not None or r.forced_realize: continue
+    if r.op not in ReduceOps and r not in realizes: continue
 
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
@@ -212,8 +213,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
       realizes[tr] = None
       if len(realized_children) > 1 and can_group: group_for_output.update((rc, (tr, r)) for rc in realized_children)
     elif not forced_realize and r.op in ReduceOps: reduce_for_op.update((tr, r) for tr in realized_children)
-    elif not forced_realize:
-      print(r, list(realized_children))
+    elif not forced_realize and r in realizes and len(realized_children) == 1: group_for_output[r] = list(realized_children)[0]
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
