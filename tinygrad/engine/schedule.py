@@ -154,20 +154,19 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
     realized_children: Dict[LazyBuffer, ShapeTracker] = {}
-    forced_realize, can_group = False, True
+    forced_realize = False
     can_chase = True
     while not forced_realize and len(child_set):
       next_child_set = {}
       for tr,st in child_set.items():
         if tr in realizes and tr is not r:
           realized_children[tr] = st
-          for tr, st in realized_children.items():
-            # can only reduce contiguous
-            # max one reduceop per kernel
-            if st.size != r.size or not st.contiguous or (tr in reduce_for_op and reduce_for_op[tr] != r) or tr.device != r.device:
-              can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
-              forced_realize = True
-              break
+          # can only reduce contiguous
+          # max one reduceop per kernel
+          if not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r):
+            can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
+            forced_realize = True
+            break
           if len(realized_children) > 1:
             for rc in realized_children:
               rc_parents = deque(x.base for x in rc.srcs)
@@ -177,7 +176,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
                 # max one reduceop per kernel
                 if p.op in ReduceOps:
                   can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
-                  forced_realize, can_group = True, False
+                  forced_realize = True
                   break
                 for x in p.srcs: rc_parents.append(x.base)
           continue
@@ -211,9 +210,9 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
           tr = tr.srcs[0].base
         reduce_for_op[tr] = r
       realizes[tr] = None
-      if len(realized_children) > 1 and can_group: group_for_output.update((rc, (tr, r)) for rc in realized_children)
-    elif not forced_realize and r.op in ReduceOps: reduce_for_op.update((tr, r) for tr in realized_children)
-    elif not forced_realize and r in realizes and len(realized_children) == 1: group_for_output[r] = list(realized_children)[0]
+    elif not forced_realize:
+      if r.op in ReduceOps: reduce_for_op.update((tr, r) for tr in realized_children)
+      elif len(realized_children) == 1: group_for_output[r] = list(realized_children)[0]
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
