@@ -170,6 +170,7 @@ tinygrad is yours to play with now. It's pure Python and short, so unlike PyTorc
 
 - It's two lines to add multiGPU support to this example (can you find them?). You have to `.shard` the model to all GPUs, and `.shard` the dataset by batch.
 - `with Context(DEBUG=2)` shows the running kernels, `DEBUG=4` shows the code. All `Context` variables can also be environment variables.
+- `with Context(SAVE_SCHEDULE=1)` will save the scheduled kernels, you visualize the graph on [this website](https://tiny-tools-client.vercel.app).
 - `with Context(BEAM=2)` will do a BEAM search on the kernels, searching many possible implementations for what runs the fastest on your hardware. After this search, tinygrad is usually speed competitive with PyTorch, and the results are cached so you won't have to search next time.
 
 [Join our Discord](https://discord.gg/ZjZadyC7PK) for help, and if you want to be a tinygrad developer. Please read the Discord rules when you get there.
