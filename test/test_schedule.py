@@ -465,12 +465,12 @@ class TestSchedule(unittest.TestCase):
     out1 = a.sum() + out0 + 4
     check_schedule([out0, out1], 1)
 
-  def test_group_midreduce_nofuse(self):
+  def test_group_midreduce(self):
     a = Tensor.empty((4, 4))
     b = Tensor.empty((4, 4))
     out0 = a.sum() + 2
     out1 = a.sum() + b.sum() + 4
-    check_schedule([out0, out1], 3)
+    check_schedule([out0, out1], 2)
 
   def test_group_midexpand_nofuse(self):
     a = Tensor.empty((32, 32, 32))
@@ -501,7 +501,7 @@ class TestSchedule(unittest.TestCase):
     # b.max() is in the indirect path from r to out2
     out1 = b.max() + out0
     out2 = r + out1
-    check_schedule([r, out0, out1, out2], 2)
+    check_schedule([r, out0, out1, out2], 4)
 
   def test_reduce_multiple_paths_midexpand(self):
     a = Tensor.empty(4, 4)
