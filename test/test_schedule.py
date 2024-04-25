@@ -486,6 +486,33 @@ class TestSchedule(unittest.TestCase):
     out1 = a.sum() + 2
     check_schedule([out0, out1], 1)
 
+  def test_reduce_multiple_paths_fuse(self):
+    a = Tensor.empty(4, 4)
+    out0 = a.sum().exp2()
+    # out1 has two paths to a.sum()
+    out1 = a.sum() + out0
+    check_schedule([a, out0, out1], 1)
+
+  def test_reduce_multiple_paths_midreduce(self):
+    a = Tensor.empty(4, 4)
+    b = Tensor.empty(4, 4)
+    r = a.sum()
+    out0 = r.exp2()
+    # b.max() is in the indirect path from r to out2
+    out1 = b.max() + out0
+    out2 = r + out1
+    check_schedule([r, out0, out1, out2], 2)
+
+  def test_reduce_multiple_paths_midexpand(self):
+    a = Tensor.empty(4, 4)
+    b = Tensor.empty(4, 4, 4)
+    r = a.sum()
+    out0 = r.exp2()
+    # e1 is in the indirect path from a.sum() to out1
+    e1 = b + out0
+    out1 = r + e1[0][0][0]
+    Tensor.realize(out0, out1, e1)
+
   @unittest.skipUnless(is_dtype_supported(dtypes.half), "need half")
   def test_prefer_half_buffer(self):
     x = Tensor.ones(4).contiguous().realize()
