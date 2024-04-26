@@ -446,6 +446,20 @@ class TestSchedule(unittest.TestCase):
     out = x + y
     check_schedule(out, 2)  # TODO: this should be 1
 
+  def test_reduce_shrink_multioutput(self):
+    a = Tensor.empty(4, 4)
+    b = Tensor.empty(1, 16)
+    e0 = a.sum()+4
+    e1 = a.sum()+e0+b
+    check_schedule([e0, e1], 4) # TODO: this should be 1
+
+  def test_reduce_shrink_child_fuse(self):
+    a = Tensor.empty(100, 100)
+    b = Tensor.empty(10,)
+    c = a.sum() + b[0]
+    d = a.sum() + 2
+    check_schedule([c, d], 1)
+
   @unittest.skip("broken due to const folding and two contiguous are different kernels")
   def test_const_no_recompute(self):
     x = Tensor(2) + Tensor(2)
