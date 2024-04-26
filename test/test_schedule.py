@@ -451,7 +451,7 @@ class TestSchedule(unittest.TestCase):
     b = Tensor.empty(1, 16)
     e0 = a.sum()+4
     e1 = a.sum()+e0+b
-    check_schedule([e0, e1], 4) # TODO: this should be 1
+    check_schedule([e0, e1], 2) # TODO: this should be 1
 
   def test_reduce_shrink_child_fuse(self):
     a = Tensor.empty(100, 100)
@@ -515,6 +515,14 @@ class TestSchedule(unittest.TestCase):
     out1 = (a - out0).max()
     out2 = r + out1
     check_schedule([r, out0, out1, out2], 4)
+
+  def test_reduce_multiple_paths_midreduce_fused(self):
+    a = Tensor.empty(4, 4)
+    b = Tensor.empty(4, 4)
+    out0 = a.sum()+4
+    out1 = b.max()+out0*2
+    out2 = a.sum()+out1
+    check_schedule([out0, out1, out2], 4)
 
   def test_reduce_multiple_paths_midexpand(self):
     a = Tensor.empty(4, 4)
