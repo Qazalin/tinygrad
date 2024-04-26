@@ -467,11 +467,12 @@ class TestSchedule(unittest.TestCase):
     out = x.contiguous() + y.contiguous()
     check_schedule(out, 2)
 
-  def test_group_fuse(self):
+  def test_same_size_child_fuse(self):
     a = Tensor.empty((4, 4))
     out0 = a.sum() + 2
     out1 = a.sum() + 4
-    check_schedule([out0, out1], 1)
+    out2 = out0 * out1
+    check_schedule([out0, out1, out2], 2)
 
   def test_group_inner_deps_fuse(self):
     a = Tensor.empty((4, 4))
@@ -486,6 +487,18 @@ class TestSchedule(unittest.TestCase):
     # b.sum() is not a descendant of the fused nodes
     out1 = a.sum() + b.sum() + 4
     check_schedule([out0, out1], 3) # TODO: this can fuse
+
+  def test_contiguous_child(self):
+    a = Tensor.empty(4, 4).sum()
+    b = a + 4
+    c = a + b.contiguous()
+    check_schedule([a, b, c], 3)
+
+  def test_not_contiguous_child(self):
+    a = Tensor.empty(32, 32, 32).sum(2)
+    b = a + 2
+    c = a + b[: ,2]
+    check_schedule([a, b, c], 3)
 
   def test_reduce_multiple_paths_fuse(self):
     a = Tensor.empty(4, 4)
