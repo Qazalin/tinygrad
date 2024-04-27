@@ -167,16 +167,11 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
             break
           if len(realized_children) > 1:
             for rc in realized_children:
-              rc_parents = deque(x.base for x in rc.srcs)
-              while rc_parents:
-                if (p:=rc_parents.pop()).realized or p.op is LoadOps.CONST: continue
-                if p is r: continue
+              rc_parents = deque([rc])
+              while rc_parents and not forced_realize:
                 # max one reduceop per kernel
-                if p.op in ReduceOps:
-                  can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
-                  forced_realize = True
-                  break
-                for x in p.srcs: rc_parents.append(x.base)
+                if (p:=rc_parents.pop()).op in ReduceOps and p is not r: forced_realize = True
+                else: rc_parents.extend(x.base for x in p.srcs if x.realized is None)
           continue
         for tr_next in children[tr].keys():
           if not tr_next.realized:
