@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import subprocess, os, dill, shlex, sys
 from typing import List, Tuple
 from tinygrad.features.graph import print_tree
