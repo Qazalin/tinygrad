@@ -131,6 +131,10 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Dict[LazyBuffer, None]) -> bool:
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
+def _recursive_fuse(buf:LazyBuffer, realizes:Dict[LazyBuffer, None], reduce_for_op:Dict[LazyBuffer, LazyBuffer], children:Dict[LazyBuffer, Dict[LazyBuffer, None]]):
+  realizes[buf] = None
+  pass
+
 def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[DefaultDict[LazyBuffer, List[LazyBuffer]], DefaultDict[LazyBuffer, int],
                                                                     Dict[LazyBuffer, _LBScheduleItem]]:
   # start by just realizing the buffers passed in
@@ -149,66 +153,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
-
-    # follow the reduce down
-    child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
-    realized_children: Dict[LazyBuffer, ShapeTracker] = {}
-    realize_op = False
-    can_chase = True
-    while len(child_set):
-      next_child_set = {}
-      for tr,st in child_set.items():
-        if tr in realizes:
-          # can only reduce contiguous
-          # max one reduceop per kernel
-          if not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r):
-            can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
-            realize_op = True
-            continue
-          realized_children[tr] = st
-          continue # TODO: can search children
-        for tr_next in children[tr].keys():
-          if not tr_next.realized:
-            if tr_next.op in ReduceOps:
-              realize_op = True
-              continue
-            st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
-            if len(st_childs) > 1:
-              realize_op = True
-              continue
-            next_child_set[tr_next] = st + st_childs[0].st
-      child_set = next_child_set
-    # can fuse some children
-    for tr in realized_children.copy():
-      tr_parents = deque(tr.srcs)
-      while tr_parents:
-        if (p:=tr_parents.pop().base).realized or p.op is LoadOps.CONST: continue
-        if p is r: continue
-        if p.op in ReduceOps:
-          del realized_children[tr]
-          break
-        tr_parents.extend(p.srcs)
-      print(tr, tr in realized_children)
-    if realize_op: realizes[r] = None
-    if not realized_children:
-      tr = r
-      if can_chase:
-        # can chase this down to contiguous children
-        st = tr.st
-        while len(children[tr]) == 1:
-          tr_next = next(iter(children[tr].keys()))
-          st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
-          if len(st_childs) > 1: break
-          if st.size != st_childs[0].st.size: break
-          st = st + st_childs[0].st
-          if not st.contiguous or tr_next.op in ReduceOps: break
-          tr = tr_next
-        # don't cast to higher size before store (tr cannot be realized if forced_realize)
-        if tr.op is UnaryOps.CAST and tr.arg[0].itemsize > tr.srcs[0].dtype.itemsize:
-          tr = tr.srcs[0].base
-        reduce_for_op[tr] = r
-      realizes[tr] = None
-    else: reduce_for_op.update((tr, r) for tr in realized_children)
+    _recursive_fuse(r, realizes, reduce_for_op, children)
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
