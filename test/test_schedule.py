@@ -643,6 +643,13 @@ class TestSchedule(unittest.TestCase):
       c4(c3(c2(c1(img).relu()).relu()).relu()).relu().sum().backward()
       check_schedule(opt.schedule_step(), 22)
 
+  def test_partial_fuse(self):
+    a = Tensor.empty(512, 1, 250)
+    b = a.sum(2) + 2
+    c = a.sum(2) + 3
+    d = a.sum(2).sum() * 4
+    check_schedule([b, c, d], 2)
+
   @unittest.skipUnless(is_dtype_supported(dtypes.half), "need half")
   def test_prefer_half_buffer(self):
     x = Tensor.ones(4).contiguous().realize()
