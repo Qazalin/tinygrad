@@ -180,6 +180,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
            # max one reduceop per kernel
           if not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r):
             realize_op = True
+            can_chase = tr not in reduce_for_op
             continue
           realized_children[tr] = st
           continue # TODO: can search children
@@ -194,7 +195,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
               continue
             next_child_set[tr_next] = st + st_childs[0].st
       child_set = next_child_set
-    print(r, list(realized_children))
+    if realize_op: realizes[r] = None
     if not realized_children:
       tr = r
       if can_chase:
@@ -213,9 +214,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
           tr = tr.srcs[0].base
         reduce_for_op[tr] = r
       realizes[tr] = None
-    else:
-      if realize_op: realizes[r] = None
-      reduce_for_op.update((tr, r) for tr in realized_children)
+    else: reduce_for_op.update((tr, r) for tr in realized_children)
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
