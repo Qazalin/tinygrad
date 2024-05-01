@@ -9,6 +9,8 @@ subprocess.run(["git", "checkout", commit], check=True)
 subprocess.run(["python3", "test/test_schedule.py"], env={**os.environ, "SAVE_SCHEDULE": "1", "SAVE_SCHEDULE_PATH": f"{commit}.pkl"})
 feat = dill.load(open(f"./{commit}.pkl", "rb"))
 
+"""
+
 commit = subprocess.run(["git", "rev-parse", "master"], stdout=subprocess.PIPE, check=True, text=True).stdout.strip()
 subprocess.run(["git", "checkout", commit], check=True)
 subprocess.run(["python3", "test/test_schedule.py"], env={**os.environ, "SAVE_SCHEDULE": "1"})
@@ -26,3 +28,4 @@ for m, f in zip(master_asts, feat_asts):
     for op in m: print_tree(op)
     print("got:")
     for op in f: print_tree(op)
+"""

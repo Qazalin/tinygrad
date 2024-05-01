@@ -264,7 +264,7 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
   if SAVE_SCHEDULE:
     import dill
     def _save():
-      print(f"saving {len(SCHEDULES)} schedule graphs to", fp:="schedule.pkl" or getenv("SAVE_SCHEDULE_PATH"))
+      print(f"saving {len(SCHEDULES)} schedule graphs to", fp:=getenv("SAVE_SCHEDULE_PATH", default="schedule.pkl"))
       dill.dump(SCHEDULES, open(fp, "wb"))
     if len(SCHEDULES) == 0: atexit.register(_save)
     SCHEDULES.append((graph, prescheduled))
