@@ -155,32 +155,15 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     realized_children: Dict[LazyBuffer, ShapeTracker] = {}
     realize_op = False
     can_chase = True
-    # r
-    # e
-    # r
-    # e
-    # fuse [e, e]
-    # done
-
-    # r2
-    # e ??
-    # what's in e, have you thought of that?
-
-    # ideal outcome:
-
-    # [r3] -> [r, e, e]
-
-    # 2 options: fuse, chase
-    # when can i chase? !(is the realized_child already grouped with another reduceop?)
     while len(child_set):
       next_child_set = {}
-      for tr, st in child_set.items():
+      for tr,st in child_set.items():
         if tr in realizes:
-           # can only reduce contiguous
-           # max one reduceop per kernel
+          # can only reduce contiguous
+          # max one reduceop per kernel
           if not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r):
+            can_chase = tr not in reduce_for_op or reduce_for_op[tr] == r
             realize_op = True
-            can_chase = tr not in reduce_for_op
             continue
           realized_children[tr] = st
           continue # TODO: can search children
@@ -195,6 +178,17 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
               continue
             next_child_set[tr_next] = st + st_childs[0].st
       child_set = next_child_set
+    # can fuse some children
+    for tr in realized_children.copy():
+      tr_parents = deque(tr.srcs)
+      while tr_parents:
+        if (p:=tr_parents.pop().base).realized or p.op is LoadOps.CONST: continue
+        if p is r: continue
+        if p.op in ReduceOps:
+          del realized_children[tr]
+          break
+        tr_parents.extend(p.srcs)
+      print(tr, tr in realized_children)
     if realize_op: realizes[r] = None
     if not realized_children:
       tr = r
