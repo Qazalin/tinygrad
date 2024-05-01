@@ -1,15 +1,18 @@
-import dill, subprocess, os
+import subprocess, os, dill
 from typing import List, Tuple
 from tinygrad.features.graph import print_tree
 from tinygrad.helpers import colored
 from tinygrad.ops import LazyOp
 
-master = dill.load(open("./ref.pkl", "rb"))
-
 commit = subprocess.check_output(["git", "rev-parse", "HEAD"], encoding="utf-8").strip()
 subprocess.run(["git", "checkout", commit], check=True)
+subprocess.run(["python3", "test/test_schedule.py"], env={**os.environ, "SAVE_SCHEDULE": "1", "SAVE_SCHEDULE_PATH": f"{commit}.pkl"})
+feat = dill.load(open(f"./{commit}.pkl", "rb"))
+
+commit = subprocess.run(["git", "rev-parse", "master"], stdout=subprocess.PIPE, check=True, text=True).stdout.strip()
+subprocess.run(["git", "checkout", commit], check=True)
 subprocess.run(["python3", "test/test_schedule.py"], env={**os.environ, "SAVE_SCHEDULE": "1"})
-feat = dill.load(open("./schedule.pkl", "rb"))
+master = dill.load(open(f"./schedule.pkl", "rb"))
 
 assert len(master) == len(feat)
 master_asts: List[Tuple[LazyOp, ...]] = [ps.ast for _, prescheduled in master for _, ps in prescheduled.items()]

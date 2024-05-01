@@ -1,4 +1,4 @@
-import sys, pickle, atexit
+import sys, atexit
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
@@ -262,9 +262,10 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
       if in_degree[x] == 0: queue.append(prescheduled[x])
 
   if SAVE_SCHEDULE:
+    import dill
     def _save():
-      print(f"saving {len(SCHEDULES)} schedule graphs to", fp:="schedule.pkl")
-      pickle.dump(SCHEDULES, open(fp, "wb"))
+      print(f"saving {len(SCHEDULES)} schedule graphs to", fp:="schedule.pkl" or getenv("SAVE_SCHEDULE_PATH"))
+      dill.dump(SCHEDULES, open(fp, "wb"))
     if len(SCHEDULES) == 0: atexit.register(_save)
     SCHEDULES.append((graph, prescheduled))
   # confirm everything was scheduled correctly

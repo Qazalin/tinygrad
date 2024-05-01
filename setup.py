@@ -54,6 +54,7 @@ setup(name='tinygrad',
             "networkx",
             "hypothesis",
             "nibabel",
+            "dill",
         ],
         'docs': [
             "mkdocs-material",
