@@ -4,6 +4,7 @@
 
 import unittest
 from typing import List, Optional, Union
+from tinygrad.engine.realize import run_schedule
 from tinygrad.tensor import Tensor
 from tinygrad.ops import LoadOps, ReduceOps
 from tinygrad.helpers import DEBUG, GRAPH, flatten
@@ -39,6 +40,7 @@ def check_schedule(t:Union[Tensor, List[Tensor]], allowed:int, to_prerealize:Opt
     l = Linearizer(*s.ast)
     l.hand_coded_optimizations()
     l.linearize()
+  run_schedule(sched.copy())
   return sched
 
 class TestSchedule(unittest.TestCase):
@@ -208,7 +210,7 @@ class TestSchedule(unittest.TestCase):
       opt.zero_grad()
       img_bn.backward()
       # this is too high
-      check_schedule(opt.schedule_step(), 18)
+      check_schedule(opt.schedule_step(), 17)
 
   def test_fold_conv_relu(self):
     c1 = nn.Conv2d(3,16,3)

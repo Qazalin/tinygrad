@@ -152,14 +152,16 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
 
     # follow the reduce down
     child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
-    realized_children: Dict[LazyBuffer, ShapeTracker] = {}
+    realized_children: Dict[LazyBuffer, int] = {}
     forced_realize = False
     can_chase = True
+    depth = 0
     while not forced_realize and len(child_set):
       next_child_set = {}
+      depth += 1
       for tr,st in child_set.items():
         if tr in realizes:
-          realized_children[tr] = st
+          realized_children[tr] = depth
           # can only reduce contiguous
           # max one reduceop per kernel
           if not st.contiguous or st.size != r.st.size or (tr in reduce_for_op and reduce_for_op[tr] != r):
@@ -192,6 +194,10 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
             next_child_set[tr_next] = st + st_childs[0].st
       child_set = next_child_set
     if forced_realize:
+      for tr, d in (prev:=realized_children.copy()).items():
+        if d == depth: del realized_children[tr]
+      if len(prev) != len(realized_children): realizes[r] = None
+    if len(realized_children) == 0:
       tr = r
       if can_chase:
         # can chase this down to contiguous children
