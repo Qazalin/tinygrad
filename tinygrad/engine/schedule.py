@@ -140,6 +140,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   simple_pads: Set[LazyBuffer] = set()
   children: DefaultDict[LazyBuffer, Dict[LazyBuffer, None]] = defaultdict(dict)
   for out in outs: _recurse_lb(out.base, realizes, allbufs, simple_pads, children, scheduled=True)
+  assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
   # check if we have to realize pads
   for p in simple_pads:
@@ -168,11 +169,19 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
             forced_realize = True
             break
           if len(realized_children) > 1:
-            rc_parents = deque(realized_children)
+            rc_parents, rc_children = deque(realized_children), deque(realized_children)
             while rc_parents and not forced_realize:
               # max one reduceop per kernel
               if (p:=rc_parents.pop()).op in ReduceOps: forced_realize = True
               else: rc_parents.extend(x.base for x in p.srcs if x.base.realized is None and x.base is not r)
+            realized_descendants: Set[LazyBuffer] = set()
+            while rc_children and not forced_realize:
+              if (c:=rc_children.pop()).op in ReduceOps or not c.st.contiguous or c.st.size != r.st.size or c in reduce_for_op:
+                realized_descendants.clear()
+                break
+              if c in realizes and c not in (*realized_children, tr): realized_descendants.add(c)
+              rc_children.extend(x for x in children[c] if x.realized is None and x.device == r.device)
+            realized_children.update((rd, st) for rd in realized_descendants)
           continue
         for tr_next in children[tr].keys():
           if not tr_next.realized:
@@ -214,7 +223,6 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   # preschedule all buffers in realizes
   prescheduled = {group[0]:_schedule_group(tuple(group), realizes, reduce_for_op) for group in output_groups.values()}
   schedule_targets = {out:ps for ps in prescheduled.values() for out in ps.outputs}
-  assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
   # breadth first ordering
   graph: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
