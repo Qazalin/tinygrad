@@ -11,7 +11,6 @@ from tinygrad.engine.realize import run_schedule
 
 @unittest.skipIf(CI and Device.DEFAULT == "CUDA", "slow")
 class TestNN(unittest.TestCase):
-  @unittest.skipIf(Device.DEFAULT == "WEBGPU", "no int64 on WebGPU")
   def test_sparse_cat_cross_entropy(self):
     # create in tinygrad
     input = Tensor.randn(5, 5)
@@ -181,8 +180,6 @@ class TestNN(unittest.TestCase):
     np.testing.assert_allclose(gb.numpy(), torch_layer.bias.grad.numpy(), atol=5e-4, rtol=1e-5)
     np.testing.assert_allclose(gx.numpy(), torch_x.grad.numpy(), atol=5e-4, rtol=1e-5)
 
-
-  @unittest.skipIf(CI and Device.DEFAULT == "WEBGPU", "runs out of memory in CI")
   def test_conv_transpose1d(self):
     BS, C1, W = 4, 16, 224//4
     C2, K, S, P = 64, 7, 2, 1
@@ -203,7 +200,6 @@ class TestNN(unittest.TestCase):
     torch_z = torch_layer(torch_x)
     np.testing.assert_allclose(z.numpy(), torch_z.detach().numpy(), atol=5e-4, rtol=1e-5)
 
-  @unittest.skipIf(CI and Device.DEFAULT == "WEBGPU", "runs out of memory in CI")
   def test_conv_transpose2d(self):
     BS, C1, H, W = 4, 16, 224//4, 224//4
     C2, K, S, P = 64, 7, 2, 1

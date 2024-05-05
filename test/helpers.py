@@ -26,7 +26,6 @@ def is_dtype_supported(dtype: DType, device: str = Device.DEFAULT):
   if dtype == dtypes.bfloat16:
     # NOTE: this requires bf16 buffer support
     return device in {"RHIP", "HSA"} or (device == "CUDA" and not CI and not getenv("PTX"))
-  if device in ["WEBGPU", "WEBGL"]: return dtype in [dtypes.float, dtypes.int32, dtypes.uint32]
   if device == "CUDA" and getenv("PTX") and dtype in (dtypes.int8, dtypes.uint8): return False
   # for CI GPU and OSX, cl_khr_fp16 isn't supported
   # for CI LLVM, it segfaults because it can't link to the casting function
