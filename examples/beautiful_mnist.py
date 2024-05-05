@@ -1,7 +1,7 @@
 # model based off https://towardsdatascience.com/going-beyond-99-mnist-handwritten-digits-recognition-cfff96337392
 from typing import List, Callable
 from tinygrad import Tensor, TinyJit, nn, GlobalCounters
-from tinygrad.helpers import getenv, colored
+from tinygrad.helpers import Context, getenv, colored
 from tinygrad.nn.datasets import mnist
 from tqdm import trange
 
@@ -41,11 +41,13 @@ if __name__ == "__main__":
   def get_test_acc() -> Tensor: return (model(X_test).argmax(axis=1) == Y_test).mean()*100
 
   test_acc = float('nan')
-  for i in (t:=trange(70)):
-    GlobalCounters.reset()   # NOTE: this makes it nice for DEBUG=2 timing
-    loss = train_step()
-    if i%10 == 9: test_acc = get_test_acc().item()
-    t.set_description(f"loss: {loss.item():6.2f} test_accuracy: {test_acc:5.2f}%")
+  for i in (t:=trange(2)):
+    with Context(GRAPH=1 if i == 1 else 0):
+      with Context(SAVE_SCHEDULE=1 if i == 1 else 0):
+        GlobalCounters.reset()   # NOTE: this makes it nice for DEBUG=2 timing
+        loss = train_step()
+        if i%10 == 9: test_acc = get_test_acc().item()
+        t.set_description(f"loss: {loss.item():6.2f} test_accuracy: {test_acc:5.2f}%")
 
   # verify eval acc
   if target := getenv("TARGET_EVAL_ACC_PCT", 0.0):
