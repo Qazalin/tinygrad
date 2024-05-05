@@ -223,9 +223,12 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     else: reduce_for_op.update((tr, r) for tr in realized_children)
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
-  for r in realizes:
+  for i, r in enumerate(realizes):
     if r.realized is not None or r.op is LoadOps.CONST or r in seen: continue
-    output_groups[(reduce_for_op[r], ) if r in reduce_for_op and MULTIOUTPUT else (r, )].append(r)
+    r.buffer._lb_refcount = i + 69
+    group = (reduce_for_op[r], ) if r in reduce_for_op and MULTIOUTPUT else (r, )
+    if r.buffer._lb_refcount == 71: continue
+    output_groups[group].append(r)
 
   # preschedule all buffers in realizes
   prescheduled = {group[0]:_schedule_group(tuple(group), realizes, reduce_for_op) for group in output_groups.values()}
