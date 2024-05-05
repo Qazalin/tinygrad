@@ -7,7 +7,7 @@ directory = Path(__file__).resolve().parent
 with open(directory / 'README.md', encoding='utf-8') as f:
   long_description = f.read()
 
-setup(name='tinygrad',
+setup(name='tinygrad-tools',
       version='0.8.0',
       description='You like pytorch? You like micrograd? You love tinygrad! <3',
       author='George Hotz',
