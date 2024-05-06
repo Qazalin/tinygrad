@@ -5,35 +5,38 @@ from tinygrad.ops import LoadOps, get_lazyop_info
 from tinygrad.device import Device, Compiled
 from tinygrad.codegen.linearizer import Linearizer
 from tinygrad.features.search import time_linearizer, beam_search, bufs_from_lin
-from tinygrad.helpers import ansilen, DEBUG, getenv
+from tinygrad.helpers import Context, ansilen, DEBUG, getenv
 from tinygrad.shape.symbolic import sym_infer
 from tinygrad.dtype import dtypes
 from tinygrad.engine.schedule import create_schedule
 from tinygrad.features.graph import print_tree
 
 if __name__ == "__main__":
-  if getenv("HALF"):
-    dtypes.default_float = dtypes.half
+  with Tensor.train():
+    if getenv("HALF"):
+      dtypes.default_float = dtypes.half
 
-  mdl = ResNet50()
-  seen = set()
+    mdl = ResNet50()
+    seen = set()
 
-  # the device we are optimizing for
-  device: Compiled = Device[Device.DEFAULT]
-  if getenv("BACKWARD"): optim = (nn.optim.LARS if getenv("LARS") else nn.optim.SGD)(nn.state.get_parameters(mdl))
-  print(f"optimizing for {Device.DEFAULT}")
+    # the device we are optimizing for
+    device: Compiled = Device[Device.DEFAULT]
+    if getenv("BACKWARD"): optim = (nn.optim.LARS if getenv("LARS") else nn.optim.SGD)(nn.state.get_parameters(mdl))
+    print(f"optimizing for {Device.DEFAULT}")
 
-  # run model twice to get only what changes, these are the kernels of the model
-  for i in range(2):
-    out = mdl(Tensor.empty(64, 3, 224, 224))
-    targets = [out.lazydata]
-    if getenv("BACKWARD"):
-      optim.zero_grad()
-      out.sparse_categorical_crossentropy(Tensor.empty(64, dtype=dtypes.int)).backward()
-      targets += [x.lazydata for x in optim.schedule_step()]
-    sched = create_schedule(targets, seen)
-    print(f"schedule length {len(sched)}")
-  sched = [x for x in sched if x.ast[0].op not in LoadOps]
+    # run model twice to get only what changes, these are the kernels of the model
+    for i in range(2):
+      with Context(SAVE_SCHEDULE=0 if i == 0 else 1):
+        out = mdl(Tensor.empty(64, 3, 224, 224))
+        targets = [out.lazydata]
+        if getenv("BACKWARD"):
+          optim.zero_grad()
+          out.sparse_categorical_crossentropy(Tensor.empty(64, dtype=dtypes.int)).backward()
+          targets += [x.lazydata for x in optim.schedule_step()]
+        sched = create_schedule(targets, seen)
+        print(f"schedule length {len(sched)}")
+    sched = [x for x in sched if x.ast[0].op not in LoadOps]
+  """
 
   # focus on one kernel
   if getenv("KERNEL", -1) >= 0: sched = sched[getenv("KERNEL", -1):getenv("KERNEL", -1)+1]
@@ -82,3 +85,4 @@ if __name__ == "__main__":
     running_gflops += gflops * tm
     print(f"*** {total_tm*1000:7.2f} ms : kernel {i:2d} {lin.name+' '*(37-ansilen(lin.name))} {str(lin.global_size):18s} {str(lin.local_size):12s} takes {tm*1000:7.2f} ms, {gflops:6.0f} GFLOPS")
   print(f"******* total {total_tm*1000:.2f} ms, {running_gflops/total_tm:6.0f} GFLOPS")
+  """

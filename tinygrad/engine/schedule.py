@@ -2,7 +2,7 @@ import sys, pickle, atexit
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
-from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS, UnaryOps
+from tinygrad.ops import BinaryOps, LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS, UnaryOps
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, prod, dedup, all_int, merge_dicts, getenv
 from tinygrad.shape.symbolic import Variable
@@ -157,6 +157,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     realized_children: Dict[LazyBuffer, ShapeTracker] = {}
     forced_realize = False
     can_chase = True
+    because_of_this = False
     while not forced_realize and len(child_set):
       next_child_set = {}
       for tr,st in child_set.items():
@@ -169,19 +170,27 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
             forced_realize = True
             break
           if len(realized_children) > 1:
-            rc_parents, rc_children = deque(realized_children), deque(realized_children)
-            while rc_parents and not forced_realize:
-              # max one reduceop per kernel
-              if (p:=rc_parents.pop()).op in ReduceOps: forced_realize = True
-              else: rc_parents.extend(x.base for x in p.srcs if x.base.realized is None and x.base is not r)
-            realized_descendants: Set[LazyBuffer] = set()
-            while rc_children and not forced_realize:
-              if (c:=rc_children.pop()).op in ReduceOps or not c.st.contiguous or c.st.size != r.st.size or c in reduce_for_op:
-                realized_descendants.clear()
-                break
-              if c in realizes and c not in (*realized_children, tr): realized_descendants.add(c)
-              rc_children.extend(x for x in children[c] if x.realized is None and x.device == r.device)
-            realized_children.update((rd, st) for rd in realized_descendants)
+            #rc_parents, rc_children = deque(realized_children), deque(realized_children)
+            for rc in realized_children.copy():
+              rc_parents = deque(x.base for x in rc.srcs)
+              while rc_parents:
+                if (p:=rc_parents.pop()).realized or p.op is LoadOps.CONST: continue
+                if p is r: continue
+                # max one reduceop per kernel
+                if p.op in ReduceOps:
+                  forced_realize = True
+                  if r.shape == (1, 256, 1, 1) and len(realized_children) > 1:
+                    for rc2 in realized_children:
+                      rc2.buffer._lb_refcount = 69
+                    r.buffer._lb_refcount = 69
+                    if rc.op is BinaryOps.MUL and len(realized_children) == 3:
+                      del realized_children[rc]
+                      print(list(realized_children))
+                      forced_realize = False
+                    can_chase = False
+                    because_of_this = True
+                  break
+                for x in p.srcs: rc_parents.append(x.base)
           continue
         for tr_next in children[tr].keys():
           if not tr_next.realized:
@@ -195,6 +204,9 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
               break
             next_child_set[tr_next] = st + st_childs[0].st
       child_set = next_child_set
+
+    if r.shape == (1, 256, 1, 1) and len(realized_children) > 1:
+      print(because_of_this)
     if not forced_realize and any(x.op is LoadOps.ASSIGN for x in realized_children):
       parents = deque((r, *realized_children))
       while parents and not forced_realize:
