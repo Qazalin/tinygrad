@@ -152,19 +152,44 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
 
+    # acc to global? (TODO: dfs)
+    r_children, realize_acc = deque(((r, r.st),)), False
+    visisted: Set[LazyBuffer] = set()
+    while r_children:
+      tr, st = r_children.pop()
+      visisted.add(tr)
+      if tr in realizes:
+        if not st.contiguous or st.size != r.st.size or tr in reduce_for_op:
+          realize_acc = True
+          break
+        continue
+      for tr_next in children[tr]:
+        if not tr_next.realized and tr_next not in visisted:
+          if tr_next.op in ReduceOps:
+            realize_acc = True
+            break
+          st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
+          if len(st_childs) > 1:
+            realize_acc = True
+            break
+          r_children.append((tr_next, st + st_childs[0].st))
+
+
     # search future paths (TODO: recursive>)
     r_children = deque(((r, r.st),))
     siblings: Set[LazyBuffer] = set()
+    visisted: Set[LazyBuffer] = set()
     external_path: Set[LazyBuffer] = set()
     while r_children:
       tr, st = r_children.pop()
+      visisted.add(tr)
       if tr in realizes:
         if not st.contiguous or st.size != r.st.size or tr in reduce_for_op:
           external_path.add(tr)
           continue
         siblings.add(tr)
       for tr_next in children[tr]:
-        if not tr_next.realized:
+        if not tr_next.realized and tr_next not in visisted:
           if tr_next.op in ReduceOps:
             external_path.add(tr_next)
             continue
@@ -189,7 +214,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
           break
         rs_parents.extend(p.srcs)
       if rs in siblings: reduce_for_op[rs] = r
-    if not siblings: realizes[r] = None
+    if not siblings or realize_acc: realizes[r] = None
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:

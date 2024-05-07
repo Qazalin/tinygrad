@@ -235,7 +235,7 @@ class TestSchedule(unittest.TestCase):
       fw = bn(x).contiguous_backward().relu().contiguous()
       fw.sum().backward()
       # TODO: this is too many
-      check_schedule([x.grad, bn.weight.grad, bn.bias.grad, fw], 10)
+      check_schedule([x.grad, bn.weight.grad, bn.bias.grad, fw], 9)
 
   def test_fold_conv_relu(self):
     c1 = nn.Conv2d(3,16,3)
