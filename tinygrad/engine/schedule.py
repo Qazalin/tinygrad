@@ -2,9 +2,9 @@ import sys, pickle, atexit
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
-from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS, UnaryOps
+from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
-from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, prod, dedup, all_int, merge_dicts, getenv
+from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, dedup, prod, all_int, merge_dicts, getenv
 from tinygrad.shape.symbolic import Variable
 from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.lazy import LazyBuffer
@@ -132,22 +132,21 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Dict[LazyBuffer, None]) -> bool:
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
-# how would she create the scheduler?
-
-def _recurse_children(r:LazyBuffer, realizes:Dict[LazyBuffer, None],
-                      children:Dict[LazyBuffer, Dict[LazyBuffer, None]], reduce_for_op:Dict[LazyBuffer, LazyBuffer]) -> Set[LazyBuffer]:
-  output_set: Set[LazyBuffer] = set()
-  def _dfs(tr:LazyBuffer, st:ShapeTracker, cache):
-    if tr.realized or tr in cache: return
-    if tr in realizes:
-      if not st.contiguous or st.size != r.st.size or tr in reduce_for_op: return output_set.add(r)
-      return output_set.add(tr)
-    for tr_next in children[tr]:
-      if tr_next.realized is None:
-        if tr_next.op in ReduceOps or len(st_childs:=dedup([s for s in tr_next.srcs if s.base == tr])) > 1: return output_set.add(r)
-        _dfs(tr_next, st+st_childs[0].st, cache)
-  _dfs(r, r.st, cache={})
-  return output_set
+# search the local graph for groupable ops
+def _create_group(r:LazyBuffer, realizes:Dict[LazyBuffer, None], children:Dict[LazyBuffer, Dict[LazyBuffer, None]],
+                  reduce_for_op:Dict[LazyBuffer, LazyBuffer]) -> Set[LazyBuffer]:
+  outputs: Set[LazyBuffer] = set()
+  def _dfs(tr:LazyBuffer, st:ShapeTracker, st_childs:List[LazyBuffer]):
+    # only search LazyBuffers in the local graph
+    if tr.realized is not None or tr.op is LoadOps.CONST or tr.device != r.device: return
+    # max one reduceop per kernel
+    if (tr.op in ReduceOps or tr in reduce_for_op) and tr is not r: return outputs.add(r)
+    # shapetracker breakers
+    if len(st_childs) > 1 or (st:=st+st_childs[0].st).size != r.st.size or not st.contiguous: return outputs.add(r)
+    if tr in realizes: return outputs.add(tr)
+    for tr_next in children[tr]: _dfs(tr_next, st, dedup([s for s in tr_next.srcs if s.base == tr]))
+  _dfs(r, r.st, [r])
+  return outputs
 
 def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[DefaultDict[LazyBuffer, List[LazyBuffer]], DefaultDict[LazyBuffer, int],
                                                                     Dict[LazyBuffer, _LBScheduleItem]]:
@@ -165,11 +164,17 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
       realizes[p] = None
 
   # group reduces with n elementwise ops: r(n), r(1 + n - unfused_ops), r
+  cnt = 69
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
-    r_children = _recurse_children(r, realizes, children, reduce_for_op)
-    if r_children: print(r.shape, r_children)
+    group = _create_group(r, realizes, children, reduce_for_op)
+    if DEBUG >= 1: print(cnt, r.shape, group)
+    #reduce_for_op.update((out, r) for out in group)
+    for g in group:
+      g.buffer._lb_refcount = cnt if g.op is not LoadOps.ASSIGN else cnt + 1
+    r.buffer._lb_refcount = cnt
+    cnt += 1
     realizes[r] = None
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
