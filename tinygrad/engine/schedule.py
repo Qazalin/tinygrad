@@ -176,10 +176,12 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
 
     # group (TODO: delete aesthetics)
     for rs in siblings.copy():
-      rs_parents = deque()
+      rs_parents = deque((rs, ))
+      visisted = set()
       while rs_parents:
         p = rs_parents.pop().base
-        if p.realized is not None or p.op is LoadOps.CONST: continue
+        if p.realized is not None or p.op is LoadOps.CONST or p in visisted: continue
+        visisted.add(p)
         if p is r: continue
         if p in external_path:
           realizes[r] = None
