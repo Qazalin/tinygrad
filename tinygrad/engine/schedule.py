@@ -164,18 +164,25 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
       realizes[p] = None
 
   # group reduces with n elementwise ops: r(n), r(1 + n - unfused_ops), r
-  cnt = 69
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
-    group = _create_group(r, realizes, children, reduce_for_op)
-    if DEBUG >= 1: print(cnt, r.shape, group)
-    #reduce_for_op.update((out, r) for out in group)
-    for g in group:
-      g.buffer._lb_refcount = cnt if g.op is not LoadOps.ASSIGN else cnt + 1
-    r.buffer._lb_refcount = cnt
-    cnt += 1
-    realizes[r] = None
+    outputs = _create_group(r, realizes, children, reduce_for_op)
+    if DEBUG >= 1: print(r.shape, outputs)
+    for out in outputs:
+      can_group = True
+      # r(1 + n-unfused_ops)
+      if r in outputs and out is not r:
+        out_parents = deque((out, ))
+        while out_parents:
+          if (p:=out_parents.pop().base).realized or p.op is LoadOps.CONST or p is r: continue
+          # unfused op
+          if p in realizes:
+            can_group = False
+            break
+          out_parents.extend(p.srcs)
+      if can_group: reduce_for_op[out] = r
+    if r in outputs: realizes[r] = None
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
