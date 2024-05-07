@@ -775,5 +775,22 @@ class TestSchedule(unittest.TestCase):
     f = (b - d).sum() - e
     check_schedule([c, d, e, f], 3)
 
+  def test_reduce_fuse_all(self):
+    a = Tensor.empty(4, 4)
+    b = a.sum() + 2
+    c = a.sum() + 4
+    d = b * c
+    ast = check_schedule([b, c, d], 1)[-1].ast
+    assert len(ast) == 3
+
+  def test_reduce_fuse_some_reduce(self):
+    a = Tensor.empty(4, 4)
+    b = a.sum(1) + 2
+    c = a.sum(1) + 4
+    d = (a.sum(1) - a.max(1)) + 2
+    check_schedule([b, c, d], 4)
+    #ast = check_schedule([b, c, d], 2)[-2].ast
+    #assert len(ast) == 3
+
 if __name__ == '__main__':
   unittest.main(verbosity=2)
