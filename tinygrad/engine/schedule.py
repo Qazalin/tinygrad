@@ -2,7 +2,7 @@ import sys, pickle, atexit
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
-from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS, UnaryOps
+from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, prod, dedup, all_int, merge_dicts, getenv
 from tinygrad.shape.symbolic import Variable
@@ -174,20 +174,20 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
             break
           r_children.append((tr_next, st + st_childs[0].st))
 
-
-    # search future paths (TODO: recursive>)
+    # search future paths (TODO: recursive>>)
     r_children = deque(((r, r.st),))
     siblings: Set[LazyBuffer] = set()
-    visisted: Set[LazyBuffer] = set()
+    visisted = set()
     external_path: Set[LazyBuffer] = set()
     while r_children:
       tr, st = r_children.pop()
       visisted.add(tr)
       if tr in realizes:
-        if not st.contiguous or st.size != r.st.size or tr in reduce_for_op:
+        if not st.contiguous or st.size != r.st.size or tr in reduce_for_op or tr.device != r.device:
           external_path.add(tr)
           continue
         siblings.add(tr)
+        if tr.forced_realize: continue
       for tr_next in children[tr]:
         if not tr_next.realized and tr_next not in visisted:
           if tr_next.op in ReduceOps:
