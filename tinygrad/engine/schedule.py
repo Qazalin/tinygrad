@@ -132,6 +132,23 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Dict[LazyBuffer, None]) -> bool:
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
+# how would she create the scheduler?
+
+def _recurse_children(r:LazyBuffer, realizes:Dict[LazyBuffer, None],
+                      children:Dict[LazyBuffer, Dict[LazyBuffer, None]], reduce_for_op:Dict[LazyBuffer, LazyBuffer]) -> Set[LazyBuffer]:
+  output_set: Set[LazyBuffer] = set()
+  def _dfs(tr:LazyBuffer, st:ShapeTracker, cache):
+    if tr.realized or tr in cache: return
+    if tr in realizes:
+      if not st.contiguous or st.size != r.st.size or tr in reduce_for_op: return output_set.add(r)
+      return output_set.add(tr)
+    for tr_next in children[tr]:
+      if tr_next.realized is None:
+        if tr_next.op in ReduceOps or len(st_childs:=dedup([s for s in tr_next.srcs if s.base == tr])) > 1: return output_set.add(r)
+        _dfs(tr_next, st+st_childs[0].st, cache)
+  _dfs(r, r.st, cache={})
+  return output_set
+
 def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[DefaultDict[LazyBuffer, List[LazyBuffer]], DefaultDict[LazyBuffer, int],
                                                                     Dict[LazyBuffer, _LBScheduleItem]]:
   # start by just realizing the buffers passed in
@@ -147,80 +164,13 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     if not _is_padding_okay(p, realizes):
       realizes[p] = None
 
-  # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
+  # group reduces with n elementwise ops: r(n), r(1 + n - unfused_ops), r
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
-
-    # follow the reduce down
-    child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
-    realized_children: Dict[LazyBuffer, ShapeTracker] = {}
-    forced_realize = False
-    can_chase = True
-    while not forced_realize and len(child_set):
-      next_child_set = {}
-      for tr,st in child_set.items():
-        if tr in realizes:
-          realized_children[tr] = st
-          # can only reduce contiguous
-          # max one reduceop per kernel
-          if not st.contiguous or st.size != r.st.size or tr in reduce_for_op:
-            can_chase = tr not in reduce_for_op
-            forced_realize = True
-            break
-          if len(realized_children) > 1:
-            rc_parents, rc_children = deque(realized_children), deque(realized_children)
-            while rc_parents and not forced_realize:
-              # max one reduceop per kernel
-              if (p:=rc_parents.pop()).op in ReduceOps: forced_realize = True
-              else: rc_parents.extend(x.base for x in p.srcs if x.base.realized is None and x.base is not r)
-            realized_descendants: Set[LazyBuffer] = set()
-            while rc_children and not forced_realize:
-              if (c:=rc_children.pop()).op in ReduceOps or not c.st.contiguous or c.st.size != r.st.size or c in reduce_for_op:
-                realized_descendants.clear()
-                break
-              if c in realizes and c not in (*realized_children, tr): realized_descendants.add(c)
-              rc_children.extend(x for x in children[c] if x.realized is None and x.device == r.device)
-            realized_children.update((rd, st) for rd in realized_descendants)
-          continue
-        for tr_next in children[tr].keys():
-          if not tr_next.realized:
-            # max one reduceop per kernel
-            if tr_next.op in ReduceOps:
-              forced_realize = True
-              break
-            st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
-            if len(st_childs) > 1:
-              forced_realize = True
-              break
-            next_child_set[tr_next] = st + st_childs[0].st
-      child_set = next_child_set
-    if not forced_realize and any(x.op is LoadOps.ASSIGN for x in realized_children):
-      parents = deque((r, *realized_children))
-      while parents and not forced_realize:
-        if (p:=parents.pop().base).realized or p in realizes:
-          if p in assign_targets and assign_targets[p] not in realized_children: forced_realize, can_chase = True, False
-          continue
-        parents.extend(p.srcs)
-    if forced_realize:
-      tr = r
-      if can_chase:
-        # can chase this down to contiguous children
-        st = tr.st
-        while len(children[tr]) == 1:
-          tr_next = next(iter(children[tr].keys()))
-          st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
-          if len(st_childs) > 1: break
-          if st.size != st_childs[0].st.size: break
-          st = st + st_childs[0].st
-          if not st.contiguous or tr_next.op in ReduceOps: break
-          tr = tr_next
-        # don't cast to higher size before store (tr cannot be realized if forced_realize)
-        if tr.op is UnaryOps.CAST and tr.arg[0].itemsize > tr.srcs[0].dtype.itemsize:
-          tr = tr.srcs[0].base
-        reduce_for_op[tr] = r
-      realizes[tr] = None
-    else: reduce_for_op.update((tr, r) for tr in realized_children)
+    r_children = _recurse_children(r, realizes, children, reduce_for_op)
+    if r_children: print(r.shape, r_children)
+    realizes[r] = None
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
@@ -276,6 +226,7 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
       print(f"saving {len(SCHEDULES)} schedule graphs to", fp:=getenv("SAVE_SCHEDULE_PATH", "schedule.pkl"))
       pickle.dump(SCHEDULES, open(fp, "wb"))
     if len(SCHEDULES) == 0: atexit.register(_save)
+    SCHEDULES.clear()
     SCHEDULES.extend((ps.ast for ps in prescheduled.values()) if getenv("CAPTURE_AST") else [(graph, prescheduled)])
   # confirm everything was scheduled correctly
   if not all(degree == 0 for degree in in_degree.values()) or len(prescheduled) != len(schedule):
