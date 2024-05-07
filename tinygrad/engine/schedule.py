@@ -136,16 +136,18 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Dict[LazyBuffer, None]) -> bool:
 def _create_group(r:LazyBuffer, realizes:Dict[LazyBuffer, None], children:Dict[LazyBuffer, Dict[LazyBuffer, None]],
                   reduce_for_op:Dict[LazyBuffer, LazyBuffer]) -> Set[LazyBuffer]:
   outputs: Set[LazyBuffer] = set()
-  def _dfs(tr:LazyBuffer, st:ShapeTracker, st_childs:List[LazyBuffer]):
-    # only search LazyBuffers in the local graph
-    if tr.realized is not None or tr.op is LoadOps.CONST or tr.device != r.device: return
-    # max one reduceop per kernel
-    if (tr.op in ReduceOps or tr in reduce_for_op) and tr is not r: return outputs.add(r)
-    # shapetracker breakers
-    if len(st_childs) > 1 or (st:=st+st_childs[0].st).size != r.st.size or not st.contiguous: return outputs.add(r)
-    if tr in realizes: return outputs.add(tr)
-    for tr_next in children[tr]: _dfs(tr_next, st, dedup([s for s in tr_next.srcs if s.base == tr]))
-  _dfs(r, r.st, [r])
+  def _dfs(tr:LazyBuffer, st:ShapeTracker):
+    if tr in realizes:
+      if not st.contiguous or st.size != r.st.size or tr in reduce_for_op: return outputs.add(r)
+      return outputs.add(tr)
+    for tr_next in children[tr].keys():
+      if not tr_next.realized:
+        # max one reduceop per kernel
+        if tr_next.op in ReduceOps: return outputs.add(r)
+        st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
+        if len(st_childs) > 1: return outputs.add(r)
+        _dfs(tr_next, st + st_childs[0].st)
+  _dfs(r, r.st)
   return outputs
 
 def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[DefaultDict[LazyBuffer, List[LazyBuffer]], DefaultDict[LazyBuffer, int],
