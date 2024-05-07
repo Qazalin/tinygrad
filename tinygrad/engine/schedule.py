@@ -189,6 +189,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
           break
         rs_parents.extend(p.srcs)
       if rs in siblings: reduce_for_op[rs] = r
+    if not siblings: realizes[r] = None
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
