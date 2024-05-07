@@ -213,8 +213,20 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
           siblings.remove(rs)
           break
         rs_parents.extend(p.srcs)
-      if rs in siblings: reduce_for_op[rs] = r
+
+    # assign...
+    if any(x.op is LoadOps.ASSIGN for x in siblings):
+      parents = deque((r, *siblings))
+      while parents:
+        if (p:=parents.pop().base).realized or p in realizes:
+          if p in assign_targets and assign_targets[p] not in siblings:
+            siblings.clear()
+            break
+          continue
+        parents.extend(p.srcs)
+
     if not siblings or realize_acc: realizes[r] = None
+    reduce_for_op.update((s, r) for s in siblings)
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
