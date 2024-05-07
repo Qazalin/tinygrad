@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
-from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, prod, dedup, all_int, merge_dicts, getenv
+from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, dedup, prod, all_int, merge_dicts, getenv
 from tinygrad.shape.symbolic import Variable
 from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.lazy import LazyBuffer
@@ -132,6 +132,23 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Dict[LazyBuffer, None]) -> bool:
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
+# search the local graph for groupable ops
+def _create_group(r:LazyBuffer, realizes:Dict[LazyBuffer, None], children:Dict[LazyBuffer, Dict[LazyBuffer, None]],
+                  reduce_for_op:Dict[LazyBuffer, LazyBuffer]) -> Set[LazyBuffer]:
+  outputs: Set[LazyBuffer] = set()
+  def _dfs(tr:LazyBuffer, st:ShapeTracker, st_childs:List[LazyBuffer]):
+    # only search LazyBuffers in the local graph
+    if tr.realized is not None or tr.op is LoadOps.CONST or tr.device != r.device: return
+    # max one reduceop per kernel
+    if (tr.op in ReduceOps or tr in reduce_for_op) and tr is not r: return outputs.add(r)
+    # shapetracker breakers
+    if tr is not r: st = st+st_childs[0].st
+    if len(st_childs) > 1 or (tr in realizes and (st.size != r.st.size or not st.contiguous)): return outputs.add(r)
+    if tr in realizes: return outputs.add(tr)
+    for tr_next in children[tr]: _dfs(tr_next, st, dedup([s for s in tr_next.srcs if s.base == tr]))
+  _dfs(r, r.st, [])
+  return outputs
+
 def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[DefaultDict[LazyBuffer, List[LazyBuffer]], DefaultDict[LazyBuffer, int],
                                                                     Dict[LazyBuffer, _LBScheduleItem]]:
   # start by just realizing the buffers passed in
@@ -147,86 +164,21 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     if not _is_padding_okay(p, realizes):
       realizes[p] = None
 
-  # group reduces with n elementwise ops: r(n), r(1 + n-unfused), r
+  # group reduces with n elementwise ops: r(n), r(1 + n - unfused_ops), r
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
-
-    # acc to global? (TODO: dfs)
-    r_children, realize_acc = deque(((r, r.st),)), False
-    visisted: Set[LazyBuffer] = set()
-    while r_children:
-      tr, st = r_children.pop()
-      visisted.add(tr)
-      if tr in realizes:
-        if not st.contiguous or st.size != r.st.size or tr in reduce_for_op:
-          realize_acc = True
-          break
-        continue
-      for tr_next in children[tr]:
-        if not tr_next.realized and tr_next not in visisted:
-          if tr_next.op in ReduceOps:
-            realize_acc = True
-            break
-          st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
-          if len(st_childs) > 1:
-            realize_acc = True
-            break
-          r_children.append((tr_next, st + st_childs[0].st))
-
-    # search future paths (TODO: recursive>>)
-    r_children = deque(((r, r.st),))
-    siblings: Set[LazyBuffer] = set()
-    visisted = set()
-    external_path: Set[LazyBuffer] = set()
-    while r_children:
-      tr, st = r_children.pop()
-      visisted.add(tr)
-      if tr in realizes:
-        if not st.contiguous or st.size != r.st.size or tr in reduce_for_op or tr.device != r.device:
-          external_path.add(tr)
-          continue
-        siblings.add(tr)
-        if tr.forced_realize: continue
-      for tr_next in children[tr]:
-        if not tr_next.realized and tr_next not in visisted:
-          if tr_next.op in ReduceOps:
-            external_path.add(tr_next)
-            continue
-        st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
-        if len(st_childs) > 1:
-          external_path.add(tr_next)
-          continue
-        r_children.append((tr_next, st + st_childs[0].st))
-
-    # group (TODO: delete aesthetics)
-    for rs in siblings.copy():
-      rs_parents = deque((rs, ))
-      visisted = set()
-      while rs_parents:
-        p = rs_parents.pop().base
-        if p.realized is not None or p.op is LoadOps.CONST or p in visisted: continue
-        visisted.add(p)
-        if p is r: continue
-        if p in external_path:
-          realizes[r] = None
-          siblings.remove(rs)
-          break
-        rs_parents.extend(p.srcs)
-
-    # assign...
-    if any(x.op is LoadOps.ASSIGN for x in siblings):
-      parents = deque((r, *siblings))
-      while parents:
-        if (p:=parents.pop().base).realized or p in realizes:
-          if p in assign_targets and assign_targets[p] not in siblings:
-            siblings.clear()
-            break
-          continue
-        parents.extend(p.srcs)
-
-    if not siblings or realize_acc: realizes[r] = None
-    reduce_for_op.update((s, r) for s in siblings)
+    outputs = _create_group(r, realizes, children, reduce_for_op)
+    # TODO: check if the output can group
+    realize_r = r in outputs
+    for out in outputs:
+      out_parents, can_group = deque((out, )), True
+      while out_parents and can_group:
+        if (p:=out_parents.pop().base) in realizes: can_group = False
+        else: out_parents.extend(x.base for x in p.srcs if x.realized is None and x.op is not LoadOps.CONST and x is not r)
+      if can_group: reduce_for_op[out] = r
+      else: realize_r = True
+    if realize_r: realizes[r] = None
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:

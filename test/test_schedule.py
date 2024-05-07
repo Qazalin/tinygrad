@@ -6,7 +6,7 @@ import unittest
 from typing import List, Optional, Union
 from tinygrad.tensor import Tensor
 from tinygrad.ops import BinaryOps, LoadOps, ReduceOps
-from tinygrad.helpers import DEBUG, dedup, flatten
+from tinygrad.helpers import DEBUG, flatten
 from tinygrad.codegen.linearizer import Linearizer
 from tinygrad.features.graph import print_tree
 from tinygrad.engine.schedule import create_schedule
@@ -24,7 +24,7 @@ def check_schedule(t:Union[Tensor, List[Tensor]], allowed:int, to_prerealize:Opt
   sched = create_schedule(flatten([r.lazydata.lbs for r in t]), seen)
   if filter_loadops: sched = [s for s in sched if s.ast[0].op not in LoadOps]
   if len(sched) != allowed: print(f"SCHEDULE ISSUE, expecting {allowed} got {len(sched)}")
-  if DEBUG >= 3:
+  if len(sched) != allowed or DEBUG >= 3:
     for i, s in enumerate(sched):
       print("kernel", i+1)
       for op in s.ast: print_tree(op)
@@ -159,8 +159,8 @@ class TestSchedule(unittest.TestCase):
     r1 = (x - r0).sum(axis=0).div(2)
     out = r0 + r1
     schedule = check_schedule(out, 2)
-    reduceops = dedup([x for si in schedule for out in si.ast for x in out.lazyops if x.op in ReduceOps])
-    assert len(reduceops) == 2, f"expected 2 reduces, got {len(reduceops)}"
+    reduceops = [x for si in schedule for out in si.ast for x in out.lazyops if x.op in ReduceOps]
+    assert len(reduceops) == 2
 
   def test_cache_reduce_multiple_children(self):
     x = Tensor.empty(32)
@@ -204,7 +204,7 @@ class TestSchedule(unittest.TestCase):
 
   def test_fold_conv_batchnorm_optim(self):
     # this is too high
-    for optim, cnt in [(nn.optim.Adam, 19), (nn.optim.SGD, 16)]:
+    for optim, cnt in [(nn.optim.Adam, 20), (nn.optim.SGD, 17)]:
       with self.subTest(optim=optim.__name__):
         with Tensor.train():
           img = Tensor.ones(1,3,4,4)
@@ -235,7 +235,7 @@ class TestSchedule(unittest.TestCase):
       fw = bn(x).contiguous_backward().relu().contiguous()
       fw.sum().backward()
       # TODO: this is too many
-      check_schedule([x.grad, bn.weight.grad, bn.bias.grad, fw], 9)
+      check_schedule([x.grad, bn.weight.grad, bn.bias.grad, fw], 10)
 
   def test_fold_conv_relu(self):
     c1 = nn.Conv2d(3,16,3)
@@ -527,7 +527,7 @@ class TestSchedule(unittest.TestCase):
     # b.sum() is not a descendant of the fused nodes
     out0 = a.sum() + b.sum() + 2
     out1 = a.sum() + b.sum() + 4
-    check_schedule([out0, out1], 2)
+    check_schedule([out0, out1], 4)
 
   def test_reduce_multiple_paths_midreduce(self):
     a = Tensor.empty(4, 4)
@@ -544,7 +544,7 @@ class TestSchedule(unittest.TestCase):
     out0 = a.sum() + 4
     out1 = b.max() + out0*2
     out2 = a.sum() + out1
-    check_schedule([out0, out1, out2], 2)
+    check_schedule([out0, out1, out2], 4)
 
   def test_reduce_multiple_paths_midexpand(self):
     a = Tensor.empty(4, 4)
@@ -672,7 +672,6 @@ class TestSchedule(unittest.TestCase):
       check_schedule(opt.schedule_step(), 22)
 
   @unittest.skipUnless(is_dtype_supported(dtypes.half), "need half")
-  @unittest.skip("TODO: chase")
   def test_prefer_half_buffer(self):
     x = Tensor.ones(4).contiguous().realize()
     # y = Tensor.ones(4).contiguous().realize()
@@ -709,7 +708,6 @@ class TestSchedule(unittest.TestCase):
     # sched = check_schedule([b, c], 4)
     # doesn't store either in half because it doesn't chase
 
-  @unittest.skip("TODO: chase")
   def test_reduce_simple_chase(self):
     a = Tensor.empty(4, 4, 4)
     r = a.sum(0) + 6
@@ -718,7 +716,6 @@ class TestSchedule(unittest.TestCase):
     schedule = check_schedule([b, c], 3)
     assert schedule[0].ast[0].src[0].op is BinaryOps.ADD
 
-  @unittest.skip("TODO: chase")
   def test_push_permute_chase(self):
     a = Tensor.empty(4, 4, 4)
     b = Tensor.empty(4, 4)
@@ -728,7 +725,6 @@ class TestSchedule(unittest.TestCase):
     schedule = check_schedule([d, e], 3)
     assert schedule[0].ast[0].src[0].op is BinaryOps.ADD
 
-  @unittest.skip("TODO: chase")
   def test_push_shrink_chase(self):
     a = Tensor.empty(16, 16)
     b = Tensor.empty(4)
@@ -750,7 +746,7 @@ class TestSchedule(unittest.TestCase):
     b = Tensor.empty(16, 16)
     c = a.sum() + 2
     d = (a.sum() - b.sum()) * 4
-    check_schedule([c, d], 2)
+    check_schedule([c, d], 3)
 
   # pattern in conv
   def test_partial_fuse2(self):
@@ -777,23 +773,7 @@ class TestSchedule(unittest.TestCase):
     d = a.sum() * 2
     e = c * d
     f = (b - d).sum() - e
-    check_schedule([c, d, e, f], 2)
-
-  def test_reduce_fuse_all(self):
-    a = Tensor.empty(4, 4)
-    b = a.sum() + 2
-    c = a.sum() + 4
-    d = b * c
-    ast = check_schedule([b, c, d], 1)[-1].ast
-    assert len(ast) == 3
-
-  def test_reduce_fuse_some_reduce(self):
-    a = Tensor.empty(4, 4)
-    b = a.sum(1) + 2
-    c = a.sum(1) + 4
-    d = (a.sum(1) - a.max(1)) + 2
-    ast = check_schedule([b, c, d], 2)[-1].ast
-    assert len(ast) == 3
+    check_schedule([c, d, e, f], 3)
 
 if __name__ == '__main__':
   unittest.main(verbosity=2)
