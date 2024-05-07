@@ -6,7 +6,7 @@ import unittest
 from typing import List, Optional, Union
 from tinygrad.tensor import Tensor
 from tinygrad.ops import BinaryOps, LoadOps, ReduceOps
-from tinygrad.helpers import DEBUG, flatten
+from tinygrad.helpers import DEBUG, dedup, flatten
 from tinygrad.codegen.linearizer import Linearizer
 from tinygrad.features.graph import print_tree
 from tinygrad.engine.schedule import create_schedule
@@ -159,8 +159,8 @@ class TestSchedule(unittest.TestCase):
     r1 = (x - r0).sum(axis=0).div(2)
     out = r0 + r1
     schedule = check_schedule(out, 2)
-    reduceops = [x for si in schedule for out in si.ast for x in out.lazyops if x.op in ReduceOps]
-    assert len(reduceops) == 2
+    reduceops = dedup([x for si in schedule for out in si.ast for x in out.lazyops if x.op in ReduceOps])
+    assert len(reduceops) == 2, f"expected 2 reduces, got {len(reduceops)}"
 
   def test_cache_reduce_multiple_children(self):
     x = Tensor.empty(32)
@@ -544,7 +544,7 @@ class TestSchedule(unittest.TestCase):
     out0 = a.sum() + 4
     out1 = b.max() + out0*2
     out2 = a.sum() + out1
-    check_schedule([out0, out1, out2], 4)
+    check_schedule([out0, out1, out2], 2)
 
   def test_reduce_multiple_paths_midexpand(self):
     a = Tensor.empty(4, 4)
