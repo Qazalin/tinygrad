@@ -166,11 +166,11 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
       for tr_next in children[tr]:
         if not tr_next.realized:
           if tr_next.op in ReduceOps:
-            external_path.add(tr)
+            external_path.add(tr_next)
             continue
         st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
         if len(st_childs) > 1:
-          external_path.add(tr)
+          external_path.add(tr_next)
           continue
         r_children.append((tr_next, st + st_childs[0].st))
 

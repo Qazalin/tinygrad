@@ -24,7 +24,7 @@ def check_schedule(t:Union[Tensor, List[Tensor]], allowed:int, to_prerealize:Opt
   sched = create_schedule(flatten([r.lazydata.lbs for r in t]), seen)
   if filter_loadops: sched = [s for s in sched if s.ast[0].op not in LoadOps]
   if len(sched) != allowed: print(f"SCHEDULE ISSUE, expecting {allowed} got {len(sched)}")
-  if len(sched) != allowed or DEBUG >= 3:
+  if DEBUG >= 3:
     for i, s in enumerate(sched):
       print("kernel", i+1)
       for op in s.ast: print_tree(op)
