@@ -147,80 +147,46 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     if not _is_padding_okay(p, realizes):
       realizes[p] = None
 
-  # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
+  # group reduces with n elementwise ops: r(n), r(1 + n-unfused), r
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
 
-    # follow the reduce down
-    child_set: Dict[LazyBuffer, ShapeTracker] = {r: r.st}
-    realized_children: Dict[LazyBuffer, ShapeTracker] = {}
-    forced_realize = False
-    can_chase = True
-    while not forced_realize and len(child_set):
-      next_child_set = {}
-      for tr,st in child_set.items():
-        if tr in realizes:
-          realized_children[tr] = st
-          # can only reduce contiguous
-          # max one reduceop per kernel
-          if not st.contiguous or st.size != r.st.size or tr in reduce_for_op:
-            can_chase = tr not in reduce_for_op
-            forced_realize = True
-            break
-          if len(realized_children) > 1:
-            rc_parents, rc_children = deque(realized_children), deque(realized_children)
-            while rc_parents and not forced_realize:
-              # max one reduceop per kernel
-              if (p:=rc_parents.pop()).op in ReduceOps: forced_realize = True
-              else: rc_parents.extend(x.base for x in p.srcs if x.base.realized is None and x.base is not r)
-            realized_descendants: Set[LazyBuffer] = set()
-            while rc_children and not forced_realize:
-              if (c:=rc_children.pop()).op in ReduceOps or not c.st.contiguous or c.st.size != r.st.size or c in reduce_for_op:
-                realized_descendants.clear()
-                break
-              if c in realizes and c not in (*realized_children, tr): realized_descendants.add(c)
-              rc_children.extend(x for x in children[c] if x.realized is None and x.device == r.device)
-            realized_children.update((rd, st) for rd in realized_descendants)
+    # search future paths (TODO: recursive>)
+    r_children = deque(((r, r.st),))
+    siblings: Set[LazyBuffer] = set()
+    external_path: Set[LazyBuffer] = set()
+    while r_children:
+      tr, st = r_children.pop()
+      if tr in realizes:
+        if not st.contiguous or st.size != r.st.size or tr in reduce_for_op:
+          external_path.add(tr)
           continue
-        for tr_next in children[tr].keys():
-          if not tr_next.realized:
-            # max one reduceop per kernel
-            if tr_next.op in ReduceOps:
-              forced_realize = True
-              break
-            st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
-            if len(st_childs) > 1:
-              forced_realize = True
-              break
-            next_child_set[tr_next] = st + st_childs[0].st
-      child_set = next_child_set
-    if not forced_realize and any(x.op is LoadOps.ASSIGN for x in realized_children):
-      parents = deque((r, *realized_children))
-      while parents and not forced_realize:
-        if (p:=parents.pop().base).realized or p in realizes:
-          if p in assign_targets and assign_targets[p] not in realized_children: forced_realize, can_chase = True, False
+        siblings.add(tr)
+      for tr_next in children[tr]:
+        if not tr_next.realized:
+          if tr_next.op in ReduceOps:
+            external_path.add(tr)
+            continue
+        st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
+        if len(st_childs) > 1:
+          external_path.add(tr)
           continue
-        parents.extend(p.srcs)
-    if forced_realize:
-      tr = r
-      if can_chase:
-        # can chase this down to contiguous children
-        st = tr.st
-        while len(children[tr]) == 1:
-          tr_next = next(iter(children[tr].keys()))
-          st_childs = dedup([s for s in tr_next.srcs if s.base == tr])
-          if len(st_childs) > 1: break
-          if st.size != st_childs[0].st.size: break
-          st = st + st_childs[0].st
-          if not st.contiguous or tr_next.op in ReduceOps: break
-          tr = tr_next
-        # don't cast to higher size before store (tr cannot be realized if forced_realize)
-        if tr.op is UnaryOps.CAST and tr.arg[0].itemsize > tr.srcs[0].dtype.itemsize:
-          tr = tr.srcs[0].base
-        reduce_for_op[tr] = r
-      realizes[tr] = None
-    else: reduce_for_op.update((tr, r) for tr in realized_children)
+        r_children.append((tr_next, st + st_childs[0].st))
+
+    # group (TODO: delete aesthetics)
+    for rs in siblings.copy():
+      rs_parents = deque()
+      while rs_parents:
+        p = rs_parents.pop().base
+        if p.realized is not None or p.op is LoadOps.CONST: continue
+        if p is r: continue
+        if p in external_path:
+          realizes[r] = None
+          siblings.remove(rs)
+          break
+        rs_parents.extend(p.srcs)
+      if rs in siblings: reduce_for_op[rs] = r
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
