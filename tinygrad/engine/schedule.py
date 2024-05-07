@@ -170,22 +170,6 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
     outputs = _create_group(r, realizes, children, reduce_for_op)
     if DEBUG >= 1: print(r.shape, outputs)
-    print()
-    print(r)
-    for out in outputs:
-      can_group = True
-      if r in outputs and out is not r:
-        out_parents = deque((out, ))
-        while out_parents:
-          if (p:=out_parents.pop().base).realized or p.op is LoadOps.CONST or p is r: continue
-          # unfused op
-          if p in realizes:
-            can_group = False
-            break
-          out_parents.extend(p.srcs)
-      print(out, can_group)
-      if can_group: reduce_for_op[out] = r
-    if r in outputs: realizes[r] = None
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
