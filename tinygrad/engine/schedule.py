@@ -150,7 +150,7 @@ def _create_group(r:LazyBuffer, realizes:Dict[LazyBuffer, None], children:Dict[L
   return outputs
 
 # is r + rest is a self-contained DAG within the large graph?
-def _can_localize(r:LazyBuffer, *rest:LazyBuffer) -> bool:
+def _can_localize(r:LazyBuffer, common_op:LazyBuffer, *rest:LazyBuffer) -> bool:
   if len(rest) == 0: return True
   D = r.size == 64 and r.op is LoadOps.ASSIGN
   if not D: return False
@@ -178,7 +178,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
     outputs = _create_group(r, realizes, children, reduce_for_op)
     for out in outputs:
-      if _can_localize(out, *(x for x in outputs if x is not out)): reduce_for_op[out] = r
+      if out is not r and _can_localize(out, r, *(x for x in outputs if x is not out)): reduce_for_op[out] = r
       else: realizes[r] = None
     if r in outputs: realizes[r] = None
 
