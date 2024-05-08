@@ -174,8 +174,11 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     for out in outputs:
       out_parents, can_group = deque((out, )), True
       while out_parents and can_group:
-        if (p:=out_parents.pop().base) in realizes: can_group = False
-        else: out_parents.extend(x.base for x in p.srcs if x.realized is None and x.op is not LoadOps.CONST and x is not r)
+        p = out_parents.pop().base
+        if p.realized is not None: continue
+        print(p)
+        if p in realizes: can_group = False
+        else: out_parents.extend(p.srcs)
       if can_group: reduce_for_op[out] = r
       else: realize_r = True
     if realize_r: realizes[r] = None
