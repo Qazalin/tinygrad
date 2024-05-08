@@ -125,48 +125,29 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Dict[LazyBuffer, None]) -> bool:
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
-# search the local graph for groupable ops
-def _create_group(r:LazyBuffer, realizes:Dict[LazyBuffer, None], children:Dict[LazyBuffer, Dict[LazyBuffer, None]],
-                  reduce_for_op:Dict[LazyBuffer, LazyBuffer]) -> Set[LazyBuffer]:
-  outputs: Set[LazyBuffer] = set()
-  def _dfs(tr:LazyBuffer, st:ShapeTracker, st_childs:List[LazyBuffer]):
-    # only search LazyBuffers in the local graph
-    if tr.realized is not None or tr.op is LoadOps.CONST or tr.device != r.device: return
-    # max one reduceop per kernel
-    if (tr.op in ReduceOps or tr in reduce_for_op) and tr is not r: return outputs.add(r)
-    # shapetracker breakers
-    if tr is not r: st = st+st_childs[0].st
-    if len(st_childs) > 1 or (tr in realizes and (st.size != r.st.size or not st.contiguous)): return outputs.add(r)
-    if tr in realizes: return outputs.add(tr)
-    for tr_next in children[tr]: _dfs(tr_next, st, dedup([s for s in tr_next.srcs if s.base == tr]))
-  _dfs(r, r.st, [])
-  return outputs
-
-# is r + rest is a self-contained DAG within the large graph?
-def _can_localize(r:LazyBuffer, realizes:Dict[LazyBuffer, None], reduce_for_op:Dict[LazyBuffer,LazyBuffer],
-                  common_op:LazyBuffer, *rest:LazyBuffer) -> bool:
-  if len(rest) == 0: return True
-  local_ops = [common_op, *rest]
-  global_ops: Deque[LazyBuffer] = deque()
+def _create_group(r:LazyBuffer, children:Dict[LazyBuffer, Dict[LazyBuffer, None]],
+                  realizes:Dict[LazyBuffer, None], reduce_for_op:Dict[LazyBuffer, LazyBuffer]) -> Set[LazyBuffer]:
+  group: Set[LazyBuffer] = set()
   def _dfs(tr:LazyBuffer, st:ShapeTracker, cache):
-    # only search LazyBuffers in the external graph
+    # only search LazyBuffers in the local graph
     if tr.realized is not None or tr.op is LoadOps.CONST or tr.device != r.device or tr in cache: return
     cache.add(tr)
-    if tr in local_ops or tr is common_op: return
     # max one reduceop per kernel
-    if tr.op in ReduceOps or tr in reduce_for_op: return global_ops.append(tr)
-    # shapetracker breakers
-    if (tr in realizes and (st.size != r.st.size or not st.contiguous)): return global_ops.append(tr)
-    if tr in realizes and tr is not r: return global_ops.append(tr)
-    for tr_next in tr.srcs: _dfs(tr_next.base, st, cache)
-  _dfs(r, r.st, set())
-  visited: Set[LazyBuffer] = set()
-  while global_ops:
-    if (g:=global_ops.pop().base).realized is not None or g.op is LoadOps.CONST or g.device != r.device or g in visited: continue
-    visited.add(g)
-    if g in local_ops: return False
-    global_ops.extend(g.srcs)
-  return True
+    if (tr.op in ReduceOps or tr in reduce_for_op) and tr is not r: return group.add(r)
+    # can only fuse contiguous
+    if tr in realizes and st.size != r.st.size or not st.contiguous: return group.add(r)
+    if tr in realizes: return group.add(tr)
+    for tr_next in children[tr]:
+      if len(st_childs:=dedup([s for s in tr_next.srcs if s.base == tr])) > 1:
+        group.add(r)
+        continue
+      _dfs(tr_next, st+st_childs[0].st, cache)
+  _dfs(r, r.st, cache=set())
+  assert len(group) == len(set(group))
+  return group
+
+def _can_localize(r:LazyBuffer, group:Set[LazyBuffer]) -> bool:
+  return False
 
 def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[DefaultDict[LazyBuffer, List[LazyBuffer]], DefaultDict[LazyBuffer, int],
                                                                     Dict[LazyBuffer, _LBScheduleItem]]:
@@ -183,15 +164,15 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     if not _is_padding_okay(p, realizes):
       realizes[p] = None
 
-  # group reduces with n elementwise ops: r(n), r(1 + n - unfused_ops), r
+  # group reduces with its localizable elementwise children
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
-    outputs = _create_group(r, realizes, children, reduce_for_op)
-    for out in outputs:
-      if out is not r and _can_localize(out, realizes, reduce_for_op, r, *(x for x in outputs if x is not out)): reduce_for_op[out] = r
+    group = _create_group(r, children, realizes, reduce_for_op)
+    for op in group:
+      if _can_localize(r, group): reduce_for_op[op] = r
       else: realizes[r] = None
-    if r in outputs: realizes[r] = None
+    if not group or r in group: realizes[r] = None
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for buf in realizes:
