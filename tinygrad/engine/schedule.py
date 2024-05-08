@@ -172,15 +172,17 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     # TODO: check if the output can group
     realize_r = r in outputs
     for out in outputs:
-      out_parents, can_group = deque((out, )), True
+      out_parents = deque((out, ))
+      can_group = True
       while out_parents and can_group:
         p = out_parents.pop().base
-        if p.realized is not None: continue
-        print(p)
-        if p in realizes: can_group = False
-        else: out_parents.extend(p.srcs)
+        if p.realized or p.op is LoadOps.CONST or p is r: continue
+        if p.op in ReduceOps:
+          can_group = False
+          realize_r = True
+          break
+        out_parents.extend(p.srcs)
       if can_group: reduce_for_op[out] = r
-      else: realize_r = True
     if realize_r: realizes[r] = None
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
