@@ -1,7 +1,7 @@
 import sys, pickle, atexit
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import BinaryIO, Tuple, List, Dict, Optional, Set, DefaultDict
+from typing import BinaryIO, Deque, Tuple, List, Dict, Optional, Set, DefaultDict
 from tinygrad.ops import BinaryOps, LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, dedup, prod, all_int, merge_dicts, getenv
@@ -154,21 +154,26 @@ def _can_localize(r:LazyBuffer, realizes:Dict[LazyBuffer, None], reduce_for_op:D
                   common_op:LazyBuffer, *rest:LazyBuffer) -> bool:
   if len(rest) == 0: return True
   local_ops = [common_op, *rest]
-  global_ops: Set[LazyBuffer] = set()
+  global_ops: Deque[LazyBuffer] = deque()
   def _dfs(tr:LazyBuffer, st:ShapeTracker, cache):
     # only search LazyBuffers in the external graph
     if tr.realized is not None or tr.op is LoadOps.CONST or tr.device != r.device or tr in cache: return
     cache.add(tr)
     if tr in local_ops or tr is common_op: return
     # max one reduceop per kernel
-    if tr.op in ReduceOps or tr in reduce_for_op: return global_ops.add(tr)
+    if tr.op in ReduceOps or tr in reduce_for_op: return global_ops.append(tr)
     # shapetracker breakers
-    if (tr in realizes and (st.size != r.st.size or not st.contiguous)): return global_ops.add(tr)
-    if tr in realizes and tr is not r: return global_ops.add(tr)
+    if (tr in realizes and (st.size != r.st.size or not st.contiguous)): return global_ops.append(tr)
+    if tr in realizes and tr is not r: return global_ops.append(tr)
     for tr_next in tr.srcs: _dfs(tr_next.base, st, cache)
   _dfs(r, r.st, set())
-  if not global_ops: return True
-  return False
+  visited: Set[LazyBuffer] = set()
+  while global_ops:
+    if (g:=global_ops.pop().base).realized is not None or g.op is LoadOps.CONST or g.device != r.device or g in visited: continue
+    visited.add(g)
+    if g in local_ops: return False
+    global_ops.extend(g.srcs)
+  return True
 
 def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[DefaultDict[LazyBuffer, List[LazyBuffer]], DefaultDict[LazyBuffer, int],
                                                                     Dict[LazyBuffer, _LBScheduleItem]]:
