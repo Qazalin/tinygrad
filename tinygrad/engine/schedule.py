@@ -1,8 +1,8 @@
 import sys, pickle, atexit
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Tuple, List, Dict, Optional, Set, DefaultDict
-from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS
+from typing import BinaryIO, Tuple, List, Dict, Optional, Set, DefaultDict
+from tinygrad.ops import BinaryOps, LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, dedup, prod, all_int, merge_dicts, getenv
 from tinygrad.shape.symbolic import Variable
@@ -150,11 +150,24 @@ def _create_group(r:LazyBuffer, realizes:Dict[LazyBuffer, None], children:Dict[L
   return outputs
 
 # is r + rest is a self-contained DAG within the large graph?
-def _can_localize(r:LazyBuffer, common_op:LazyBuffer, *rest:LazyBuffer) -> bool:
+def _can_localize(r:LazyBuffer, realizes:Dict[LazyBuffer, None], reduce_for_op:Dict[LazyBuffer,LazyBuffer],
+                  common_op:LazyBuffer, *rest:LazyBuffer) -> bool:
   if len(rest) == 0: return True
-  D = r.size == 64 and r.op is LoadOps.ASSIGN
-  if not D: return False
-  print("hi!", rest)
+  local_ops = [common_op, *rest]
+  global_ops: Set[LazyBuffer] = set()
+  def _dfs(tr:LazyBuffer, st:ShapeTracker, cache):
+    # only search LazyBuffers in the external graph
+    if tr.realized is not None or tr.op is LoadOps.CONST or tr.device != r.device or tr in cache: return
+    cache.add(tr)
+    if tr in local_ops or tr is common_op: return
+    # max one reduceop per kernel
+    if tr.op in ReduceOps or tr in reduce_for_op: return global_ops.add(tr)
+    # shapetracker breakers
+    if (tr in realizes and (st.size != r.st.size or not st.contiguous)): return global_ops.add(tr)
+    if tr in realizes and tr is not r: return global_ops.add(tr)
+    for tr_next in tr.srcs: _dfs(tr_next.base, st, cache)
+  _dfs(r, r.st, set())
+  if not global_ops: return True
   return False
 
 def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[DefaultDict[LazyBuffer, List[LazyBuffer]], DefaultDict[LazyBuffer, int],
@@ -178,7 +191,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
     outputs = _create_group(r, realizes, children, reduce_for_op)
     for out in outputs:
-      if out is not r and _can_localize(out, r, *(x for x in outputs if x is not out)): reduce_for_op[out] = r
+      if out is not r and _can_localize(out, realizes, reduce_for_op, r, *(x for x in outputs if x is not out)): reduce_for_op[out] = r
       else: realizes[r] = None
     if r in outputs: realizes[r] = None
 
