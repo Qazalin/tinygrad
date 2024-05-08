@@ -1,7 +1,7 @@
 import sys, pickle, atexit
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Deque, Tuple, List, Dict, Optional, Set, DefaultDict
+from typing import Tuple, List, Dict, Optional, Set, DefaultDict
 from tinygrad.ops import LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS, UnaryOps
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, dedup, prod, all_int, merge_dicts, getenv
@@ -125,6 +125,7 @@ def _is_padding_okay(buf:LazyBuffer, realizes:Dict[LazyBuffer, None]) -> bool:
   if buf.op in UNSAFE_PAD_OPS: return False
   return all(_is_padding_okay(x.base, realizes) for x in buf.srcs)
 
+# search the local graph for groupable ops
 def _create_group(r:LazyBuffer, children:Dict[LazyBuffer, Dict[LazyBuffer, None]],
                   realizes:Dict[LazyBuffer, None], reduce_for_op:Dict[LazyBuffer, LazyBuffer]) -> Set[LazyBuffer]:
   group: Set[LazyBuffer] = set()
@@ -143,11 +144,10 @@ def _create_group(r:LazyBuffer, children:Dict[LazyBuffer, Dict[LazyBuffer, None]
         continue
       _dfs(tr_next, st+st_childs[0].st, cache)
   _dfs(r, r.st, cache=set())
-  assert len(group) == len(set(group))
   return group
 
-def _can_localize(r:LazyBuffer, group:Set[LazyBuffer]) -> bool:
-  return False
+# TODO: is r + rest is a self-contained DAG within the large graph?
+def _can_localize(r:LazyBuffer, *rest:LazyBuffer) -> bool: return False
 
 def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[DefaultDict[LazyBuffer, List[LazyBuffer]], DefaultDict[LazyBuffer, int],
                                                                     Dict[LazyBuffer, _LBScheduleItem]]:
@@ -170,7 +170,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
     group = _create_group(r, children, realizes, reduce_for_op)
     for op in group:
-      if _can_localize(r, group): reduce_for_op[op] = r
+      if _can_localize(op, r, *(x for x in group if x is not op)): reduce_for_op[op] = r
       else: realizes[r] = None
     if not group or r in group: realizes[r] = None
 
