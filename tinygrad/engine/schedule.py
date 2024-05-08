@@ -152,6 +152,9 @@ def _create_group(r:LazyBuffer, realizes:Dict[LazyBuffer, None], children:Dict[L
 # is r + rest is a self-contained DAG within the large graph?
 def _can_localize(r:LazyBuffer, *rest:LazyBuffer) -> bool:
   if len(rest) == 0: return True
+  D = r.size == 64 and r.op is LoadOps.ASSIGN
+  if not D: return False
+  print("hi!", rest)
   return False
 
 def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[DefaultDict[LazyBuffer, List[LazyBuffer]], DefaultDict[LazyBuffer, int],
