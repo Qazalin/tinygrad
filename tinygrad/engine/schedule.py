@@ -149,6 +149,11 @@ def _create_group(r:LazyBuffer, realizes:Dict[LazyBuffer, None], children:Dict[L
   _dfs(r, r.st, [])
   return outputs
 
+# is r + rest is a self-contained DAG within the large graph?
+def _can_localize(r:LazyBuffer, *rest:LazyBuffer) -> bool:
+  if len(rest) == 0: return True
+  return False
+
 def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[DefaultDict[LazyBuffer, List[LazyBuffer]], DefaultDict[LazyBuffer, int],
                                                                     Dict[LazyBuffer, _LBScheduleItem]]:
   # start by just realizing the buffers passed in
@@ -169,21 +174,10 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   for r in allbufs.keys():
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
     outputs = _create_group(r, realizes, children, reduce_for_op)
-    # TODO: check if the output can group
-    realize_r = r in outputs
     for out in outputs:
-      out_parents = deque((out, ))
-      can_group = True
-      while out_parents and can_group:
-        p = out_parents.pop().base
-        if p.realized or p.op is LoadOps.CONST or p is r: continue
-        if p.op in ReduceOps:
-          can_group = False
-          realize_r = True
-          break
-        out_parents.extend(p.srcs)
-      if can_group: reduce_for_op[out] = r
-    if realize_r: realizes[r] = None
+      if _can_localize(out, *(x for x in outputs if x is not out)): reduce_for_op[out] = r
+      else: realizes[r] = None
+    if r in outputs: realizes[r] = None
 
   output_groups: DefaultDict[Tuple, List[LazyBuffer]] = defaultdict(list)
   for r in realizes:
