@@ -1,7 +1,7 @@
 import sys, pickle, atexit
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Tuple, List, Dict, Optional, Set, DefaultDict
+from typing import Deque, Tuple, List, Dict, Optional, Set, DefaultDict
 from tinygrad.ops import BinaryOps, LoadOps, ScheduleItem, BufferOps, LazyOp, ReduceOps, ConstBuffer, MemBuffer, UNSAFE_PAD_OPS, UnaryOps
 from tinygrad.features.graph import log_lazybuffer, realized_lazybuffer
 from tinygrad.helpers import GRAPH, DEBUG, MULTIOUTPUT, SAVE_SCHEDULE, GlobalCounters, dedup, prod, all_int, merge_dicts, getenv
@@ -135,9 +135,10 @@ def _create_group(r:LazyBuffer, children:Dict[LazyBuffer, Dict[LazyBuffer, None]
     cache.add(tr)
     # max one reduceop per kernel
     if (tr.op in ReduceOps or tr in reduce_for_op) and tr is not r: return group.add(r)
-    # can only fuse contiguous
-    if tr in realizes and st.size != r.st.size or not st.contiguous: return group.add(r)
-    if tr in realizes: return group.add(tr)
+    if tr in realizes:
+      # can only fuse contiguous
+      if (st.size != r.st.size or not st.contiguous): return group.add(r)
+      return group.add(tr)
     for tr_next in children[tr]:
       if len(st_childs:=dedup([s for s in tr_next.srcs if s.base == tr])) > 1:
         group.add(r)
@@ -150,12 +151,19 @@ def _create_group(r:LazyBuffer, children:Dict[LazyBuffer, Dict[LazyBuffer, None]
 def _can_localize(r:LazyBuffer, realizes:Dict[LazyBuffer, None], *rest:LazyBuffer) -> bool:
   ext_srcs: List[LazyBuffer] = []
   def _dfs(x:LazyBuffer, cache):
-    if x.realized is not None or x.op is LoadOps.CONST or (x in rest and x != r) or x in cache: return
+    if x.realized is not None or (x in rest and x != r) or x in cache: return
     cache.add(x)
     if x != r and x in realizes: return ext_srcs.append(x)
     for next_x in x.srcs: _dfs(next_x.base, cache)
   _dfs(r, set())
-  return len(ext_srcs) == 0
+  ancestors: Deque[LazyBuffer] = deque([xs for x in ext_srcs for xs in x.srcs])
+  cache: Set[LazyBuffer] = set()
+  while ancestors:
+    if (x:=ancestors.pop().base).realized is not None or x in cache: continue
+    cache.add(x)
+    if x in rest: return False
+    ancestors.extend(next_x.base for next_x in x.srcs)
+  return True
 
 def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[DefaultDict[LazyBuffer, List[LazyBuffer]], DefaultDict[LazyBuffer, int],
                                                                     Dict[LazyBuffer, _LBScheduleItem]]:
