@@ -1,9 +1,11 @@
+from typing import List, Optional, Tuple
 import numpy as np
 import unittest
 
 from tinygrad.codegen.kernel import Opt, OptOps, KernelOptError, tensor_cores
 from tinygrad.codegen.linearizer import Linearizer, UOp, UOps, expand_node, expand_idxs
 from tinygrad.device import Device, Buffer
+from tinygrad.features.search import bufs_from_lin
 from tinygrad.ops import BinaryOps, BufferOps, MemBuffer, ConstBuffer, LazyOp, LoadOps, TernaryOps, ReduceOps, UnaryOps
 from tinygrad.shape.shapetracker import ShapeTracker
 from tinygrad.shape.view import View
@@ -14,6 +16,7 @@ from tinygrad.engine.realize import run_schedule, lower_schedule
 from tinygrad.helpers import prod, Context, getenv, CI
 from tinygrad.dtype import DType, dtypes
 from tinygrad.codegen.uops import UOpGraph
+from test.helpers import rand_for_dtype
 
 def helper_realized_ast(r:Tensor):
   s = create_schedule([r.lazydata])
@@ -582,12 +585,20 @@ class TestHandCodedOpts(unittest.TestCase):
     assert k.local_dims == 1
     assert k.upcasted == 1
 
-def helper_linearizer_opt(r:Tensor, opts=[], apply_tc=False, atol=1e-4, rtol=1e-4, color_sizes=[]):
-  wanna_output = None
+def helper_linearizer_opt(r:Tensor, opts=[], apply_tc=False, atol=1e-4, rtol=1e-4, color_sizes=[]) -> List[Linearizer]:
   realized_ast, real_bufs = helper_realized_ast(r)
+  return helper_linearizer_opt_ast((realized_ast, ), real_bufs, opts, apply_tc, atol, rtol, color_sizes)
+
+
+def helper_linearizer_opt_ast(realized_ast:Tuple[LazyOp, ...], real_bufs:Optional[List[Buffer]]=None,
+                              opts=[], apply_tc=False, atol=1e-4, rtol=1e-4, color_sizes=[]) -> List[Linearizer]:
+  wanna_output = []
+  lins = []
+  outbufs = []
 
   def check_opt(opts, create_k, to_prg, expected_color_size):
     k = create_k()
+    lins.append(k)
     if apply_tc:
       assert k.apply_tensor_cores(1, extra_opts=opts), "no tensor core triggered"
     else:
@@ -596,25 +607,36 @@ def helper_linearizer_opt(r:Tensor, opts=[], apply_tc=False, atol=1e-4, rtol=1e-
     if expected_color_size is not None:
       assert (cs:=[(x,y) for x,y in zip(k.colors(), k.full_shape)]) == expected_color_size, f"expected={expected_color_size} got={cs}"
     prg = to_prg(k)
-    real_bufs[0].copyin(np.zeros((real_bufs[0].size, ), dtype=real_bufs[0].dtype.np).data) # Zero to check that all values are filled
+    for buf in outbufs:
+      buf.copyin(np.zeros((buf.size, ), dtype=buf.dtype.np).data) # Zero to check that all values are filled
     prg.exec(real_bufs)
-    np.testing.assert_allclose(np.frombuffer(real_bufs[0].as_buffer(), real_bufs[0].dtype.np), wanna_output, atol=atol, rtol=rtol)
+
+    for i, buf in enumerate(outbufs):
+      np.testing.assert_allclose(np.frombuffer(buf.as_buffer(), buf.dtype.np), wanna_output[i], atol=atol, rtol=rtol)
 
   # Get baseline, which is not optimized at all.
-  k = Linearizer(realized_ast)
+  k = Linearizer(*realized_ast)
+  lins.append(k)
   prg = Device[Device.DEFAULT].to_runner(k)
+  if real_bufs is None:
+    # assign random inputs
+    for i, buf in enumerate(real_bufs:=bufs_from_lin(k)):
+      if i >= len(realized_ast): buf.copyin(rand_for_dtype(buf.dtype, buf.size).data)
+      else: outbufs.append(buf)
   prg.exec(real_bufs)
-  wanna_output = np.frombuffer(real_bufs[0].as_buffer(), real_bufs[0].dtype.np).copy()
+  wanna_output = [np.frombuffer(out.as_buffer(), out.dtype.np).copy() for out in outbufs]
 
   # Check correctness of handcoded optimiztions.
-  k = Linearizer(realized_ast)
+  k = Linearizer(*realized_ast)
+  lins.append(k)
   k.hand_coded_optimizations()
   prg = Device[Device.DEFAULT].to_runner(k)
-  real_bufs[0].copyin(np.zeros((real_bufs[0].size, ), dtype=real_bufs[0].dtype.np).data) # Zero to check that all values are filled
+  for buf in outbufs: buf.copyin(np.zeros((buf.size, ), dtype=buf.dtype.np).data) # Zero to check that all values are filled
   prg.exec(real_bufs)
   np.testing.assert_allclose(wanna_output, np.frombuffer(real_bufs[0].as_buffer(), real_bufs[0].dtype.np), atol=atol, rtol=rtol)
   for i, x in enumerate(opts): # Check custom transformations if any.
-    check_opt(x, lambda: Linearizer(realized_ast), Device[Device.DEFAULT].to_runner, color_sizes[i] if i < len(color_sizes) else None)
+    check_opt(x, lambda: Linearizer(*realized_ast), Device[Device.DEFAULT].to_runner, color_sizes[i] if i < len(color_sizes) else None)
+  return lins
 
 class TestKernelOpts(unittest.TestCase):
   def test_local_and_grouped_reduce(self):
