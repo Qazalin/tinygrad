@@ -41,6 +41,7 @@ class _LBScheduleItem:
   outputs: Tuple[LazyBuffer, ...]
   inputs: Tuple[LazyBuffer, ...]
   var_vals: Dict[Variable, int]
+  key: LazyBuffer
 
 def _recursive_lazyop(buf:LazyBuffer, inputs:List[LazyBuffer], outbufs:Tuple[LazyBuffer, ...], var_vals:Dict[Variable, int], st:ShapeTracker,
                       realizes:Dict[LazyBuffer, None], cache, assign_to:Optional[LazyBuffer]=None, assign_idx:Optional[int]=None) -> LazyOp:
@@ -116,7 +117,7 @@ def _schedule_group(outs:Tuple[LazyBuffer, ...], realizes:Dict[LazyBuffer, None]
       output_view, vv = output_view.simplify().unbind()
       if vv: var_vals.update(vv)
       ast.append(LazyOp(BufferOps.STORE, (lop, ), MemBuffer(i, out.dtype, output_view)))
-  return _LBScheduleItem(tuple(ast), outs, tuple(inputs), var_vals)
+  return _LBScheduleItem(tuple(ast), outs, tuple(inputs), var_vals, outs[0])
 
 # *** DAG creation: decide which LazyBuffers should realize ***
 
@@ -262,17 +263,17 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
 
   graph: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
   in_degree: DefaultDict[LazyBuffer, int] = defaultdict(int)
-  for key, lsi in prescheduled.items():
-    if key not in in_degree: in_degree[key] = 0
+  for lsi in prescheduled.values():
+    if lsi.key not in in_degree: in_degree[lsi.key] = 0
     # realize outputs after all parents are realized
     scheduled_parents = set(schedule_targets[x].outputs[0] for x in lsi.inputs if x in schedule_targets)
     for x in scheduled_parents:
-      graph[x].append(key)
-      in_degree[key] += 1
+      graph[x].append(lsi.key)
+      in_degree[lsi.key] += 1
     # realize outputs before a parent is assigned to
     parents_assigns = set(schedule_targets[assign_targets[x]].outputs[0] for x in lsi.inputs if x in assign_targets)
     for assign in parents_assigns:
-      graph[key].append(assign)
+      graph[lsi.key].append(assign)
       in_degree[assign] += 1
 
   return graph, in_degree, prescheduled
@@ -283,7 +284,7 @@ SCHEDULES: List = []
 def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
   if seen is None: seen = set()
   graph, in_degree, prescheduled = _graph_schedule(outs, seen)
-  queue = deque(si for key, si in prescheduled.items() if in_degree[key] == 0)
+  queue = deque(ps for ps in prescheduled.values() if in_degree[ps.key] == 0)
   schedule: List[ScheduleItem] = []
   var_vals: Dict[Variable, int] = {}
   kernel_number = GlobalCounters.kernel_count
@@ -297,7 +298,7 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
     for out in ps.outputs: del out.srcs  # can only schedule once
     schedule.append(si:=ScheduleItem(ps.ast, tuple(x.buffer for x in (ps.outputs+ps.inputs) if x.size != 0)))
     if logops and si.ast[0].op not in LoadOps and not any(i.device.startswith("DISK:") for i in si.inputs): logops.write(str(si.ast)+"\n")
-    for x in graph[ps.outputs[0]]:
+    for x in graph[ps.key]:
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append(prescheduled[x])
 
