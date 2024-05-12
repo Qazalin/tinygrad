@@ -40,7 +40,6 @@ class _LBScheduleItem:
   ast: Tuple[LazyOp, ...]
   outputs: Tuple[LazyBuffer, ...]
   inputs: Tuple[LazyBuffer, ...]
-  var_vals: Dict[Variable, int]
 
 def _recursive_lazyop(buf:LazyBuffer, inputs:List[LazyBuffer], outbufs:Tuple[LazyBuffer, ...], var_vals:Dict[Variable, int], st:ShapeTracker,
                       realizes:Dict[LazyBuffer, None], cache, assign_to:Optional[LazyBuffer]=None, assign_idx:Optional[int]=None) -> LazyOp:
@@ -94,7 +93,8 @@ def _recursive_lazyop(buf:LazyBuffer, inputs:List[LazyBuffer], outbufs:Tuple[Laz
     LazyOp(buf.op, tuple(_recursive_lazyop(x, inputs, outbufs, var_vals, st, realizes, cache, assign_to, assign_idx) for x in buf.srcs), buf.arg)
   return ret
 
-def _schedule_group(outs:Tuple[LazyBuffer, ...], realizes:Dict[LazyBuffer, None], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> _LBScheduleItem:
+def _schedule_group(outs:Tuple[LazyBuffer, ...], realizes:Dict[LazyBuffer, None], reduce_for_op:Dict[LazyBuffer, LazyBuffer],
+                    op_vars:Dict[LazyBuffer, Dict[Variable, int]]) -> _LBScheduleItem:
   """create a schedule item from a list of outputs"""
   inputs: List[LazyBuffer] = []
   ast: List[LazyOp] = []
@@ -116,7 +116,8 @@ def _schedule_group(outs:Tuple[LazyBuffer, ...], realizes:Dict[LazyBuffer, None]
       output_view, vv = output_view.simplify().unbind()
       if vv: var_vals.update(vv)
       ast.append(LazyOp(BufferOps.STORE, (lop, ), MemBuffer(i, out.dtype, output_view)))
-  return _LBScheduleItem(tuple(ast), outs, tuple(inputs), var_vals)
+  op_vars[outs[0]] = var_vals
+  return _LBScheduleItem(tuple(ast), outs, tuple(inputs))
 
 # *** DAG creation: decide which LazyBuffers should realize ***
 
@@ -170,7 +171,7 @@ def _recursive_group(tr:LazyBuffer, st:ShapeTracker, r:LazyBuffer, children:Defa
       _recursive_group(tr_next, st+st_childs[0].st, r, children, realizes, reduce_for_op, group)
 
 def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[DefaultDict[LazyBuffer, List[LazyBuffer]], DefaultDict[LazyBuffer, int],
-                                                                    Dict[LazyBuffer, _LBScheduleItem]]:
+                                                                    Dict[LazyBuffer, _LBScheduleItem], Dict[LazyBuffer, Dict[Variable, int]]]:
   """create a graph for realizing the outputs"""
   # start by just realizing the buffers passed in
   realizes: Dict[LazyBuffer, None] = {x.base: None for x in outs if not x.base.realized}
@@ -257,7 +258,8 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
         buf.buffer.options = None
 
   # preschedule all buffers in realizes
-  prescheduled = {group[0]:_schedule_group(tuple(group), realizes, reduce_for_op) for group in output_groups.values()}
+  op_vars: Dict[LazyBuffer, Dict[Variable, int]] = {}
+  prescheduled = {group[0]:_schedule_group(tuple(group), realizes, reduce_for_op, op_vars) for group in output_groups.values()}
   schedule_targets = {out:ps for ps in prescheduled.values() for out in ps.outputs}
 
   graph: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
@@ -275,14 +277,14 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
       graph[key].append(assign)
       in_degree[assign] += 1
 
-  return graph, in_degree, prescheduled
+  return graph, in_degree, prescheduled, op_vars
 
 # *** DAG ordering: breadth first search ***
 
 SCHEDULES: List = []
 def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffer]]=None) -> Tuple[List[ScheduleItem], Dict[Variable, int]]:
   if seen is None: seen = set()
-  graph, in_degree, prescheduled = _graph_schedule(outs, seen)
+  graph, in_degree, prescheduled, ast_vars = _graph_schedule(outs, seen)
   queue = deque(si for key, si in prescheduled.items() if in_degree[key] == 0)
   schedule: List[ScheduleItem] = []
   var_vals: Dict[Variable, int] = {}
@@ -293,7 +295,7 @@ def create_schedule_with_vars(outs:List[LazyBuffer], seen:Optional[Set[LazyBuffe
     if GRAPH:
       kernel_number += 1
       for out in ps.outputs: realized_lazybuffer(out, kernel_number)
-    var_vals = merge_dicts([var_vals, ps.var_vals])
+    var_vals = merge_dicts([var_vals, ast_vars[ps.outputs[0]]])
     for out in ps.outputs: del out.srcs  # can only schedule once
     schedule.append(si:=ScheduleItem(ps.ast, tuple(x.buffer for x in (ps.outputs+ps.inputs) if x.size != 0)))
     if logops and si.ast[0].op not in LoadOps and not any(i.device.startswith("DISK:") for i in si.inputs): logops.write(str(si.ast)+"\n")

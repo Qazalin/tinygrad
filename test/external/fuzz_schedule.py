@@ -16,7 +16,7 @@ def fuzz_schedule(outs: List[LazyBuffer]):
   unique_ts: Dict[Tuple[LazyBuffer, ...], Tuple[Dict, Dict[LazyBuffer, _LBScheduleItem]]] = {}
   for combination in itertools.product(*ctx_vars.values()):
     for var, val in zip(ctx_vars, combination): var.value = val
-    graph, in_degree, prescheduled = _graph_schedule(outs, set())
+    graph, in_degree, prescheduled, _ = _graph_schedule(outs, set())
     for ts in find_all_toposorts(graph, in_degree): unique_ts[ts] = (dict(zip([v.key for v in ctx_vars], combination)), prescheduled)
   toposorts = list(unique_ts.items())
   if DEBUG >= 1: print(colored(f"fuzzing {len(toposorts)} schedule permutations", "yellow"))
