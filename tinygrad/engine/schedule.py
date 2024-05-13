@@ -205,9 +205,12 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
         nv.append(View.create(v.shape+rshape, tuple(x*prshape for x in v.strides)+strides,
                               v.offset*prshape, v.mask+tuple((0,s) for s in rshape) if v.mask is not None else None))
       st = tmp + ShapeTracker(tuple(nv))
-      ret = input_to_reduce.base._view(st)._reduce_op(r.op, r.arg + tuple(range(len(st.shape)-len(rshape), len(st.shape))))
-      ret = ret.reshape(ret.shape[:-len(rshape)])
-      print(ret)
+      merged = input_to_reduce.base._view(st)._reduce_op(r.op, r.arg + tuple(range(len(st.shape)-len(rshape), len(st.shape))))
+      merged = merged.reshape(merged.shape[:-len(rshape)])
+      del realizes[r]
+      del realizes[reduce_parent.base]
+      realizes[merged.base] = None
+      continue
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
 
     group: Set[LazyBuffer] = set()
