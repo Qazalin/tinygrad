@@ -1,4 +1,4 @@
-import sys, pickle, atexit
+import sys, pickle, atexit, math
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Set, DefaultDict
@@ -126,6 +126,10 @@ def _recurse_lb(buf:LazyBuffer, realizes:Dict[LazyBuffer, None], allbufs:Dict[La
   """recursively search the entire graph for all LazyBuffers, insert realizes after expands"""
   if buf in allbufs or buf.base.realized: return
   if GRAPH: log_lazybuffer(buf, scheduled)
+  # reduce const folding
+  if buf.base.op in ReduceOps:
+    if buf.base.srcs[0].base.size == 0:
+      buf = buf.const(0.0 if buf.base.op is ReduceOps.SUM else -math.inf, buf.shape)
   if buf.base != buf:
     # realize all places where the buffer is expanded
     if prod(buf.base.st.shape) < prod(buf.st.shape):
