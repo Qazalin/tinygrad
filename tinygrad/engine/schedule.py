@@ -126,11 +126,15 @@ def _recurse_lb(buf:LazyBuffer, realizes:Dict[LazyBuffer, None], allbufs:Dict[La
   """recursively search the entire graph for all LazyBuffers, insert realizes after expands"""
   if buf in allbufs or buf.base.realized: return
   if GRAPH: log_lazybuffer(buf, scheduled)
-  # reduce const folding
-  if buf.base.op in ReduceOps:
-    if buf.base.srcs[0].base.size == 0:
+  # reduceop const folding
+  if buf == buf.base and buf.op in ReduceOps:
+    if buf.srcs[0].size == 0:
       #buf = buf.const(0.0 if buf.base.op is ReduceOps.SUM else -math.inf, buf.shape)
       buf.arg = {ReduceOps.SUM: 0.0, ReduceOps.MAX: -math.inf}[buf.base.op]
+      buf.op = LoadOps.CONST
+      buf.srcs = ()
+    elif buf.srcs[0].is_unrealized_unmasked_const():
+      buf.arg = buf.srcs[0].base.arg * {ReduceOps.SUM: prod(buf.srcs[0].shape[i] for i in buf.base.arg), ReduceOps.MAX: 1}[buf.op]
       buf.op = LoadOps.CONST
       buf.srcs = ()
   if buf.base != buf:
