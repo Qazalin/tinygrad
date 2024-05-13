@@ -189,7 +189,9 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
 
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
+  fused_redcues: Set[LazyBuffer] = set()
   for r in allbufs:
+    if r in fused_redcues: continue
     if r.buffer._lb_refcount == 69:
       reduce_parent = r.srcs[0]
       input_to_reduce = reduce_parent.base.srcs[0]
@@ -210,6 +212,9 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
       del realizes[r]
       del realizes[reduce_parent.base]
       realizes[merged.base] = None
+      print(r.shape)
+      fused_redcues.add(r)
+      fused_redcues.add(reduce_parent.base)
       continue
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
 
