@@ -9,6 +9,8 @@ from tinygrad.shape.shapetracker import ShapeTracker
 from tinygrad.device import Buffer
 from weakref import ref, ReferenceType, WeakValueDictionary
 
+from tinygrad.shape.view import View, strides_for_shape
+
 lazycache: WeakValueDictionary[Any, LazyBuffer] = WeakValueDictionary()
 def create_lazybuffer(device:str, st:ShapeTracker, dtype:DType, op:Optional[Op]=None, arg:Any=None, srcs:Tuple[LazyBuffer, ...]=(),
                       base:Optional[LazyBuffer]=None, enable_cache=bool(getenv("LAZYCACHE", 1))):
@@ -169,6 +171,34 @@ class LazyBuffer:
 
   def _reduce_op(self, op:ReduceOps, axis:Tuple[int, ...]) -> LazyBuffer:
     assert all(0 <= x < len(self.shape) for x in axis), f"axis args {axis} out of range for shape {self.shape}"
+
+    def _handle(input_to_reduce, top_reduce_axes):
+      setattr(input_to_reduce.base, "dont_realize", True)
+      permute_axis = tuple(i for i in range(len(input_to_reduce.shape)) if i not in top_reduce_axes) + top_reduce_axes
+      tmp = input_to_reduce.st.permute(permute_axis)
+      rshape = tmp.shape[-len(top_reduce_axes):]
+      prshape = prod(rshape)
+      strides = strides_for_shape(rshape)
+
+      nv: List[View] = []
+      for v in self.st.views:
+        nv.append(View.create(v.shape+rshape, tuple(x*prshape for x in v.strides)+strides,
+                              v.offset*prshape, v.mask+tuple((0,s) for s in rshape) if v.mask is not None else None))
+      st = tmp + ShapeTracker(tuple(nv))
+      ret = input_to_reduce.base._view(st)._reduce_op(op, axis + tuple(range(len(st.shape)-len(rshape), len(st.shape))))
+      return ret.reshape(ret.shape[:-len(rshape)])
+
+    if self.base.op == UnaryOps.CAST and self.base == self and self.base.srcs[0].base.op == UnaryOps.CAST and \
+        self.srcs[0].base.srcs[0].base == self.srcs[0].base.srcs[0] and self.srcs[0].base.srcs[0].op == op:
+      input_to_reduce: LazyBuffer = self.srcs[0].base.srcs[0].srcs[0]
+      top_reduce_axes: Tuple[int, ...] = self.srcs[0].base.srcs[0].arg
+      return _handle(input_to_reduce, top_reduce_axes)
+
+    if self.base != self and self.base.op == op:
+      input_to_reduce = self.base.srcs[0]
+      top_reduce_axes = self.base.arg
+      return _handle(input_to_reduce, top_reduce_axes)
+
     axis = tuple(x for x in axis if self.shape[x] != 1)
     if len(axis) == 0: return self
     new_shape = tuple(1 if i in axis else s for i,s in enumerate(self.shape))
