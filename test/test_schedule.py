@@ -225,7 +225,7 @@ class TestSchedule(unittest.TestCase):
     c1(img).relu().mean().backward()
     # TODO: this should be 4, not 5
     # img.grad is requiring two reduces
-    check_schedule([img.grad, c1.weight.grad], 5)
+    check_schedule([img.grad, c1.weight.grad], 4)
 
   def test_fold_batchnorm_backward(self):
     with Tensor.train():

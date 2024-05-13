@@ -192,7 +192,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   fused_redcues: Set[LazyBuffer] = set()
   for r in allbufs:
     if r in fused_redcues: continue
-    if r.buffer._lb_refcount == 69:
+    if r.op in ReduceOps and r.srcs[0].base.op is r.op and r.srcs[0].base != r.srcs[0]:
       reduce_parent = r.srcs[0]
       input_to_reduce = reduce_parent.base.srcs[0]
       top_reduce_axes = reduce_parent.base.arg
@@ -209,10 +209,9 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
       st = tmp + ShapeTracker(tuple(nv))
       merged = input_to_reduce.base._view(st)._reduce_op(r.op, r.arg + tuple(range(len(st.shape)-len(rshape), len(st.shape))))
       merged = merged.reshape(merged.shape[:-len(rshape)])
-      del realizes[r]
-      del realizes[reduce_parent.base]
+      if r in realizes: del realizes[r]
+      if reduce_parent.base in realizes: del realizes[reduce_parent.base]
       realizes[merged.base] = None
-      print(r.shape)
       fused_redcues.add(r)
       fused_redcues.add(reduce_parent.base)
       continue
