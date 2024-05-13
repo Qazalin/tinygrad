@@ -207,6 +207,8 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
       st = tmp + ShapeTracker(tuple(nv))
       ret = input_to_reduce.base._view(st)._reduce_op(r.op, r.arg + tuple(range(len(st.shape)-len(rshape), len(st.shape))))
       ret = ret.reshape(ret.shape[:-len(rshape)])
+      del realizes[reduce_parent.base]
+      del realizes[r]
       print(ret)
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
 
