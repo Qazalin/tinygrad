@@ -173,9 +173,10 @@ class LazyBuffer:
     assert all(0 <= x < len(self.shape) for x in axis), f"axis args {axis} out of range for shape {self.shape}"
 
     def _handle(input_to_reduce, top_reduce_axes):
-      setattr(input_to_reduce.base, "dont_realize", True)
+      #setattr(input_to_reduce.base, "dont_realize", True)
       permute_axis = tuple(i for i in range(len(input_to_reduce.shape)) if i not in top_reduce_axes) + top_reduce_axes
       tmp = input_to_reduce.st.permute(permute_axis)
+      print(permute_axis)
       rshape = tmp.shape[-len(top_reduce_axes):]
       prshape = prod(rshape)
       strides = strides_for_shape(rshape)
@@ -194,15 +195,20 @@ class LazyBuffer:
       top_reduce_axes: Tuple[int, ...] = self.srcs[0].base.srcs[0].arg
       return _handle(input_to_reduce, top_reduce_axes)
 
+    me = False
     if self.base != self and self.base.op == op:
+      print()
       input_to_reduce = self.base.srcs[0]
       top_reduce_axes = self.base.arg
-      return _handle(input_to_reduce, top_reduce_axes)
+      me = True
+      _handle(input_to_reduce, top_reduce_axes)
 
     axis = tuple(x for x in axis if self.shape[x] != 1)
     if len(axis) == 0: return self
     new_shape = tuple(1 if i in axis else s for i,s in enumerate(self.shape))
-    return create_lazybuffer(self.device, ShapeTracker.from_shape(new_shape), self.dtype, op, axis, (self,))
+    r =  create_lazybuffer(self.device, ShapeTracker.from_shape(new_shape), self.dtype, op, axis, (self,))
+    if me: r.buffer._lb_refcount = 69
+    return r
 
   def r(self, op:ReduceOps, axis:Tuple[int, ...]) -> LazyBuffer:
     new_shape = tuple(1 if i in axis else s for i,s in enumerate(self.shape))

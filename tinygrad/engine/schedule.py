@@ -10,6 +10,7 @@ from tinygrad.dtype import ImageDType, dtypes
 from tinygrad.lazy import LazyBuffer
 from tinygrad.shape.shapetracker import ShapeTracker
 from tinygrad.device import Buffer
+from tinygrad.shape.view import View, strides_for_shape
 
 # creation can recurse a lot
 sys.setrecursionlimit(10000)
@@ -189,6 +190,25 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
   for r in allbufs:
+    if r.buffer._lb_refcount == 69:
+      reduce_parent = r.srcs[0]
+      input_to_reduce = reduce_parent.base.srcs[0]
+      top_reduce_axes = reduce_parent.base.arg
+      permute_axis = tuple(i for i in range(len(input_to_reduce.shape)) if i not in top_reduce_axes) + top_reduce_axes
+      tmp = input_to_reduce.st.permute(permute_axis)
+      print(permute_axis)
+      rshape = tmp.shape[-len(top_reduce_axes):]
+      prshape = prod(rshape)
+      strides = strides_for_shape(rshape)
+
+      nv: List[View] = []
+      for v in reduce_parent.st.views:
+        nv.append(View.create(v.shape+rshape, tuple(x*prshape for x in v.strides)+strides,
+                              v.offset*prshape, v.mask+tuple((0,s) for s in rshape) if v.mask is not None else None))
+      st = tmp + ShapeTracker(tuple(nv))
+      ret = input_to_reduce.base._view(st)._reduce_op(op, axis + tuple(range(len(st.shape)-len(rshape), len(st.shape))))
+      ret = ret.reshape(ret.shape[:-len(rshape)])
+      print()
     if r != r.base or r.op not in ReduceOps or r in realizes: continue
 
     group: Set[LazyBuffer] = set()
