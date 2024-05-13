@@ -187,7 +187,6 @@ class LazyBuffer:
       st = tmp + ShapeTracker(tuple(nv))
       ret = input_to_reduce.base._view(st)._reduce_op(op, axis + tuple(range(len(st.shape)-len(rshape), len(st.shape))))
       r = ret.reshape(ret.shape[:-len(rshape)])
-      print(r)
       return r
 
     if self.base.op == UnaryOps.CAST and self.base == self and self.base.srcs[0].base.op == UnaryOps.CAST and \
