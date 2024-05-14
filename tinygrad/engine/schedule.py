@@ -185,7 +185,12 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
 
   # check if we have to realize base changes
   for buf in base_changes:
-    if prod(buf.base.st.shape) < prod(buf.st.shape): realizes[buf.base] = None
+    # fuse shrinks
+    if prod(buf.base.st.shape) >= prod(buf.st.shape): continue
+    # fuse safe pads
+    if len(buf.st.views) == 1 and buf.st.views[-1].mask and all_int(buf.base.st.shape) \
+        and prod(buf.base.st.shape) >= prod([y-x for x,y in buf.st.views[-1].mask]) and _is_padding_okay(buf.base, realizes): continue
+    realizes[buf.base] = None
 
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
