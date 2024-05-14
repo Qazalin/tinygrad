@@ -122,21 +122,13 @@ def _schedule_group(outs:Tuple[LazyBuffer, ...], realizes:Dict[LazyBuffer, None]
 # *** DAG creation: decide which LazyBuffers should realize ***
 
 def _recurse_lb(buf:LazyBuffer, realizes:Dict[LazyBuffer, None], allbufs:Dict[LazyBuffer, None],
-                simple_pads:Set[LazyBuffer], children:DefaultDict[LazyBuffer, Dict[LazyBuffer, None]], scheduled=False):
+                base_changes:Set[LazyBuffer], children:DefaultDict[LazyBuffer, Dict[LazyBuffer, None]], scheduled=False):
   """recursively search the entire graph for all LazyBuffers, insert realizes after expands"""
   if buf in allbufs or buf.base.realized: return
   if GRAPH: log_lazybuffer(buf, scheduled)
   if buf.base != buf:
-    # realize all places where the buffer is expanded
-    if prod(buf.base.st.shape) < prod(buf.st.shape):
-      if len(buf.st.views) == 1 and buf.st.views[-1].mask and all_int(buf.base.st.shape) and \
-          prod(buf.base.st.shape) >= prod([y-x for x,y in buf.st.views[-1].mask]):
-        simple_pads.add(buf.base)
-      elif buf.base.op is UnaryOps.CAST and isinstance(buf.base.srcs[0].dtype, ImageDType) and isinstance(buf.base.arg[0], ImageDType):
-        pass # don't realize image to image casts. this is part of a larger problem
-      else:
-        realizes[buf.base] = None
-    return _recurse_lb(buf.base, realizes, allbufs, simple_pads, children)
+    base_changes.add(buf)
+    return _recurse_lb(buf.base, realizes, allbufs, base_changes, children)
   if buf.forced_realize: realizes[buf] = None
   allbufs[buf] = None
   if buf.op in LoadOps: realizes[buf.base] = None
@@ -146,7 +138,7 @@ def _recurse_lb(buf:LazyBuffer, realizes:Dict[LazyBuffer, None], allbufs:Dict[La
   if buf.op is LoadOps.VIEW: realizes[buf.srcs[0].base] = None
   for x in buf.srcs:
     children[x.base][buf] = None
-    _recurse_lb(x, realizes, allbufs, simple_pads, children)
+    _recurse_lb(x, realizes, allbufs, base_changes, children)
 
 def _is_padding_okay(buf:LazyBuffer, realizes:Dict[LazyBuffer, None]) -> bool:
   if buf in realizes or buf.realized is not None: return True
@@ -176,15 +168,24 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   # start by just realizing the buffers passed in
   realizes: Dict[LazyBuffer, None] = {x.base:None for x in outs if x.base.realized is None}
   allbufs: Dict[LazyBuffer, None] = {}
-  simple_pads: Set[LazyBuffer] = set()
+  base_changes: Set[LazyBuffer] = set()
   children: DefaultDict[LazyBuffer, Dict[LazyBuffer, None]] = defaultdict(dict)
-  for out in outs: _recurse_lb(out.base, realizes, allbufs, simple_pads, children, scheduled=True)
+  for out in outs: _recurse_lb(out.base, realizes, allbufs, base_changes, children, scheduled=True)
   assign_targets = {x.srcs[1]:x for x in realizes if x.op is LoadOps.ASSIGN and x not in seen and x.realized is None}
 
-  # check if we have to realize pads
-  for p in simple_pads:
-    if not _is_padding_okay(p, realizes):
-      realizes[p] = None
+  """
+  if prod(buf.base.st.shape) < prod(buf.st.shape):
+    if len(buf.st.views) == 1 and buf.st.views[-1].mask and all_int(buf.base.st.shape) and \
+        prod(buf.base.st.shape) >= prod([y-x for x,y in buf.st.views[-1].mask]):
+      base_changes.add(buf.base)
+    elif buf.base.op is UnaryOps.CAST and isinstance(buf.base.srcs[0].dtype, ImageDType) and isinstance(buf.base.arg[0], ImageDType):
+      pass # don't realize image to image casts. this is part of a larger problem
+    else:
+  """
+
+  # check if we have to realize base changes
+  for buf in base_changes:
+    if prod(buf.base.st.shape) < prod(buf.st.shape): realizes[buf.base] = None
 
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
   reduce_for_op: Dict[LazyBuffer, LazyBuffer] = {}
