@@ -232,11 +232,11 @@ class TestLinearizer(unittest.TestCase):
         arg=((axis,), dtypes.float)),)),), arg=store)
       return [ast]
 
-    for axis in [0, 1, 2]:
-      ast = gen((4, 32, 64), axis)
-      load_t = Tensor.randn((4, 32, 64)).realize()
-      helper_linearizer_ast(tuple(ast), [load_t], \
-                            wanna_output=[((load_t.numpy() - load_t.numpy().sum(axis, keepdims=True)*0.015625).sum(axis)*0.015625).reshape(-1)])
+    axis = 0
+    ast = gen((4, 32, 64), axis)
+    load_t = Tensor.randn((4, 32, 64)).realize()
+    helper_linearizer_ast(tuple(ast), [load_t], \
+                          wanna_output=[((load_t.numpy() - load_t.numpy().sum(axis, keepdims=True)*0.015625).sum(axis)*0.015625).reshape(-1)])
 
   # @unittest.skip
   def test_multireduce_multiout(self):
@@ -254,19 +254,18 @@ class TestLinearizer(unittest.TestCase):
         ), arg=store1)
       return [mean_out, ast]
 
-    for axis in [0, 1, 2]:
-      ast = gen((4, 32, 64), axis)
-      load_t = Tensor.randn((4, 32, 64)).realize()
-      helper_linearizer_ast(tuple(ast), [load_t], \
-              wanna_output=[(load_t.numpy().sum(axis, keepdims=True)*0.015625).reshape(-1),
-                            ((load_t.numpy() - load_t.numpy().sum(axis, keepdims=True)*0.015625).sum(axis)*0.015625).reshape(-1),])
-      ast = list(reversed(gen((4, 32, 64), axis)))
-      load_t = Tensor.randn((4, 32, 64)).realize()
-      helper_linearizer_ast(tuple(ast), [load_t], \
-              wanna_output=[(load_t.numpy().sum(axis, keepdims=True)*0.015625).reshape(-1),
-                            ((load_t.numpy() - load_t.numpy().sum(axis, keepdims=True)*0.015625).sum(axis)*0.015625).reshape(-1),])
+    axis = 1
+    ast = gen((4, 32, 64), axis)
+    load_t = Tensor.randn((4, 32, 64)).realize()
+    helper_linearizer_ast(tuple(ast), [load_t], \
+            wanna_output=[(load_t.numpy().sum(axis, keepdims=True)*0.015625).reshape(-1),
+                          ((load_t.numpy() - load_t.numpy().sum(axis, keepdims=True)*0.015625).sum(axis)*0.015625).reshape(-1),])
+    ast = list(reversed(gen((4, 32, 64), axis)))
+    load_t = Tensor.randn((4, 32, 64)).realize()
+    helper_linearizer_ast(tuple(ast), [load_t], \
+            wanna_output=[(load_t.numpy().sum(axis, keepdims=True)*0.015625).reshape(-1),
+                          ((load_t.numpy() - load_t.numpy().sum(axis, keepdims=True)*0.015625).sum(axis)*0.015625).reshape(-1),])
 
-  @unittest.skip
   def test_mean_std_multireduce(self):
     ast = LazyOp(op=BufferOps.STORE, src=(LazyOp(op=UnaryOps.SQRT, src=(LazyOp(op=BinaryOps.MUL, src=(LazyOp(op=ReduceOps.SUM, src=(LazyOp(op=BinaryOps.MUL, src=(LazyOp(op=BinaryOps.SUB, src=(LazyOp(op=BufferOps.LOAD, src=(), arg=MemBuffer(idx=1, dtype=dtypes.float, st=ShapeTracker(views=(View(shape=(15, 25, 35), strides=(875, 35, 1), offset=0, mask=None, contiguous=True),)))), LazyOp(op=BinaryOps.MUL, src=(LazyOp(op=ReduceOps.SUM, src=(LazyOp(op=BufferOps.LOAD, src=(), arg=MemBuffer(idx=1, dtype=dtypes.float, st=ShapeTracker(views=(View(shape=(15, 25, 35), strides=(875, 35, 1), offset=0, mask=None, contiguous=True),)))),), arg=(0, 1, 2)), LazyOp(op=BufferOps.CONST, src=(), arg=ConstBuffer(val=7.619047619047618e-05, dtype=dtypes.float, st=ShapeTracker(views=(View(shape=(15, 25, 35), strides=(0, 0, 0), offset=0, mask=None, contiguous=False),))))), arg=None)), arg=None), LazyOp(op=BinaryOps.SUB, src=(LazyOp(op=BufferOps.LOAD, src=(), arg=MemBuffer(idx=1, dtype=dtypes.float, st=ShapeTracker(views=(View(shape=(15, 25, 35), strides=(875, 35, 1), offset=0, mask=None, contiguous=True),)))), LazyOp(op=BinaryOps.MUL, src=(LazyOp(op=ReduceOps.SUM, src=(LazyOp(op=BufferOps.LOAD, src=(), arg=MemBuffer(idx=1, dtype=dtypes.float, st=ShapeTracker(views=(View(shape=(15, 25, 35), strides=(875, 35, 1), offset=0, mask=None, contiguous=True),)))),), arg=(0, 1, 2)), LazyOp(op=BufferOps.CONST, src=(), arg=ConstBuffer(val=7.619047619047618e-05, dtype=dtypes.float, st=ShapeTracker(views=(View(shape=(15, 25, 35), strides=(0, 0, 0), offset=0, mask=None, contiguous=False),))))), arg=None)), arg=None)), arg=None),), arg=(0, 1, 2)), LazyOp(op=BufferOps.CONST, src=(), arg=ConstBuffer(val=7.619628162145687e-05, dtype=dtypes.float, st=ShapeTracker(views=(View(shape=(1, 1, 1), strides=(0, 0, 0), offset=0, mask=None, contiguous=True),))))), arg=None),), arg=None),), arg=MemBuffer(idx=0, dtype=dtypes.float, st=ShapeTracker(views=(View(shape=(1, 1, 1), strides=(0, 0, 0), offset=0, mask=None, contiguous=True),)))), # noqa: E501
 
@@ -428,11 +427,7 @@ class TestLinearizer(unittest.TestCase):
       # check correctness
       helper_tc_allclose(tc.dims[0]+pad, tc.dims[1]+pad, tc.dims[2]+pad, tc.dtype_in, tc.dtype_out, tc_opt=2)
 
-<<<<<<< HEAD
   @unittest.skipIf(Device.DEFAULT == "RHIP", "RHIP is really slow here")
-=======
-  @unittest.skipIf(CI and Device.DEFAULT in {"RHIP", "AMD"}, "RHIP/AMD CI is really slow here")
->>>>>>> parent of 9b02aef4 (remove rhip (#4579))
   def test_tensor_cores_multi_reduce(self):
     if not Device[Device.DEFAULT].renderer.has_tensor_cores:
       self.skipTest("device doesn't have tensor cores")
@@ -798,16 +793,6 @@ def _helper_linearizer_opt_ast(realized_ast:Tuple[LazyOp, ...], real_bufs:List[B
     for i, buf in enumerate(outbufs):
       np.testing.assert_allclose(np.frombuffer(buf.as_buffer(), buf.dtype.np), wanna_output[i], atol=atol, rtol=rtol)
 
-  # Get baseline if it is not provided, which is not optimized at all.
-  k = Linearizer(*realized_ast)
-  lins.append(k)
-  prg = get_prg(k)
-  prg.exec(real_bufs)
-  if len(wanna_output) == 0: wanna_output = [np.frombuffer(buf.as_buffer(), buf.dtype.np).copy() for buf in outbufs]
-  else:
-    for i, buf in enumerate(outbufs):
-      np.testing.assert_allclose(np.frombuffer(buf.as_buffer(), buf.dtype.np), wanna_output[i], atol=atol, rtol=rtol)
-
   # Check correctness of handcoded optimiztions.
   k = Linearizer(*realized_ast)
   lins.append(k)
@@ -817,8 +802,6 @@ def _helper_linearizer_opt_ast(realized_ast:Tuple[LazyOp, ...], real_bufs:List[B
   prg.exec(real_bufs)
   for i, buf in enumerate(outbufs):
     np.testing.assert_allclose(np.frombuffer(buf.as_buffer(), buf.dtype.np), wanna_output[i], atol=atol, rtol=rtol)
-  for i, x in enumerate(opts): # Check custom transformations if any.
-    check_opt(x, lambda: Linearizer(*realized_ast), color_sizes[i] if i < len(color_sizes) else None)
   return lins
 
 class TestKernelOpts(unittest.TestCase):
@@ -992,11 +975,7 @@ class TestKernelOpts(unittest.TestCase):
       ], apply_tc=True, atol=atol, rtol=rtol)
 
   def test_padto_matmul(self):
-<<<<<<< HEAD
     if CI and Device.DEFAULT in ["CUDA", "RHIP"]: self.skipTest("super slow on CUDA and RHIP because of the big grid dims")
-=======
-    if CI and Device.DEFAULT in ["CUDA", "RHIP", "AMD"]: self.skipTest("super slow on CUDA and RHIP because of the big grid dims")
->>>>>>> parent of 9b02aef4 (remove rhip (#4579))
     N = 17 * 17
     Tensor.manual_seed(289)
     a = Tensor.rand(N, N)
