@@ -104,7 +104,11 @@ class TestRandomness(unittest.TestCase):
     self.assertTrue(equal_distribution(Tensor.randn, torch.randn, lambda x: np.random.randn(*x)))
 
   @given(strat.sampled_from([dtypes.float, dtypes.float16, dtypes.bfloat16]))
+<<<<<<< HEAD
   @unittest.skipIf(Device.DEFAULT in ["HSA", "RHIP"], "bfloat16 local buffer broken in HSA")
+=======
+  @unittest.skipIf(Device.DEFAULT in ["HSA", "RHIP", "AMD"], "bfloat16 local buffer broken in HSA")
+>>>>>>> parent of 9b02aef4 (remove rhip (#4579))
   def test_randn_finite(self, default_float):
     if not is_dtype_supported(default_float): return
     old_default_float = dtypes.default_float

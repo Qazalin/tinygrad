@@ -428,7 +428,11 @@ class TestLinearizer(unittest.TestCase):
       # check correctness
       helper_tc_allclose(tc.dims[0]+pad, tc.dims[1]+pad, tc.dims[2]+pad, tc.dtype_in, tc.dtype_out, tc_opt=2)
 
+<<<<<<< HEAD
   @unittest.skipIf(Device.DEFAULT == "RHIP", "RHIP is really slow here")
+=======
+  @unittest.skipIf(CI and Device.DEFAULT in {"RHIP", "AMD"}, "RHIP/AMD CI is really slow here")
+>>>>>>> parent of 9b02aef4 (remove rhip (#4579))
   def test_tensor_cores_multi_reduce(self):
     if not Device[Device.DEFAULT].renderer.has_tensor_cores:
       self.skipTest("device doesn't have tensor cores")
@@ -988,7 +992,11 @@ class TestKernelOpts(unittest.TestCase):
       ], apply_tc=True, atol=atol, rtol=rtol)
 
   def test_padto_matmul(self):
+<<<<<<< HEAD
     if CI and Device.DEFAULT in ["CUDA", "RHIP"]: self.skipTest("super slow on CUDA and RHIP because of the big grid dims")
+=======
+    if CI and Device.DEFAULT in ["CUDA", "RHIP", "AMD"]: self.skipTest("super slow on CUDA and RHIP because of the big grid dims")
+>>>>>>> parent of 9b02aef4 (remove rhip (#4579))
     N = 17 * 17
     Tensor.manual_seed(289)
     a = Tensor.rand(N, N)
