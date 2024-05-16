@@ -29,6 +29,7 @@ class LazyBuffer:
                base:Optional[LazyBuffer]=None):
     self.device, self.st, self.dtype, self.shape, self.size = device, st, dtype, st.shape, st.size
     self._base: Optional[LazyBuffer] = None
+    self.mov_ops = []
     if base is None:
       # properties on base
       self.op, self.arg, self.srcs = op, arg, srcs  # this is a LazyOp, except the src is LazyBuffers and not LazyOps
@@ -212,9 +213,21 @@ class LazyBuffer:
     if new_st.contiguous and self.base.shape == new_st.shape: return self.base
     return create_lazybuffer(self.device, new_st, self.dtype, base=self.base)
 
-  def reshape(self, arg:Tuple[sint, ...]): return self._view(self.st.reshape(arg))
-  def pad(self, arg:Tuple[Tuple[sint, sint], ...]): return self._view(self.st.pad(arg))
-  def expand(self, arg:Tuple[sint, ...]): return self._view(self.st.expand(arg))
-  def permute(self, arg:Tuple[int, ...]): return self._view(self.st.permute(arg))
-  def shrink(self, arg:Tuple[Tuple[sint, sint], ...]): return self._view(self.st.shrink(arg))
-  def stride(self, arg:Tuple[int, ...]): return self._view(self.st.stride(arg))
+  def reshape(self, arg:Tuple[sint, ...]):
+    self.base.mov_ops.append(("reshape", arg))
+    return self._view(self.st.reshape(arg))
+  def pad(self, arg:Tuple[Tuple[sint, sint], ...]):
+    self.base.mov_ops.append(("pad", arg))
+    return self._view(self.st.pad(arg))
+  def expand(self, arg:Tuple[sint, ...]):
+    self.base.mov_ops.append(("expand", arg))
+    return self._view(self.st.expand(arg))
+  def permute(self, arg:Tuple[int, ...]):
+    self.base.mov_ops.append(("permute", arg))
+    return self._view(self.st.permute(arg))
+  def shrink(self, arg:Tuple[Tuple[sint, sint], ...]):
+    self.base.mov_ops.append(("shrink", arg))
+    return self._view(self.st.shrink(arg))
+  def stride(self, arg:Tuple[int, ...]):
+    self.base.mov_ops.append(("stride", arg))
+    return self._view(self.st.stride(arg))
