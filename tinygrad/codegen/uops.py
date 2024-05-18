@@ -304,24 +304,38 @@ class UOpGraph:
     in_degree: DefaultDict[UOp, int] = defaultdict(int)
     loops = []
     ifs = []
+    global_bufs = []
     nodes: Dict[UOp, None] = {}
     def add_parents(u:UOp):
       if u in nodes: return
       nodes[u] = None
+      in_degree[u] = 0
       for x in u.vin:
         add_parents(x)
         in_degree[u] += 1
         graph[x].append(u)
+      if u.uop is UOps.DEFINE_GLOBAL: global_bufs.append(u)
       if u.uop is UOps.LOOP: loops.append(u)
       if u.uop is UOps.IF: ifs.append(u)
     sink = UOp(UOps.SINK, None, tuple(x for x in sink.vin if x.uop is not UOps.NOOP))
     add_parents(sink)
+
+    # define globals parents
+    for i, u in enumerate(global_bufs):
+      for x in global_bufs[i+1:]:
+        graph[x].append(u)
+        in_degree[x] += 1
 
     @functools.lru_cache(None)
     def get_recursive_children(x:UOp, include_self=False) -> Set[UOp]:
       if x.uop is UOps.SINK: return set()
       return set.union(set((x,)) if include_self else set(), *([get_recursive_children(u, True) for u in graph[x]] if x.uop is not UOps.PHI else []))
     loops_children = {l:get_recursive_children(l) for l in loops[::-1]}
+
+    if getenv("FUZZ_UOPS", 1):
+      from test.external.fuzz_uops import fuzz_uops
+      self._uops = fuzz_uops(graph, in_degree)
+      return
 
     queue: List = []
     def push(u):
@@ -338,20 +352,15 @@ class UOpGraph:
     while queue:
       p,x = heapq.heappop(queue)
       if DEBUG >= 7: print(p,x)
-      self._uops.append(x)
-      """
       if x.uop is UOps.DEFINE_ACC and len(x.vin):
         idx = min([self._uops.index(l) for l in x.vin])
         self._uops.insert(idx, x)
       else:
         self._uops.append(x)
-      """
-      """
       for u, ss in loops_children.items():
         if x in ss:
           ss.remove(x)
           if len(ss) == 0: self._uops.append(UOp(UOps.ENDLOOP, None, (u,)))
-      """
       for u in graph[x]:
         in_degree[u] -= 1
         if in_degree[u] == 0: push(u)
