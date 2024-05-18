@@ -338,15 +338,20 @@ class UOpGraph:
     while queue:
       p,x = heapq.heappop(queue)
       if DEBUG >= 7: print(p,x)
+      self._uops.append(x)
+      """
       if x.uop is UOps.DEFINE_ACC and len(x.vin):
         idx = min([self._uops.index(l) for l in x.vin])
         self._uops.insert(idx, x)
       else:
         self._uops.append(x)
+      """
+      """
       for u, ss in loops_children.items():
         if x in ss:
           ss.remove(x)
           if len(ss) == 0: self._uops.append(UOp(UOps.ENDLOOP, None, (u,)))
+      """
       for u in graph[x]:
         in_degree[u] -= 1
         if in_degree[u] == 0: push(u)
