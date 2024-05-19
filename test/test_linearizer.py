@@ -75,7 +75,7 @@ class TestLinearizer(unittest.TestCase):
 
   def test_load_removed(self):
     a = Tensor.rand(1).realize()
-    b = Tensor.rand(1).realize()
+    b = Tensor.rand(2).realize()
     ta = Tensor.where(Tensor(True), a, b).numpy()
     tb = Tensor.where(Tensor(False), a, b).numpy()
     np.testing.assert_equal(a.numpy(), ta)
