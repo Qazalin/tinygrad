@@ -253,13 +253,12 @@ class UOpGraph:
     for i,u in enumerate(self):
       print(f"{i:4d} {str(u.uop):20s}: {str(u.dtype) if u.dtype is not None else '':25s} " f"{str([self.uops.index(x) for x in u.vin]):32s} {u.arg}")
 
-  def graph_rewrite(self, sink, pm):
+  def graph_rewrite(self, sink:UOp, pm:PatternMatcher):
     # recursive rewrite
-    changed = getenv("UOPS_REWRITE", 1)
+    changed = 1
     run_cnt = 0
     while changed:
       changed = 0
-      @functools.lru_cache
       def rewrite(u:UOp) -> UOp:
         nonlocal changed
         recurse_cnt = 0
@@ -270,13 +269,13 @@ class UOpGraph:
           up = rewritten
           recurse_cnt += 1
         changed += recurse_cnt
-        # NOTE: this changes UOp, so we have to delete caches
         up.vin = tuple(rewrite(x) for x in up.vin)
+        # NOTE: this changes UOp, so we have to delete caches
         if hasattr(up, "parents"): del up.parents
         if hasattr(up, "cmp_tuple"): del up.cmp_tuple
         # replace with cached nodes
         if found:=self.nodes.get(key:=up.tuple()): return found
-        else: self.nodes[key] = up
+        self.nodes[key] = up
         return up
       sink = rewrite(sink)
       run_cnt += 1
