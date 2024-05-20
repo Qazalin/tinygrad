@@ -304,6 +304,7 @@ class UOpGraph:
     in_degree: DefaultDict[UOp, int] = defaultdict(int)
     loops = []
     ifs = []
+    acc_for_loop: Dict[UOp, UOp] = {}
     nodes: Dict[UOp, None] = {}
     def add_parents(u:UOp):
       if u in nodes: return
@@ -314,6 +315,7 @@ class UOpGraph:
           if u.uop is UOps.DEFINE_ACC:
             in_degree[x] += 1
             graph[u].append(x)
+            acc_for_loop[x] = u
           else:
             in_degree[u] += 1
             graph[x].append(u)
@@ -324,16 +326,28 @@ class UOpGraph:
       if u.uop is UOps.IF: ifs.append(u)
     sink = UOp(UOps.SINK, None, tuple(x for x in sink.vin if x.uop is not UOps.NOOP))
     add_parents(sink)
+
+    for loop, acc in acc_for_loop.items():
+      for x in graph[acc]:
+        if x.uop is not UOps.RANGE:
+          graph[loop].append(x)
+          in_degree[x] += 1
+
+    print("GRAPH")
     for uop, children in graph.items():
-      print(str(uop.uop) + f" {uop.arg}" if uop.uop is UOps.CONST else f"{uop.uop}_{uop.vin[-1].arg}" if uop.uop is UOps.RANGE else uop.uop)
-      print([x.uop for x in children])
-      print("--")
+      print(str(uop.uop) + f" {uop.arg}" if uop.uop is UOps.CONST else f"{uop.uop}_{uop.vin[-1].arg}" if uop.uop is UOps.RANGE else uop.uop, [x.uop for x in children])
 
     @functools.lru_cache(None)
     def get_recursive_children(x:UOp, include_self=False) -> Set[UOp]:
       if x.uop is UOps.SINK: return set()
       return set.union(set((x,)) if include_self else set(), *([get_recursive_children(u, True) for u in graph[x]] if x.uop is not UOps.PHI else []))
     loops_children = {l:get_recursive_children(l) for l in loops[::-1]}
+
+    print("LOOPS")
+    for l, children in loops_children.items():
+      print(l.uop, [x.arg for x in l.vin])
+      print([x.uop for x in children])
+    print("--")
 
     queue: List = []
     def push(u):
@@ -355,6 +369,12 @@ class UOpGraph:
       p,x = heapq.heappop(queue)
       print(p,x)
       if getenv("NEW"): self._uops.append(x)
+      else:
+        if x.uop is UOps.DEFINE_ACC and len(x.vin):
+          idx = min([self._uops.index(l) for l in x.vin])
+          self._uops.insert(idx, x)
+        else:
+          self._uops.append(x)
       for u, ss in loops_children.items():
         if x in ss:
           ss.remove(x)
