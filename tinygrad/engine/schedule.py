@@ -51,13 +51,14 @@ def _recursive_lazyop(buf:LazyBuffer, inputs:List[LazyBuffer], outputs:Tuple[Laz
     buf = buf.base
   # all buffers here are base now
   assert buf.op is not None
+  op, srcs, arg = buf.op, buf.srcs, buf.arg
 
   # consts are always fused and generated
-  if buf.op is LoadOps.CONST:
+  if op is LoadOps.CONST:
     unbound_st, st_var_vals = st.simplify().unbind()
     var_vals.update(st_var_vals)
-    if isinstance(buf.arg, Variable): var_vals.__setitem__(*buf.arg.unbind())
-    return LazyOp(BufferOps.CONST, (), ConstBuffer(buf.arg, buf.dtype, unbound_st))
+    if isinstance(arg, Variable): var_vals.__setitem__(*arg.unbind())
+    return LazyOp(BufferOps.CONST, (), ConstBuffer(arg, buf.dtype, unbound_st))
 
   # if we aren't fusing it, it's a load and we add it to the inputs
   if buf.realized is not None or (buf in realizes and buf not in outputs):
@@ -75,23 +76,22 @@ def _recursive_lazyop(buf:LazyBuffer, inputs:List[LazyBuffer], outputs:Tuple[Laz
     return LazyOp(BufferOps.LOAD, (), MemBuffer(len(outputs)+inputs.index(buf), buf.dtype, unbound_st))
 
   # if a CONTIGUOUS or ASSIGN made it all the way here, just skip it
-  if buf.op is LoadOps.CONTIGUOUS:
+  if op is LoadOps.CONTIGUOUS:
     assert buf in outputs
-    return _recursive_lazyop(buf.srcs[0], inputs, outputs, var_vals, st, realizes, assign_targets, cache)
-  if buf.op is LoadOps.ASSIGN:
+    return _recursive_lazyop(srcs[0], inputs, outputs, var_vals, st, realizes, assign_targets, cache)
+  if op is LoadOps.ASSIGN:
     assert buf in outputs
-    assert buf.srcs[1].base is buf.srcs[1], "assign must be to base"
-    assert buf.srcs[1].realized is not None, f"assign must be already realized to schedule {buf.srcs[1]}"
-    return _recursive_lazyop(buf.srcs[0], inputs, outputs, var_vals, st, realizes, assign_targets, cache)
+    assert srcs[1].base is srcs[1], "assign must be to base"
+    assert srcs[1].realized is not None, f"assign must be already realized to schedule {srcs[1]}"
+    return _recursive_lazyop(srcs[0], inputs, outputs, var_vals, st, realizes, assign_targets, cache)
 
   # if it's a reduce, we have to change the shapetracker
-  if buf.op in ReduceOps:
+  if op in ReduceOps:
     assert st.contiguous, "ReduceOps late fusion must be contiguous"
-    st = ShapeTracker.from_shape(buf.srcs[0].shape)
+    st = ShapeTracker.from_shape(srcs[0].shape)
 
   # otherwise we fuse it like normal
-  cache[(buf, st)] = ret = \
-    LazyOp(buf.op, tuple(_recursive_lazyop(x, inputs, outputs, var_vals, st, realizes, assign_targets, cache) for x in buf.srcs), buf.arg)
+  cache[(buf, st)] = ret = LazyOp(op, tuple(_recursive_lazyop(x, inputs, outputs, var_vals, st, realizes, assign_targets, cache) for x in srcs), arg)
   return ret
 
 def _schedule_group(outs:Tuple[LazyBuffer, ...], realizes:Dict[LazyBuffer, None], reduce_for_op: Dict[LazyBuffer, LazyBuffer]) -> _LBScheduleItem:
