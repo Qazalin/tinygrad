@@ -311,6 +311,7 @@ class UOpGraph:
       nodes[u] = None
       for x in u.vin:
         add_parents(x)
+        # DEFINE_ACC comes before loop
         if u.uop is UOps.DEFINE_ACC:
           in_degree[x] += 1
           graph[u].append(x)
@@ -322,7 +323,7 @@ class UOpGraph:
       if u.uop is UOps.IF: ifs.append(u)
     sink = UOp(UOps.SINK, None, tuple(x for x in sink.vin if x.uop is not UOps.NOOP))
     add_parents(sink)
-
+    # DEFINE_ACC children are also loop children
     for loop, acc in acc_for_loop.items():
       for x in graph[acc]:
         if x.uop is not UOps.RANGE:
