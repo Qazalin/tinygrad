@@ -310,12 +310,24 @@ class UOpGraph:
       nodes[u] = None
       for x in u.vin:
         add_parents(x)
-        in_degree[u] += 1
-        graph[x].append(u)
+        if getenv("NEW"):
+          if u.uop is UOps.DEFINE_ACC:
+            in_degree[x] += 1
+            graph[u].append(x)
+          else:
+            in_degree[u] += 1
+            graph[x].append(u)
+        else:
+          in_degree[u] += 1
+          graph[x].append(u)
       if u.uop is UOps.RANGE: loops.append(u)
       if u.uop is UOps.IF: ifs.append(u)
     sink = UOp(UOps.SINK, None, tuple(x for x in sink.vin if x.uop is not UOps.NOOP))
     add_parents(sink)
+    for uop, children in graph.items():
+      print(str(uop.uop) + f" {uop.arg}" if uop.uop is UOps.CONST else f"{uop.uop}_{uop.vin[-1].arg}" if uop.uop is UOps.RANGE else uop.uop)
+      print([x.uop for x in children])
+      print("--")
 
     @functools.lru_cache(None)
     def get_recursive_children(x:UOp, include_self=False) -> Set[UOp]:
@@ -341,12 +353,8 @@ class UOpGraph:
     self._uops = []
     while queue:
       p,x = heapq.heappop(queue)
-      if DEBUG >= 7: print(p,x)
-      if x.uop is UOps.DEFINE_ACC and len(x.vin):
-        idx = min([self._uops.index(l) for l in x.vin])
-        self._uops.insert(idx, x)
-      else:
-        self._uops.append(x)
+      print(p,x)
+      if getenv("NEW"): self._uops.append(x)
       for u, ss in loops_children.items():
         if x in ss:
           ss.remove(x)
