@@ -27,6 +27,12 @@ jobs:
         ln -s ~/tinygrad/weights/bpe_simple_vocab_16e6.txt.gz weights/bpe_simple_vocab_16e6.txt.gz
         ln -s ~/tinygrad/weights/LLaMA weights/LLaMA
         ln -s ~/tinygrad/extra/datasets/cifar-10-python.tar.gz extra/datasets/cifar-10-python.tar.gz
+    - name: Setup tracing
+      run: |
+        export TRACE_PATH="$HOME/traces/$GITHUB_SHA" && echo "TRACE_PATH=$TRACE_PATH" >> $GITHUB_ENV
+        rm -rf "$TRACE_PATH"
+        mkdir -p "$HOME/traces"
+        echo "SAVE_TRACE=1" >> $GITHUB_ENV
     - name: Run Stable Diffusion
       run: JIT=2 python3 examples/stable_diffusion.py --seed 0 --noshow --timing | tee sd.txt
     - name: Run model inference benchmark
