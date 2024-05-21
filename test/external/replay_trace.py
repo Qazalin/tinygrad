@@ -6,6 +6,7 @@ from tinygrad.engine.graph import print_tree
 from tinygrad.helpers import to_function_name
 from tinygrad.ops import LazyOp
 
+# 
 with open("/Users/tiny/traces/833aa0ca0ae05de8444e76216f9142da359e8b38", "rb") as f:
   try:
     while True:
