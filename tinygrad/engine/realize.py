@@ -1,5 +1,6 @@
+from __future__ import annotations
 from typing import List, Dict, Optional, cast, Generator, Tuple
-import time
+import time, atexit, pickle
 from dataclasses import dataclass, replace
 from tinygrad.helpers import colored, getenv, DEBUG, GlobalCounters, ansilen, BEAM, NOOPT, all_int
 from tinygrad.ops import BufferOps, LoadOps, LazyOp
@@ -11,6 +12,7 @@ from tinygrad.engine.schedule import ScheduleItem
 
 # **************** Program Creation ****************
 
+trace: Dict[Tuple[LazyOp, ...], Linearizer] = {}
 logkerns, logkerns_level = open(getenv("LOGKERNS", ""), "a") if getenv("LOGKERNS", "") else None, getenv("LOGKERNS_LEVEL", 1)
 def get_linearizer(renderer:Renderer, ast:Tuple[LazyOp, ...]) -> Linearizer:
   if DEBUG >= 3:
@@ -38,6 +40,13 @@ def get_linearizer(renderer:Renderer, ast:Tuple[LazyOp, ...]) -> Linearizer:
         if logkerns is not None and logkerns_level > 1: logkerns.writelines([f"{(lin.ast, lin.applied_opts)}\n" for (_,lin,_) in timed[1:]])
   # TODO: check the correctness inline once compare_linearizer is in core
   if logkerns is not None: logkerns.writelines([f"{(k.ast, k.applied_opts)}\n"])
+  if getenv("SAVE_TRACE"):
+    if len(trace) == 0:
+      def _save():
+        print(f"Saving {len(trace)} trace items to", fp:=getenv("TRACE_PATH", "/tmp/trace"))
+        with open(fp, "ab") as f: pickle.dump(trace, f)
+      atexit.register(_save)
+    trace[ast] = k
   if DEBUG >= 4: print((k.ast, k.applied_opts)) # print here to show final applied_opts for all kernels instead of just in beam_search
   return k
 
