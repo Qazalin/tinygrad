@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Iterator, Optional, Tuple, Any, Dict, List, DefaultDict, Set, Callable
-import functools, itertools, heapq
-from collections import defaultdict
+import functools, itertools
+from collections import defaultdict, deque
 from enum import Enum, auto
 from dataclasses import dataclass
 from tinygrad.dtype import dtypes, DType
@@ -324,16 +324,7 @@ class UOpGraph:
       return set.union(set((x,)) if include_self else set(), *([get_recursive_children(u, True) for u in graph[x]] if x.uop is not UOps.PHI else []))
     loops_children = {l:get_recursive_children(l) for l in loops[::-1]}
 
-    queue: List = []
-    def push(u):
-      priority = 0
-      # prefer uops that are loop children
-      for l, ss in loops_children.items():
-        if u in ss: priority -= l.arg[0]*1000 + l.arg[1]
-      heapq.heappush(queue, (priority, u))
-
-    for u in nodes:
-      if in_degree[u] == 0: push(u)
+    queue = deque(u for u in nodes if in_degree[u] == 0)
 
     if getenv("FUZZ_UOPS", 0):
       from test.external.fuzz_uops import fuzz_uops
@@ -341,8 +332,8 @@ class UOpGraph:
 
     self._uops = []
     while queue:
-      p,x = heapq.heappop(queue)
-      if DEBUG >= 7: print(p,x)
+      x = queue.popleft()
+      if DEBUG >= 7: print(x)
       if x.uop is UOps.DEFINE_ACC and len(x.vin):
         idx = min([self._uops.index(l) for l in x.vin])
         self._uops.insert(idx, x)
@@ -354,7 +345,7 @@ class UOpGraph:
           if len(ss) == 0: self._uops.append(UOp(UOps.ENDRANGE, None, (u,)))
       for u in graph[x]:
         in_degree[u] -= 1
-        if in_degree[u] == 0: push(u)
+        if in_degree[u] == 0: queue.append(u)
 
     assert self._uops[-1].uop is UOps.SINK, f"didn't end with SINK, ended with {self._uops[-1]}"
     self._uops = self._uops[:-1]
