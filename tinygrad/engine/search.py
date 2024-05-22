@@ -62,6 +62,13 @@ def _try_compile_linearized_w_idx(x:Tuple[int,Linearizer], compiler:Compiler) ->
   except RuntimeError:
     if DEBUG >= 4: traceback.print_exc()
     return x[0], None
+  except AssertionError as e:
+    import pickle
+    print("FAILED TO COMPILE")
+    x[1].uops.print()
+    pickle.dump(x[1], open("/tmp/lin", "wb"))
+    raise e
+
 
 # workers should ignore ctrl c
 def _init_worker(): signal.signal(signal.SIGINT, signal.SIG_IGN)
