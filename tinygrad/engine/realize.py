@@ -1,6 +1,5 @@
 from __future__ import annotations
-from collections import defaultdict
-from typing import DefaultDict, List, Dict, Optional, cast, Generator, Tuple
+from typing import List, Dict, Optional, cast, Generator, Tuple
 import time, atexit, pickle
 from dataclasses import dataclass, replace
 from tinygrad.helpers import colored, getenv, DEBUG, GlobalCounters, ansilen, BEAM, NOOPT, all_int
@@ -13,7 +12,7 @@ from tinygrad.engine.schedule import ScheduleItem
 
 # **************** Program Creation ****************
 
-trace: DefaultDict[Tuple[LazyOp, ...], List[Tuple[str, Linearizer]]] = defaultdict(list)
+trace: Dict[Tuple[LazyOp, ...], List[Tuple[str, Linearizer]]] = {}
 logkerns, logkerns_level = open(getenv("LOGKERNS", ""), "a") if getenv("LOGKERNS", "") else None, getenv("LOGKERNS_LEVEL", 1)
 def get_linearizer(renderer:Renderer, ast:Tuple[LazyOp, ...]) -> Linearizer:
   if DEBUG >= 3:
@@ -25,6 +24,8 @@ def get_linearizer(renderer:Renderer, ast:Tuple[LazyOp, ...]) -> Linearizer:
         print(f"Saving {len(trace)} trace items to", fp:=getenv("TRACE_PATH", "/tmp/trace"))
         with open(fp, "ab") as f: pickle.dump(trace, f)
       atexit.register(_save)
+    # mark ast as seen
+    trace[ast] = []
   k = Linearizer(*ast, opts=renderer)
   k.required_optimizations()
   if not NOOPT:
