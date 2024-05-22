@@ -6,14 +6,16 @@ from tinygrad.engine.graph import print_tree
 from tinygrad.helpers import to_function_name
 from tinygrad.ops import LazyOp
 
-with open("/Users/tiny/traces/34eed4aaf34706aa4a6267e071f9f08fbde90a5d", "rb") as f:
+with open("/Users/tiny/traces/26e7b157cf87855be38ee4bc718f80a3ffa94004", "rb") as f:
   try:
     while True:
       trace: Dict[Tuple[LazyOp, ...], List[Tuple[str, Linearizer]]] = pickle.load(f)
       print(len(trace))
-      if len(trace) != 48: continue
+      if len(trace) != 22: continue
       for ast, lins in trace.items():
         for op in ast: print_tree(op)
+        print(ast)
+        print(len(lins))
         for _,lin in lins:
           lin.uops.print()
           print(Device[Device.DEFAULT].renderer.render(to_function_name(lin.name), lin.uops))
