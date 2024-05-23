@@ -588,6 +588,24 @@ class TestLinearizer(unittest.TestCase):
     helper(Tensor.arange(256), max_ops=2)
     helper(Tensor.arange(255), max_ops=2)
 
+  def test_gated_store_indexing_ops(self):
+    """
+    if (alu0) { *(data0+alu1+gidx1) = acc0; }
+
+    becomes:
+    if (alu0) {
+        int alu1 = (gidx0*289);
+        *(data0+alu1+gidx1) = acc0;
+    }
+    """
+    N = 17 * 17
+    a = Tensor.rand(N, N)
+    b = Tensor.rand(N, N)
+    k = helper_linearizer_opt(a@b, [[Opt(OptOps.PADTO, 0, 32)]])[-1]
+    store = [u for u in k.uops if u.uop is UOps.STORE][0]
+    gate = k.uops.uops.index(store.vin[3])
+    index = k.uops.uops.index(store.vin[1].vin[0])
+
   @unittest.skipUnless(Device[Device.DEFAULT].renderer.supports_float4, "device doesn't support float4")
   def test_grouped_store_phis(self):
     """
