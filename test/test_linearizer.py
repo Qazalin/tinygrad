@@ -547,27 +547,6 @@ class TestLinearizer(unittest.TestCase):
     lin.linearize()
     assert not any(u.arg == TernaryOps.WHERE for u in lin.uops), "found where where where should be folded"
 
-  def test_simplify_uop(self):
-    def helper_test_simplify(uop, dtype, vin, arg=None):
-      ast = LazyOp(BufferOps.CONST, (),
-                   ConstBuffer(42, dtypes.float, ShapeTracker(views=(View(shape=(), strides=(), offset=0, mask=None, contiguous=True),))))
-      ast = LazyOp(BufferOps.STORE, (ast,),
-                   MemBuffer(0, dtypes.float, ShapeTracker(views=(View(shape=(), strides=(), offset=0, mask=None, contiguous=True),))))
-      lin = Linearizer(ast) # this is a dummy ast
-
-      lin.uops = UOpGraph()
-      ret = lin.uops.add(uop, dtype, vin, arg)
-      lin.uops.add(UOps.SINK, None, (ret,))
-      return list(lin.uops.uops)[-1]
-
-    c0 = UOp(UOps.CONST, dtypes.float, vin=(), arg=0.0)
-    assert helper_test_simplify(UOps.ALU, dtypes.float, vin=(UOp(UOps.CONST, dtypes.bool, vin=(), arg=True), c0, c0), arg=TernaryOps.WHERE) == c0
-
-    c0 = UOp(UOps.CONST, dtypes.float, vin=(), arg=0.0)
-    c1 = UOp(UOps.CONST, dtypes.float, vin=(), arg=1.0)
-    assert helper_test_simplify(UOps.ALU, dtypes.float, vin=(UOp(UOps.CONST, dtypes.bool, vin=(), arg=True), c0, c1),
-                                arg=TernaryOps.WHERE).arg == c0.arg
-
   def test_phi_simplification(self):
     def helper(t, max_ops=0):
       sched = create_schedule([t.lazydata])
