@@ -15,7 +15,6 @@ from tinygrad.engine.schedule import create_schedule
 from tinygrad.engine.realize import run_schedule, lower_schedule, CompiledRunner
 from tinygrad.helpers import prod, Context, getenv, CI
 from tinygrad.dtype import DType, dtypes
-from tinygrad.codegen.uops import UOpGraph
 
 def helper_realized_ast(r:Tensor):
   s = create_schedule([r.lazydata])
@@ -362,9 +361,7 @@ class TestLinearizer(unittest.TestCase):
 
     x, y = Tensor.rand(1,128), Tensor.rand(128, 128)
     r = (x@y).relu()
-    k = Linearizer(*create_schedule([r.lazydata])[-1].ast)
-    k.hand_coded_optimizations()
-    k.linearize()
+    k = helper_linearizer_opt(r)[-1]
 
     accs = [u for u in k.uops if u.uop is UOps.DEFINE_ACC]
     stores = [u for u in k.uops if u.uop is UOps.STORE]
