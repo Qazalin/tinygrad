@@ -206,13 +206,6 @@ constant_folder = PatternMatcher([
   ({"uop": UOps.STORE, "vin": ({"__name__": "buf"}, {"__name__": "idx"}, {"uop": UOps.ALU, "arg": TernaryOps.WHERE,
                        "vin": ({"__name__": "gate"}, {"__name__": "alt"}, {"uop": UOps.LOAD, "vin": ({"__name__": "buf"}, {"__name__": "idx"})})})},
     lambda buf, idx, gate, alt: UOp(UOps.STORE, None, (buf, idx, alt, gate))),
-  # store float4/float2 directly (remove CAST/GEP)
-  ({"uop": UOps.STORE, "vin": ({"__name__": "buf"}, {"__name__": "idx"}, {"uop": UOps.CAST, "vin":
-                                tuple({"uop": UOps.GEP, "vin": ({"__name__": "val"},), "arg": i} for i in range(4))})},
-   lambda buf,idx,val: UOp(UOps.STORE, None, (buf, idx, val))),
-  ({"uop": UOps.STORE, "vin": ({"__name__": "buf"}, {"__name__": "idx"}, {"uop": UOps.CAST, "vin":
-                                tuple({"uop": UOps.GEP, "vin": ({"__name__": "val"},), "arg": i} for i in range(2))})},
-   lambda buf,idx,val: UOp(UOps.STORE, None, (buf, idx, val))),
   # CAST-PHI-GEP -> PHI-CAST
   ({"__name__": "root", "uop": UOps.CAST, "vin":
     tuple({"uop": UOps.PHI, "vin": ({"uop": UOps.GEP, "vin": ({"__name__": "val"},), "arg": i}, {"__name__": f"v{i}"})} for i in range(4))},
@@ -224,6 +217,11 @@ constant_folder = PatternMatcher([
   ({"uop": UOps.ALU, "arg": BinaryOps.CMPLT, "vin": ({"uop": UOps.ALU, "arg": UnaryOps.NEG, "vin": ({"__name__": "x"},)},
                                                      {"__name__": "c", "uop": UOps.CONST, "dtype": dtypes.int})},
     lambda c,x: UOp(UOps.ALU, dtypes.bool, (UOp.const(c.dtype, -c.arg), x), BinaryOps.CMPLT)),
+  # upcast NOOP
+  ({"__name__": "root", "uop": UOps.CAST, "vin": tuple({"uop": UOps.GEP, "vin": ({"__name__": "val"},), "arg": i} for i in range(2))},
+   lambda root, val: val if root.dtype == val.dtype else None),
+  ({"__name__": "root", "uop": UOps.CAST, "vin": tuple({"uop": UOps.GEP, "vin": ({"__name__": "val"},), "arg": i} for i in range(4))},
+   lambda root, val: val if root.dtype == val.dtype else None),
   # cast NOOP (NOTE: it's str to deal with PtrDType)
   ({"__name__": "root", "uop": UOps.CAST}, lambda root: root.vin[0] if str(root.dtype) == str(root.vin[0].dtype) else None),
 ])
