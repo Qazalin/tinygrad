@@ -240,5 +240,17 @@ class TestLocalAccess(unittest.TestCase):
     sres = uop(uops, UOps.LOAD, dtypes.int32, (smem, ofs))
     self.assertEqual(_test_uops_result(dtypes.int32, uops, sres), 42)
 
+  def test_gated_store_index(self):
+    # indexing uops don't get rendered if gate is false
+    pass
+
+  def test_gated_store_index_multichild(self):
+    # indexing uops are rendererd correctly regardless of branch
+    pass
+
+  def test_gated_store_parent_phi(self):
+    # if there is a parent PHI - the entire reduceop should be placed inside the IF
+    pass
+
 if __name__ == '__main__':
   unittest.main(verbosity=2)
