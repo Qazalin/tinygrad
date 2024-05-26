@@ -1,3 +1,4 @@
+from collections import deque
 import numpy as np
 from dataclasses import replace
 from typing import DefaultDict, Dict, List, Set, Tuple
@@ -10,7 +11,7 @@ from tinygrad.shape.symbolic import Variable
 def fuzz_uops(graph:DefaultDict[UOp, List[UOp]], in_degree:DefaultDict[UOp, int], loops_children:Dict[UOp, Set[UOp]]):
   paths: List[List[UOp]] = []
   # TODO: express DEFINE_ACC and loop children conditions in the graph, builtin.
-  for p in find_all_toposorts(graph, in_degree):
+  for p in [_bfs(graph, in_degree)]:
     assert p[-1].uop is UOps.SINK, f"didn't end with SINK, ended with {p[-1]}"
     paths.append(path:=list(p[:-1]))
     for u in path:
@@ -75,3 +76,15 @@ def find_all_toposorts(graph:DefaultDict[UOp, List[UOp]], in_degree:DefaultDict[
   # verify all paths are unique
   assert len(ret) == len(set(ret))
   return ret
+
+def _bfs(graph:DefaultDict[UOp, List[UOp]], in_degree:DefaultDict[UOp, int]) -> Tuple[UOp, ...]:
+  queue = deque(x for x,d in in_degree.items() if d == 0)
+  ret: List[UOp] = []
+  while queue:
+    u = queue.popleft()
+    if u.uop is UOps.DEFINE_ACC: ret.insert(min(ret.index(v) for v in u.vin), u)
+    else: ret.append(u)
+    for x in graph[u]:
+      in_degree[x] -= 1
+      if in_degree[x] == 0: queue.append(x)
+  return tuple(ret)
