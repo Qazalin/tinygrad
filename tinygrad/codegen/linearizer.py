@@ -60,9 +60,6 @@ class Linearizer(Kernel):
       if dtypes.is_int(reduceop.dtype): return 0 if dtypes.is_unsigned(reduceop.dtype) else -2**(reduceop.dtype.itemsize*8-1)
       return -math.inf if dtypes.is_float(reduceop.dtype) else False
 
-  # NOTE: once images are loaded, we uop them as their base float
-  def get_base_dtype(self, dt:DType): return dt.base if isinstance(dt, ImageDType) else dt
-
   render_ops: Any = { Variable: lambda self, ops, ctx: ctx.loop_uops[self.expr], NumNode: lambda self, ops, ctx: ctx.const(self.b),
                 MulNode: lambda self, ops, ctx: ctx.uop_alu_idx(self.a.render(ops, ctx), self.b, ops, ctx, BinaryOps.MUL),
                 DivNode: lambda self, ops, ctx: ctx.uop_alu_idx(self.a.render(ops, ctx), self.b, ops, ctx, BinaryOps.DIV),
@@ -75,7 +72,7 @@ class Linearizer(Kernel):
 
   def global_load(self, i:int, idxs:List[Node], acc:Optional[LazyOp]=None, barrier:Optional[UOp]=None, loop_ctx:Tuple[UOp, ...]=()) -> List[UOp]:
     buf = self.bufs[i]
-    localtype = self.get_base_dtype(buf.dtype if acc is None else acc.dtype)
+    localtype = acc.dtype if acc is not None else buf.dtype.base if isinstance(buf.dtype, ImageDType) else buf.dtype
     const = buf.val if isinstance(buf, ConstBuffer) else None
 
     expand_vars = expand_idxs(idxs)
@@ -430,7 +427,7 @@ class Linearizer(Kernel):
     if x.op in BufferOps: return loaded_buffers[x.arg]
     if x.op in [UnaryOps.CAST, UnaryOps.BITCAST]:
       return [self.uops.add(UOps.BITCAST if x.op is UnaryOps.BITCAST else UOps.CAST,
-                            self.get_base_dtype(x.arg), (u,)) for u in self.ast_parse(x.src[0], accs, offs, loaded_buffers)]
+                            x.dtype, (u,)) for u in self.ast_parse(x.src[0], accs, offs, loaded_buffers)]
     if x.op in ReduceOps and reduce_acc is None:
       assert offs is None, "not available if we aren't doing reduce"
       return accs[x]
