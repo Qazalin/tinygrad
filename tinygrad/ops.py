@@ -4,7 +4,7 @@ import functools, hashlib, math, operator, ctypes
 from enum import Enum, auto
 from dataclasses import dataclass
 from tinygrad.helpers import prod, dedup
-from tinygrad.dtype import dtypes, DType, ConstType
+from tinygrad.dtype import ImageDType, dtypes, DType, ConstType
 from tinygrad.shape.symbolic import Variable, sint
 from tinygrad.shape.shapetracker import ShapeTracker
 
@@ -60,8 +60,8 @@ class LazyOp:
   @functools.cached_property
   def dtype(self) -> DType:
     if self.op in BufferOps: return self.arg.dtype
-    if self.op in [UnaryOps.CAST, UnaryOps.BITCAST]: return self.arg
-    return dtypes.bool if self.op in {BinaryOps.CMPLT, BinaryOps.CMPEQ} else self.src[-1].dtype
+    if self.op in {UnaryOps.CAST, UnaryOps.BITCAST}: return self.arg
+    return dtypes.bool if self.op in {BinaryOps.CMPLT, BinaryOps.CMPEQ} else dt.base if isinstance(dt:=self.src[-1].dtype, ImageDType) else dt
 
   @functools.cached_property
   def key(self) -> bytes:

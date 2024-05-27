@@ -30,5 +30,11 @@ class TestLazyOp(unittest.TestCase):
       # sanity check if caching works this should be way faster
       assert time.monotonic() -st < 0.5, f"{i}"
 
+  def test_lazyop_dtype_image_alu(self):
+    img0 = LazyOp(BufferOps.LOAD, (), MemBuffer(1, dtypes.imagef((32, 128, 4)), ShapeTracker(views=(View(shape=(1, 32, 32, 1, 1, 4, 4, 4, 4, 1, 1), strides=(0, 512, 16, 0, 0, 0, 0, 4, 1, 0, 0), offset=0, mask=None, contiguous=False),)))) # noqa: E501
+    img1 = LazyOp(BufferOps.LOAD, (), MemBuffer(2, dtypes.imagef((32, 128, 4)), ShapeTracker(views=(View(shape=(1, 32, 32, 1, 1, 4, 4, 4, 4, 1, 1), strides=(0, 32, 1, 0, 0, 4096, 1024, 0, 0, 0, 0), offset=0, mask=None, contiguous=False),)))) # noqa: E501
+    op = LazyOp(BinaryOps.MUL, (img0, img1))
+    assert op.dtype == dtypes.float
+
 if __name__ == '__main__':
   unittest.main()
