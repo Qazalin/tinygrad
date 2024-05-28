@@ -1,3 +1,5 @@
+# tinygrad documentation
+
 Welcome to the docs for tinygrad. This page is for users of the tinygrad library. tinygrad is not 1.0 yet, but it will be soon. The API has been pretty stable for a while.
 
 While you can `pip install tinygrad`, we encourage you to install from source:
@@ -40,6 +42,6 @@ In tinygrad, you can do [`x.conv2d(w, b)`](tensor.md/#tinygrad.Tensor.conv2d) or
 
 When you do `a+b` in tinygrad, nothing happens. It's not until you [`realize`](tensor.md/#tinygrad.Tensor.realize) the Tensor that the computation actually runs.
 
-### tinygrad requires @TinyJIT to be fast
+### tinygrad requires @TinyJit to be fast
 
 PyTorch spends a lot of development effort to make dispatch very fast. tinygrad doesn't. We have a simple decorator that will replay the kernels used in the decorated function.
