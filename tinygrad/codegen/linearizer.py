@@ -178,12 +178,7 @@ class Linearizer(Kernel):
     return tuple(new_loops.values())
 
   def render_reduceop(self, reduceop:LazyOp, accs:Dict[LazyOp, List[UOp]], loaded_buffers:Dict[Union[MemBuffer, ConstBuffer, LocalBuffer], List[UOp]],
-                      global_idxs, local_idxs, upcast_idxs):
-    # define indicies
-    full_upcast_idxs = [Variable(f"_uidx{i}", 0, s-1) for i, s in enumerate(self.full_shape[self.shape_len-self.upcasted:])]
-    reduce_idxs = [Variable(f"ridx{i}", 0, self.full_shape[i]-1) for i in range(self.first_reduce+self.group_for_reduces, self.shape_len-self.upcasted)]  # noqa: E501
-    fake_reduce_idxs = [x*0 for x in reduce_idxs]
-
+                      global_idxs, local_idxs, upcast_idxs, full_upcast_idxs, reduce_idxs, fake_reduce_idxs):
     def calc_tc_idxs(local_sizes: List[int], aliases: List[List[int]]):
       replace_idxs, thread_idxs, thread_idx = [], [], Variable("_uidx_tc", 0, prod(local_sizes)-1)
       for s in local_sizes:
@@ -309,10 +304,7 @@ class Linearizer(Kernel):
 
       # end the late reduce loop
       self.load_cache.clear()
-
-      # all local indices which were used for group_for_reduce are not valid any more and should be replaced with fake NumNode(0), since they have
-      # been rewritten with fake end_local_idxs.
-    return (accs, loaded_buffers, fake_reduce_idxs, local_idxs[:self.local_dims] + [NumNode(0) for i in range(self.group_for_reduces)], upcast_idxs)
+    return local_idxs[:self.local_dims] + [NumNode(0) for i in range(self.group_for_reduces)]
 
   kernel_cnt: Final[DefaultDict[str, int]] = defaultdict(int)
   def linearize(self):
@@ -396,11 +388,16 @@ class Linearizer(Kernel):
     accs: Dict[LazyOp, List[UOp]] = {}
     self.load_cache: Dict[str, UOp] = {}
 
+
     # reduce op
-    fake_reduce_idxs: List[Variable] = []
+    # define reduce loop indicies
+    full_upcast_idxs = [Variable(f"_uidx{i}", 0, s-1) for i, s in enumerate(self.full_shape[self.shape_len-self.upcasted:])]
+    reduce_idxs = [Variable(f"ridx{i}", 0, self.full_shape[i]-1) for i in range(self.first_reduce+self.group_for_reduces, self.shape_len-self.upcasted)]  # noqa: E501
+    fake_reduce_idxs = [x*0 for x in reduce_idxs]
     for reduceop in [self.reduceop] if self.reduceop is not None else []:
-      accs,loaded_buffers,fake_reduce_idxs,local_idxs,upcast_idxs = \
-        self.render_reduceop(reduceop,accs,loaded_buffers,global_idxs,local_idxs,upcast_idxs)
+      # all local indices which were used for group_for_reduce are not valid any more and should be replaced with fake NumNode(0), since they have
+      # been rewritten with fake end_local_idxs.
+      local_idxs = self.render_reduceop(reduceop, accs, loaded_buffers, global_idxs, local_idxs, upcast_idxs, full_upcast_idxs, reduce_idxs, fake_reduce_idxs)
 
     # load latebufs
     loaded_buffers.update({b:self.global_load(i, global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs) \
