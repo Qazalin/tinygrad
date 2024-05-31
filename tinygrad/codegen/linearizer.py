@@ -305,8 +305,8 @@ class Linearizer(Kernel):
       # end the late reduce loop
       self.load_cache.clear()
 
-      # all local indices which were used for group_for_reduce are not valid any more and should be replaced with fake NumNode(0), since they have
-      # been rewritten with fake end_local_idxs.
+    # all local indices which were used for group_for_reduce are not valid any more and should be replaced with fake NumNode(0), since they have
+    # been rewritten with fake end_local_idxs.
     return local_idxs[:self.local_dims] + [NumNode(0) for _ in range(self.group_for_reduces)]
 
   kernel_cnt: Final[DefaultDict[str, int]] = defaultdict(int)
