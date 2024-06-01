@@ -86,7 +86,6 @@ def _recursive_lazyop(buf:LazyBuffer, inputs:List[LazyBuffer], outputs:Tuple[Laz
 
   # if it's a reduce, we have to change the shapetracker
   if buf.op in ReduceOps:
-    assert st.contiguous, "ReduceOps late fusion must be contiguous"
     st = ShapeTracker.from_shape(buf.srcs[0].shape)
 
   # otherwise we fuse it like normal
@@ -247,7 +246,7 @@ def _graph_schedule(outs:List[LazyBuffer], seen:Set[LazyBuffer]) -> Tuple[Defaul
   output_groups: DefaultDict[LazyBuffer, List[LazyBuffer]] = defaultdict(list)
   for buf in realizes:
     if buf.realized is not None or buf.op is LoadOps.CONST or buf in seen: continue
-    output_groups[reduce_for_op[buf] if buf in reduce_for_op and MULTIOUTPUT else buf].append(buf)
+    output_groups["r" if buf.op not in LoadOps else buf].append(buf)
 
     # make things that can't be images not images
     if isinstance(buf.dtype, ImageDType) and (prod(buf.shape) != prod(buf.dtype.shape) or

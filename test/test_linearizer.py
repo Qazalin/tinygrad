@@ -1023,7 +1023,6 @@ def _temp_create_multireduce_ast(r0:Tensor, r1:Tensor, merge=lambda r0,r1: LazyO
   out = merge(_deep_replace(op0), _deep_replace(op1, op0_loads))
   # limitation: only tests single output
   op = LazyOp(BufferOps.STORE, (out, ), MemBuffer(0, s0[-1].ast[-1].arg.dtype, s0[-1].ast[-1].arg.st))
-  if DEBUG >= 3: print_tree(op)
   return op,
 
 class TestKernelOpts(unittest.TestCase):
@@ -1411,18 +1410,14 @@ class TestKernelOpts(unittest.TestCase):
     Tensor.manual_seed(0)
     N = 18 * 18
     x = (Tensor.rand(N, N).shrink(((0, 17), (0, 17))) * 100).realize()
-    x_ld = LazyOp(op=BufferOps.LOAD, src=(), arg=MemBuffer(idx=1, dtype=dtypes.float, st=ShapeTracker(views=(View(shape=(17, 17), strides=(324, 1), offset=0, mask=None, contiguous=False),))))
-    def ast(axis:int): return LazyOp(op=BufferOps.STORE, src=(LazyOp(op=ReduceOps.SUM, src=(LazyOp(op=BinaryOps.SUB, src=(x_ld,LazyOp(op=ReduceOps.SUM, src=(x_ld,), arg=(axis,)))),), arg=(axis,)),), arg=MemBuffer(idx=0, dtype=dtypes.float, st=ShapeTracker(views=(View(shape=(1, 17), strides=(0, 1), offset=0, mask=None, contiguous=True),)))) # noqa: E501
-    opts = [[Opt(OptOps.PADTO, 0, 32)]] #,[Opt(OptOps.PADTO, 0, 32), Opt(OptOps.UPCAST, 0, 8),],]
-    want = (x.numpy() - x.numpy().sum(0)).sum(0)
-    helper_linearizer_ast((ast(0),), [x], opts=opts, wanna_output=[want])
-    #print("--------")
-    #helper_linearizer_ast((ast(1),), [x], opts=opts)
-
-    # pad reduce sum
-    #helper_linearizer_ast((ast(0),), [x], opts=[[Opt(OptOps.PADTO, 1, 32)],])
-    #op = LazyOp(op=BufferOps.STORE, src=(LazyOp(op=ReduceOps.SUM, src=(LazyOp(op=BinaryOps.SUB, src=(x_ast,LazyOp(op=ReduceOps.SUM, src=(x_ast,), arg=(0,1)))),), arg=(0,1)),), arg=MemBuffer(idx=0, dtype=dtypes.float, st=ShapeTracker(views=(View(shape=(1, 1), strides=(0, 1), offset=0, mask=None, contiguous=True),)))) # noqa: E501
-    #helper_linearizer_ast((op,), [x], opts=[[Opt(OptOps.PADTO, 0, 32)],])
+    def ast(axis:int):
+      x_ld = LazyOp(BufferOps.LOAD, (), MemBuffer(1, dtypes.float, ShapeTracker(views=(View(shape=(17, 17), strides=(17, 1), offset=0, mask=None, contiguous=True),))))
+      x_sum = LazyOp(ReduceOps.SUM, (x_ld,), (axis,))
+      r1 = LazyOp(ReduceOps.SUM, (LazyOp(BinaryOps.SUB, (x_ld, x_sum), None),), (axis,))
+      return LazyOp(BufferOps.STORE, (r1, ), MemBuffer(0, dtypes.float, ShapeTracker(views=(View(shape=(1, 17), strides=(0, 1), offset=0, mask=None, contiguous=True),))))
+    opts = [[Opt(OptOps.PADTO, 0, 32)], [Opt(OptOps.PADTO, 0, 32), Opt(OptOps.UPCAST, 0, 8),],]
+    helper_linearizer_ast((ast(0),), [x], opts=opts, wanna_output=[(x.numpy() - x.numpy().sum(0)).sum(0)])
+    helper_linearizer_ast((ast(1),), [x], opts=opts, wanna_output=[(x.numpy() - x.numpy().sum(1)).sum(1)])
 
   def test_padto_max_multireduce(self):
     N = 18 * 18
