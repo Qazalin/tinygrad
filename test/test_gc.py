@@ -8,6 +8,13 @@ def tensors_allocated():
   return sum([isinstance(x, Tensor) for x in gc.get_objects()])
 
 class TestGC(unittest.TestCase):
+  # test gc in isolation for this TestCase
+  def setUp(self):
+    gc.disable()
+    gc.collect()
+
+  def tearDown(self):
+    gc.enable()
 
   def test_gc(self):
     a = Tensor.rand(4, 4, requires_grad=True)
@@ -15,6 +22,7 @@ class TestGC(unittest.TestCase):
     (a*b).mean().backward()
     assert(tensors_allocated() > 0)
     del a,b
+    gc.collect()
     assert(tensors_allocated() == 1) # one for Tensor._rng_counter
 
   def test_gc_complex(self):
@@ -24,6 +32,7 @@ class TestGC(unittest.TestCase):
     (a*b).mean().backward()
     assert(tensors_allocated() == 5)
     del b
+    gc.collect()
     assert(tensors_allocated() == 3)
     b = Tensor(np.zeros((4, 4), dtype=np.float32), requires_grad=True)
     print(tensors_allocated())
@@ -31,6 +40,7 @@ class TestGC(unittest.TestCase):
     print(tensors_allocated())
     assert(tensors_allocated() == 5)
     del b
+    gc.collect()
     assert(tensors_allocated() == 3)
 
 if __name__ == '__main__':
