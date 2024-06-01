@@ -334,6 +334,7 @@ class Kernel:
     def buf_index(src: LazyOp) -> Optional[int]:
       # TODO: apply tc even if the sources are not from LOAD
       if src.op is BufferOps.LOAD and src.arg.dtype == tc.dtype_in: return self.bufs.index(cast(MemBuffer, src.arg))
+      if src.op is ReduceOps.SUM: print(src)
       try:
         if opt_level >= 1 and src.op is UnaryOps.CAST and src.arg == tc.dtype_in: return self.bufs.index(cast(MemBuffer, src.src[0].arg))
       except ValueError: return None
