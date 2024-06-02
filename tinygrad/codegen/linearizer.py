@@ -169,10 +169,11 @@ class Linearizer(Kernel):
     return stores
 
   # render loop
-  def render_loop(self, xx:List[Variable], depth:int) -> Tuple[UOp, ...]:
+  def render_loop(self, xx:List[Variable], depth:int, num:Optional[int]=None) -> Tuple[UOp, ...]:
+    print(depth, num)
     new_loops = {x.expr:self.uops.add(UOps.RANGE, dtypes.int32, (
       self.const(x.min) if isinstance(x.min, int) else cast(Node, x.min).render(self.render_ops, self),
-      self.const(x.max+1) if isinstance(x.max, int) else cast(Node, x.max+1).render(self.render_ops, self)), arg=(depth,i)) for i,x in enumerate(xx) if not isinstance(x, NumNode) and x.expr is not None}  # noqa: E501
+      self.const(x.max+1) if isinstance(x.max, int) else cast(Node, x.max+1).render(self.render_ops, self)), arg=(depth,i,num)) for i,x in enumerate(xx) if not isinstance(x, NumNode) and x.expr is not None}  # noqa: E501
     self.loop_uops.update(new_loops)
     return tuple(new_loops.values())
 
@@ -220,7 +221,8 @@ class Linearizer(Kernel):
   def render_reduceop(self, reduceop:LazyOp, accs:Dict[LazyOp, List[UOp]], loaded_buffers:Dict[Union[MemBuffer, ConstBuffer, LocalBuffer], List[UOp]],
                       global_idxs, local_idxs, upcast_idxs, full_upcast_idxs, reduce_idxs, fake_reduce_idxs, alias_buf_idxs):
     # reduce loop
-    loop_ctx = self.render_loop(reduce_idxs, self.reduceops.index(reduceop)*4+2)
+    s = self.reduceops.index(reduceop)
+    loop_ctx = self.render_loop(reduce_idxs, 2, self.reduceops.index(reduceop))
 
     # define accumulator - modify idxs if necessary for TC
     out_buf = -1 if self.group_for_reduces else 0
@@ -294,7 +296,7 @@ class Linearizer(Kernel):
       # NOTE: this structure is the same as the reduce op above
 
       # late reduce loop
-      loop_ctx = self.render_loop(end_local_idxs, self.reduceops.index(reduceop)*4+3)
+      loop_ctx = self.render_loop(end_local_idxs, 3, self.reduceops.index(reduceop))
 
       # define late accumulator
       accs[reduceop] = self.global_load(0, fake_global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, acc=reduceop, loop_ctx=loop_ctx)
