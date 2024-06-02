@@ -377,7 +377,10 @@ class UOpGraph:
     self._uops = self._uops[:-1]
 
     # TODO: ifs should be removed and just the store should be gated
-    for u in ifs[::-1]: self._uops.append(UOp(UOps.ENDIF, None, (u,)))
+    for u in ifs:
+      barriers = ([i for i in range(self._uops.index(u), len(self._uops)-1) if self._uops[i].uop is UOps.BARRIER \
+                and self._uops[i+1].uop is UOps.LOAD and all([x.vin[0] in self._uops[i+1].vin for x in self._uops[i].vin])])
+      self._uops.insert(barriers[0] if len(barriers) > 0 else len(self._uops), UOp(UOps.ENDIF, None, (u,)))
 
     if type_verify: self.type_verify()
 
