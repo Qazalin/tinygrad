@@ -78,8 +78,9 @@ class UPat:
   allow_len: Set[int] = field(default_factory=set)
 
 def _match(uop:UOp, pat:UPat, store:Dict[str, UOp]) -> bool:
-  if pat.name in store and store[pat.name] != uop: return False
-  if pat.name is not None: store[pat.name] = uop
+  if pat.name is not None:
+    if pat.name in store and store[pat.name] != uop: return False
+    store[pat.name] = uop
   if pat.arg is not None and uop.arg != pat.arg: return False
   if pat.uop is not None:
     if isinstance(pat.uop, set):
