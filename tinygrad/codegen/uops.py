@@ -4,6 +4,7 @@ import functools, itertools, heapq
 from collections import defaultdict
 from enum import Enum, auto
 from dataclasses import dataclass, field
+
 from tinygrad.dtype import dtypes, DType
 from tinygrad.shape.symbolic import sint, Variable
 from tinygrad.ops import UnaryOps, BinaryOps, TernaryOps, exec_alu
@@ -322,6 +323,7 @@ class UOpGraph:
     in_degree: DefaultDict[UOp, int] = defaultdict(int)
     loops = []
     ifs = []
+    smem_stores: DefaultDict[UOp, Set[UOp]] = defaultdict(set)
     nodes: Dict[UOp, None] = {}
     def add_parents(u:UOp):
       if u in nodes: return
@@ -332,6 +334,7 @@ class UOpGraph:
         graph[x].append(u)
       if u.uop is UOps.RANGE: loops.append(u)
       if u.uop is UOps.IF: ifs.append(u)
+      if u.uop is UOps.STORE and u.vin[0].uop is UOps.DEFINE_LOCAL: smem_stores[u.vin[0]].add(u)
     sink = UOp(UOps.SINK, None, tuple(x for x in sink.vin if x.uop is not UOps.NOOP))
     add_parents(sink)
 
@@ -369,6 +372,9 @@ class UOpGraph:
         if x in ss:
           ss.remove(x)
           if len(ss) == 0: self._uops.append(UOp(UOps.ENDRANGE, None, (u,)))
+      if x.uop is UOps.STORE and x.vin[0].uop is UOps.DEFINE_LOCAL:
+        smem_stores[x.vin[0]].remove(x)
+        if len(smem_stores[x.vin[0]]) == 0: self._uops.append(UOp(UOps.BARRIER, None))
       for u in graph[x]:
         in_degree[u] -= 1
         if in_degree[u] == 0: push(u)
