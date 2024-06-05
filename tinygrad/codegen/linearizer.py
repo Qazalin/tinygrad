@@ -403,15 +403,13 @@ class Linearizer(Kernel):
     # render reduceops by depth
     for reduceop in self.reduceops:
       # create an extra block for early reduce
-      if self.group_for_reduces:
-        self.render_block((reduceop, ), (lb, ), *block_args)
+      #if self.group_for_reduces: self.render_block((reduceop, ), (lb, ), *block_args)
 
-      self.render_block((reduceop, ), *block_args)
+      # late reduce is never promoted from a register value (this will change with multi reduce)
+      self.render_block((reduceop, ), (), *block_args)
 
 
-      self.render_block((reduceop, ), *block_args)
-
-    self.render_block(self.ast, *block_args)
+    self.render_block(self.ast, tuple(x.arg for x in self.ast), *block_args)
 
     # maybe graph the uops
     if DEBUG >= 5: self.uops.print()
@@ -424,7 +422,7 @@ class Linearizer(Kernel):
     self.applied_opts_cache = self.applied_opts[:]
     return self
 
-  def render_block(self, outputs:Tuple[LazyOp, ...], outbufs:Tuple[MemBuffer|LocalBuffer], global_idxs, local_idxs, upcast_idxs, full_upcast_idxs,
+  def render_block(self, outputs:Tuple[LazyOp, ...], outbufs:Tuple[MemBuffer|LocalBuffer, ...], global_idxs, local_idxs, upcast_idxs, full_upcast_idxs,
                    alias_buf_idxs, loaded_buffers, accs) -> List[List[UOp]]:
     assert len(reduceops:=dedup(x for x in outputs if x.op in ReduceOps)) <= 1, "max one reduceop per block"
     reduce_idxs = [Variable(f"ridx{i}", 0, self.full_shape[i]-1) for i in range(self.first_reduce+self.group_for_reduces, self.shape_len-self.upcasted)]  # noqa: E501
