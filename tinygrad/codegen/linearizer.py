@@ -356,7 +356,7 @@ class Linearizer(Kernel):
       # TODO: the strides of this can be controlled
       self.sts.append(ShapeTracker.from_shape(tuple([1] * self.global_dims + list(self.full_shape[self.global_dims:self.global_dims+self.local_dims+self.group_for_reduces]) + [1] * (self.shape_len - self.upcasted - self.group_for_reduces - self.first_reduce) + [x[0] for x in self.upcasted_axis(0)])))  # noqa: E501
       temp_dtype = self.get_base_dtype(cast(LazyOp, self.reduceop).dtype)
-      self.bufs.append(LocalBuffer("temp", self.sts[-1].size, temp_dtype))
+      self.bufs.append(lb:=LocalBuffer("temp", self.sts[-1].size, temp_dtype))
       self.buf_uops.append(self.uops.add(UOps.DEFINE_LOCAL, PtrDType(temp_dtype), (), ("temp", self.sts[-1].size)))
 
     # kernel name (before late upcast)
@@ -399,11 +399,19 @@ class Linearizer(Kernel):
     loaded_buffers:Dict[Union[MemBuffer, ConstBuffer, LocalBuffer], List[UOp]] = {}
     accs: Dict[LazyOp, List[UOp]] = {}
 
+    block_args = (global_idxs, local_idxs, upcast_idxs, full_upcast_idxs, alias_buf_idxs, loaded_buffers, accs)
     # render reduceops by depth
     for reduceop in self.reduceops:
-      self.render_block((reduceop, ), global_idxs, local_idxs, upcast_idxs, full_upcast_idxs, alias_buf_idxs, loaded_buffers, accs)
+      # create an extra block for early reduce
+      if self.group_for_reduces:
+        self.render_block((reduceop, ), (lb, ), *block_args)
 
-    self.render_block(self.ast, global_idxs, local_idxs, upcast_idxs, full_upcast_idxs, alias_buf_idxs, loaded_buffers, accs)
+      self.render_block((reduceop, ), *block_args)
+
+
+      self.render_block((reduceop, ), *block_args)
+
+    self.render_block(self.ast, *block_args)
 
     # maybe graph the uops
     if DEBUG >= 5: self.uops.print()
@@ -416,7 +424,7 @@ class Linearizer(Kernel):
     self.applied_opts_cache = self.applied_opts[:]
     return self
 
-  def render_block(self, outputs:Tuple[LazyOp, ...], global_idxs, local_idxs, upcast_idxs, full_upcast_idxs,
+  def render_block(self, outputs:Tuple[LazyOp, ...], outbufs:Tuple[MemBuffer|LocalBuffer], global_idxs, local_idxs, upcast_idxs, full_upcast_idxs,
                    alias_buf_idxs, loaded_buffers, accs) -> List[List[UOp]]:
     assert len(reduceops:=dedup(x for x in outputs if x.op in ReduceOps)) <= 1, "max one reduceop per block"
     reduce_idxs = [Variable(f"ridx{i}", 0, self.full_shape[i]-1) for i in range(self.first_reduce+self.group_for_reduces, self.shape_len-self.upcasted)]  # noqa: E501
