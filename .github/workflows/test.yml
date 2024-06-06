@@ -339,7 +339,9 @@ jobs:
       fail-fast: false
       matrix:
         backend: [llvm, clang, gpu, ptx, amd, nv] #, triton]
-
+    outputs:
+      run_process_replay: ${{ steps.check-process-replay.outputs.run_process_replay }}
+      process_replay_commit: ${{ steps.check-process-replay.outputs.process_replay_commit }}
     name: Tests on (${{ matrix.backend }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -364,10 +366,13 @@ jobs:
           path: ~/.cache/tinygrad/downloads/
           key: downloads-cache-${{ matrix.backend }}-${{ env.DOWNLOAD_CACHE_VERSION }}
       - name: Set env
+        id: check-process-replay # TODO: change this
         run: |
           COMMIT_MESSAGE=$(git show -s --format=%B ${{ github.event.pull_request.head.sha }})
           if { echo "$COMMIT_MESSAGE" | grep -q "\[run_process_replay\]" || [ "${{ github.event.inputs.run_process_replay }}" == "true" ]; } && [ "$GITHUB_REF_NAME" != "master" ]; then
             echo "RUN_PROCESS_REPLAY=1" >> $GITHUB_ENV
+            echo "RUN_PROCESS_REPLAY=1" >> $GITHUB_OUTPUT
+            echo "PROCESS_REPLAY_COMMIT=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
           fi
           printf "${{ matrix.backend == 'llvm' && 'LLVM=1' || matrix.backend == 'clang' && 'CLANG=1' || matrix.backend == 'gpu' && 'GPU=1' || matrix.backend == 'PTX' && 'FORWARD_ONLY=1\nJIT=1\nOPT=2\nCUDA=1\nCUDACPU=1\nPTX=1' || matrix.backend == 'triton' && 'FORWARD_ONLY=1\nJIT=1\nOPT=2\nCUDA=1\nCUDACPU=1\nTRITON=1\nTRITON_PTXAS_PATH=/usr/bin/ptxas' || matrix.backend == 'amd' && 'AMD=1\nMOCKGPU=1\nFORWARD_ONLY=1' || matrix.backend == 'nv' && 'NV=1\nMOCKGPU=1\nFORWARD_ONLY=1' }}" >> $GITHUB_ENV
       - name: Install OpenCL
@@ -507,6 +512,25 @@ jobs:
           PYTHONPATH="." python examples/compile_efficientnet.py > recognize.c
           clang -O2 recognize.c -lm -o recognize
           cat test/models/efficientnet/Chicken.jpg | ./recognize | grep cock
+
+  process_replay:
+    needs: tests
+    name: process replay
+    if: ${{ needs.tests.outputs.run_process_replay }}
+    permissions:
+      pull-requests: write
+      contents: read
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Update process replay status
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: run_process_replay
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        skip_unchanged: true
+        recreate: true
+        message: Process replay tests passed up to commit `${{ github.event.pull_request.head.sha }}` (${{ needs.tests.outputs.process_replay_commit }})
 
   #testunicorn:
   #  name: ARM64 unicorn Test
