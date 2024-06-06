@@ -17,8 +17,9 @@ def get_src(limit:int, offset:int):
   conn.close()
 
 def get_program(branch, limit, offset) -> str:
+  code = inspect.getsource(get_src)+f"\nget_src({limit}, {offset})"
   subprocess.run(["git", "checkout", branch], check=True, capture_output=True)
-  result = subprocess.run(["python3", "-c", inspect.getsource(get_src)+f"\nget_src({limit}, {offset})"], capture_output=True, text=True)
+  result = subprocess.run(["python3", "-c", code], capture_output=True, text=True)
   return result.stdout
 
 def cleanup():
