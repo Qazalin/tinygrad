@@ -1,7 +1,7 @@
 from typing import List, Dict, Optional, cast, Generator, Tuple
 import time
 from dataclasses import dataclass, replace
-from tinygrad.helpers import colored, getenv, DEBUG, GlobalCounters, ansilen, BEAM, NOOPT, all_int
+from tinygrad.helpers import colored, diskcache_put, getenv, DEBUG, GlobalCounters, ansilen, BEAM, NOOPT, all_int
 from tinygrad.ops import BufferOps, LoadOps, LazyOp
 from tinygrad.device import Device, Buffer
 from tinygrad.shape.symbolic import Variable, sym_infer, sint
@@ -134,11 +134,12 @@ def get_runner(dname:str, ast:Tuple[LazyOp, ...]) -> CompiledRunner:
   if bret:=method_cache.get(bkey):
     method_cache[ckey] = ret = CompiledRunner(replace(bret.p, dname=dname), bret.lib)
   else:
-    prg: Program = get_linearizer(Device[dname].renderer, ast).to_program()
+    prg: Program = (lin:=get_linearizer(Device[dname].renderer, ast)).to_program()
     if hasattr(prg.uops, "fuzz_paths"):
       from test.external.fuzz_uops import UOpsFuzzerRunner
       return UOpsFuzzerRunner(replace(prg, dname=dname))
     method_cache[ckey] = method_cache[bkey] = ret = CompiledRunner(replace(prg, dname=dname))
+    if getenv("RUN_PROCESS_REPLAY"): diskcache_put("process_replay", "".join(map(str,ckey)), (ast, lin.applied_opts))
   return ret
 
 # **************** lowering functions ****************
