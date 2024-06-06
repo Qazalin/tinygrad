@@ -2,7 +2,7 @@ from typing import Optional, Tuple, Any, List
 import unittest, math
 import numpy as np
 from tinygrad.tensor import Tensor
-from tinygrad.helpers import CI, getenv
+from tinygrad.helpers import CI, DEBUG, getenv
 from tinygrad.dtype import dtypes, DType, PtrDType
 from tinygrad.device import Buffer, Device
 from tinygrad.ops import UnaryOps, BinaryOps, TernaryOps, exec_alu
@@ -272,6 +272,20 @@ class TestAssembly(unittest.TestCase):
     Device[Device.DEFAULT].renderer.render("test", uops)
     self.assertEqual(uops.uops[-1].arg, BinaryOps.DIV)
     self.assertEqual(uops.uops[-2].arg, BinaryOps.SHR)
+
+class TestIFRewrite(unittest.TestCase):
+  def test_rewrite_gated_store_idxs(self):
+    uops = UOpGraph()
+    gmem = uops.add(UOps.DEFINE_GLOBAL, PtrDType(dtypes.float), (), (0, True))
+    gidx0 = uops.add(UOps.SPECIAL, dtypes.int, (), (0, 'gidx0', 4))
+    idx = gidx0 * UOp.const(dtypes.int, 2)
+
+    gate = uops.add(UOps.ALU, dtypes.bool, (gidx0, UOp.const(dtypes.int, 1)), arg=BinaryOps.CMPLT)
+    uops.add(UOps.STORE, None, (gmem, idx, uops.add(UOps.CONST, dtypes.float, (), 42.0), gate))
+    if DEBUG >= 4: print(Device[Device.DEFAULT].renderer.render("test", uops))
+    if_block = next(u for u in uops if u.uop is UOps.IF)
+    print(if_block)
+
 
 if __name__ == '__main__':
   unittest.main(verbosity=2)
