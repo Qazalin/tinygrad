@@ -217,101 +217,6 @@ class Linearizer(Kernel):
       if DEBUG >= 3: print(f"store alias: sts={self.sts[0]} idxs={global_idxs+local_idxs+upcast_idxs}")
     return alias_buf_idxs
 
-  def render_reduceop(self, reduceop:LazyOp, accs:Dict[LazyOp, List[UOp]], loaded_buffers:Dict[Union[MemBuffer, ConstBuffer, LocalBuffer], List[UOp]],
-                      global_idxs, local_idxs, upcast_idxs, full_upcast_idxs, reduce_idxs, fake_reduce_idxs, alias_buf_idxs):
-    # reduce loop
-    loop_ctx = self.render_loop(reduce_idxs, 2)
-
-    # define accumulator - modify idxs if necessary for TC
-    out_buf = -1 if self.group_for_reduces else 0
-    accs[reduceop] = self.global_load(out_buf, global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, acc=reduceop, loop_ctx=loop_ctx)
-
-    # store local aliases
-    locals_to_store = [(localbuf_idx, buf_idxs, self.global_load(i, buf_idxs)) for i, localbuf_idx, buf_idxs in alias_buf_idxs]
-
-    if (tc:=self.tensor_core):
-      # run tensor cores AST
-      wmma_sz = [prod(l) for l in tc.thread_local_sizes]
-      def upcast_strides(buf:int):
-        strides, next = [], 1
-        for (sz, stride, reduce) in self.upcasted_axis(buf)[tc.num_upcasts():]:
-          strides.append((0 if stride == 0 else next, sz))
-          next *= 1 if stride == 0 else sz
-        return strides
-      upcasts, dev = [upcast_strides(x) for x in [locals_to_store[0][0], locals_to_store[1][0], 0]], self.opts.device
-      # cast initial accs
-      wmmas = [self.uops.add(UOps.CAST, (dt3:=tc.dtype_out.vec(wmma_sz[2])), tuple(accs[reduceop][x:x+wmma_sz[2]]))
-               for x in range(0, len(accs[reduceop]), wmma_sz[2])]
-      for iter in [x[::-1] for x in itertools.product(*[x for x in [range(sz) for _,sz in upcasts[0]][::-1]])]:
-        offs = [x*y for (x,y) in zip([sum([prod(x) for x in zip(iter, [stride for stride,_ in y])]) for y in upcasts], wmma_sz)]
-        ops = (self.uops.add(UOps.CAST, tc.dtype_in.vec(wmma_sz[0]), tuple(locals_to_store[0][2][offs[0]:offs[0]+wmma_sz[0]])),
-                self.uops.add(UOps.CAST, tc.dtype_in.vec(wmma_sz[1]), tuple(locals_to_store[1][2][offs[1]:offs[1]+wmma_sz[1]])),
-                wmmas[(wmma_idx:=offs[2]//wmma_sz[2])])
-        # TODO: don't need to DEFINE_ACC, pass to WMMA in op3, or PHI accs that are not valid
-        wmmas[wmma_idx] = self.uops.add(UOps.WMMA, dt3, ops, (str(tc), tc.dims, tc.dtype_in, tc.dtype_out, tuple(wmma_sz), dev))
-      # phi the last wmmas back to accs
-      accs[reduceop] = [self.uops.add(UOps.PHI, tc.dtype_out, (acc, self.uops.add(UOps.GEP, tc.dtype_out, (wmmas[z//wmma_sz[2]],), z%wmma_sz[2])))
-                        for z, acc in enumerate(accs[reduceop])]
-    else:
-      assert not locals_to_store, "storing locals isn't supported here"
-
-      # load earlybufs
-      loaded_buffers.update({b:self.global_load(self.bufs.index(self.local_alias[reduceop][i]) if i in self.local_alias else i,
-        global_idxs+local_idxs+reduce_idxs+full_upcast_idxs) for i,b in enumerate(self.bufs) if b in self.earlybufs})
-
-      # run early AST (with reduce)
-      self.ast_parse(reduceop, accs, self.acc_offsets(self.full_buf_index), loaded_buffers, reduce_acc=accs[reduceop])
-
-    # end the reduce loop
-    self.load_cache.clear()
-
-    # end the local loop, do the local reduce
-    if self.group_for_reduces:
-      fake_global_idxs = [x*0 for x in global_idxs]
-      stores = self.global_store(-1, fake_global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, accs[reduceop])  # store accumulators
-      barrier = self.uops.add(UOps.BARRIER, None, tuple(stores))
-      if self.opts.has_local:
-        fake_idxs = [NumNode(0)]*len(self.sts[-1].shape)
-        fake_idxs[self.global_dims+self.local_dims:self.global_dims+len(local_idxs)] = local_idxs[self.local_dims:]
-        if_cond: UOp = create_lt_node(self.sts[-1].expr_idxs(fake_idxs)[0], 1).render(self.render_ops, self)
-        barrier = self.uops.add(UOps.IF, None, (if_cond, barrier))
-
-      # create new late reduce local loops and replace local_idxs that have been used
-      end_local_idxs = [Variable(f"tidx{i}", 0, self.full_shape[i]-1 if i >= self.first_reduce and i not in self.upcast_in_mid_reduce_axes else 0) for i in range(0, self.first_reduce+self.group_for_reduces)]  # noqa: E501
-      local_idxs = local_idxs[:self.local_dims] + end_local_idxs[self.global_dims + self.local_dims:]
-
-      # if any group_for_reduce items aren't reduces, upcast them here
-      for j in self.upcast_in_mid_reduce_axes:
-        self.reshape_and_permute(None, [i for i in range(self.shape_len) if i != j] + [j])
-        self.upcast()
-        self.group_for_reduces -= 1
-        local_idxs = local_idxs[:-1]
-        end_local_idxs = end_local_idxs[:-1]
-        # regenerate upcast_idxs
-        upcast_idxs = [Variable(f"_uidx{i}", 0, s-1) for i, s in enumerate(self.output_shape[self.shape_len-self.upcasted:])]
-
-      # NOTE: this structure is the same as the reduce op above
-
-      # late reduce loop
-      loop_ctx = self.render_loop(end_local_idxs, 3)
-
-      # define late accumulator
-      accs[reduceop] = self.global_load(0, fake_global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, acc=reduceop, loop_ctx=loop_ctx)
-
-      # load localbufs
-      loaded_buffers[self.bufs[-1]] = self.global_load(-1, fake_global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, barrier=barrier)
-
-      # there's no AST here (and there's no shape for the reduce LazyOp)
-      self.ast_parse(LazyOp(reduceop.op, (LazyOp(BufferOps.LOAD, (), self.bufs[-1]),)),\
-                     accs, self.acc_offsets(-1), loaded_buffers, reduce_acc=accs[reduceop])
-
-      # end the late reduce loop
-      self.load_cache.clear()
-
-    # all local indices which were used for group_for_reduce are not valid any more and should be replaced with fake NumNode(0), since they have
-    # been rewritten with fake end_local_idxs.
-    return local_idxs[:self.local_dims] + [NumNode(0) for _ in range(self.group_for_reduces)], upcast_idxs
-
   kernel_cnt: Final[DefaultDict[str, int]] = defaultdict(int)
   def linearize(self):
     # no new opts and we already ran? skip relinearizing
@@ -423,10 +328,99 @@ class Linearizer(Kernel):
     fake_reduce_idxs = [x*0 for x in reduce_idxs]
 
     if len(reduceops) != 0:
-      # TODO: delete render_reduceop and move the logic for group_for_reduces to Block
-      local_idxs[:], upcast_idxs[:] = self.render_reduceop((r:=reduceops[0]),accs,loaded_buffers,global_idxs,local_idxs,upcast_idxs, full_upcast_idxs,
-                                                     reduce_idxs,fake_reduce_idxs,alias_buf_idxs[r])
-      return accs[r]
+      # reduce loop
+      loop_ctx = self.render_loop(reduce_idxs, 2)
+
+      # define accumulator - modify idxs if necessary for TC
+      out_buf = -1 if self.group_for_reduces else 0
+      accs[reduceop:=reduceops[0]] = self.global_load(out_buf, global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, acc=reduceops[0], loop_ctx=loop_ctx)
+
+      # store local aliases
+      locals_to_store = [(localbuf_idx, buf_idxs, self.global_load(i, buf_idxs)) for i, localbuf_idx, buf_idxs in alias_buf_idxs[reduceop]]
+
+      if (tc:=self.tensor_core):
+        # run tensor cores AST
+        wmma_sz = [prod(l) for l in tc.thread_local_sizes]
+        def upcast_strides(buf:int):
+          strides, next = [], 1
+          for (sz, stride, reduce) in self.upcasted_axis(buf)[tc.num_upcasts():]:
+            strides.append((0 if stride == 0 else next, sz))
+            next *= 1 if stride == 0 else sz
+          return strides
+        upcasts, dev = [upcast_strides(x) for x in [locals_to_store[0][0], locals_to_store[1][0], 0]], self.opts.device
+        # cast initial accs
+        wmmas = [self.uops.add(UOps.CAST, (dt3:=tc.dtype_out.vec(wmma_sz[2])), tuple(accs[reduceop][x:x+wmma_sz[2]]))
+                 for x in range(0, len(accs[reduceop]), wmma_sz[2])]
+        for iter in [x[::-1] for x in itertools.product(*[x for x in [range(sz) for _,sz in upcasts[0]][::-1]])]:
+          offs = [x*y for (x,y) in zip([sum([prod(x) for x in zip(iter, [stride for stride,_ in y])]) for y in upcasts], wmma_sz)]
+          ops = (self.uops.add(UOps.CAST, tc.dtype_in.vec(wmma_sz[0]), tuple(locals_to_store[0][2][offs[0]:offs[0]+wmma_sz[0]])),
+                  self.uops.add(UOps.CAST, tc.dtype_in.vec(wmma_sz[1]), tuple(locals_to_store[1][2][offs[1]:offs[1]+wmma_sz[1]])),
+                  wmmas[(wmma_idx:=offs[2]//wmma_sz[2])])
+          # TODO: don't need to DEFINE_ACC, pass to WMMA in op3, or PHI accs that are not valid
+          wmmas[wmma_idx] = self.uops.add(UOps.WMMA, dt3, ops, (str(tc), tc.dims, tc.dtype_in, tc.dtype_out, tuple(wmma_sz), dev))
+        # phi the last wmmas back to accs
+        accs[reduceop] = [self.uops.add(UOps.PHI, tc.dtype_out, (acc, self.uops.add(UOps.GEP, tc.dtype_out, (wmmas[z//wmma_sz[2]],), z%wmma_sz[2])))
+                          for z, acc in enumerate(accs[reduceop])]
+      else:
+        assert not locals_to_store, "storing locals isn't supported here"
+
+        # load earlybufs
+        loaded_buffers.update({b:self.global_load(self.bufs.index(self.local_alias[reduceop][i]) if i in self.local_alias else i,
+          global_idxs+local_idxs+reduce_idxs+full_upcast_idxs) for i,b in enumerate(self.bufs) if b in self.earlybufs})
+
+        # run early AST (with reduce)
+        self.ast_parse(reduceop, accs, self.acc_offsets(self.full_buf_index), loaded_buffers, reduce_acc=accs[reduceop])
+
+      # end the reduce loop
+      self.load_cache.clear()
+
+      # end the local loop, do the local reduce
+      if self.group_for_reduces:
+        fake_global_idxs = [x*0 for x in global_idxs]
+        stores = self.global_store(-1, fake_global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, accs[reduceop])  # store accumulators
+        barrier = self.uops.add(UOps.BARRIER, None, tuple(stores))
+        if self.opts.has_local:
+          fake_idxs = [NumNode(0)]*len(self.sts[-1].shape)
+          fake_idxs[self.global_dims+self.local_dims:self.global_dims+len(local_idxs)] = local_idxs[self.local_dims:]
+          if_cond: UOp = create_lt_node(self.sts[-1].expr_idxs(fake_idxs)[0], 1).render(self.render_ops, self)
+          barrier = self.uops.add(UOps.IF, None, (if_cond, barrier))
+
+        # create new late reduce local loops and replace local_idxs that have been used
+        end_local_idxs = [Variable(f"tidx{i}", 0, self.full_shape[i]-1 if i >= self.first_reduce and i not in self.upcast_in_mid_reduce_axes else 0) for i in range(0, self.first_reduce+self.group_for_reduces)]  # noqa: E501
+        local_idxs = local_idxs[:self.local_dims] + end_local_idxs[self.global_dims + self.local_dims:]
+
+        # if any group_for_reduce items aren't reduces, upcast them here
+        for j in self.upcast_in_mid_reduce_axes:
+          self.reshape_and_permute(None, [i for i in range(self.shape_len) if i != j] + [j])
+          self.upcast()
+          self.group_for_reduces -= 1
+          local_idxs = local_idxs[:-1]
+          end_local_idxs = end_local_idxs[:-1]
+          # regenerate upcast_idxs
+          upcast_idxs[:] = [Variable(f"_uidx{i}", 0, s-1) for i, s in enumerate(self.output_shape[self.shape_len-self.upcasted:])]
+
+        # NOTE: this structure is the same as the reduce op above
+
+        # late reduce loop
+        loop_ctx = self.render_loop(end_local_idxs, 3)
+
+        # define late accumulator
+        accs[reduceop] = self.global_load(0, fake_global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, acc=reduceop, loop_ctx=loop_ctx)
+
+        # load localbufs
+        loaded_buffers[self.bufs[-1]] = self.global_load(-1, fake_global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, barrier=barrier)
+
+        # there's no AST here (and there's no shape for the reduce LazyOp)
+        self.ast_parse(LazyOp(reduceop.op, (LazyOp(BufferOps.LOAD, (), self.bufs[-1]),)),\
+                       accs, self.acc_offsets(-1), loaded_buffers, reduce_acc=accs[reduceop])
+
+        # end the late reduce loop
+        self.load_cache.clear()
+
+      # all local indices which were used for group_for_reduce are not valid any more and should be replaced with fake NumNode(0), since they have
+      # been rewritten with fake end_local_idxs.
+      local_idxs[:] = local_idxs[:self.local_dims] + [NumNode(0) for _ in range(self.group_for_reduces)]
+      return accs[reduceop]
 
     # load latebufs
     loaded_buffers.update({b:self.global_load(i, global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs) \
