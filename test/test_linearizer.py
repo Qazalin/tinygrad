@@ -435,9 +435,11 @@ class TestLinearizer(unittest.TestCase):
       d, w = Tensor.rand(4, 8, 8, 8, dtype=tensor_dtype), Tensor.rand(8, 8, 2, 2, dtype=tensor_dtype)
       helper_arg_acc_dtype(d.conv2d(w, acc_dtype=acc_dtype), expected_dtype)
 
+  def test_tensor_cores_raise(self):
+    raise Exception(Device.DEFAULT, Device[Device.DEFAULT].renderer, Device[Device.DEFAULT].renderer.tensor_cores, )
+
   @unittest.skipUnless(Device[Device.DEFAULT].renderer.tensor_cores, "test requires tensor cores")
   def test_tensor_cores(self):
-    raise Exception("i ran")
     for tc in Device[Device.DEFAULT].renderer.tensor_cores:
       if getenv("EMULATE_CUDA") and (tc.dtype_in == dtypes.bfloat16 or tc.dtype_out == dtypes.bfloat16): continue
       helper_tc_allclose(tc.dims[0], tc.dims[1], tc.dims[2], tc.dtype_in, tc.dtype_out, axis=0, tc_opt=0)
