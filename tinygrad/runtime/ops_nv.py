@@ -70,7 +70,6 @@ def nvdata64_le(data): return (data & 0xFFFFFFFF, data >> 32)
 class NVCompiler(Compiler):
   def __init__(self, arch:str):
     self.arch = arch
-    #NVCompiler.compiler_opts = replace(NVCompiler.compiler_opts, has_tensor_cores=int(arch[3:]) >= 80)
     cuda_check(cuda.nvrtcVersion((nvrtcMajor := ctypes.c_int()), (nvrtcMinor := ctypes.c_int())))
     self.compile_options = [f'--gpu-architecture={arch}', "-I/usr/local/cuda/include", "-I/usr/include", "-I/opt/cuda/include/"]
     if (nvrtcMajor.value, nvrtcMinor.value) >= (12, 4): self.compile_options.append("--minimal")
@@ -558,7 +557,7 @@ class NVDevice(Compiled):
     self.kernargs_page: nv_gpu.UVM_MAP_EXTERNAL_ALLOCATION_PARAMS = self._gpu_alloc(0x4000000, map_to_cpu=True)
     self.kernargs_ptr: int = self.kernargs_page.base
 
-    self.arch: str = "sm_89" if not MOCKGPU else "sm_35" # TODO: fix
+    self.arch: str = "sm_89" #if not MOCKGPU else "sm_35" # TODO: fix
 
     from tinygrad.runtime.graph.hcq import HCQGraph
     super().__init__(device, NVAllocator(self), NVRenderer(self.arch), CUDACompiler(self.arch) if MOCKGPU else NVCompiler(self.arch),
