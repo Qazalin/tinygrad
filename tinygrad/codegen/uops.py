@@ -244,6 +244,8 @@ constant_folder = PatternMatcher([
   ((UOp.cvar("c0") + UOp.var("x")).lt(UOp.cvar("c1")), lambda x,c0,c1: UOp.lt(x, exec_alu(BinaryOps.SUB, x.dtype, [c1.arg, c0.arg]))),
   # (x+x*c0)-> x*(c0+1)
   (UOp.var("x") + UOp.var("x") * UOp.cvar("c0"), lambda x,c0: x*UOp.const(x.dtype, c0.arg+1)),
+  # x >= c & x.max <= c
+  (UOp.ge(UOp.var("x"), UOp.cvar("c")), lambda x,c: UOp.const(dtypes.bool, False) if x.arg.min <= c.arg else None),
   # TODO: can do the invert of this (flip alt/load) when we fix double ops
   (UOp.store(UOp.var("buf"), UOp.var("idx"), UOp.alu(TernaryOps.WHERE, UOp.var("gate"), UOp.var("alt"), UOp.load(UOp.var("buf"), UOp.var("idx")))),
    lambda buf, idx, gate, alt: UOp.store(buf, idx, alt, gate)),

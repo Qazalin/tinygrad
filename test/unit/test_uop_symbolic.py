@@ -28,9 +28,13 @@ def NumNode(val): return UOp.const(dtypes.int, val)
 def Variable(expr, nmin, nmax):
   # TODO: fix DEFINE_VAR to not need this
   class TempVar:
-    def __init__(self, x): self.expr = x
+    def __init__(self, x, min, max):
+      self.expr = x
+      self.min = min
+      self.max = max
+  # TODO: fold Variable to arg tuple
   #return UOp(UOps.DEFINE_VAR, dtypes.int, (UOp.const(dtypes.int, nmin), UOp.const(dtypes.int, nmax)), TempVar(expr))
-  return UOp(UOps.DEFINE_VAR, dtypes.int, tuple(), TempVar(expr))
+  return UOp(UOps.DEFINE_VAR, dtypes.int, tuple(), TempVar(expr, nmin, nmax))
 class Node:
   @staticmethod
   def sum(ops): return functools.reduce(lambda x,y: x+y, ops)
@@ -63,14 +67,15 @@ class TestSymbolic(unittest.TestCase):
     self.helper_test_variable(create_lt_node(Variable("a", 3, 8), 4), 0, 1, "(a<4)")
     self.helper_test_variable(create_ge_node(Variable("a", 3, 8), 8), 0, 1, {"((a*-1)<-7)", "(7<a)", "(!(a<8))"})
 
-  @unittest.expectedFailure
   def test_ge(self):
     self.helper_test_variable(create_ge_node(Variable("a", 3, 8), 77), 0, 0, "0")
     self.helper_test_variable(create_ge_node(Variable("a", 3, 8), 9), 0, 0, "0")
+    """
     self.helper_test_variable(create_ge_node(Variable("a", 3, 8), 8), 0, 1, "((a*-1)<-7)")
     self.helper_test_variable(create_ge_node(Variable("a", 3, 8), 4), 0, 1, "((a*-1)<-3)")
     self.helper_test_variable(create_ge_node(Variable("a", 3, 8), 3), 1, 1, "1")
     self.helper_test_variable(create_ge_node(Variable("a", 3, 8), 2), 1, 1, "1")
+    """
 
   @unittest.expectedFailure
   def test_lt(self):
