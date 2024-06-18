@@ -4,7 +4,7 @@ from tinygrad.codegen.kernel import Kernel
 from tinygrad.codegen.linearizer import get_grouped_dims
 from tinygrad.codegen.uops import UOp, UOpGraph, UOps
 from tinygrad.dtype import PtrDType, dtypes
-from tinygrad.helpers import colored, to_function_name
+from tinygrad.helpers import colored, getenv, to_function_name
 from tinygrad.ops import BufferOps, LazyOp, MemBuffer
 from tinygrad.renderer import Program
 from tinygrad.shape.shapetracker import ShapeTracker
@@ -69,4 +69,5 @@ class Lowerer(Kernel):
   def to_program(self) -> Program:
     self.linearize()
     src = self.opts.render(to_function_name(self.name), self.uops)
+    if getenv("PRINT_KERNEL"): print(src)
     return Program(self.name, src, self.opts.device, self.global_size, self.local_size, self.uops, 0, 0)
