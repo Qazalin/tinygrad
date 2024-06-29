@@ -348,6 +348,11 @@ jobs:
     - name: Run process replay tests
       if: env.RUN_PROCESS_REPLAY == '1'
       run: cp test/external/process_replay/process_replay.py ./process_replay.py && git fetch origin master && git checkout origin/master && PYTHONPATH=. python3 process_replay.py
+    - name: Upload cache as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: cache.db
+        path: ~/Library/Caches/tinygrad/cache.db
 
 #  testwebgl:
 #    name: WebGL Tests
@@ -541,6 +546,11 @@ jobs:
       - name: Run process replay tests
         if: env.RUN_PROCESS_REPLAY == '1'
         run: cp test/external/process_replay/process_replay.py ./process_replay.py && git fetch origin master && git checkout origin/master && PYTHONPATH=. python3 process_replay.py
+      - name: Upload cache as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cache.db
+          path: ~/.cache/tinygrad/cache.db
 
   #testunicorn:
   #  name: ARM64 unicorn Test
