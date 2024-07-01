@@ -293,6 +293,9 @@ def get_children_dfs(u:UOp, children:Dict[UOp, List[UOp]], in_degree:Dict[UOp, i
   in_degree[u] = len(u.src)
 
 def graph_rewrite(sink:UOp, pm:PatternMatcher) -> UOp:
+  if getenv("EGG", 1):
+    from extra.backends.ops_egg import egg_graph_rewrite
+    return egg_graph_rewrite(sink)
   nodes: Dict[Tuple, UOp] = {}
   replace: Dict[UOp, UOp] = {}
   def __inner_rewrite(n:UOp) -> UOp:
