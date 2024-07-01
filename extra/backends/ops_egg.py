@@ -2,7 +2,7 @@ from dataclasses import replace
 import ctypes, pickle
 from typing import Dict, Tuple
 from tinygrad.codegen.uops import UOp, UOps
-from tinygrad.dtype import DTYPES_DICT
+from tinygrad.dtype import DTYPES_DICT, DType, dtypes
 
 class ByteArray(ctypes.Structure): _fields_ = [("ptr", ctypes.POINTER(ctypes.c_char)), ("len", ctypes.c_size_t)]
 lib = ctypes.CDLL("/Users/qazal/code/egg/target/release/libdev.dylib")
@@ -23,12 +23,15 @@ def _serialize(uop) -> UOp:
   return uop
 
 def _deserialize(uop_dict, replace_nodes:Dict[UOp, UOp], nodes:Dict[Tuple, UOp]):
-  dt = DTYPES_DICT[uop_dict["dtype"].replace("dtypes.", "")]
+  dt = DTYPES_DICT[uop_dict["dtype"].replace("dtypes.", "")] if uop_dict["dtype"] is not None else None
   op = UOps[uop_dict["op"]]
-  n = UOp(op, dt, tuple(_deserialize(x, replace_nodes, nodes) for x in uop_dict["src"]), uop_dict["arg"])
+  arg = uop_dict["arg"]
+  if op is UOps.CONST: arg = _to_type(dt)(arg)
+  n = UOp(op, dt, tuple(_deserialize(x, replace_nodes, nodes) for x in uop_dict["src"]), arg)
   key = (n.op, n.dtype, tuple(replace_nodes.get(x, x) for x in n.src), n.arg)
   if found:=nodes.get(key): ret = replace_nodes[n] = found
   else: ret = replace_nodes[n] = nodes[key] = UOp(*key)
   return ret
 
 def _as_str(x): return str(x) if x is not None else None
+def _to_type(dt:DType): return int if dtypes.is_int(dt) else float if dtypes.is_float(dt) else bool 
