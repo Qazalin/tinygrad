@@ -4,7 +4,7 @@ from tinygrad.codegen.uops import UOp, UOps
 from tinygrad.dtype import DTYPES_DICT
 
 class ByteArray(ctypes.Structure): _fields_ = [("ptr", ctypes.POINTER(ctypes.c_char)), ("len", ctypes.c_size_t)]
-lib = ctypes.CDLL("/Users/qazal/code/dev/target/release/libdev.dylib")
+lib = ctypes.CDLL("/Users/qazal/code/egg/target/release/libdev.dylib")
 lib.rewrite_uops.argtypes = [ctypes.POINTER(ctypes.c_ubyte), ctypes.c_int]
 lib.rewrite_uops.restype = ByteArray
 
