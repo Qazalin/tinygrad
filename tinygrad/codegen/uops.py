@@ -362,10 +362,6 @@ class UOpGraph:
 
     # do graph rewrite
 
-    if getenv("EGG", 1):
-      from extra.backends.ops_egg import egg_graph_rewrite
-      egg_graph_rewrite(sink)
-
     sink = self.graph_rewrite(sink, constant_folder)
     if extra_pm: sink = self.graph_rewrite(sink, PatternMatcher(constant_folder.patterns+extra_pm.patterns))
 
