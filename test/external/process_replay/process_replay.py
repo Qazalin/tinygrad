@@ -54,6 +54,7 @@ def diff_kernel(offset:int, ref_schedule:List[LazyOp], kernel_changed):
     if COMPARE_SCHEDULE and ast not in ref_schedule:
       with Context(**{k:v for k,v in ctx.items() if k in ContextVar._cache and k != "DEBUG"}):
         print(opts.render(name, Kernel(ast, opts=opts).linearize().uops))
+      if ASSERT_DIFF: raise AssertionError("schedule changed")
       continue
     try: assert compare_src == good_src
     except AssertionError as e:
@@ -118,9 +119,10 @@ def process_replay():
 
   # *** schedule diff
   ref_schedule = multiprocessing.Manager().list()
-  if COMPARE_SCHEDULE:
+  if True:
     logging.info("fetching process replay reference")
-    ref_runs = requests.get(f"{BASE_URL}/actions/workflows/benchmark.yml/runs?per_page=1&branch=master&status=success", headers=GH_HEADERS).json()
+    ref_runs = requests.get(f"{BASE_URL}/actions/workflows/test.yml/runs?per_page=1&branch=master&status=success", headers=GH_HEADERS).json()
+    print(ref_runs)
     download_artifact(ref_runs['workflow_runs'][0]['id'], f"process_replay_{os.getenv('BACKEND'), Device.DEFAULT}.db", f"{TEMP_DIR}/schedule")
     ref_conn = sqlite3.connect(f"{TEMP_DIR}/schedule/process_replay.db")
     ref_table_name = ref_conn.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchone()[0]
@@ -153,6 +155,4 @@ if __name__ == "__main__":
   if SKIP_PROCESS_REPLAY:
     logging.info("skipping process replay.")
     exit(0)
-  try: process_replay()
-  except Exception as e:
-    if ASSERT_DIFF: raise e
+  process_replay()

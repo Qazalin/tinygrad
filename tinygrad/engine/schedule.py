@@ -82,7 +82,7 @@ def _recursive_lazyop(buf:LazyBuffer, inputs:Dict[LazyBuffer, int], outputs:Tupl
 
   # otherwise we fuse it like normal
   return cache.setdefault((buf, st), LazyOp(cast(Op,buf.op), tuple(_recursive_lazyop(x, inputs, outputs, var_vals, st, realizes, assign_targets, \
-      reduce_info, cache) for x in buf.srcs), arg))
+      reduce_info, cache) for x in buf.srcs), arg if arg is not None else False))
 
 def _permute_reduce(input_st:ShapeTracker, axis:Tuple[int, ...]) -> Tuple[ShapeTracker, Tuple[sint, ...]]:
   permute_axis = tuple(i for i in range(len(input_st.shape)) if i not in axis) + axis
