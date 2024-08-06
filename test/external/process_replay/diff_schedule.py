@@ -6,7 +6,7 @@ from tinygrad.engine.schedule import ScheduleItem
 from tinygrad.helpers import Context, colored
 from tinygrad.lazy import LazyBuffer
 from tinygrad.ops import LazyOp
-from tinygrad.engine.realize import lower_schedule_item
+from tinygrad.engine.realize import CompiledRunner, lower_schedule_item
 
 def diff_schedule(s):
   si_for_buf: DefaultDict[LazyBuffer, List[ScheduleItem]] = defaultdict(list)
@@ -24,6 +24,7 @@ def diff_schedule(s):
     #print(ocdiff.console_diff(render(ast[0]), render(ast[1])))
     ei0 = lower_schedule_item(si[0])
     ei1 = lower_schedule_item(si[1])
+    assert isinstance(ei0.prg, CompiledRunner) and isinstance(ei1.prg, CompiledRunner)
     diff = list(difflib.unified_diff(ei0.prg.p.src.splitlines(), ei1.prg.p.src.splitlines()))
     unified_diff = "\n".join(colored(line, "red" if line.startswith("-") else "green" if line.startswith("+") else None) for line in diff)
     print(unified_diff)
