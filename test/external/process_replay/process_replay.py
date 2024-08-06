@@ -54,6 +54,7 @@ def diff_kernel(offset:int, ref_schedule:List[LazyOp], kernel_changed):
     if COMPARE_SCHEDULE and ast not in ref_schedule:
       with Context(**{k:v for k,v in ctx.items() if k in ContextVar._cache and k != "DEBUG"}):
         print(opts.render(name, Kernel(ast, opts=opts).linearize().uops))
+      if ASSERT_DIFF: raise AssertionError("schedule changed")
       continue
     try: assert compare_src == good_src
     except AssertionError as e:
