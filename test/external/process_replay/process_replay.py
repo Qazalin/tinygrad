@@ -121,7 +121,8 @@ def process_replay():
   ref_schedule = multiprocessing.Manager().list()
   if True:
     logging.info("fetching process replay reference")
-    ref_runs = requests.get(f"{BASE_URL}/actions/workflows/benchmark.yml/runs?per_page=1&branch=master&status=success", headers=GH_HEADERS).json()
+    ref_runs = requests.get(f"{BASE_URL}/actions/workflows/test.yml/runs?per_page=1&branch=master&status=success", headers=GH_HEADERS).json()
+    print(ref_runs)
     download_artifact(ref_runs['workflow_runs'][0]['id'], f"process_replay_{os.getenv('BACKEND'), Device.DEFAULT}.db", f"{TEMP_DIR}/schedule")
     ref_conn = sqlite3.connect(f"{TEMP_DIR}/schedule/process_replay.db")
     ref_table_name = ref_conn.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchone()[0]
