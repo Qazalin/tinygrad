@@ -118,7 +118,7 @@ def process_replay():
 
   # *** schedule diff
   ref_schedule = multiprocessing.Manager().list()
-  if COMPARE_SCHEDULE:
+  if True:
     logging.info("fetching process replay reference")
     ref_runs = requests.get(f"{BASE_URL}/actions/workflows/benchmark.yml/runs?per_page=1&branch=master&status=success", headers=GH_HEADERS).json()
     download_artifact(ref_runs['workflow_runs'][0]['id'], f"process_replay_{os.getenv('BACKEND'), Device.DEFAULT}.db", f"{TEMP_DIR}/schedule")
