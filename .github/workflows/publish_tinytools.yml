@@ -1,0 +1,36 @@
+name: Publish tinygrad-tools
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.x'
+    - name: ghr upstream
+      run: |
+        git config --global user.email "github-actions@github.com"
+        git config --global user.name "github-actions"
+        git remote add tinygrad-upstream https://github.com/tinygrad/tinygrad.git
+        git fetch tinygrad-upstream master
+        git reset --hard tinygrad-upstream/master
+        git remote add qazalin https://github.com/Qazalin/tinygrad.git
+        git fetch qazalin tool
+        git checkout qazalin/tool -- update_version.py
+        python3 update_version.py
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install setuptools wheel twine
+    - name: Build and publish
+      env:
+        TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
+        TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+      run: |
+        python setup.py sdist bdist_wheel
+        twine upload dist/*
