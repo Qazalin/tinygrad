@@ -6,6 +6,7 @@ runs:
     - name: Run process replay tests
       shell: bash
       run: |
+        git fetch origin ${{ github.event.pull_request.head.sha }}
         export PR_TITLE=$(jq -r .pull_request.title "$GITHUB_EVENT_PATH")
         export COMMIT_MESSAGE=$(git show -s --format=%B ${{ github.event.pull_request.head.sha }})
         export CURRENT_HEAD=$(git rev-parse HEAD)
