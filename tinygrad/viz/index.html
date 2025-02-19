@@ -4,12 +4,13 @@
   <title>tinygrad viz</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" href="data:;base64,iVBORw0KGgo=">
-  <script src="assets/d3js.org/d3.v5.min.js" charset="utf-8"></script>
-  <script src="assets/dagrejs.github.io/project/dagre-d3/latest/dagre-d3.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
   <link rel="stylesheet" href="assets/cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/default.min.css">
   <script src="assets/cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js"></script>
   <script src="assets/cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/languages/python.min.js"></script>
   <script src="assets/cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/languages/cpp.min.js"></script>
+  <script src="http://localhost:35729/livereload.js"></script>
   <link rel="stylesheet" href="assets/unpkg.com/@highlightjs/cdn-assets@11.10.0/styles/tokyo-night-dark.min.css" />
   <style>
   * {
@@ -234,50 +235,8 @@
   }));
 
   // **** D3
-  function recenterRects(svg, zoom) {
-    const svgBounds = svg.node().getBoundingClientRect();
-    for (const rect of svg.node().querySelectorAll("rect")) {
-      const rectBounds = rect.getBoundingClientRect();
-      const outOfBounds = rectBounds.top < svgBounds.top || rectBounds.left < svgBounds.left ||
-        rectBounds.bottom > svgBounds.bottom || rectBounds.right > svgBounds.right;
-      // if there's at least one rect in view we don't do anything
-      if (!outOfBounds) return;
-    }
-    svg.call(zoom.transform, d3.zoomIdentity)
-  }
   function renderGraph(graph, additions) {
-    const g = new dagreD3.graphlib.Graph({ compound: true }).setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
-    g.setNode("addition", {label: "", clusterLabelPos: "top", style: additions.length !== 0 ? "fill: rgba(26, 27, 38, 0.5);" : "display: none;"});
-    for (const [k,u] of Object.entries(graph)) {
-      let node = {label: u[0], labelType: "text", style: `fill: ${u[2]};`};
-      // for PROGRAM UOp we render the node with a code block
-      if (u[0].includes("PROGRAM")) {
-        const [name, ...rest] = u[0].split("\n");
-        const label = Object.assign(document.createElement("div"));
-        label.appendChild(Object.assign(document.createElement("p"), {innerText: name, className: "label", style: "margin-bottom: 2px" }))
-        label.appendChild(highlightedCodeBlock(rest.join("\n"), "cpp", true));
-        node = {label, labelType: "html", style: `fill: ${u[2]}`};
-      }
-      g.setNode(k, node);
-      for (const src of u[1]) {
-        g.setEdge(src, k, {curve: d3.curveBasis})
-      }
-      if (additions.includes(parseInt(k))) {
-        g.setParent(k, "addition");
-      }
-    }
-    const svg = d3.select("#graph-svg");
-    const inner = svg.select("g");
-    var zoom = d3.zoom()
-      .scaleExtent([0.05, 2])
-      .on("zoom", () => {
-        const transform = d3.event.transform;
-        inner.attr("transform", transform);
-      });
-    recenterRects(svg, zoom);
-    svg.call(zoom);
-    const render = new dagreD3.render();
-    render(inner, g);
+    console.log(graph);
   }
 
   // **** extra helpers
@@ -304,7 +263,7 @@
   var cache = {};
   var kernels = null;
   var currentUOp = 0;
-  var currentKernel = -1;
+  var currentKernel = 0;
   var currentRewrite = 0;
   var expandKernel = true;
   const evtSources = [];
@@ -313,7 +272,7 @@
     // ***** LHS kernels list
     if (kernels == null) {
       kernels = await (await fetch("/kernels")).json();
-      currentKernel = -1;
+      currentKernel = 0;
     }
     const kernelListParent = document.querySelector(".container.kernel-list-parent");
     const kernelList = document.querySelector(".container.kernel-list");
