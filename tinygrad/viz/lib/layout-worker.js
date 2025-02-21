@@ -1,4 +1,4 @@
-importScripts("https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js")
+importScripts("/assets/cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js")
 
 const canvas = new OffscreenCanvas(0, 0);
 const ctx = canvas.getContext('2d');
@@ -18,12 +18,15 @@ onmessage = (e) => {
   const { graph, additions } = e.data;
   const g = new dagre.graphlib.Graph({ compound: true });
   g.setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
-  for (const [k,u] of Object.entries(graph)) {
-    // adjust the node width by the label dims + add padding
-    const [labelWidth, labelHeight] = getTextDims(u[0]);
-    g.setNode(k, { id: k, label: u[0], color: u[2], width: labelWidth+20, height: labelHeight+30 });
-    for (const src of u[1]) g.setEdge(src, k);
+  for (const [k,v] of Object.entries(graph)) {
+    const [label, parents, color] = v;
+    // calculate label dims + add padding
+    const [labelWidth, labelHeight] = getTextDims(label);
+    g.setNode(k, { label, color, width:labelWidth+20, height:labelHeight+30 });
+    for (const s of src) g.setEdge(s, k);
   }
+  postMessage({ event:"update-progress", payload:"Created graph with ${g.nodes().length} nodes and ${g.edges().length} edges" });
   dagre.layout(g);
-  postMessage(dagre.graphlib.json.write(g))
+  postMessage({ event:"set-graph", payload:dagre.graphlib.json.write(g) });
+  self.close();
 }

@@ -1,8 +1,14 @@
+const pendingWorkers = new Set();
 window.renderGraph = (graph, additions) => {
+  for (w of pendingWorkers) w.terminate();
+  pendingWorkers.clear();
   const worker = new Worker("/lib/layout-worker.js");
+  pendingWorkers.add(worker);
   worker.postMessage({graph, additions})
   worker.onmessage = (e) => {
+    console.log("hi!");
     paintGraph(e.data);
+    pendingWorkers.delete(worker);
   };
 }
 
