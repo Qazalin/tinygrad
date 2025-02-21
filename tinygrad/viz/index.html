@@ -4,7 +4,9 @@
   <title>tinygrad viz</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" href="data:;base64,iVBORw0KGgo=">
-  <script type="module" src="lib/graph.js"></script>
+  <script src="/assets/d3js.org/d3.v5.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+  <script src="lib/graph.js"></script>
   <link rel="stylesheet" href="assets/cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/default.min.css">
   <script src="assets/cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js"></script>
   <script src="assets/cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/languages/python.min.js"></script>
@@ -209,7 +211,10 @@
     <div class="container kernel-list-parent"><div class="container kernel-list"></div></div>
     <div class="graph">
       <svg id="graph-svg">
-        <g id="render"></g>
+        <g id="render">
+          <g id="nodes"></g>
+          <g id="edges"></g>
+        </g>
       </svg>
     </div>
     <div class="container metadata"></div>
