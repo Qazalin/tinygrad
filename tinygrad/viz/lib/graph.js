@@ -1,8 +1,8 @@
 import "/assets/d3js.org/d3.v5.min.js";
-import "/assets/dagrejs.github.io/project/dagre-d3/latest/dagre-d3.min.js";
+import "https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js";
 
 window.renderGraph = function(graph, additions) {
-  const g = new dagreD3.graphlib.Graph({ compound: true }).setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
+  const g = new dagre.graphlib.Graph({ compound: true }).setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
   g.setNode("addition", {label: "", clusterLabelPos: "top", style: additions.length !== 0 ? "fill: rgba(26, 27, 38, 0.5);" : "display: none;"});
   for (const [k,u] of Object.entries(graph)) {
     let node = {label: u[0], labelType: "text", style: `fill: ${u[2]};`};
@@ -31,6 +31,5 @@ window.renderGraph = function(graph, additions) {
       inner.attr("transform", transform);
     });
   svg.call(zoom);
-  const render = new dagreD3.render();
-  render(inner, g);
+  // render(inner, g);
 }
