@@ -2,22 +2,15 @@ function applyClass(dom, classFn, otherClasses) {
   if (classFn) dom.attr("class", classFn).attr("class", otherClasses + " " + dom.attr("class"));
 }
 
-function addTextLabel(root, node) {
-  const domNode = root.append("text");
-  const lines = node.label.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    domNode.append("tspan").attr("xml:space", "preserve").attr("dy", "1em").attr("x", "1").text(lines[i]);
-  }
-  return domNode;
-}
-
-function addLabel(root, node, location) {
-  const label = node.label;
-  const labelSvg = root.append("g");
-  addTextLabel(labelSvg, node);
-  const labelBBox = labelSvg.node().getBBox();
-  labelSvg.attr("transform", "translate("+(-labelBBox.width/2)+","+(-labelBBox.height/2)+")");
-  return labelSvg;
+function addLabel(root, label) {
+  const labelGroup = root.append("g");
+  const labelText = labelGroup.append("text");
+  const lines = label.split("\n");
+  for (let i = 0; i < lines.length; i++) labelText.append("tspan").attr("xml:space", "preserve").attr("dy", "1em").attr("x", "1").text(lines[i]);
+  // recenter text
+  const { width, height } = labelGroup.node().getBBox();
+  labelText.attr("transform", `translate(${-width/2}, ${-height/2})`);
+  return labelGroup;
 }
 
 function createNodes(selection, g) {
@@ -33,14 +26,12 @@ function createNodes(selection, g) {
     const node = g.node(v);
     const thisGroup = d3.select(this);
     applyClass(thisGroup, node["class"], `${thisGroup.classed("update") ? "update " : ""}node`);
-    // Remove any existing labels and create a new label group
     thisGroup.select("g.label").remove();
     const labelGroup = thisGroup.append("g").attr("class", "label");
-    const labelDom = addLabel(labelGroup, node);
+    const labelDom = addLabel(labelGroup, node.label);
     // Get the bounding box dimensions of the label
     const labelBBox = labelDom.node().getBBox();
     const bbox = { width: labelBBox.width, height: labelBBox.height };
-    node.elem = this; // Store reference to the element
     // Adjust dimensions for padding
     const padding = 10;
     bbox.width += padding*2;
@@ -50,12 +41,11 @@ function createNodes(selection, g) {
     const rect = d3.select(this).insert("rect", ":first-child").attr("x", -bbox.width / 2).attr("y", -bbox.height / 2).attr("width", bbox.width).attr("height", bbox.height).attr("fill", node.color);
     // Update node dimensions with the shape's bounding box
     const { width, height } = rect.node().getBBox();
+    // things that access node
     node.width = width;
     node.height = height;
+    node.elem = this;
   });
-  // Handle exiting elements (if any)
-  const exitSelection = svgNodes.exit ? svgNodes.exit() : svgNodes.selectAll(null); // empty selection fallback
-  exitSelection.style("opacity", 0).remove();
   return svgNodes;
 }
 
