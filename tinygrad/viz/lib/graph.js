@@ -42,15 +42,12 @@ function createNodes(selection, g) {
     const bbox = { width: labelBBox.width, height: labelBBox.height };
     node.elem = this; // Store reference to the element
     // Adjust dimensions for padding
-    bbox.width += node.paddingLeft + node.paddingRight;
-    bbox.height += node.paddingTop + node.paddingBottom;
+    const padding = 10;
+    bbox.width += padding*2;
+    bbox.height += padding*2;
     // Center the label considering padding
-    labelGroup.attr("transform", `translate(${(node.paddingLeft - node.paddingRight) / 2}, ${(node.paddingTop - node.paddingBottom) / 2})`);
-    // Remove any existing shape and draw the new one
-    const root = d3.select(this);
-    root.select(".label-container").remove();
-    const rect = root.insert("rect", ":first-child").attr("x", -bbox.width / 2).attr("y", -bbox.height / 2)
-      .attr("width", bbox.width).attr("height", bbox.height).attr("fill", node.color);
+    labelGroup.attr("transform", `translate(0, 0)`);
+    const rect = d3.select(this).insert("rect", ":first-child").attr("x", -bbox.width / 2).attr("y", -bbox.height / 2).attr("width", bbox.width).attr("height", bbox.height).attr("fill", node.color);
     // Update node dimensions with the shape's bounding box
     const { width, height } = rect.node().getBBox();
     node.width = width;
@@ -67,8 +64,7 @@ window.renderGraph = (graph, additions) => {
   const g = new dagre.graphlib.Graph({ compound: true });
   g.setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
   for (const [k,u] of Object.entries(graph)) {
-    let node = { label: u[0], color: u[2], paddingLeft: 10, paddingRight: 10, paddingTop: 10, paddingBottom: 10 };
-    g.setNode(k, node);
+    g.setNode(k, { id: k, label: u[0], color: u[2] });
     for (const src of u[1]) g.setEdge(src, k);
   }
   const svg = d3.select("#graph-svg");
