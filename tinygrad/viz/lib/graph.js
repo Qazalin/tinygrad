@@ -1,41 +1,14 @@
-function applyClass(dom, classFn, otherClasses) {
-  if (classFn) dom.attr("class", classFn).attr("class", otherClasses + " " + dom.attr("class"));
-}
-
-function addLabel(root, label) {
-  const labelGroup = root.append("g");
-  const labelText = labelGroup.append("text");
-  const lines = label.split("\n");
-  for (let i = 0; i < lines.length; i++) labelText.append("tspan").attr("xml:space", "preserve").attr("dy", "1em").attr("x", "1").text(lines[i]);
-  // recenter text
-  const { width, height } = labelGroup.node().getBBox();
-  labelText.attr("transform", `translate(${-width/2}, ${-height/2})`);
-  return labelGroup;
-}
-
-function createNodes(selection, g) {
-  // Bind data to existing nodes and mark them as updated
-  let svgNodes = selection.selectAll("g.node").data(g.nodes(), (v) => v).classed("update", true);
-  svgNodes.exit().remove();
-  svgNodes.enter().append("g").attr("class", "node").style("opacity", 0);
-  svgNodes = selection.selectAll("g.node");
-  svgNodes.each(function(v) {
-    const node = g.node(v);
-    const thisGroup = d3.select(this);
-    applyClass(thisGroup, node["class"], `${thisGroup.classed("update") ? "update " : ""}node`);
-    thisGroup.select("g.label").remove();
-    const labelGroup = thisGroup.append("g").attr("class", "label");
-    const labelDom = addLabel(labelGroup, node.label);
-    // adjust the node width by the label dims + add padding
-    const { width: labelWidth, height: labelHeight } = labelDom.node().getBBox();
-    const padding = 20;
-    const [w, h] = [labelWidth+padding, labelHeight+padding];
-    const rect = d3.select(this).insert("rect", ":first-child").attr("x", -w/2).attr("y", -h/2).attr("width", w).attr("height", h).attr("fill", node.color);
-    node.width = w;
-    node.height = h;
-    node.elem = this;
-  });
-  return svgNodes;
+const canvas = new OffscreenCanvas(0, 0);
+const ctx = canvas.getContext('2d');
+ctx.font = "14px sans-serif";
+function getTextDims(text) {
+  let [maxWidth, height] = [0, 0];
+  for (l of text.split("\n")) {
+    const { width, actualBoundingBoxAscent, actualBoundingBoxDescent } = ctx.measureText(l);
+    if (width > maxWidth) maxWidth = width;
+    height += actualBoundingBoxAscent+actualBoundingBoxDescent;
+  }
+  return [maxWidth, height];
 }
 
 window.renderGraph = (graph, additions) => {
@@ -43,25 +16,63 @@ window.renderGraph = (graph, additions) => {
   const g = new dagre.graphlib.Graph({ compound: true });
   g.setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
   for (const [k,u] of Object.entries(graph)) {
-    g.setNode(k, { id: k, label: u[0], color: u[2] });
+    // adjust the node width by the label dims + add padding
+    const [labelWidth, labelHeight] = getTextDims(u[0]);
+    g.setNode(k, { id: k, label: u[0], color: u[2], width: labelWidth+20, height: labelHeight+30 });
     for (const src of u[1]) g.setEdge(src, k);
   }
+  dagre.layout(g);
+  paintGraph(g);
+  // console.profileEnd('graph.js Profile');
+}
+
+// this has DOM access
+function paintGraph(g) {
   const svg = d3.select("#graph-svg");
   const render = svg.select("#render");
   svg.call(d3.zoom().scaleExtent([0.05, 2]).on("zoom", () => {
     const transform = d3.event.transform;
     render.attr("transform", transform);
   }));
-  const nodes = createNodes(render.select("#nodes"), g);
-  dagre.layout(g);
-  paintGraph(nodes, g);
-  // console.profileEnd('graph.js Profile');
-}
 
-// this has DOM access
-function paintGraph(nodes, g) {
-  const svg = d3.select("#graph-svg");
-  const render = svg.select("#render");
+  function applyClass(dom, classFn, otherClasses) {
+    if (classFn) dom.attr("class", classFn).attr("class", otherClasses + " " + dom.attr("class"));
+  }
+
+  function addLabel(root, label) {
+    const labelGroup = root.append("g");
+    const labelText = labelGroup.append("text");
+    const lines = label.split("\n");
+    for (let i = 0; i < lines.length; i++) labelText.append("tspan").attr("xml:space", "preserve").attr("dy", "1em").attr("x", "1").text(lines[i]);
+    // recenter text
+    const { width, height } = labelGroup.node().getBBox();
+    labelText.attr("transform", `translate(${-width/2}, ${-height/2})`);
+    return labelGroup;
+  }
+
+  function createNodes(selection, g) {
+    // Bind data to existing nodes and mark them as updated
+    let svgNodes = selection.selectAll("g.node").data(g.nodes(), (v) => v).classed("update", true);
+    svgNodes.exit().remove();
+    svgNodes.enter().append("g").attr("class", "node").style("opacity", 0);
+    svgNodes = selection.selectAll("g.node");
+    svgNodes.each(function(v) {
+      const node = g.node(v);
+      // append the label
+      const thisGroup = d3.select(this);
+      applyClass(thisGroup, node["class"], `${thisGroup.classed("update") ? "update " : ""}node`);
+      thisGroup.select("g.label").remove();
+      const labelGroup = thisGroup.append("g").attr("class", "label");
+      const labelDom = addLabel(labelGroup, node.label);
+      // create the rect based on node widths and heights
+      const rect = d3.select(this).insert("rect", ":first-child").attr("width", node.width).attr("height", node.height).attr("fill", node.color)
+        .attr("x", -node.width/2).attr("y", -node.height/2)
+      node.elem = this;
+    });
+    return svgNodes;
+  }
+
+  const nodes = createNodes(render.select("#nodes"), g)
   function positionNodes(selection, g) {
     const created = selection.filter(function() { return !d3.select(this).classed("update") });
     function translate(v) {
