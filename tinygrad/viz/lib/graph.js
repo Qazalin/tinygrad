@@ -16,11 +16,8 @@ function addLabel(root, label) {
 function createNodes(selection, g) {
   // Bind data to existing nodes and mark them as updated
   let svgNodes = selection.selectAll("g.node").data(g.nodes(), (v) => v).classed("update", true);
-  // Remove nodes that no longer have associated data
   svgNodes.exit().remove();
-  // Enter selection: append new <g> elements with "node" class
   svgNodes.enter().append("g").attr("class", "node").style("opacity", 0);
-  // Re-select nodes after the enter selection to ensure updates
   svgNodes = selection.selectAll("g.node");
   svgNodes.each(function(v) {
     const node = g.node(v);
@@ -29,21 +26,13 @@ function createNodes(selection, g) {
     thisGroup.select("g.label").remove();
     const labelGroup = thisGroup.append("g").attr("class", "label");
     const labelDom = addLabel(labelGroup, node.label);
-    // Get the bounding box dimensions of the label
-    const labelBBox = labelDom.node().getBBox();
-    const bbox = { width: labelBBox.width, height: labelBBox.height };
-    // Adjust dimensions for padding
-    const padding = 10;
-    bbox.width += padding*2;
-    bbox.height += padding*2;
-    // Center the label considering padding
-    labelGroup.attr("transform", `translate(0, 0)`);
-    const rect = d3.select(this).insert("rect", ":first-child").attr("x", -bbox.width / 2).attr("y", -bbox.height / 2).attr("width", bbox.width).attr("height", bbox.height).attr("fill", node.color);
-    // Update node dimensions with the shape's bounding box
-    const { width, height } = rect.node().getBBox();
-    // things that access node
-    node.width = width;
-    node.height = height;
+    // adjust the node width by the label dims + add padding
+    const { width: labelWidth, height: labelHeight } = labelDom.node().getBBox();
+    const padding = 20;
+    const [w, h] = [labelWidth+padding, labelHeight+padding];
+    const rect = d3.select(this).insert("rect", ":first-child").attr("x", -w/2).attr("y", -h/2).attr("width", w).attr("height", h).attr("fill", node.color);
+    node.width = w;
+    node.height = h;
     node.elem = this;
   });
   return svgNodes;
