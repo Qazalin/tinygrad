@@ -22,12 +22,13 @@ window.renderGraph = (graph, additions) => {
     for (const src of u[1]) g.setEdge(src, k);
   }
   dagre.layout(g);
-  paintGraph(g);
+  paintGraph(dagre.graphlib.json.write(g));
   // console.profileEnd('graph.js Profile');
 }
 
 // this has DOM access
-function paintGraph(g) {
+function paintGraph(graphJSON) {
+  const g = dagre.graphlib.json.read(graphJSON);
   const svg = d3.select("#graph-svg");
   const render = svg.select("#render");
   svg.call(d3.zoom().scaleExtent([0.05, 2]).on("zoom", () => {
