@@ -37,6 +37,12 @@ def replace_contiguous(ctx:dict[UOp, UOp], alu:UOp):
     if (replace_src:=ctx.get(s, None)) is not None: new_src[i] = replace_src
   if tuple(new_src) != alu.src: return alu.replace(src=tuple(new_src))
 
+def fix_view_copy(device:UOp, v:UOp):
+  # if it's a shrink, do the shrink before the copy with CONTIGUOUS
+  if prod(v.shape) < prod(v.base.shape): return UOp(Ops.COPY, v.dtype, (device, v.contiguous()), False)
+  # otherwise apply VIEW after COPY
+  return UOp(Ops.COPY, v.dtype, (device, v.base), arg=False).view(unwrap(v.st))
+
 sym = symbolic_simple+PatternMatcher([
   # UOp with size 0 is zero
   (UPat(GroupOp.All-{Ops.SINK}, name="root"), lambda root: root.const_like(0) if root.base.st is not None and root.size == 0 \
@@ -53,9 +59,8 @@ sym = symbolic_simple+PatternMatcher([
   # no COPY to same device, except clone (arg is True)
   (UPat(Ops.COPY, src=(UPat(), UPat.var("copyin")), name="copy"),
    lambda copyin,copy: copyin if copyin.device == copy.device and copy.arg is not True else None),
-  # VIEW after COPY
-  (UPat(Ops.COPY, src=(UPat.var("device"), UPat(Ops.VIEW, src=(UPat.var("copyin"),), name="v"))),
-    lambda device,copyin,v: UOp(Ops.COPY, copyin.dtype, (device, copyin), arg=False).view(v.st)),
+  # make view copyin base
+  (UPat(Ops.COPY, src=(UPat.var("device"), UPat(Ops.VIEW, name="v"))), fix_view_copy),
   # remove cast to image when it's already a contiguous image
   (UPat(Ops.CAST, name="cast", src=(UPat(Ops.VIEW, name="vm", src=(UPat(Ops.CONTIGUOUS, name="base"))),)),
    lambda cast,base,vm: base.view(vm.st) if isinstance(cast.dtype, ImageDType) and isinstance(base.dtype, ImageDType) else None),
