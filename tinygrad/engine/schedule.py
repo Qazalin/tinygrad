@@ -379,40 +379,22 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
   # display the cleaned up tensor graph
   if getenv("VIZ"): graph_rewrite(tensor_map[big_sink], PatternMatcher([]), name="View Tensor Graph")
 
-  # do_realize + group_realizes
-  sink = tensor_map[big_sink]
-  realize_map = group_realizes(sink)
-
-  # map tensors to new uops
-  becomes_map: dict[UOp, UOp] = {}
-  ops_metadata: dict[UOp, Metadata] = {}
-  for k,v in tensor_map.items():
-    if k is v or k is big_sink: continue
-    if v.base.op is Ops.CONST:
-      if all_int(v.shape): becomes_map[k] = v
-    # VIEW isn't a valid tensor uop, we need to backtrack to the movement op that created it
-    elif v.op is Ops.VIEW:
-      mop = next(iter(x for x in k.toposort if x.st == v.st and x.base.st is not None and x.base.size == v.base.size))
-      if mop.base is v.base: continue # if base didn't change this view is effectively a NOOP for the tensor itself
-      mop_rep = v.base.reshape(mop.base.shape)
-      mop = mop.substitute({mop.base:UOp(Ops.NOOP)})
-      for m in mop.toposort:
-        if m is m.base: continue
-        assert m.op in GroupOp.Movement, f"base should be clear here {m}"
-        mop_rep = mop_rep._mop(m.op, m.arg)
-      becomes_map[k] = mop_rep
-    else: becomes_map[k] = v
-
+  # get realizes
+  realize_map = group_realizes(tensor_map[big_sink])
   # create kernels
-  if len(realize_map) == 0: return [], {}, becomes_map
-  kernel_map = graph_rewrite_map(sink, create_kernels, ctx=KernelContext(realize_map, ops_metadata), bottom_up=True)
-  sched_sink = kernel_map[sink]
+  kernel_map = graph_rewrite_map(tensor_map[big_sink], create_kernels, ctx=KernelContext(realize_map, {}), bottom_up=True)
+  for k,v in tensor_map.items():
+    if (kernel:=kernel_map.get(v)) is not None and kernel.op is Ops.ASSIGN: tensor_map[k] = kernel.src[0]
+  sched_sink = kernel_map[tensor_map[big_sink]]
   type_verify(list(sched_sink.toposort), kernel_spec)
 
-  # map realized tensors to buffers
-  for k,v in kernel_map.items():
-    if k is v or v.op is not Ops.ASSIGN: continue
-    becomes_map[k] = v.buf_uop.reshape(k.shape)
+  # map tensors to buffer/const
+  becomes_map: dict[UOp, UOp] = {}
+  for k,v in tensor_map.items():
+    if k is v: continue
+    if v.base.op is Ops.CONST:
+      if all_int(v.shape): becomes_map[k] = v
+    elif v.base.op is Ops.BUFFER: becomes_map[k] = v
 
   # if a kernel depends on a buffer, and that buffer is later assigned to, make the assign depend on the kernel's assign
   kernel_assign: dict[UOp, UOp] = {}

@@ -232,6 +232,7 @@ class UOpMetaClass(type):
     if _buffer is not None:
       assert op is Ops.BUFFER, f"trying to set Buffer {_buffer} for {op}"
       buffers[created] = _buffer
+    if created.op is Ops.VIEW and created.src and created.src[0].op is Ops.RESHAPE: raise Exception()
     return created
 
 # some uops map to other stuff
