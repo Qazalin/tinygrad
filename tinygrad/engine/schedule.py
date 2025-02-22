@@ -53,9 +53,9 @@ sym = symbolic_simple+PatternMatcher([
   # no COPY to same device, except clone (arg is True)
   (UPat(Ops.COPY, src=(UPat(), UPat.var("copyin")), name="copy"),
    lambda copyin,copy: copyin if copyin.device == copy.device and copy.arg is not True else None),
-  # put VIEW after COPY
+  # VIEW after COPY
   (UPat(Ops.COPY, src=(UPat.var("device"), UPat(Ops.VIEW, src=(UPat.var("copyin"),))), name="v"),
-    lambda device,copyin,v: UOp(Ops.COPY, copyin.dtype, (device, copyin)).view(v.st)),
+    lambda device,copyin,v: UOp(Ops.COPY, copyin.dtype, (device, copyin), arg=False).view(v.st)),
   # remove cast to image when it's already a contiguous image
   (UPat(Ops.CAST, name="cast", src=(UPat(Ops.VIEW, name="vm", src=(UPat(Ops.CONTIGUOUS, name="base"))),)),
    lambda cast,base,vm: base.view(vm.st) if isinstance(cast.dtype, ImageDType) and isinstance(base.dtype, ImageDType) else None),
@@ -392,10 +392,10 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
       if all_int(v.shape): becomes_map[k] = v
     # VIEW isn't a valid tensor uop, we need to backtrack to the movement op that created it
     elif v.op is Ops.VIEW:
-      mop = next(iter(x for x in k.toposort if x.st == v.st and x.op in GroupOp.Movement and x.base.shape == v.base.shape))
+      mop = next(iter(x for x in k.toposort if x.st == v.st and x.base.st is not None and x.base.size == v.base.size))
       if mop.base is v.base: continue # if base didn't change this view is effectively a NOOP for the tensor itself
+      mop_rep = v.base.reshape(mop.base.shape)
       mop = mop.substitute({mop.base:UOp(Ops.NOOP)})
-      mop_rep = v.base
       for m in mop.toposort:
         if m is m.base: continue
         assert m.op in GroupOp.Movement, f"base should be clear here {m}"
