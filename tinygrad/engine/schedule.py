@@ -383,8 +383,9 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
   realize_map = group_realizes(tensor_map[big_sink])
   # create kernels
   kernel_map = graph_rewrite_map(tensor_map[big_sink], create_kernels, ctx=KernelContext(realize_map, {}), bottom_up=True)
-  for k,v in tensor_map.items():
-    if (kernel:=kernel_map.get(v)) is not None and kernel.op is Ops.ASSIGN: tensor_map[k] = kernel.src[0]
+  for t,st in tensor_map.items():
+    if (k:=kernel_map.get(st)) is not None and k.base.op is Ops.ASSIGN:
+      tensor_map[t] = k.src[0] if k is k.base else k.base.src[0].view(k.st)
   sched_sink = kernel_map[tensor_map[big_sink]]
   type_verify(list(sched_sink.toposort), kernel_spec)
 
