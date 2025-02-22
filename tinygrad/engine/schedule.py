@@ -53,6 +53,9 @@ sym = symbolic_simple+PatternMatcher([
   # no COPY to same device, except clone (arg is True)
   (UPat(Ops.COPY, src=(UPat(), UPat.var("copyin")), name="copy"),
    lambda copyin,copy: copyin if copyin.device == copy.device and copy.arg is not True else None),
+  # put VIEW after COPY
+  (UPat(Ops.COPY, src=(UPat.var("device"), UPat(Ops.VIEW, src=(UPat.var("copyin"),))), name="v"),
+    lambda device,copyin,v: UOp(Ops.COPY, copyin.dtype, (device, copyin)).view(v.st)),
   # remove cast to image when it's already a contiguous image
   (UPat(Ops.CAST, name="cast", src=(UPat(Ops.VIEW, name="vm", src=(UPat(Ops.CONTIGUOUS, name="base"))),)),
    lambda cast,base,vm: base.view(vm.st) if isinstance(cast.dtype, ImageDType) and isinstance(base.dtype, ImageDType) else None),
@@ -70,6 +73,9 @@ sym = symbolic_simple+PatternMatcher([
   # substitute BITCAST/CONTIGUOUS with BUFFER_VIEW on DISK
   (UPat((Ops.BITCAST, Ops.CONTIGUOUS), name="root"),
    lambda root: root.replace(op=Ops.BUFFER_VIEW) if isinstance(root.device, str) and root.device.startswith("DISK") else None),
+  # put UnaryOps before EXPAND
+  (UPat(GroupOp.Unary, src=UPat(Ops.VIEW, src=(UPat.var("inp"),), name="v"), name="alu"),
+   lambda inp,v,alu: inp.alu(alu.op).view(v.st) if prod(alu.shape) > v.st.real_size() else None),
 ])
 
 remove_movement_ops = merge_views+PatternMatcher([
@@ -379,20 +385,23 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
 
   # map tensors to new uops
   becomes_map: dict[UOp, UOp] = {}
-  rev_tensor_map: dict[UOp, list[UOp]] = {}
   ops_metadata: dict[UOp, Metadata] = {}
   for k,v in tensor_map.items():
-    rev_tensor_map.setdefault(v, []).append(k)
-    if k is v: continue
-    if v.base.op is Ops.BUFFER:
-      # VIEW isn't a valid tensor uop, we need to backtrack to the movement op that created it
-      if v.op is Ops.VIEW:
-        mop = [x for x in k.toposort if (xs:=tensor_map[x]).base is v.base and xs.st == v.st][0]
-        if k is not mop: becomes_map[k] = mop
-      else: becomes_map[k] = v
-    elif v.base.op is Ops.CONST and all_int(v.shape): becomes_map[k] = v
-    # if we're not realizing this tensor, map its metadata to the simplified uop
-    elif isinstance(k.metadata, Metadata): ops_metadata[v] = k.metadata
+    if k is v or k is big_sink: continue
+    if v.base.op is Ops.CONST:
+      if all_int(v.shape): becomes_map[k] = v
+    # VIEW isn't a valid tensor uop, we need to backtrack to the movement op that created it
+    elif v.op is Ops.VIEW:
+      mop = next(iter(x for x in k.toposort if x.st == v.st and x.op in GroupOp.Movement and x.base.shape == v.base.shape))
+      if mop.base is v.base: continue # if base didn't change this view is effectively a NOOP for the tensor itself
+      mop = mop.substitute({mop.base:UOp(Ops.NOOP)})
+      mop_rep = v.base
+      for m in mop.toposort:
+        if m is m.base: continue
+        assert m.op in GroupOp.Movement, f"base should be clear here {m}"
+        mop_rep = mop_rep._mop(m.op, m.arg)
+      becomes_map[k] = mop_rep
+    else: becomes_map[k] = v
 
   # create kernels
   if len(realize_map) == 0: return [], {}, becomes_map
@@ -403,7 +412,7 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
   # map realized tensors to buffers
   for k,v in kernel_map.items():
     if k is v or v.op is not Ops.ASSIGN: continue
-    for t in rev_tensor_map[k]: becomes_map[t] = t.src[0] if t.op is Ops.ASSIGN else v.buf_uop.reshape(t.shape)
+    becomes_map[k] = v.buf_uop.reshape(k.shape)
 
   # if a kernel depends on a buffer, and that buffer is later assigned to, make the assign depend on the kernel's assign
   kernel_assign: dict[UOp, UOp] = {}
