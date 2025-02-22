@@ -54,7 +54,7 @@ sym = symbolic_simple+PatternMatcher([
   (UPat(Ops.COPY, src=(UPat(), UPat.var("copyin")), name="copy"),
    lambda copyin,copy: copyin if copyin.device == copy.device and copy.arg is not True else None),
   # VIEW after COPY
-  (UPat(Ops.COPY, src=(UPat.var("device"), UPat(Ops.VIEW, src=(UPat.var("copyin"),))), name="v"),
+  (UPat(Ops.COPY, src=(UPat.var("device"), UPat(Ops.VIEW, src=(UPat.var("copyin"),), name="v"))),
     lambda device,copyin,v: UOp(Ops.COPY, copyin.dtype, (device, copyin), arg=False).view(v.st)),
   # remove cast to image when it's already a contiguous image
   (UPat(Ops.CAST, name="cast", src=(UPat(Ops.VIEW, name="vm", src=(UPat(Ops.CONTIGUOUS, name="base"))),)),
