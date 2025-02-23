@@ -241,7 +241,8 @@ def append_to_kernel(ctx:KernelContext, x:UOp):
 create_kernels = merge_views+PatternMatcher([
   (UPat(GroupOp.All-{Ops.KERNEL, Ops.BUFFER}, name="x"), create_kernel),
   (UPat(Ops.KERNEL, name="x"), append_to_kernel),
-  (UPat(Ops.SINK, name="x"), lambda x: x.replace(src=new_src) if (new_src:=tuple(dedup(s.base for s in x.src))) != x.src else None),
+  (UPat(Ops.SINK, name="x"),
+   lambda x: x.replace(src=ns) if (ns:=tuple(dedup(s.base for s in x.src if s.op not in {Ops.CONST, Ops.BIND, Ops.DEFINE_VAR}))) != x.src else None),
 ])
 
 # **** fix kernel AST
@@ -364,9 +365,9 @@ class ScheduleItem:
 def schedule_uop(sink:UOp, var_vals:dict[Variable, int]) -> ScheduleItem:
   assert sink.op is Ops.ASSIGN and sink.src[1].op is Ops.KERNEL, f"{sink} must be ASSIGN"
   # substitute kernel sources for the target buffer
-  ast = sink.src[1].arg.ast.substitute({s.src[1].arg.ast:s.src[0] for s in sink.src[1].src if s.op is Ops.ASSIGN}).sink()
+  ast = sink.src[1].arg.ast.substitute({(k:=s.src[1].arg.ast):s.src[0].reshape(k.shape) for s in sink.src[1].src if s.op is Ops.ASSIGN}).sink()
   # add buffer ops
-  ast = graph_rewrite(ast, add_buffer_ops, bufs:=[sink.buf_uop], bottom_up=True)
+  ast = graph_rewrite(ast, remove_movement_ops+add_buffer_ops, bufs:=[sink.buf_uop], bottom_up=True)
   # unbind_vars + push views to edges
   ast = graph_rewrite(graph_rewrite(ast, unbind_vars+view_left, ctx=var_vals), view_right)
   # fix_kernel_ops
