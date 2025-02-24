@@ -289,8 +289,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
     if self.op is Ops.MULTI:
       return ShapeTracker.from_shape(
         tuple(sum(y.shape[a] for y in self.real_lbs) if a == self.axis else s for a,s in enumerate(self.real_lbs[0].shape)))
-    if self.op is Ops.BUFFER: return ShapeTracker.from_shape((self.size,))
-    if self.op is Ops.KERNEL: return ShapeTracker.from_shape((self.arg.ast.size,))
+    if self.op in {Ops.BUFFER, Ops.BUFFER_VIEW, Ops.KERNEL}: return ShapeTracker.from_shape((self.size,))
     # these ops define a ShapeTracker from the arg
     if self.op is Ops.VIEW: return self.arg
     if self.op in GroupOp.Movement: return unwrap(self.src[0].st).mop(self.op, self.arg)
@@ -298,7 +297,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
     if self.op in GroupOp.Buffer: return vsrc[0] if len(vsrc:=[x.st for x in self.src if x.op is Ops.VIEW]) != 0 else None
     if not (src_sts := [x.st for x in self.src if x.st is not None]): return None
     assert all_same([x.shape for x in src_sts]), f"UOp sources must have the same shape {self} {[x.shape for x in src_sts]}"
-    if self.op in {Ops.BITCAST, Ops.BUFFER_VIEW}:
+    if self.op is Ops.BITCAST:
       shape = src_sts[0].shape
       if self.dtype.itemsize != (input_sz:=self.src[0].dtype.itemsize): shape = shape[:-1]+((shape[-1]*input_sz) // self.dtype.itemsize,)
     # only reduce ops are allowed to change shape, everything else derives shape from sources
@@ -316,7 +315,11 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   @property
   def shape(self) -> tuple[sint, ...]: return unwrap(self.st).shape
   @property
-  def size(self) -> int: return self.arg if self.op is Ops.BUFFER else unwrap(self.st).size
+  def size(self) -> int:
+    if self.op is Ops.BUFFER: return self.arg
+    if self.op is Ops.KERNEL: return self.arg.ast.size
+    if self.op is Ops.BUFFER_VIEW: return self.arg[0]
+    return unwrap(self.st).size
 
   # *** uop evaluation ***
 
@@ -518,6 +521,9 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
     if self is not self.base:
       assert unwrap(self.st).contiguous, "VIEW only works here if it's contiguous"
       return self.src[0].buffer
+    if self.op is Ops.BUFFER_VIEW:
+      buffers[self] = ret = self.src[0].buffer.view(*self.arg)
+      return ret
     assert self.op is Ops.BUFFER, f"must be BUFFER {self.op}"
     if (cret:=buffers.get(self)) is not None: return cret
     from tinygrad.device import Buffer

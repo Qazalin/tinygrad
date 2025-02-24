@@ -1,7 +1,7 @@
 import sys, atexit, pickle
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from tinygrad.ops import UOp, Variable, Ops, GroupOp, PatternMatcher, UPat, graph_rewrite, graph_rewrite_map, track_rewrites, buffers
+from tinygrad.ops import UOp, Variable, Ops, GroupOp, PatternMatcher, UPat, graph_rewrite, graph_rewrite_map, track_rewrites
 from tinygrad.ops import can_pad, identity_element, resolve, view_left, merge_views
 from tinygrad.codegen.symbolic import symbolic_simple
 from tinygrad.helpers import Context, ContextVar, Metadata, all_int, all_same, colored, diskcache_put, prod, dedup, unwrap, flatten, getenv, pluralize
@@ -227,10 +227,13 @@ class KernelContext:
   realizes: dict[UOp, None]
   ops_metadata: dict[UOp, Metadata]
 
+DONT_PLACE_IN_KERNEL = {Ops.KERNEL, Ops.BUFFER, Ops.BUFFER_VIEW}
+
 def create_kernel(ctx:KernelContext, x:UOp):
   if x not in ctx.realizes: return None
   assert isinstance(x.device, str), f"buf device in kernel must be string {x.device}"
   b = x.buf_uop if x.op is Ops.ASSIGN else UOp.new_buffer(x.device, x.size, x.dtype)
+  if x.size < b.size: b = UOp(Ops.BUFFER_VIEW, b.dtype, (b,), (x.size, x.dtype, 0))
   # KERNEL nodes become: ASSIGN(BUFFER, KERNEL)
   return b.assign(UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x, (m,) if (m:=ctx.ops_metadata.get(x)) else ())))
 
@@ -238,14 +241,14 @@ def append_to_kernel(ctx:KernelContext, x:UOp):
   new_srcs: list[UOp] = []
   new_metadata: dict[Metadata, None] = dict.fromkeys(x.arg.metadata)
   for s in x.src:
-    if s.op is Ops.BUFFER or (s.op is Ops.ASSIGN and s.src[1].op is Ops.KERNEL) or s in ctx.realizes: new_srcs.append(s)
+    if s.op in DONT_PLACE_IN_KERNEL or (s.op is Ops.ASSIGN and s.src[1].op is Ops.KERNEL) or s in ctx.realizes: new_srcs.append(s)
     else:
       new_srcs.extend(s.src)
       if (m:=ctx.ops_metadata.get(s)) is not None: new_metadata[m] = None
   return x.replace(src=n, arg=Kernel(x.arg.ast, tuple(new_metadata))) if (n:=tuple(dedup(new_srcs))) != x.src else None
 
 create_kernels = merge_views+PatternMatcher([
-  (UPat(GroupOp.All-{Ops.KERNEL, Ops.BUFFER}, name="x"), create_kernel),
+  (UPat(GroupOp.All-DONT_PLACE_IN_KERNEL, name="x"), create_kernel),
   (UPat(Ops.KERNEL, name="x"), append_to_kernel),
 ])
 
@@ -376,8 +379,6 @@ def schedule_uop(sink:UOp, var_vals:dict[Variable, int]) -> ScheduleItem:
   ast = graph_rewrite(graph_rewrite(ast, unbind_vars+view_left, ctx=var_vals), view_right)
   # fix_kernel_ops
   ast = graph_rewrite(ast, fix_kernel_ops, var_vals)
-  # create subbuffer
-  if ast.op is Ops.BUFFER_VIEW: buffers[bufs[0]] = bufs[1].buffer.view(ast.size, ast.dtype, (x:=ast.src[0]).st_arg.views[0].offset*x.dtype.itemsize)
   return ScheduleItem(ast, tuple(dedup([x.buffer for x in bufs])), sink.src[1].arg.metadata)
 
 PROCESS_REPLAY_CAPTURE:dict[str, bytes] = {}
