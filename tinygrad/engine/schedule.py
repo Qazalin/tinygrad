@@ -272,7 +272,7 @@ add_buffer_ops = remove_movement_ops+PatternMatcher([
   (UPat(Ops.SINK, src=(UPat(GroupOp.All-{Ops.STORE}, name="x"),)),
    lambda x: UOp.store(UOp(Ops.DEFINE_GLOBAL, x.dtype.ptr(x.size), (), 0), ShapeTracker.from_shape(x.shape).to_uop(), x).sink()),
   # remove ASSIGN
-  (UPat.store(UPat.var("g"), UPat.var("st"), UPat.assign(UPat(), UPat.var("nv"))), lambda g,st,nv: UOp.store(g, st.view(nv.st), nv.base)),
+  (UPat.assign(UPat(), UPat.var("b")), lambda b: b),
 ])
 
 # ** push views to buffer ops
@@ -314,8 +314,6 @@ def merge_double_reduce(root:UOp, first_reduce:UOp) -> UOp:
 
 # push VIEW to children
 view_right = merge_views+PatternMatcher([
-  # STORE is the last child, so we just merge the ShapeTrackers and store the base
-  (UPat(Ops.STORE, src=(UPat.var("b"), UPat.var("st"), UPat(Ops.VIEW, src=(UPat.var("val"),)))), lambda b,st,val: UOp.store(b, st.view(val.st), val)),
   # REDUCE(src.view(contiguous=False)) -> REDUCE(src.view(contiguous=True)).view()
   (UPat(Ops.REDUCE_AXIS, src=(UPat.var("src"),), name="r").view(name="v"), lambda v,r,src: None if v.st.contiguous else swizzle_r(r, src, v.st)),
   # REDUCE(src.view()) -> REDUCE(src).view()

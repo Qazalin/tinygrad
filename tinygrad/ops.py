@@ -961,6 +961,8 @@ merge_views = PatternMatcher([
   # merge unmasked const views
   (UPat(Ops.VIEW, name="view", src=(UPat((Ops.CONST, Ops.DEFINE_VAR), name="const", src=(UPat(Ops.VIEW, name="st"),) ),)),
    lambda st,const,view: const.replace(src=(st.replace(arg=st.st+view.st),)) if all(v.mask is None for v in (st.st+view.st).views) else None),
+  # STORE is the last child, so we just merge the ShapeTrackers and store the base
+  (UPat(Ops.STORE, src=(UPat.var("b"), UPat.var("st"), UPat(Ops.VIEW, src=(UPat.var("v"),)))), lambda b,st,v: UOp.store(b, st.view(v.st), v)),
 ])
 
 # push VIEW to parents
