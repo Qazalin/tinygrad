@@ -54,6 +54,10 @@ def replace_contiguous(ctx:dict[UOp, UOp], alu:UOp):
     if (replace_src:=ctx.get(s, None)) is not None: new_src[i] = replace_src
   if tuple(new_src) != alu.src: return alu.replace(src=tuple(new_src))
 
+def invert_assign_st(a:UOp, b:UOp):
+  if (sti:=unwrap(a.st).invert(a.base.shape)) is not None: return a.base.assign(b.view(sti))
+  raise Exception("can't invert")
+
 sym = symbolic_simple+PatternMatcher([
   # UOp with size 0 is zero
   (UPat(GroupOp.All-{Ops.SINK}, name="root"), lambda root: root.const_like(0) if root.base.st is not None and root.size == 0 \
@@ -92,6 +96,8 @@ sym = symbolic_simple+PatternMatcher([
   # put UnaryOps before EXPANDs
   (UPat(GroupOp.Unary, src=UPat(Ops.VIEW, src=(UPat.var("inp"),), name="v"), name="alu"),
    lambda inp,v,alu: inp.alu(alu.op).view(v.st) if resolve(prod(alu.shape) > v.st.real_size()) else None),
+  # invert ASSIGN or replace with subbuffer
+  (UPat.assign(UPat(Ops.VIEW, name="a"), UPat.var("b")), invert_assign_st),
 ])
 
 remove_movement_ops = merge_views+PatternMatcher([
@@ -229,8 +235,8 @@ DONT_PLACE_IN_KERNEL = {Ops.KERNEL, Ops.BUFFER, Ops.BUFFER_VIEW}
 def create_kernel(ctx:KernelContext, x:UOp):
   if x not in ctx.realizes: return None
   assert isinstance(x.device, str), f"buf device in kernel must be string {x.device}"
-  b = x.buf_uop if x.op is Ops.ASSIGN else UOp.new_buffer(x.device, x.size, x.dtype)
-  if x.size < b.size: b = UOp(Ops.BUFFER_VIEW, x.dtype, (b,), (x.size, unwrap(x.src[0].st).views[0].offset))
+  b = x.src[0] if x.op is Ops.ASSIGN else UOp.new_buffer(x.device, x.size, x.dtype)
+  assert b.op is Ops.BUFFER
   return b.assign(UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x, (m,) if (m:=ctx.ops_metadata.get(x)) else ())))
 
 def append_to_kernel(ctx:KernelContext, x:UOp):
@@ -265,6 +271,8 @@ add_buffer_ops = remove_movement_ops+PatternMatcher([
   (UPat(Ops.SINK, src=(UPat((Ops.COPY), name="x"),)), lambda x:x),
   (UPat(Ops.SINK, src=(UPat(GroupOp.All-{Ops.STORE}, name="x"),)),
    lambda x: UOp.store(UOp(Ops.DEFINE_GLOBAL, x.dtype.ptr(x.size), (), 0), ShapeTracker.from_shape(x.shape).to_uop(), x).sink()),
+  # remove ASSIGN
+  (UPat.store(UPat.var("g"), UPat.var("st"), UPat.assign(UPat(), UPat.var("nv"))), lambda g,st,nv: UOp.store(g, st.view(nv.st), nv.base)),
 ])
 
 # ** push views to buffer ops
@@ -306,9 +314,6 @@ def merge_double_reduce(root:UOp, first_reduce:UOp) -> UOp:
 
 # push VIEW to children
 view_right = merge_views+PatternMatcher([
-  # STORE(.., ASSIGN(VIEW(BUFFER), new_val)) -> VIEW(STORE(.., new_val))
-  (UPat(Ops.STORE, src=(UPat.var("b"), UPat.var("st"), UPat.assign(UPat.var("target"), UPat.var("val")))),
-   lambda b,target,st,val: apply_swizzle(UOp.store(b, st, val).view(target.st))),
   # STORE is the last child, so we just merge the ShapeTrackers and store the base
   (UPat(Ops.STORE, src=(UPat.var("b"), UPat.var("st"), UPat(Ops.VIEW, src=(UPat.var("val"),)))), lambda b,st,val: UOp.store(b, st.view(val.st), val)),
   # REDUCE(src.view(contiguous=False)) -> REDUCE(src.view(contiguous=True)).view()
@@ -350,9 +355,8 @@ def check_load_st(glbl:UOp, view:UOp):
 fix_kernel_ops = PatternMatcher([
   # BIND in shapetracker becomes DEFINE_VAR
   (UPat(Ops.VIEW, name="x"), unbind_shapetracker),
-  # remove CONTIGUOUS/ASSIGN/DEVICE
+  # remove CONTIGUOUS/DEVICE
   (UPat(Ops.CONTIGUOUS, src=(UPat.var("x"),)), lambda x: x),
-  (UPat(Ops.ASSIGN, src=(UPat(), UPat.var("x"),)), lambda x: x),
   (UPat(Ops.VIEW, name="view", src=(UPat(Ops.DEVICE),)), lambda view: view.replace(src=())),
   # no ImageDType after load
   (UPat(GroupOp.All-{Ops.DEFINE_GLOBAL}, name="x"), lambda x: x.replace(dtype=x.dtype.base) if isinstance(x.dtype, ImageDType) else None),
