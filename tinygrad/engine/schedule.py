@@ -89,9 +89,6 @@ sym = symbolic_simple+PatternMatcher([
   # support for using a contiguous permuted view instead of the parent view if one exists
   (UPat(Ops.CONTIGUOUS, name="contig", src=(UPat(Ops.VIEW, name="src"),)), found_contiguous),
   (UPat(GroupOp.ALU, name="alu"), replace_contiguous),
-  # substitute BITCAST/CONTIGUOUS with BUFFER_VIEW on DISK
-  (UPat((Ops.BITCAST, Ops.CONTIGUOUS), name="root"),
-   lambda root: root.replace(op=Ops.BUFFER_VIEW) if isinstance(root.device, str) and root.device.startswith("DISK") else None),
   # put UnaryOps before EXPANDs
   (UPat(GroupOp.Unary, src=UPat(Ops.VIEW, src=(UPat.var("inp"),), name="v"), name="alu"),
    lambda inp,v,alu: inp.alu(alu.op).view(v.st) if resolve(prod(alu.shape) > v.st.real_size()) else None),
@@ -128,8 +125,8 @@ def realize_before_view(ctx:GrouperContext, view:UOp, src:UOp) -> None:
 do_realize = PatternMatcher([
   # always realize SINK parents
   (UPat(Ops.SINK, name="s"), lambda ctx,s: ctx.realizes.update((x.base, None) for x in s.src if x.base.op not in {Ops.CONST, Ops.BIND, Ops.BUFFER})),
-  # always realize ASSIGN/CONTIGUOUS/COPY/BUFFER_VIEW
-  (UPat({Ops.ASSIGN, Ops.CONTIGUOUS, Ops.COPY, Ops.BUFFER_VIEW}, name="tr"), realize),
+  # always realize ASSIGN/CONTIGUOUS/COPY
+  (UPat({Ops.ASSIGN, Ops.CONTIGUOUS, Ops.COPY}, name="tr"), realize),
   # realize before expand or unsafe pad ops
   (UPat(Ops.VIEW, name="view", src=(UPat(GroupOp.All-{Ops.BUFFER, Ops.CONST, Ops.DEVICE}, name="src"),)), realize_before_view),
   # realize before COPY
@@ -227,28 +224,30 @@ class KernelContext:
   realizes: dict[UOp, None]
   ops_metadata: dict[UOp, Metadata]
 
+DONT_PLACE_IN_KERNEL = {Ops.KERNEL, Ops.BUFFER, Ops.BUFFER_VIEW}
+
 def create_kernel(ctx:KernelContext, x:UOp):
   if x not in ctx.realizes: return None
   assert isinstance(x.device, str), f"buf device in kernel must be string {x.device}"
   b = x.buf_uop if x.op is Ops.ASSIGN else UOp.new_buffer(x.device, x.size, x.dtype)
-  output_st = ShapeTracker.from_shape(x.shape)
-  # KERNEL nodes become: ASSIGN(VIEW(BUFFER), KERNEL)
-  # TODO: this should be ASSIGN(BUFFER, KERNEL) followed by the output ShapeTracker
-  return b.view(output_st).assign(UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x, (m,) if (m:=ctx.ops_metadata.get(x)) else ())))
+  if x.size < b.size: b = UOp(Ops.BUFFER_VIEW, x.dtype, (b,), (x.size, unwrap(x.src[0].st).views[0].offset))
+  return b.assign(UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x, (m,) if (m:=ctx.ops_metadata.get(x)) else ())))
 
 def append_to_kernel(ctx:KernelContext, x:UOp):
   new_srcs: list[UOp] = []
   new_metadata: dict[Metadata, None] = dict.fromkeys(x.arg.metadata)
   for s in x.src:
-    if s.op is Ops.BUFFER or (s.op is Ops.ASSIGN and s.src[1].op is Ops.KERNEL) or s in ctx.realizes: new_srcs.append(s)
+    if s.op in DONT_PLACE_IN_KERNEL or (s.op is Ops.ASSIGN and s.src[1].op is Ops.KERNEL) or s in ctx.realizes: new_srcs.append(s)
     else:
       new_srcs.extend(s.src)
       if (m:=ctx.ops_metadata.get(s)) is not None: new_metadata[m] = None
   return x.replace(src=n, arg=Kernel(x.arg.ast, tuple(new_metadata))) if (n:=tuple(dedup(new_srcs))) != x.src else None
 
 create_kernels = merge_views+PatternMatcher([
-  (UPat(GroupOp.All-{Ops.KERNEL, Ops.BUFFER}, name="x"), create_kernel),
+  (UPat(GroupOp.All-DONT_PLACE_IN_KERNEL, name="x"), create_kernel),
   (UPat(Ops.KERNEL, name="x"), append_to_kernel),
+  (UPat(Ops.SINK, name="x"),
+   lambda x: x.replace(src=ns) if (ns:=tuple(dedup(s.base for s in x.src if s.op not in {Ops.CONST, Ops.BIND}))) != x.src else None),
 ])
 
 # **** fix kernel AST
@@ -259,11 +258,11 @@ def load_buf(ctx:list[UOp], x:UOp):
   if x not in ctx: ctx.append(x)
   return UOp(Ops.LOAD, x.dtype, (UOp(Ops.DEFINE_GLOBAL, x.dtype.ptr(x.size), (), ctx.index(x)), unwrap(x.st).to_uop()))
 
-add_buffer_ops = PatternMatcher([
+add_buffer_ops = remove_movement_ops+PatternMatcher([
   # LOAD
   (UPat(Ops.BUFFER, name="x"), load_buf),
-  # STORE (except for COPY/BUFFER_VIEW)
-  (UPat(Ops.SINK, src=(UPat((Ops.COPY, Ops.BUFFER_VIEW), name="x"),)), lambda x:x),
+  # STORE (except for COPY)
+  (UPat(Ops.SINK, src=(UPat((Ops.COPY), name="x"),)), lambda x:x),
   (UPat(Ops.SINK, src=(UPat(GroupOp.All-{Ops.STORE}, name="x"),)),
    lambda x: UOp.store(UOp(Ops.DEFINE_GLOBAL, x.dtype.ptr(x.size), (), 0), ShapeTracker.from_shape(x.shape).to_uop(), x).sink()),
 ])
@@ -371,15 +370,13 @@ class ScheduleItem:
 def schedule_uop(sink:UOp, var_vals:dict[Variable, int]) -> ScheduleItem:
   assert sink.op is Ops.ASSIGN and sink.src[1].op is Ops.KERNEL, f"{sink} must be ASSIGN"
   # substitute kernel sources for the target buffer
-  ast = sink.src[1].arg.ast.substitute({s.src[1].arg.ast:s.src[0] for s in sink.src[1].src if s.op is Ops.ASSIGN}).sink()
+  ast = sink.src[1].arg.ast.substitute({(u:=s.src[1].arg.ast):s.src[0].reshape(u.shape) for s in sink.src[1].src if s.op is Ops.ASSIGN}).sink()
   # add buffer ops
   ast = graph_rewrite(ast, add_buffer_ops, bufs:=[sink.buf_uop], bottom_up=True)
   # unbind_vars + push views to edges
   ast = graph_rewrite(graph_rewrite(ast, unbind_vars+view_left, ctx=var_vals), view_right)
   # fix_kernel_ops
   ast = graph_rewrite(ast, fix_kernel_ops, var_vals)
-  # create subbuffer
-  if ast.op is Ops.BUFFER_VIEW: buffers[bufs[0]] = bufs[1].buffer.view(ast.size, ast.dtype, (x:=ast.src[0]).st_arg.views[0].offset*x.dtype.itemsize)
   return ScheduleItem(ast, tuple(dedup([x.buffer for x in bufs])), sink.src[1].arg.metadata)
 
 PROCESS_REPLAY_CAPTURE:dict[str, bytes] = {}
@@ -413,7 +410,7 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
   for k,v in tensor_map.items():
     # NOTE: tensors can also map to a VIEW, we just apply this VIEW on top of the BUFFER
     if (a:=kernel_map.get(v.base)) is not None and a.op is Ops.ASSIGN:
-      becomes_map[k] = a.src[0] if v is v.base else a.src[0].view(unwrap(v.st))
+      becomes_map[k] = a.src[0] if k.shape == a.shape else a.src[0].view(unwrap(v.st))
     if v is k: continue
     if v.base.op is Ops.BUFFER: becomes_map[k] = v
     elif v.base.op is Ops.CONST:

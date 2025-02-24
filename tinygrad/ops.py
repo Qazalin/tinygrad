@@ -289,8 +289,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
     if self.op is Ops.MULTI:
       return ShapeTracker.from_shape(
         tuple(sum(y.shape[a] for y in self.real_lbs) if a == self.axis else s for a,s in enumerate(self.real_lbs[0].shape)))
-    if self.op is Ops.BUFFER: return ShapeTracker.from_shape((self.size,))
-    if self.op is Ops.KERNEL: return ShapeTracker.from_shape(self.arg.ast.shape)
+    if self.op in {Ops.BUFFER, Ops.BUFFER_VIEW, Ops.KERNEL}: return ShapeTracker.from_shape((self.size,))
     # these ops define a ShapeTracker from the arg
     if self.op is Ops.VIEW: return self.arg
     if self.op in GroupOp.Movement: return unwrap(self.src[0].st).mop(self.op, self.arg)
@@ -316,7 +315,10 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   @property
   def shape(self) -> tuple[sint, ...]: return unwrap(self.st).shape
   @property
-  def size(self) -> int: return self.arg if self.op is Ops.BUFFER else unwrap(self.st).size
+  def size(self) -> int:
+    if self.op is Ops.KERNEL: return self.arg.ast.size
+    if self.op is Ops.BUFFER_VIEW: return self.arg[0]
+    return self.arg if self.op is Ops.BUFFER else unwrap(self.st).size
 
   # *** uop evaluation ***
 
@@ -518,11 +520,14 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
     if self is not self.base:
       assert unwrap(self.st).contiguous, "VIEW only works here if it's contiguous"
       return self.src[0].buffer
-    assert self.op is Ops.BUFFER, f"must be BUFFER {self.op}"
+    assert self.op in {Ops.BUFFER, Ops.BUFFER_VIEW}, f"must be BUFFER {self.op}"
     if (cret:=buffers.get(self)) is not None: return cret
-    from tinygrad.device import Buffer
-    assert isinstance(self.device, str), f"buffer not supported on multi {self.device}"
-    buffers[self] = ret = Buffer(self.device, self.size, self.dtype if isinstance(self.dtype, ImageDType) else self.dtype.base)
+    if self.op is Ops.BUFFER_VIEW: ret = self.src[0].buffer.view(self.arg[0], self.dtype, self.arg[1])
+    else:
+      from tinygrad.device import Buffer
+      assert isinstance(self.device, str), f"buffer not supported on multi {self.device}"
+      ret = Buffer(self.device, self.size, self.dtype if isinstance(self.dtype, ImageDType) else self.dtype.base)
+    buffers[self] = ret
     return ret
   @property
   def realized(self) -> Optional[Buffer]: return self.buffer if self.op is Ops.BUFFER else None
