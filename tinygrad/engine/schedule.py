@@ -231,10 +231,8 @@ def create_kernel(ctx:KernelContext, x:UOp):
   if x not in ctx.realizes: return None
   assert isinstance(x.device, str), f"buf device in kernel must be string {x.device}"
   b = x.buf_uop if x.op is Ops.ASSIGN else UOp.new_buffer(x.device, x.size, x.dtype)
-  output_st = ShapeTracker.from_shape(x.shape)
-  # KERNEL nodes become: ASSIGN(VIEW(BUFFER), KERNEL)
-  # TODO: this should be ASSIGN(BUFFER, KERNEL) followed by the output ShapeTracker
-  return b.view(output_st).assign(UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x, (m,) if (m:=ctx.ops_metadata.get(x)) else ())))
+  # KERNEL nodes become: ASSIGN(BUFFER, KERNEL)
+  return b.assign(UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x, (m,) if (m:=ctx.ops_metadata.get(x)) else ())))
 
 def append_to_kernel(ctx:KernelContext, x:UOp):
   new_srcs: list[UOp] = []
@@ -259,7 +257,7 @@ def load_buf(ctx:list[UOp], x:UOp):
   if x not in ctx: ctx.append(x)
   return UOp(Ops.LOAD, x.dtype, (UOp(Ops.DEFINE_GLOBAL, x.dtype.ptr(x.size), (), ctx.index(x)), unwrap(x.st).to_uop()))
 
-add_buffer_ops = PatternMatcher([
+add_buffer_ops = remove_movement_ops+PatternMatcher([
   # LOAD
   (UPat(Ops.BUFFER, name="x"), load_buf),
   # STORE (except for COPY/BUFFER_VIEW)
@@ -371,7 +369,7 @@ class ScheduleItem:
 def schedule_uop(sink:UOp, var_vals:dict[Variable, int]) -> ScheduleItem:
   assert sink.op is Ops.ASSIGN and sink.src[1].op is Ops.KERNEL, f"{sink} must be ASSIGN"
   # substitute kernel sources for the target buffer
-  ast = sink.src[1].arg.ast.substitute({s.src[1].arg.ast:s.src[0] for s in sink.src[1].src if s.op is Ops.ASSIGN}).sink()
+  ast = sink.src[1].arg.ast.substitute({(p:=s.src[1].arg.ast):s.src[0].reshape(p.shape) for s in sink.src[1].src if s.op is Ops.ASSIGN}).sink()
   # add buffer ops
   ast = graph_rewrite(ast, add_buffer_ops, bufs:=[sink.buf_uop], bottom_up=True)
   # unbind_vars + push views to edges
@@ -413,7 +411,7 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
   for k,v in tensor_map.items():
     # NOTE: tensors can also map to a VIEW, we just apply this VIEW on top of the BUFFER
     if (a:=kernel_map.get(v.base)) is not None and a.op is Ops.ASSIGN:
-      becomes_map[k] = a.src[0] if v is v.base else a.src[0].view(unwrap(v.st))
+      becomes_map[k] = a.src[0] if k.shape == a.shape else a.src[0].view(unwrap(v.st))
     if v is k: continue
     if v.base.op is Ops.BUFFER: becomes_map[k] = v
     elif v.base.op is Ops.CONST:
