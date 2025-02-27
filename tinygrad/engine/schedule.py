@@ -11,6 +11,7 @@ from tinygrad.shape.shapetracker import ShapeTracker
 from tinygrad.shape.view import View, strides_for_shape
 from tinygrad.device import Buffer
 from tinygrad.spec import type_verify, kernel_spec
+from tinygrad.engine.multi import multi_pm
 
 # creation can recurse a lot
 sys.setrecursionlimit(10000)
@@ -102,6 +103,9 @@ sym = symbolic_simple+PatternMatcher([
   # put UnaryOps before EXPANDs
   (UPat(GroupOp.Unary, src=UPat(Ops.VIEW, src=(UPat.var("inp"),), name="v"), name="alu"),
    lambda inp,v,alu: inp.alu(alu.op).view(v.st) if resolve(prod(alu.shape) > v.st.real_size()) else None),
+  # spread multi
+  (UPat(Ops.SINK, name="sink"), lambda sink: sink.replace(src=new_src)
+    if (new_src:=tuple(flatten([x.src if x.op is Ops.MULTI else [x] for x in sink.src]))) != sink.src else None),
 ])
 
 remove_movement_ops = merge_views+PatternMatcher([
@@ -401,8 +405,8 @@ if CAPTURE_PROCESS_REPLAY:
 
 @track_rewrites(name_fxn=lambda r: f"Schedule {pluralize('Kernel', len(r[0]))}"+(f" (with_{pluralize('Var', len(r[1]))})" if len(r[1]) != 0 else ""))
 def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Variable, int], dict[UOp, UOp]]:
-  # remove_movement_ops + sym
-  tensor_map = graph_rewrite_map(big_sink, remove_movement_ops+sym, ctx={})
+  # multi + remove_movement_ops + sym
+  tensor_map = graph_rewrite_map(big_sink, multi_pm+remove_movement_ops+sym, ctx={})
 
   # display the cleaned up tensor graph
   if getenv("VIZ"): graph_rewrite(tensor_map[big_sink], PatternMatcher([]), name="View Tensor Graph")
@@ -428,6 +432,13 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
       if k is v: continue
       if v.base.op is Ops.BUFFER: becomes_map[k] = v
       if v.base.op is Ops.CONST and all_int(v.shape): becomes_map[k] = v
+      if v.op is Ops.MULTI:
+        kernel_src = list(v.src)
+        for i,s in enumerate(v.src):
+          if (a:=kernel_map.get(s.base)) is not None and a.op is Ops.ASSIGN:
+            kernel_src[i] = a.src[0] if s is s.base else a.src[0].view(unwrap(s.st))
+        if k is k.base and tuple(kernel_src) == v.src: continue
+        becomes_map[k] = v.replace(src=tuple(kernel_src))
 
   # if a kernel depends on a buffer, and that buffer is later assigned to, make the assign depend on the kernel's assign
   kernel_assign: dict[UOp, UOp] = {}

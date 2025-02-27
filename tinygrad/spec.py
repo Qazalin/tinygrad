@@ -43,6 +43,12 @@ tensor_uop_spec = buffer_spec+PatternMatcher([
    lambda assign,target,new_val: target.base.op is Ops.BUFFER and (assign.dtype == target.dtype == new_val.dtype)),
 ])
 
+multi_spec = PatternMatcher([
+  (UPat(Ops.MULTI), lambda: True),
+  (UPat(Ops.DEVICE, dtypes.void, (), name="device"), lambda device: isinstance(device.arg, (tuple, str))),
+  (UPat(Ops.ASSIGN, src=(UPat.var("target"), UPat())), lambda target: all(s.base.op is Ops.BUFFER for s in target.base.src)),
+])
+
 # ***** uop type spec *****
 
 # this is the matcher for the final rendered UOps

@@ -287,6 +287,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   def st(self) -> ShapeTracker|None:
     from tinygrad.shape.shapetracker import ShapeTracker
     if self.op is Ops.MULTI:
+      if len(self.real_lbs) == 0: return ShapeTracker.from_shape(self.src[0].shape) # looks wrong
       return ShapeTracker.from_shape(
         tuple(sum(y.shape[a] for y in self.real_lbs) if a == self.axis else s for a,s in enumerate(self.real_lbs[0].shape)))
     if self.op in {Ops.BUFFER, Ops.BUFFER_VIEW}: return ShapeTracker.from_shape((self.size,))
