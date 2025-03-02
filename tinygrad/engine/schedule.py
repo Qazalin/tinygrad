@@ -202,7 +202,7 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
       schedule.append(ScheduleItem(u.arg.ast, tuple(s.buf_uop.buffer for s in u.src), u.arg.metadata))
       u.src[0].buffer.ref(1)
     if u.op is Ops.COPY:
-      schedule.append(ScheduleItem(u.replace(src=()), tuple(s.buffer for s in u.src), ()))
+      schedule.append(ScheduleItem(u.replace(src=()), tuple(s.buf_uop.buffer for s in u.src), ()))
       u.src[0].buffer.ref(1)
   del becomes_map[big_sink]
   return schedule, var_vals, becomes_map
