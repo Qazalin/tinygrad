@@ -117,7 +117,7 @@ def do_sink(sink:UOp):
   return sink.replace(src=n) if (n:=tuple(dedup(new_src))) != sink.src else None
 
 def view_reduceop(reduce:UOp, vm:UOp, x:UOp):
-  if not vm.contiguous: raise Exception("todo!")
+  if not vm.arg.contiguous: return reduce.contiguous().view(vm.st)
 
 view_left = merge_views+PatternMatcher([
   (UPat(Ops.VIEW, name="vm", src=(UPat(Ops.LOAD, src=(UPat(), UPat.var("st")), name="ld"),)),
@@ -149,6 +149,8 @@ add_buffer_ops = PatternMatcher([
   (UPat(Ops.SINK, src=UPat(GroupOp.All-{Ops.STORE}), name="x"),
    lambda x: UOp.sink(*[UOp.store(UOp(Ops.DEFINE_GLOBAL, s.dtype.ptr(size=s.size), (), i),
                                   ShapeTracker.from_shape(s.shape).to_uop(), s) for i,s in enumerate(x.src)])),
+  # VALID
+  (UPat(Ops.VIEW, src=(UPat.cvar("x"),), name="st"), lambda x,st: x.valid(st.arg)),
 ])
 
 def simplify_view(x:UOp):
@@ -156,10 +158,8 @@ def simplify_view(x:UOp):
 
 def elementwise_view_right(x:UOp):
   if not (view_src:=[s for s in x.src if s.op is Ops.VIEW]): return None
-  new_src_shape = view_src[0].base.shape
-  new_src = [s.base if s.op is Ops.VIEW else simplify_view(s.reshape(new_src_shape)) for s in x.src]
-  assert all_same([s.shape for s in new_src])
-  assert not any(s.op is Ops.VIEW for s in new_src)
+  assert all(v.st.contiguous for v in view_src), f"{x}"
+  new_src = [s.base if s.op is Ops.VIEW else simplify_view(s.reshape(view_src[0].base.shape)) for s in x.src]
   return x.replace(src=tuple(new_src)).reshape(x.shape)
 
 view_right = merge_views+PatternMatcher([
