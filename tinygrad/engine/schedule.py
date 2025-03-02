@@ -151,7 +151,8 @@ add_buffer_ops = view_left+PatternMatcher([
   (UPat(Ops.ASSIGN, src=(UPat(Ops.BUFFER, name="x"), UPat())), load_buf),
   # STORE
   (UPat(Ops.SINK, src=UPat(GroupOp.All-{Ops.STORE}), name="x"),
-   lambda x: UOp.sink(*[UOp.store(UOp(Ops.DEFINE_GLOBAL, s.dtype.ptr(size=s.size), (), i), unwrap(s.st).to_uop(), s) for i,s in enumerate(x.src)])),
+   lambda x: UOp.sink(*[UOp.store(UOp(Ops.DEFINE_GLOBAL, s.dtype.ptr(size=s.size), (), i),
+                                  ShapeTracker.from_shape(s.shape).to_uop(), s) for i,s in enumerate(x.src)])),
 ])
 
 DONT_PLACE_IN_KERNEL = {Ops.BUFFER, Ops.COPY, Ops.ASSIGN}
