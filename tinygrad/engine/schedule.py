@@ -2,7 +2,7 @@ import sys, atexit, pickle
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from tinygrad.ops import UOp, Variable, Ops, GroupOp, PatternMatcher, UPat, graph_rewrite, graph_rewrite_map, track_rewrites, buffers
-from tinygrad.ops import can_pad, identity_element, resolve, view_left, merge_views
+from tinygrad.ops import can_pad, identity_element, resolve, merge_views
 from tinygrad.codegen.symbolic import symbolic_simple
 from tinygrad.helpers import Context, ContextVar, Metadata, all_int, all_same, colored, diskcache_put, prod, dedup, unwrap, flatten, getenv, pluralize
 from tinygrad.helpers import FUSE_CONV_BW, FUSE_ARANGE, DEBUG, CAPTURE_PROCESS_REPLAY, DONT_REALIZE_EXPAND, SPLIT_REDUCEOP
@@ -116,6 +116,25 @@ remove_movement_ops = merge_views+PatternMatcher([
    lambda view: view.const_like(0) if (vm:=view.st.views[-1].mask) is not None and any((x[1]-x[0]) == 0 for x in vm) else None),
 ])
 
+def do_sink(sink:UOp):
+  new_src: list[UOp] = []
+  for s in sink.src:
+    if s.base.op in {Ops.CONTIGUOUS, Ops.COPY, Ops.ASSIGN}: new_src.append(s)
+    else:
+      new_src.append(s.base.contiguous())
+  return sink.replace(src=n) if (n:=tuple(dedup(new_src))) != sink.src else None
+
+view_left = merge_views+PatternMatcher([
+  (UPat(Ops.VIEW, name="vm", src=(UPat(Ops.LOAD, src=(UPat(), UPat.var("st")), name="ld"),)),
+   lambda ld,st,vm: UOp(Ops.LOAD, ld.dtype, (ld.src[0], (st.arg+vm.arg).to_uop()))),
+  (UPat(Ops.VIEW, name="vm", src=(UPat(GroupOp.All-{Ops.DEVICE, Ops.ASSIGN, Ops.COPY, Ops.CONTIGUOUS, Ops.CONST, Ops.BUFFER, Ops.REDUCE_AXIS}, name="x"),)),
+   lambda x,vm: x.replace(src=tuple(s.view(vm.arg) for s in x.src))),
+])
+
+insert_contigs = view_left+PatternMatcher([
+  (UPat(Ops.SINK, name="sink"), do_sink),
+])
+
 @dataclass(frozen=True)
 class Kernel:
   ast: UOp
@@ -125,7 +144,7 @@ class Kernel:
 def load_buf(ctx:tuple[UOp, ...], x:UOp):
   return UOp.load(UOp(Ops.DEFINE_GLOBAL, x.dtype.ptr(size=x.size), (), ctx.index(x)), unwrap(x.st).to_uop(), dtype=x.dtype)
 
-add_buffer_ops = PatternMatcher([
+add_buffer_ops = view_left+PatternMatcher([
   # LOAD
   (UPat(Ops.BUFFER, name="x"), load_buf),
   (UPat(Ops.COPY, src=(UPat(Ops.BUFFER, name="x"), UPat())), load_buf),
@@ -135,10 +154,12 @@ add_buffer_ops = PatternMatcher([
    lambda x: UOp.sink(*[UOp.store(UOp(Ops.DEFINE_GLOBAL, s.dtype.ptr(size=s.size), (), i), unwrap(s.st).to_uop(), s) for i,s in enumerate(x.src)])),
 ])
 
+DONT_PLACE_IN_KERNEL = {Ops.BUFFER, Ops.COPY, Ops.ASSIGN}
+
 def append_to_kernel(x:UOp):
   new_src: list[UOp] = []
   for s in x.src:
-    if s.op in {Ops.BUFFER, Ops.COPY, Ops.ASSIGN}: new_src.append(s)
+    if s.op in DONT_PLACE_IN_KERNEL: new_src.append(s)
     else: new_src.extend(s.src)
   if (n:=tuple(new_src)) != x.src: return x.replace(src=n)
   ast = graph_rewrite(x.arg.ast, add_buffer_ops, ctx=tuple(s.buf_uop for s in x.src), bottom_up=True)
@@ -168,6 +189,21 @@ def get_becomes_map(big_sink:UOp) -> dict[UOp, UOp]:
     children[u] = {}
     if u is not simple_sink:
       for s in u.src: children[s][u] = None
+
+  contig_map = graph_rewrite_map(simple_sink, insert_contigs, ctx=children)
+  for k,v in contig_map.items():
+    if k is v: continue
+    if v.op is Ops.CONTIGUOUS:
+      tensors = [x for x,y in tensor_map.items() if y is k]
+      for t in tensors: tensor_map[t] = v
+    if all(s.op is Ops.CONTIGUOUS for s in v.src):
+      for s,s2 in zip(k.src, v.src):
+        tensors = [x for x,y in tensor_map.items() if y is s]
+        for t in tensors: tensor_map[t] = s2
+  tensor_map[big_sink] = simple_sink = contig_map[simple_sink]
+
+  # display the contiguous graph
+  if getenv("VIZ"): graph_rewrite(simple_sink, PatternMatcher([]), name="View Contiguous Graph")
 
   kernel_map = graph_rewrite_map(simple_sink, create_kernels)
   sched_sink = kernel_map[simple_sink]
