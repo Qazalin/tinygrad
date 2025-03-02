@@ -116,9 +116,36 @@ remove_movement_ops = merge_views+PatternMatcher([
    lambda view: view.const_like(0) if (vm:=view.st.views[-1].mask) is not None and any((x[1]-x[0]) == 0 for x in vm) else None),
 ])
 
+def get_becomes_map(big_sink:UOp) -> dict[UOp, UOp]:
+  # remove_movement_ops + sym
+  tensor_map = graph_rewrite_map(big_sink, remove_movement_ops+sym, ctx={})
+
+  # display the cleaned up tensor graph
+  if getenv("VIZ"): graph_rewrite(tensor_map[big_sink], PatternMatcher([]), name="View Tensor Graph")
+
+  becomes_map = {big_sink:tensor_map[big_sink]}
+  for k,v in tensor_map.items():
+    if k is v: continue
+    if v.base.op in {Ops.BUFFER, Ops.CONST}: becomes_map[k] = v
+
+  return becomes_map
+
 # **** schedule creation and toposort
+
+@dataclass(frozen=True)
+class ScheduleItem:
+  ast: UOp
+  bufs: tuple[Buffer, ...]
+  metadata: tuple[Metadata, ...]
 
 @track_rewrites(name_fxn=lambda r: f"Schedule {pluralize('Kernel', len(r[0]))}"+(f" (with_{pluralize('Var', len(r[1]))})" if len(r[1]) != 0 else ""))
 def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Variable, int], dict[UOp, UOp]]:
-  # remove_movement_ops + sym
-  tensor_map = graph_rewrite_map(big_sink, remove_movement_ops+sym, ctx={})
+  becomes_map = get_becomes_map(big_sink)
+  sched_sink = becomes_map[big_sink]
+  schedule: list[ScheduleItem] = []
+  var_vals: dict[Variable, int] = {}
+  for u in sched_sink.toposort:
+    if u.op is Ops.KERNEL:
+      schedule.append(ScheduleItem(u.arg.ast, tuple(dedup(s.buf_uop.buffer for s in u.src)), u.arg.metadata))
+      u.src[0].buf_uop.buffer.ref(1)
+  return schedule, var_vals, becomes_map

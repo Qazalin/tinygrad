@@ -17,7 +17,7 @@ from tinygrad.ops import PatternMatcher, UOp, Ops, UPat, graph_rewrite, track_re
 from tinygrad.codegen.symbolic import symbolic_simple
 from tinygrad.spec import type_verify, shape_spec
 from tinygrad.helpers import CI, DEBUG, FUSE_ARANGE, SPLIT_REDUCEOP, GlobalCounters, Context, getenv, unwrap, prod, all_same, temp
-from tinygrad.engine.schedule import ScheduleItem, create_schedule_with_vars, view_right, view_left, remove_movement_ops, sym
+from tinygrad.engine.schedule import ScheduleItem, create_schedule_with_vars, view_left, remove_movement_ops, sym
 from tinygrad.engine.realize import CompiledRunner, run_schedule, lower_schedule
 from extra.models.llama import precompute_freqs_cis
 
@@ -72,6 +72,16 @@ def _test_conv2d(allowed:int, dtype:DType=dtypes.float, **kwargs):
 def schedule_graph_rewrite(big_sink:UOp): return graph_rewrite(big_sink, remove_movement_ops+sym, {})
 
 class TestSchedule(unittest.TestCase):
+  def test_realize_const(self):
+   a = Tensor.empty(4)*0
+   a.realize()
+   assert a.lazydata.base.op is Ops.CONST
+
+  def test_realize_buffer(self):
+    a = Tensor.empty(4)*1
+    a.realize()
+    assert a.lazydata.base.op is Ops.BUFFER
+
   @unittest.skipIf(Device.DEFAULT == "CPU", "devices must mismatch")
   def test_error_on_device_mismatch(self):
     a = Tensor.empty(10)
