@@ -108,14 +108,6 @@ sym = symbolic_simple+PatternMatcher([
     and x.base.op is Ops.BUFFER and resolve(prod(v.shape) > prod(x.shape)) else None),
 ])
 
-remove_movement_ops = merge_views+PatternMatcher([
-  # NOTE: movement ops are always applied to base
-  (UPat(GroupOp.Movement, name="mov", src=(UPat.var("x"),)), lambda x,mov: x.view(unwrap(mov.st))),
-  # some masked views can collapse to 0, VIEW(x) -> CONST(VIEW)
-  (UPat(Ops.VIEW, name="view"),
-   lambda view: view.const_like(0) if (vm:=view.st.views[-1].mask) is not None and any((x[1]-x[0]) == 0 for x in vm) else None),
-])
-
 def do_sink(sink:UOp):
   new_src: list[UOp] = []
   for s in sink.src:
@@ -124,10 +116,18 @@ def do_sink(sink:UOp):
     else: new_src.append(s.contiguous())
   return sink.replace(src=n) if (n:=tuple(dedup(new_src))) != sink.src else None
 
+def view_reduceop(reduce:UOp, vm:UOp, x:UOp):
+  if not vm.contiguous: raise Exception("todo!")
+  new_shape = vm.arg.reduce(reduce.arg[1])
+  new_axis = tuple(i for i,(s,u) in enumerate(zip(x.shape, new_shape)) if s != u)
+  raise Exception(x.shape)
+  return UOp(Ops.REDUCE_AXIS, x.dtype, (x,), (reduce.arg[0], new_axis)).reshape(new_shape)
+
 view_left = merge_views+PatternMatcher([
   (UPat(Ops.VIEW, name="vm", src=(UPat(Ops.LOAD, src=(UPat(), UPat.var("st")), name="ld"),)),
    lambda ld,st,vm: UOp(Ops.LOAD, ld.dtype, (ld.src[0], (st.arg+vm.arg).to_uop()))),
-  (UPat(Ops.VIEW, name="vm", src=(UPat(GroupOp.All-{Ops.DEVICE, Ops.ASSIGN, Ops.COPY, Ops.CONTIGUOUS, Ops.CONST, Ops.BUFFER, Ops.REDUCE_AXIS}, name="x"),)),
+  (UPat(Ops.VIEW, name="vm", src=(UPat(Ops.REDUCE_AXIS, src=(UPat.var("x"),), name="reduce"),)), view_reduceop),
+  (UPat(Ops.VIEW, name="vm", src=(UPat(GroupOp.All-{Ops.DEVICE, Ops.ASSIGN, Ops.COPY, Ops.CONTIGUOUS, Ops.CONST, Ops.BUFFER}, name="x"),)),
    lambda x,vm: x.replace(src=tuple(s.view(vm.arg) for s in x.src))),
 ])
 
@@ -178,8 +178,8 @@ create_kernels = merge_views+PatternMatcher([
 ])
 
 def get_becomes_map(big_sink:UOp) -> dict[UOp, UOp]:
-  # remove_movement_ops + sym
-  tensor_map = graph_rewrite_map(big_sink, remove_movement_ops+sym, ctx={})
+  # merge_views + sym
+  tensor_map = graph_rewrite_map(big_sink, merge_views+sym, ctx={})
 
   # display the cleaned up tensor graph
   if getenv("VIZ"): graph_rewrite(tensor_map[big_sink], PatternMatcher([]), name="View Tensor Graph")

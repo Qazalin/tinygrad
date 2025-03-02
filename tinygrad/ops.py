@@ -961,6 +961,11 @@ merge_views = PatternMatcher([
   # merge unmasked const views
   (UPat(Ops.VIEW, name="view", src=(UPat((Ops.CONST, Ops.DEFINE_VAR), name="const", src=(UPat(Ops.VIEW, name="st"),) ),)),
    lambda st,const,view: const.replace(src=(st.replace(arg=st.st+view.st),)) if all(v.mask is None for v in (st.st+view.st).views) else None),
+  # some masked views can collapse to 0, VIEW(x) -> CONST(VIEW)
+  (UPat(Ops.VIEW, name="view"),
+   lambda view: view.const_like(0) if (vm:=view.st.views[-1].mask) is not None and any((x[1]-x[0]) == 0 for x in vm) else None),
+  # apply movement ops with a view
+  (UPat(GroupOp.Movement, name="mov", src=(UPat.var("x"),)), lambda x,mov: x.view(unwrap(mov.st))),
 ])
 
 # push VIEW to parents
