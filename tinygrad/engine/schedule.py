@@ -116,6 +116,46 @@ remove_movement_ops = merge_views+PatternMatcher([
    lambda view: view.const_like(0) if (vm:=view.st.views[-1].mask) is not None and any((x[1]-x[0]) == 0 for x in vm) else None),
 ])
 
+@dataclass(frozen=True)
+class Kernel:
+  ast: UOp
+  metadata: tuple[Metadata, ...] = ()
+  def __repr__(self): return f"<Kernel {len(list(self.ast.toposort))} {self.ast.op} {self.metadata}>"
+
+add_buffer_ops = PatternMatcher([
+  (UPat(Ops.BUFFER, name="x"),
+   lambda ctx,x: UOp.load(UOp(Ops.DEFINE_GLOBAL, x.dtype.ptr(size=x.size), (), ctx.index(x)), unwrap(x.st).to_uop(), dtype=x.dtype)),
+  (UPat(Ops.SINK, src=UPat(GroupOp.All-{Ops.STORE}), name="x"),
+   lambda x: UOp.sink(*[UOp.store(UOp(Ops.DEFINE_GLOBAL, s.dtype.ptr(size=s.size), (), i), unwrap(s.st).to_uop(), s) for i,s in enumerate(x.src)])),
+])
+
+def get_fixed_ast(k:UOp):
+  ast = graph_rewrite(k.arg.ast, add_buffer_ops, ctx=tuple(s.buf_uop for s in k.src))
+  return ast
+
+def realize_childless(ctx:dict[UOp, dict[UOp, None]], x:UOp):
+  if len(ctx[x]) != 0: return
+  buf = UOp.new_buffer(x.device, x.size, x.dtype)
+  return buf.assign(UOp(Ops.KERNEL, src=(buf,)+x.src, arg=Kernel(x.sink())))
+
+DONT_PLACE_IN_KERNEL = {Ops.KERNEL, Ops.ASSIGN, Ops.SINK, Ops.BUFFER, Ops.UNIQUE}
+
+def append_to_kernel(ctx:dict[UOp, dict[UOp, None]], x:UOp):
+  new_src: list[UOp] = []
+  for s in x.src:
+    if s.op in DONT_PLACE_IN_KERNEL: new_src.append(s)
+    else: new_src.extend(s.src)
+  if (n:=tuple(new_src)) == x.src:
+    ast = get_fixed_ast(x)
+    if ast == x.arg.ast: return None
+    return x.replace(arg=Kernel(ast, x.arg.ast))
+  return x.replace(src=n)
+
+create_kernels = merge_views+PatternMatcher([
+  (UPat(GroupOp.All-DONT_PLACE_IN_KERNEL, name="x"), realize_childless),
+  (UPat(Ops.KERNEL, name="x"), append_to_kernel),
+])
+
 def get_becomes_map(big_sink:UOp) -> dict[UOp, UOp]:
   # remove_movement_ops + sym
   tensor_map = graph_rewrite_map(big_sink, remove_movement_ops+sym, ctx={})
@@ -123,11 +163,25 @@ def get_becomes_map(big_sink:UOp) -> dict[UOp, UOp]:
   # display the cleaned up tensor graph
   if getenv("VIZ"): graph_rewrite(tensor_map[big_sink], PatternMatcher([]), name="View Tensor Graph")
 
-  becomes_map = {big_sink:tensor_map[big_sink]}
+  simple_sink = tensor_map[big_sink]
+  children: dict[UOp, dict[UOp, None]] = {}
+  for u in simple_sink.toposort:
+    children[u] = {}
+    if u is not simple_sink:
+      for s in u.src: children[s][u] = None
+
+  kernel_map = graph_rewrite_map(simple_sink, create_kernels, ctx=children)
+  sched_sink = kernel_map[simple_sink]
+
+  # display the cleaned up tensor graph
+  if getenv("VIZ"): graph_rewrite(sched_sink, PatternMatcher([]), name="View Kernel Graph")
+
+  becomes_map = {big_sink:sched_sink}
   for k,v in tensor_map.items():
+    if (a:=kernel_map.get(v.base)) is not None and a.op is Ops.ASSIGN:
+      becomes_map[k] = a.buf_uop.view(unwrap(v.st))
     if k is v: continue
     if v.base.op in {Ops.BUFFER, Ops.CONST}: becomes_map[k] = v
-
   return becomes_map
 
 # **** schedule creation and toposort
@@ -148,4 +202,5 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
     if u.op is Ops.KERNEL:
       schedule.append(ScheduleItem(u.arg.ast, tuple(dedup(s.buf_uop.buffer for s in u.src)), u.arg.metadata))
       u.src[0].buf_uop.buffer.ref(1)
+  del becomes_map[big_sink]
   return schedule, var_vals, becomes_map

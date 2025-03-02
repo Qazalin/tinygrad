@@ -82,6 +82,11 @@ class TestSchedule(unittest.TestCase):
     a.realize()
     assert a.lazydata.base.op is Ops.BUFFER
 
+  def test_realize_op(self):
+    a = Tensor.empty(4)+Tensor.empty(4)
+    a.realize()
+    assert a.lazydata.base.op is Ops.BUFFER, f"add didn't become buffer {a.lazydata}"
+
   @unittest.skipIf(Device.DEFAULT == "CPU", "devices must mismatch")
   def test_error_on_device_mismatch(self):
     a = Tensor.empty(10)
