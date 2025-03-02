@@ -116,11 +116,6 @@ remove_movement_ops = merge_views+PatternMatcher([
    lambda view: view.const_like(0) if (vm:=view.st.views[-1].mask) is not None and any((x[1]-x[0]) == 0 for x in vm) else None),
 ])
 
-def contig_childless(ctx:dict[UOp, UOp], x:UOp):
-  if len(ctx[x]) != 0: return None
-  ctx[x] = {(contig:=x.contiguous()):None}
-  return contig
-
 @dataclass(frozen=True)
 class Kernel:
   ast: UOp
@@ -131,26 +126,22 @@ def load_buf(ctx:tuple[UOp, ...], x:UOp):
   return UOp.load(UOp(Ops.DEFINE_GLOBAL, x.dtype.ptr(size=x.size), (), ctx.index(x)), unwrap(x.st).to_uop(), dtype=x.dtype)
 
 add_buffer_ops = PatternMatcher([
+  # LOAD
   (UPat(Ops.BUFFER, name="x"), load_buf),
   (UPat(Ops.COPY, src=(UPat(Ops.BUFFER, name="x"), UPat())), load_buf),
   (UPat(Ops.ASSIGN, src=(UPat(Ops.BUFFER, name="x"), UPat())), load_buf),
+  # STORE
   (UPat(Ops.SINK, src=UPat(GroupOp.All-{Ops.STORE}), name="x"),
    lambda x: UOp.sink(*[UOp.store(UOp(Ops.DEFINE_GLOBAL, s.dtype.ptr(size=s.size), (), i), unwrap(s.st).to_uop(), s) for i,s in enumerate(x.src)])),
 ])
 
-def get_kernel_ast(x:UOp):
-  ast = graph_rewrite(x.arg.ast, add_buffer_ops, ctx=tuple(s.buf_uop for s in x.src), bottom_up=True)
-  return ast
-
-DONT_PLACE_IN_KERNEL = {Ops.KERNEL, Ops.ASSIGN, Ops.COPY, Ops.BUFFER}
-
 def append_to_kernel(x:UOp):
   new_src: list[UOp] = []
   for s in x.src:
-    if s.op in DONT_PLACE_IN_KERNEL: new_src.append(s)
+    if s.op in {Ops.BUFFER, Ops.COPY, Ops.ASSIGN}: new_src.append(s)
     else: new_src.extend(s.src)
   if (n:=tuple(new_src)) != x.src: return x.replace(src=n)
-  ast = get_kernel_ast(x)
+  ast = graph_rewrite(x.arg.ast, add_buffer_ops, ctx=tuple(s.buf_uop for s in x.src), bottom_up=True)
   return x.replace(arg=Kernel(ast, x.arg.metadata)) if ast is not x.arg.ast else None
 
 create_kernels = merge_views+PatternMatcher([
@@ -158,8 +149,9 @@ create_kernels = merge_views+PatternMatcher([
    lambda x: UOp(Ops.ASSIGN, x.dtype, (b:=UOp.new_buffer(x.device, x.size, x.dtype), UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x.sink()))))),
   (UPat(Ops.ASSIGN, src=(UPat(Ops.BUFFER, name="b"), UPat(GroupOp.All-{Ops.KERNEL}, name="x"))),
    lambda b,x: UOp(Ops.ASSIGN, x.dtype, (b, UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x.sink()))))),
-  (UPat(Ops.COPY, src=(UPat(Ops.DEVICE), UPat.var("y")), name="x"),
-   lambda x,y: UOp(Ops.COPY, x.dtype, src=(UOp.new_buffer(x.device, x.size, x.dtype), y))),
+  (UPat(Ops.COPY, src=(UPat(Ops.DEVICE, name="d"), UPat.var("y"))),
+   lambda d,y: UOp(Ops.COPY, y.dtype, src=(UOp.new_buffer(d.arg, y.size, y.dtype), y))),
+  # walk back the local graph until we reach BUFFER/COPY/ASSIGN
   (UPat(Ops.KERNEL, name="x"), append_to_kernel),
 ])
 
