@@ -116,43 +116,50 @@ remove_movement_ops = merge_views+PatternMatcher([
    lambda view: view.const_like(0) if (vm:=view.st.views[-1].mask) is not None and any((x[1]-x[0]) == 0 for x in vm) else None),
 ])
 
+def contig_childless(ctx:dict[UOp, UOp], x:UOp):
+  if len(ctx[x]) != 0: return None
+  ctx[x] = {(contig:=x.contiguous()):None}
+  return contig
+
 @dataclass(frozen=True)
 class Kernel:
   ast: UOp
   metadata: tuple[Metadata, ...] = ()
   def __repr__(self): return f"<Kernel {len(list(self.ast.toposort))} {self.ast.op} {self.metadata}>"
 
+def load_buf(ctx:tuple[UOp, ...], x:UOp):
+  return UOp.load(UOp(Ops.DEFINE_GLOBAL, x.dtype.ptr(size=x.size), (), ctx.index(x)), unwrap(x.st).to_uop(), dtype=x.dtype)
+
 add_buffer_ops = PatternMatcher([
-  (UPat(Ops.BUFFER, name="x"),
-   lambda ctx,x: UOp.load(UOp(Ops.DEFINE_GLOBAL, x.dtype.ptr(size=x.size), (), ctx.index(x)), unwrap(x.st).to_uop(), dtype=x.dtype)),
+  (UPat(Ops.BUFFER, name="x"), load_buf),
+  (UPat(Ops.COPY, src=(UPat(Ops.BUFFER, name="x"), UPat())), load_buf),
+  (UPat(Ops.ASSIGN, src=(UPat(Ops.BUFFER, name="x"), UPat())), load_buf),
   (UPat(Ops.SINK, src=UPat(GroupOp.All-{Ops.STORE}), name="x"),
    lambda x: UOp.sink(*[UOp.store(UOp(Ops.DEFINE_GLOBAL, s.dtype.ptr(size=s.size), (), i), unwrap(s.st).to_uop(), s) for i,s in enumerate(x.src)])),
 ])
 
-def get_fixed_ast(k:UOp):
-  ast = graph_rewrite(k.arg.ast, add_buffer_ops, ctx=tuple(s.buf_uop for s in k.src))
+def get_kernel_ast(x:UOp):
+  ast = graph_rewrite(x.arg.ast, add_buffer_ops, ctx=tuple(s.buf_uop for s in x.src), bottom_up=True)
   return ast
 
-def realize_childless(ctx:dict[UOp, dict[UOp, None]], x:UOp):
-  if len(ctx[x]) != 0: return
-  buf = UOp.new_buffer(x.device, x.size, x.dtype)
-  return buf.assign(UOp(Ops.KERNEL, src=(buf,)+x.src, arg=Kernel(x.sink())))
+DONT_PLACE_IN_KERNEL = {Ops.KERNEL, Ops.ASSIGN, Ops.COPY, Ops.BUFFER}
 
-DONT_PLACE_IN_KERNEL = {Ops.KERNEL, Ops.ASSIGN, Ops.SINK, Ops.BUFFER, Ops.UNIQUE}
-
-def append_to_kernel(ctx:dict[UOp, dict[UOp, None]], x:UOp):
+def append_to_kernel(x:UOp):
   new_src: list[UOp] = []
   for s in x.src:
     if s.op in DONT_PLACE_IN_KERNEL: new_src.append(s)
     else: new_src.extend(s.src)
-  if (n:=tuple(new_src)) == x.src:
-    ast = get_fixed_ast(x)
-    if ast == x.arg.ast: return None
-    return x.replace(arg=Kernel(ast, x.arg.ast))
-  return x.replace(src=n)
+  if (n:=tuple(new_src)) != x.src: return x.replace(src=n)
+  ast = get_kernel_ast(x)
+  return x.replace(arg=Kernel(ast, x.arg.metadata)) if ast is not x.arg.ast else None
 
 create_kernels = merge_views+PatternMatcher([
-  (UPat(GroupOp.All-DONT_PLACE_IN_KERNEL, name="x"), realize_childless),
+  (UPat(Ops.CONTIGUOUS, src=(UPat.var("x"),)),
+   lambda x: UOp(Ops.ASSIGN, x.dtype, (b:=UOp.new_buffer(x.device, x.size, x.dtype), UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x.sink()))))),
+  (UPat(Ops.ASSIGN, src=(UPat(Ops.BUFFER, name="b"), UPat(GroupOp.All-{Ops.KERNEL}, name="x"))),
+   lambda b,x: UOp(Ops.ASSIGN, x.dtype, (b, UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x.sink()))))),
+  (UPat(Ops.COPY, src=(UPat(Ops.DEVICE), UPat.var("y")), name="x"),
+   lambda x,y: UOp(Ops.COPY, x.dtype, src=(UOp.new_buffer(x.device, x.size, x.dtype), y))),
   (UPat(Ops.KERNEL, name="x"), append_to_kernel),
 ])
 
@@ -170,7 +177,7 @@ def get_becomes_map(big_sink:UOp) -> dict[UOp, UOp]:
     if u is not simple_sink:
       for s in u.src: children[s][u] = None
 
-  kernel_map = graph_rewrite_map(simple_sink, create_kernels, ctx=children)
+  kernel_map = graph_rewrite_map(simple_sink, create_kernels)
   sched_sink = kernel_map[simple_sink]
 
   # display the cleaned up tensor graph
@@ -178,7 +185,7 @@ def get_becomes_map(big_sink:UOp) -> dict[UOp, UOp]:
 
   becomes_map = {big_sink:sched_sink}
   for k,v in tensor_map.items():
-    if (a:=kernel_map.get(v.base)) is not None and a.op is Ops.ASSIGN:
+    if (a:=kernel_map.get(v.base)) is not None and a.op in {Ops.ASSIGN, Ops.COPY}:
       becomes_map[k] = a.buf_uop.view(unwrap(v.st))
     if k is v: continue
     if v.base.op in {Ops.BUFFER, Ops.CONST}: becomes_map[k] = v
@@ -200,7 +207,10 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
   var_vals: dict[Variable, int] = {}
   for u in sched_sink.toposort:
     if u.op is Ops.KERNEL:
-      schedule.append(ScheduleItem(u.arg.ast, tuple(dedup(s.buf_uop.buffer for s in u.src)), u.arg.metadata))
-      u.src[0].buf_uop.buffer.ref(1)
+      schedule.append(ScheduleItem(u.arg.ast, tuple(s.buf_uop.buffer for s in u.src), u.arg.metadata))
+      u.src[0].buffer.ref(1)
+    if u.op is Ops.COPY:
+      schedule.append(ScheduleItem(u.replace(src=()), tuple(s.buffer for s in u.src), ()))
+      u.src[0].buffer.ref(1)
   del becomes_map[big_sink]
   return schedule, var_vals, becomes_map

@@ -82,10 +82,42 @@ class TestSchedule(unittest.TestCase):
     a.realize()
     assert a.lazydata.base.op is Ops.BUFFER
 
+  def test_realize_contig(self):
+    a = (Tensor.empty(4)+Tensor.empty(4)).contiguous()
+    a.realize()
+    assert a.lazydata.base.op is Ops.BUFFER, f"contig didn't become buffer {a.lazydata}"
+
   def test_realize_op(self):
     a = Tensor.empty(4)+Tensor.empty(4)
     a.realize()
     assert a.lazydata.base.op is Ops.BUFFER, f"add didn't become buffer {a.lazydata}"
+
+  def test_copy_op(self):
+    a = Tensor([1, 2, 3])
+    a.realize()
+    assert a.lazydata.base.op is Ops.BUFFER, f"copy didn't become buffer {a.lazydata}"
+    assert a.tolist() == [1, 2, 3]
+
+  def test_purple_and_green_contig(self):
+    a = (Tensor([1])+Tensor([2])).contiguous()
+    a.realize()
+    assert a.lazydata.base.op is Ops.BUFFER
+    assert a.tolist() == [3]
+
+  def test_many_greens(self):
+    a = (Tensor([1])+Tensor([2])).contiguous()
+    b = (a+Tensor([2])).contiguous()
+    b.realize()
+    assert a.lazydata.base.op is Ops.BUFFER
+    assert a.tolist() == [3]
+    assert b.lazydata.base.op is Ops.BUFFER
+    assert b.tolist() == [3+2]
+ 
+  def test_purple_and_green(self):
+    a = Tensor([1])+Tensor([2])
+    a.realize()
+    assert a.lazydata.base.op is Ops.BUFFER
+    assert a.tolist() == [3]
 
   @unittest.skipIf(Device.DEFAULT == "CPU", "devices must mismatch")
   def test_error_on_device_mismatch(self):
