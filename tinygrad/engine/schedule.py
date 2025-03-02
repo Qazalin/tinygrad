@@ -118,16 +118,12 @@ def do_sink(sink:UOp):
 
 def view_reduceop(reduce:UOp, vm:UOp, x:UOp):
   if not vm.contiguous: raise Exception("todo!")
-  new_shape = vm.arg.reduce(reduce.arg[1])
-  new_axis = tuple(i for i,(s,u) in enumerate(zip(x.shape, new_shape)) if s != u)
-  raise Exception(x.shape)
-  return UOp(Ops.REDUCE_AXIS, x.dtype, (x,), (reduce.arg[0], new_axis)).reshape(new_shape)
 
 view_left = merge_views+PatternMatcher([
   (UPat(Ops.VIEW, name="vm", src=(UPat(Ops.LOAD, src=(UPat(), UPat.var("st")), name="ld"),)),
    lambda ld,st,vm: UOp(Ops.LOAD, ld.dtype, (ld.src[0], (st.arg+vm.arg).to_uop()))),
   (UPat(Ops.VIEW, name="vm", src=(UPat(Ops.REDUCE_AXIS, src=(UPat.var("x"),), name="reduce"),)), view_reduceop),
-  (UPat(Ops.VIEW, name="vm", src=(UPat(GroupOp.All-{Ops.DEVICE, Ops.ASSIGN, Ops.COPY, Ops.CONTIGUOUS, Ops.CONST, Ops.BUFFER}, name="x"),)),
+  (UPat(Ops.VIEW, name="vm", src=(UPat(GroupOp.All-{Ops.DEVICE, Ops.ASSIGN, Ops.COPY, Ops.CONTIGUOUS, Ops.CONST, Ops.BUFFER, Ops.REDUCE_AXIS}, name="x"),)),
    lambda x,vm: x.replace(src=tuple(s.view(vm.arg) for s in x.src))),
 ])
 
@@ -144,7 +140,7 @@ class Kernel:
 def load_buf(ctx:tuple[UOp, ...], x:UOp):
   return UOp.load(UOp(Ops.DEFINE_GLOBAL, x.dtype.ptr(size=x.size), (), ctx.index(x)), unwrap(x.st).to_uop(), dtype=x.dtype)
 
-add_buffer_ops = view_left+PatternMatcher([
+add_buffer_ops = PatternMatcher([
   # LOAD
   (UPat(Ops.BUFFER, name="x"), load_buf),
   (UPat(Ops.COPY, src=(UPat(Ops.BUFFER, name="x"), UPat())), load_buf),
@@ -155,6 +151,22 @@ add_buffer_ops = view_left+PatternMatcher([
                                   ShapeTracker.from_shape(s.shape).to_uop(), s) for i,s in enumerate(x.src)])),
 ])
 
+def simplify_view(x:UOp):
+  with Context(TRACK_MATCH_STATS=0): return graph_rewrite(x, view_left)
+
+def elementwise_view_right(x:UOp):
+  if not (view_src:=[s for s in x.src if s.op is Ops.VIEW]): return None
+  new_src_shape = view_src[0].base.shape
+  new_src = [s.base if s.op is Ops.VIEW else simplify_view(s.reshape(new_src_shape)) for s in x.src]
+  assert all_same([s.shape for s in new_src])
+  assert not any(s.op is Ops.VIEW for s in new_src)
+  return x.replace(src=tuple(new_src)).reshape(x.shape)
+
+view_right = merge_views+PatternMatcher([
+  (UPat(GroupOp.All-GroupOp.Buffer, name="x"), elementwise_view_right),
+  (UPat(Ops.STORE, src=(UPat.var("b"), UPat.var("st"), UPat(Ops.VIEW, src=(UPat.var("x"),)))), lambda b,st,x: UOp.store(b, st.view(x.st), x)),
+])
+
 DONT_PLACE_IN_KERNEL = {Ops.BUFFER, Ops.COPY, Ops.ASSIGN}
 
 def append_to_kernel(x:UOp):
@@ -163,7 +175,8 @@ def append_to_kernel(x:UOp):
     if s.op in DONT_PLACE_IN_KERNEL: new_src.append(s)
     else: new_src.extend(s.src)
   if (n:=tuple(new_src)) != x.src: return x.replace(src=n)
-  ast = graph_rewrite(x.arg.ast, add_buffer_ops, ctx=tuple(s.buf_uop for s in x.src), bottom_up=True)
+  ast = graph_rewrite(x.arg.ast, view_left+add_buffer_ops, ctx=tuple(s.buf_uop for s in x.src), bottom_up=True)
+  ast = graph_rewrite(ast, view_right)
   return x.replace(arg=Kernel(ast, x.arg.metadata)) if ast is not x.arg.ast else None
 
 create_kernels = merge_views+PatternMatcher([
