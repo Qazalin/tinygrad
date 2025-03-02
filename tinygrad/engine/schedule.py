@@ -119,9 +119,9 @@ remove_movement_ops = merge_views+PatternMatcher([
 def do_sink(sink:UOp):
   new_src: list[UOp] = []
   for s in sink.src:
-    if s.base.op in {Ops.CONTIGUOUS, Ops.COPY, Ops.ASSIGN}: new_src.append(s)
-    else:
-      new_src.append(s.base.contiguous())
+    if s.base.op in {Ops.CONTIGUOUS, Ops.COPY, Ops.ASSIGN, Ops.CONST, Ops.BUFFER}: new_src.append(s)
+    elif s.op is Ops.VIEW: new_src.append(s.base.contiguous().view(s.arg))
+    else: new_src.append(s.contiguous())
   return sink.replace(src=n) if (n:=tuple(dedup(new_src))) != sink.src else None
 
 view_left = merge_views+PatternMatcher([
@@ -196,7 +196,7 @@ def get_becomes_map(big_sink:UOp) -> dict[UOp, UOp]:
     if v.op is Ops.CONTIGUOUS:
       tensors = [x for x,y in tensor_map.items() if y is k]
       for t in tensors: tensor_map[t] = v
-    if all(s.op is Ops.CONTIGUOUS for s in v.src):
+    if all(s.base.op is Ops.CONTIGUOUS for s in v.src):
       for s,s2 in zip(k.src, v.src):
         tensors = [x for x,y in tensor_map.items() if y is s]
         for t in tensors: tensor_map[t] = s2
@@ -234,11 +234,11 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
   schedule: list[ScheduleItem] = []
   var_vals: dict[Variable, int] = {}
   for u in sched_sink.toposort:
-    if u.op is Ops.KERNEL:
-      schedule.append(ScheduleItem(u.arg.ast, tuple(s.buf_uop.buffer for s in u.src), u.arg.metadata))
-      u.src[0].buffer.ref(1)
-    if u.op is Ops.COPY:
-      schedule.append(ScheduleItem(u.replace(src=()), tuple(s.buf_uop.buffer for s in u.src), ()))
-      u.src[0].buffer.ref(1)
+    si = None
+    if u.op is Ops.KERNEL: si = ScheduleItem(u.arg.ast, tuple(s.buf_uop.buffer for s in u.src), u.arg.metadata)
+    if u.op is Ops.COPY: si = ScheduleItem(u.replace(src=()), tuple(s.buf_uop.buffer for s in u.src), ())
+    if si is not None:
+      schedule.append(si)
+      for buf in si.bufs: buf.ref(1)
   del becomes_map[big_sink]
   return schedule, var_vals, becomes_map
