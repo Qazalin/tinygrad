@@ -118,18 +118,16 @@ def do_sink(sink:UOp):
     else: new_src.append(s.contiguous())
   return sink.replace(src=n) if (n:=tuple(new_src)) != sink.src else None
 
-def view_reduceop(reduce:UOp, vm:UOp, x:UOp):
-  if not vm.arg.contiguous: return reduce.contiguous().view(vm.st)
-
 view_left = merge_views+PatternMatcher([
   (UPat(Ops.VIEW, name="vm", src=(UPat(Ops.LOAD, src=(UPat(), UPat.var("st")), name="ld"),)),
    lambda ld,st,vm: UOp(Ops.LOAD, ld.dtype, (ld.src[0], (st.arg+vm.arg).to_uop()))),
-  (UPat(Ops.VIEW, name="vm", src=(UPat(Ops.REDUCE_AXIS, src=(UPat.var("x"),), name="reduce"),)), view_reduceop),
   (UPat(Ops.VIEW, name="vm", src=(UPat(GroupOp.All-{Ops.DEVICE, Ops.ASSIGN, Ops.COPY, Ops.CONTIGUOUS, Ops.CONST, Ops.BUFFER, Ops.REDUCE_AXIS}, name="x"),)),
    lambda x,vm: x.replace(src=tuple(s.view(vm.arg) for s in x.src))),
 ])
 
 insert_contigs = view_left+PatternMatcher([
+  (UPat(Ops.VIEW, name="vm", src=(UPat(Ops.REDUCE_AXIS, src=(UPat.var("x"),), name="reduce"),)),
+   lambda vm,x,reduce: reduce.contiguous().view(vm.arg) if not vm.arg.contiguous else None),
   (UPat(Ops.SINK, name="sink"), do_sink),
 ])
 
@@ -212,7 +210,7 @@ def get_becomes_map(big_sink:UOp) -> dict[UOp, UOp]:
     children[u] = {}
     if u is not simple_sink:
       for s in u.src: children[s][u] = None
-  contig_map = graph_rewrite_map(simple_sink, insert_contigs, ctx=children)
+  contig_map = graph_rewrite_map(simple_sink, insert_contigs, ctx=children, bottom_up=True)
   for k,v in contig_map.copy().items():
     for s1,s2 in zip(k.src, v.src):
       if s2.base.op is Ops.CONTIGUOUS and (c:=contig_map.get(s1)).base.op is not s2.base.op: contig_map[s1] = s2
