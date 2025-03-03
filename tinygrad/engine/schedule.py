@@ -106,6 +106,8 @@ sym = symbolic_simple+PatternMatcher([
   # put CAST after expanding BUFFER
   (UPat(Ops.VIEW, src=(UPat(Ops.CAST, src=(UPat.var("x"),)),), name="v"), lambda x,v: x.view(x.st+v.st).cast(v.dtype) if getenv("CAST_AFTER_EXPAND")
     and x.base.op is Ops.BUFFER and resolve(prod(v.shape) > prod(x.shape)) else None),
+  # dedup sink
+  (UPat(Ops.SINK, name="sink"), lambda sink: sink.replace(src=n) if (n:=tuple(dedup(sink.src))) != sink.src else None),
 ])
 
 def do_sink(sink:UOp):
@@ -114,7 +116,7 @@ def do_sink(sink:UOp):
     if s.base.op in {Ops.CONTIGUOUS, Ops.COPY, Ops.ASSIGN, Ops.CONST, Ops.BUFFER}: new_src.append(s)
     elif s.op is Ops.VIEW: new_src.append(s.base.contiguous().view(s.arg))
     else: new_src.append(s.contiguous())
-  return sink.replace(src=n) if (n:=tuple(dedup(new_src))) != sink.src else None
+  return sink.replace(src=n) if (n:=tuple(new_src)) != sink.src else None
 
 def view_reduceop(reduce:UOp, vm:UOp, x:UOp):
   if not vm.arg.contiguous: return reduce.contiguous().view(vm.st)
@@ -197,40 +199,36 @@ def get_becomes_map(big_sink:UOp) -> dict[UOp, UOp]:
   # display the cleaned up tensor graph
   if getenv("VIZ"): graph_rewrite(tensor_map[big_sink], PatternMatcher([]), name="View Tensor Graph")
 
+  becomes_map: dict[UOp, UOp] = {}
+  for k,v in tensor_map.items():
+    if k is v: continue
+    if v.base.op in {Ops.BUFFER, Ops.CONST}: becomes_map[k] = v
+
   simple_sink = tensor_map[big_sink]
   children: dict[UOp, dict[UOp, None]] = {}
   for u in simple_sink.toposort:
     children[u] = {}
     if u is not simple_sink:
       for s in u.src: children[s][u] = None
-
   contig_map = graph_rewrite_map(simple_sink, insert_contigs, ctx=children)
-  for k,v in contig_map.items():
-    if k is v: continue
-    if v.op is Ops.CONTIGUOUS:
-      tensors = [x for x,y in tensor_map.items() if y is k]
-      for t in tensors: tensor_map[t] = v
-    if all(s.base.op is Ops.CONTIGUOUS for s in v.src):
-      for s,s2 in zip(k.src, v.src):
-        tensors = [x for x,y in tensor_map.items() if y is s]
-        for t in tensors: tensor_map[t] = s2
-  tensor_map[big_sink] = simple_sink = contig_map[simple_sink]
+  for k,v in contig_map.copy().items():
+    for s1,s2 in zip(k.src, v.src):
+      if s2.op is Ops.CONTIGUOUS and (c:=contig_map.get(s1)).op is not s2.op: contig_map[s1] = s2
 
   # display the contiguous graph
-  if getenv("VIZ"): graph_rewrite(simple_sink, PatternMatcher([]), name="View Contiguous Graph")
+  if getenv("VIZ"): graph_rewrite(contig_map[simple_sink], PatternMatcher([]), name="View Contiguous Graph")
 
-  kernel_map = graph_rewrite_map(simple_sink, create_kernels)
-  sched_sink = kernel_map[simple_sink]
+  kernel_map = graph_rewrite_map(contig_map[simple_sink], create_kernels)
+  for k,v in kernel_map.items():
+    if v.base.op not in {Ops.ASSIGN, Ops.COPY}: continue
+    contig_ops = [x for x,y in contig_map.items() if y is k]
+    for c in contig_ops:
+      tensor_ops = [x for x,y in tensor_map.items() if y is c]
+      for t in tensor_ops: becomes_map[t] = v.base.buf_uop.view(c.st)
 
-  # display the cleaned up tensor graph
+  becomes_map[big_sink] = sched_sink = kernel_map[contig_map[simple_sink]]
+  # display the final graph
   if getenv("VIZ"): graph_rewrite(sched_sink, PatternMatcher([]), name="View Kernel Graph")
-
-  becomes_map = {big_sink:sched_sink}
-  for k,v in tensor_map.items():
-    if (a:=kernel_map.get(v.base)) is not None and a.op in {Ops.ASSIGN, Ops.COPY}:
-      becomes_map[k] = a.buf_uop.view(unwrap(v.st))
-    if k is v: continue
-    if v.base.op in {Ops.BUFFER, Ops.CONST}: becomes_map[k] = v
   return becomes_map
 
 # **** schedule creation and toposort
