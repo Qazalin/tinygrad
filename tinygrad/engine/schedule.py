@@ -186,6 +186,8 @@ create_kernels = merge_views+PatternMatcher([
    lambda x: UOp(Ops.ASSIGN, x.dtype, (b:=UOp.new_buffer(x.device, x.size, x.dtype), UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x.sink()))))),
   (UPat(Ops.ASSIGN, src=(UPat(Ops.BUFFER, name="b"), UPat(GroupOp.All-{Ops.KERNEL}, name="x"))),
    lambda b,x: UOp(Ops.ASSIGN, x.dtype, (b, UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x.sink()))))),
+  (UPat(Ops.ASSIGN, src=(UPat(Ops.BUFFER, name="b"), UPat(Ops.KERNEL, name="k"))),
+   lambda b,k: UOp(Ops.ASSIGN, x.dtype, (b.replace(arg=k.size), k)) if k.size != b.size else None),
   (UPat(Ops.COPY, src=(UPat(Ops.DEVICE, name="d"), UPat.var("y"))),
    lambda d,y: UOp(Ops.COPY, y.dtype, src=(UOp.new_buffer(d.arg, y.size, y.dtype), y))),
   # walk back the local graph until we reach BUFFER/COPY/ASSIGN
@@ -213,7 +215,7 @@ def get_becomes_map(big_sink:UOp) -> dict[UOp, UOp]:
   contig_map = graph_rewrite_map(simple_sink, insert_contigs, ctx=children)
   for k,v in contig_map.copy().items():
     for s1,s2 in zip(k.src, v.src):
-      if s2.op is Ops.CONTIGUOUS and (c:=contig_map.get(s1)).op is not s2.op: contig_map[s1] = s2
+      if s2.base.op is Ops.CONTIGUOUS and (c:=contig_map.get(s1)).base.op is not s2.base.op: contig_map[s1] = s2
 
   # display the contiguous graph
   if getenv("VIZ"): graph_rewrite(contig_map[simple_sink], PatternMatcher([]), name="View Contiguous Graph")
