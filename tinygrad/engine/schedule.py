@@ -376,11 +376,13 @@ class ScheduleItem:
 
 def schedule_uop(sink:UOp, var_vals:dict[Variable, int]) -> ScheduleItem:
   assert sink.op is Ops.ASSIGN and sink.src[1].op is Ops.KERNEL, f"{sink} must be ASSIGN"
+  ast = graph_rewrite(sink.src[1].arg.ast, PatternMatcher([]), name="base_ast")
+  a2 = graph_rewrite(sink, PatternMatcher([]), name="base_kernel")
   # substitute kernel parents for the target buffer (TODO: remove this by making kernel creation top down)
   parent_rep: dict[UOp, UOp] = {}
   for s in sink.src[1].src:
     k = s.src[1].arg.ast if s.op is Ops.ASSIGN else s.src[1].copy_to_device(s.device, s.arg)
-    parent_rep[k] = s.src[0]
+    parent_rep[k] = s.buf_uop if s.op is Ops.COPY else s.src[0]
   ast = sink.src[1].arg.ast.substitute(parent_rep).sink()
   # add buffer ops
   ast = graph_rewrite(ast, add_buffer_ops, bufs:=[sink.buf_uop], bottom_up=True)
@@ -435,9 +437,9 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
   kernel_assign: dict[UOp, UOp] = {}
   assign_rep: dict[UOp, UOp] = {}
   for u in sched_sink.toposort:
-    if u.op is not Ops.ASSIGN: continue
+    if u.op not in {Ops.ASSIGN, Ops.COPY}: continue
     kernel_assign[u.buf_uop] = u
-    for s in u.src[1].src:
+    for s in (u.src[1].src if u.op is Ops.ASSIGN else u.src):
       if s.op is not Ops.BUFFER or s is u.buf_uop or (a:=kernel_assign.get(s)) is None: continue
       if any(x.op is Ops.ASSIGN and x.buf_uop is s for x in u.toposort):
         raise RuntimeError(f"cycle detected in graph, kernel for {u.buf_uop} must either depend on ASSIGN or BUFFER")

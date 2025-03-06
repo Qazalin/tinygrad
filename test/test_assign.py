@@ -142,6 +142,20 @@ class TestAssign(unittest.TestCase):
     new = a + (times_a-1).contiguous()
     np.testing.assert_allclose(new.numpy(), 4)
 
+  def test_copy_before_assign(self):
+    a = Tensor.full((4,), 1.).contiguous().realize()
+    clone_a = a.clone()
+    a.assign(Tensor.full((4,), 2.))
+    new = a + clone_a
+    np.testing.assert_allclose(new.numpy(), 2+1)
+
+  def test_copy_after_assign(self):
+    a = Tensor.full((4,), 1.).contiguous().realize()
+    a.assign(Tensor.full((4,), 2.))
+    clone_a = a.clone()
+    new = a + clone_a
+    np.testing.assert_allclose(new.numpy(), 2+2)
+
   def test_assign_diamond_possible_contiguous(self):
     a = Tensor.ones(4).contiguous().realize()
     times_a = a*3
