@@ -513,8 +513,9 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
     return dsrcs[0]._device if len(dsrcs:=[x for x in self.src if x._device is not None]) != 0 else None
   @property
   def buf_uop(self) -> UOp:
-    assert self.op is Ops.ASSIGN, f"must be ASSIGN {self.op}"
-    return self.src[0].base
+    if self.op is Ops.BUFFER: return self
+    assert self.op is Ops.ASSIGN, f"must be ASSIGN or COPY {self.op}"
+    return self.src[0].base.buf_uop
   @property
   def buffer(self) -> Buffer:
     if self is not self.base:

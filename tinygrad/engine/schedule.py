@@ -230,7 +230,7 @@ class KernelContext:
   realizes: dict[UOp, None]
   ops_metadata: dict[UOp, Metadata]
 
-DONT_PLACE_IN_KERNEL = {Ops.KERNEL, Ops.ASSIGN, Ops.BUFFER}
+DONT_PLACE_IN_KERNEL = {Ops.KERNEL, Ops.ASSIGN, Ops.COPY, Ops.BUFFER}
 def append_to_kernel(ctx:KernelContext, x:UOp):
   new_srcs: list[UOp] = []
   metadata = dict.fromkeys(x.arg.metadata)
@@ -246,6 +246,8 @@ def append_to_kernel(ctx:KernelContext, x:UOp):
 create_kernels = merge_views+PatternMatcher([
   # always give assign a kernel
   (UPat.assign(UPat.var("b"), UPat(GroupOp.All-{Ops.KERNEL}), name="x"), lambda x,b: b.assign(UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x)))),
+  # give copy a buffer on the new device
+  (UPat(Ops.COPY, src=(UPat(Ops.DEVICE, name="d"), UPat()), name="c"), lambda d,c: c.replace(src=(UOp.new_buffer(d.arg, c.size, c.dtype), c.src[1]))),
   # otherwise check if need to assign this UOp to a new buffer
   (UPat(GroupOp.All-DONT_PLACE_IN_KERNEL, name="x"), lambda ctx,x: UOp(Ops.ASSIGN, x.dtype, (b:=UOp.new_buffer(x.device, x.size, x.dtype).view(x.st),\
     UOp(Ops.KERNEL, src=(b,)+x.src, arg=Kernel(x)))) if x in ctx.realizes else None),
@@ -374,8 +376,12 @@ class ScheduleItem:
 
 def schedule_uop(sink:UOp, var_vals:dict[Variable, int]) -> ScheduleItem:
   assert sink.op is Ops.ASSIGN and sink.src[1].op is Ops.KERNEL, f"{sink} must be ASSIGN"
-  # substitute kernel sources for the target buffer
-  ast = sink.src[1].arg.ast.substitute({s.src[1].arg.ast:s.src[0] for s in sink.src[1].src if s.op is Ops.ASSIGN}).sink()
+  # substitute kernel parents for the target buffer (TODO: remove this by making kernel creation top down)
+  parent_rep: dict[UOp, UOp] = {}
+  for s in sink.src[1].src:
+    k = s.src[1].arg.ast if s.op is Ops.ASSIGN else s.src[1].copy_to_device(s.device, s.arg)
+    parent_rep[k] = s.src[0]
+  ast = sink.src[1].arg.ast.substitute(parent_rep).sink()
   # add buffer ops
   ast = graph_rewrite(ast, add_buffer_ops, bufs:=[sink.buf_uop], bottom_up=True)
   if ast.op is Ops.SINK and not all_same(dev:=[x.device for x in bufs]): raise RuntimeError(f"all buffers must be on the same device: {dev}")
@@ -417,7 +423,7 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
   becomes_map: dict[UOp, UOp] = {}
   for k,v in tensor_map.items():
     # if we created a KERNEL for this tensor, map it to the assigned buffer
-    if (a:=kernel_map.get(v.base)) is not None and a.op is Ops.ASSIGN:
+    if (a:=kernel_map.get(v.base)) is not None and a.op in {Ops.ASSIGN, Ops.COPY}:
       becomes_map[k] = a.src[0] if v is v.base else a.src[0].view(unwrap(v.st))
     # tensors can also simplify to an existing buffer/const
     else:
@@ -447,10 +453,10 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
   children: dict[UOp, list[UOp]] = {}
   in_degree: dict[UOp, int] = {}
   for u in sched_sink.toposort:
-    if u.op is not Ops.ASSIGN: continue
+    if u.op not in {Ops.ASSIGN, Ops.COPY}: continue
     in_degree[u] = 0
-    for s in u.src[1].src:
-      if s.op is not Ops.ASSIGN: continue
+    for s in (u.src[1].src if u.op is Ops.ASSIGN else u.src):
+      if s.op not in {Ops.ASSIGN, Ops.COPY}: continue
       children.setdefault(s, []).append(u)
       in_degree[u] += 1
 
@@ -459,12 +465,13 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
   var_vals: dict[Variable, int] = {}
   while queue:
     u = queue.popleft()
-    schedule.append(schedule_uop(u, var_vals))
-    # increment the refcount of the target buf (this is required by the JIT and memory planner)
-    u.buf_uop.buffer.ref(1)
+    if u.op is Ops.COPY: schedule.append(ScheduleItem(UOp(Ops.COPY), tuple(s.buf_uop.buffer for s in u.src), ()))
+    else: schedule.append(schedule_uop(u, var_vals))
     for x in children.get(u, []):
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append(x)
+  # increment the refcount of the target buf (this is required by the JIT and memory planner)
+  for si in schedule: si.bufs[0].ref(1)
 
   # confirm everything was scheduled correctly
   if len(schedule) != (kc:=len(in_degree)): raise RuntimeError(f"cycle detected in graph, created {kc} kernels but only scheduled {len(schedule)}")
