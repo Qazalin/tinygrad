@@ -37,7 +37,7 @@ def _apply_map_to_tensors(applied_map:dict[UOp, UOp]) -> None:
   if len(fixed_tensors):
     # potentially rewrite all the discovered Tensors
     sink = UOp.sink(*[t.lazydata for t in fixed_tensors])
-    new_sink = sink.substitute(applied_map)
+    new_sink = sink.substitute(applied_map, name="becomes_map")
 
     # set the relevant lazydata to the realized UOps
     for t,s,ns in zip(fixed_tensors, sink.src, new_sink.src):

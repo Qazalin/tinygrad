@@ -291,8 +291,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
     if self.op is Ops.MULTI:
       return ShapeTracker.from_shape(
         tuple(sum(y.shape[a] for y in self.real_lbs) if a == self.axis else s for a,s in enumerate(self.real_lbs[0].shape)))
-    if self.op in {Ops.BUFFER, Ops.BUFFER_VIEW}: return ShapeTracker.from_shape((self.size,))
-    if self.op is Ops.KERNEL: return ShapeTracker.from_shape(self.arg.ast.shape)
+    if self.op in {Ops.BUFFER, Ops.BUFFER_VIEW, Ops.KERNEL}: return ShapeTracker.from_shape((self.size,))
     # these ops define a ShapeTracker from the arg
     if self.op is Ops.VIEW: return self.arg
     if self.op in GroupOp.Movement: return unwrap(self.src[0].st).mop(self.op, self.arg)
@@ -318,7 +317,9 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   @property
   def shape(self) -> tuple[sint, ...]: return unwrap(self.st).shape
   @property
-  def size(self) -> int: return self.arg[0] if self.op is Ops.BUFFER_VIEW else self.arg if self.op is Ops.BUFFER else unwrap(self.st).size
+  def size(self) -> int:
+    if self.op is Ops.KERNEL: return self.arg.ast.size
+    return self.arg[0] if self.op is Ops.BUFFER_VIEW else self.arg if self.op is Ops.BUFFER else unwrap(self.st).size
 
   # *** uop evaluation ***
 
@@ -337,9 +338,9 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   def __bool__(self): return self._eval((dtypes.bool,), bool)
   def __int__(self): return self._eval(dtypes.ints, int)
   def __float__(self): return self._eval(dtypes.floats, float)
-  def substitute(self, dvars:dict[UOp, UOp]):
-    with Context(TRACK_MATCH_STATS=0):
-      return graph_rewrite(self, _substitute, dvars, bottom_up=True)
+  def substitute(self, dvars:dict[UOp, UOp], name=None):
+    with Context(TRACK_MATCH_STATS=(0 if name is None else TRACK_MATCH_STATS.value)):
+      return graph_rewrite(self, _substitute, dvars, bottom_up=True, name=name)
 
   # *** uop syntactic sugar ***
 
@@ -513,7 +514,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
     return dsrcs[0]._device if len(dsrcs:=[x for x in self.src if x._device is not None]) != 0 else None
   @property
   def buf_uop(self) -> UOp:
-    assert self.op is Ops.ASSIGN, f"must be ASSIGN {self.op}"
+    assert self.op in {Ops.ASSIGN, Ops.COPY}, f"must be ASSIGN or COPY {self.op}"
     return self.src[0].base
   @property
   def buffer(self) -> Buffer:
