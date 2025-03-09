@@ -1,12 +1,12 @@
 from typing import Optional, cast, Generator
-import time, pprint
+import time, pprint, atexit
 from dataclasses import dataclass, replace
 from tinygrad.helpers import all_same, colored, getenv, DEBUG, GlobalCounters, ansilen, BEAM, NOOPT, all_int, CAPTURING, Metadata, TRACEMETA
 from tinygrad.helpers import DEVECTORIZE, time_to_str
 from tinygrad.ops import Ops, PatternMatcher, UOp, UPat, Variable, sym_infer
 from tinygrad.device import Device, Buffer
 from tinygrad.renderer import Renderer, ProgramSpec, Estimates
-from tinygrad.codegen.kernel import Kernel
+from tinygrad.codegen.kernel import Kernel, to_function_name
 from tinygrad.engine.schedule import ScheduleItem
 
 # **************** Program Creation ****************
@@ -38,6 +38,8 @@ class Runner:
   def __call__(self, rawbufs:list[Buffer], var_vals:dict[Variable, int], wait=False) -> Optional[float]:
     raise NotImplementedError("override this")
 
+times: list[dict] = []
+cnt: dict[str, int] = {}
 class CompiledRunner(Runner):
   def __init__(self, p:ProgramSpec, precompiled:Optional[bytes]=None):
     if DEBUG >= 4: print(p.src)
@@ -65,6 +67,13 @@ class CompiledRunner(Runner):
       lra['local_size'] = tuple(local_size)
       assert len(local_size) == 3, "local size must have len 3"
     return self._prg(*[x._buf for x in rawbufs], **lra, vals=tuple(var_vals[k] for k in self.p.vars), wait=wait)
+
+@atexit.register
+def print_timing():
+  import pandas as pd
+  df = pd.DataFrame(times)
+  df.to_csv("/tmp/bert.csv")
+  print(df)
 
 class ViewOp(Runner):
   def __init__(self, buf:Buffer): super().__init__(colored(f"view {buf.nbytes:8d} @ {buf.offset:<10d}", "yellow"), buf.device)
@@ -138,6 +147,11 @@ class ExecItem:
               (str() if et is None else f"tm {ptm}/{GlobalCounters.time_sum_s*1e3:9.2f}ms ({op_est/((et or 1e-20)*1e9):9.2f} GFLOPS {mem_est/((et or 1e-20)*1e9):6.1f}|{lds_est/((et or 1e-20)*1e9):<7.1f} GB/s)" +  # noqa: E501
                f" {[repr(m) if TRACEMETA >= 2 else str(m) for m in self.metadata] if self.metadata else ''}"))
       self.prg.first_run = False
+    if isinstance(self.prg, CompiledRunner):
+      name = to_function_name(self.prg.p.name)
+      cnt.setdefault(name, 0)
+      cnt[name] += 1
+      times.append({"name": f"{name}_n{cnt[name]}", "time_ms":et*1e3, "metadata":self.metadata, "code":self.prg.p.src, "ast":repr(self.prg.p.ast)})
     return et
 
 # NOTE: ctx is the buffers
