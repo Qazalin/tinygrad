@@ -264,6 +264,18 @@ create_kernels = merge_views+PatternMatcher([
     if (new_src:=tuple(dedup(s.base for s in x.src if s.op not in {Ops.CONST,Ops.BIND}))) != x.src else None),
 ])
 
+def group_with_parent(cur:UOp):
+  if not (assign_parents:=[s for s in cur.src[1].src if s.op is Ops.ASSIGN and s.buf_uop.size == cur.buf_uop.size]): return None
+  if len(assign_parents) > 1: return None
+  parent = assign_parents[0]
+  new_sink = UOp.sink(*(parent.src[1].arg.ast.src+cur.src[1].arg.ast.src))
+  new_kernel = UOp(Ops.KERNEL, src=(cur.buf_uop,)+parent.src[1].src, arg=Kernel(new_sink, cur.src[1].arg.metadata+parent.src[1].arg.metadata))
+  return cur.replace(src=(cur.buf_uop, new_kernel))
+
+group_kernels = PatternMatcher([
+  (UPat(Ops.ASSIGN, src=(UPat(Ops.BUFFER), UPat(Ops.KERNEL)), name="cur"), group_with_parent),
+])
+
 # **** fix kernel AST
 
 # ** create buffer ops + enumerate buffers
@@ -452,6 +464,9 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
 
   # display the final graph
   if getenv("VIZ"): graph_rewrite(sched_sink, PatternMatcher([]), name="View Kernel Graph")
+
+  # grouper
+  grouped_sink = graph_rewrite(sched_sink, group_kernels)
 
   # final toposort (bfs)
   children: dict[UOp, list[UOp]] = {}
