@@ -468,16 +468,25 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
   queue = deque(k for k,v in in_degree.items() if v == 0)
   schedule: list[ScheduleItem] = []
   var_vals: dict[Variable, int] = {}
+  linear_rep: dict[UOp, UOp] = {}
   while queue:
     u = queue.popleft()
     # TODO: move this to create_kernels
-    k = fix_kernel_ast(u.src[1], var_vals)
+    k = fix_kernel_ast(kernel:=u.src[1], var_vals)
+    if linear_rep:
+      last_rep = list(linear_rep.values())[-1]
+      linear_rep[kernel] = kernel.replace(src=(last_rep,))
+    else: linear_rep[kernel] = kernel.replace(src=())
     schedule.append(ScheduleItem(k.arg.ast, tuple(s.buf_uop.buffer for s in k.src), k.arg.metadata))
     # increment the refcount of the target buf (this is required by the JIT and memory planner) TODO: this does not belong here
     k.src[0].buffer.ref(1)
     for x in children.get(u, []):
       in_degree[x] -= 1
       if in_degree[x] == 0: queue.append(x)
+
+  last_rep = list(linear_rep.values())[-1]
+  linear_sink = last_rep.sink()
+  graph_rewrite(linear_sink, PatternMatcher([]), name="View Linear Kernel Graph")
 
   # confirm everything was scheduled correctly
   if len(schedule) != (kc:=len(in_degree)): raise RuntimeError(f"cycle detected in graph, created {kc} kernels but only scheduled {len(schedule)}")
