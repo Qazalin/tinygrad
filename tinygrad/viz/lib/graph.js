@@ -9,7 +9,7 @@ function intersectRect(r1, r2) {
 }
 
 const allWorkers = [];
-window.renderGraph = function(graph, additions) {
+window.renderGraph = function(graph, additions, linear=null) {
   while (allWorkers.length) {
     const { worker, timeout } = allWorkers.pop();
     worker.terminate();
@@ -56,5 +56,8 @@ window.renderGraph = function(graph, additions) {
     // +arrow heads
     d3.select("#render").append("defs").append("marker").attr("id", "arrowhead").attr("viewBox", "0 -5 10 10").attr("refX", 10).attr("refY", 0)
       .attr("markerWidth", 6).attr("markerHeight", 6).attr("orient", "auto").append("path").attr("d", "M0,-5L10,0L0,5").attr("fill", "#4a4b57");
+    if (linear == null) return;
+    // linear graph has allocations
+    console.log(linear);
   };
 }

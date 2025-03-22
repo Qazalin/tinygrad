@@ -80,10 +80,10 @@ def get_linear_details(k:Any, ctx:TrackedGraphRewrite) -> GraphRewriteDetails:
   toposort = list([s for s in ctx.sink.toposort if s.op is Ops.KERNEL])
   linear = toposort[0].replace(src=())
   for s in toposort[1:]: linear = s.replace(src=(linear,))
-  return {"graph":uop_to_json(linear), "uop":str(ctx.sink), "changed_nodes":None, "diff":None, "upat":None}
+  return {"graph":uop_to_json(linear), "uop":str(ctx.sink), "linear":'test', "changed_nodes":None, "diff":None, "upat":None}
 
 def get_details(k:Any, ctx:TrackedGraphRewrite) -> Generator[GraphRewriteDetails, None, None]:
-  if "Linear" in ctx.name:
+  if ctx.name is not None and "Linear" in ctx.name:
     with Context(TRACK_MATCH_STATS=0): ret = get_linear_details(k, ctx)
     yield ret
   yield {"graph":uop_to_json(next_sink:=ctx.sink), "uop":str(ctx.sink), "changed_nodes":None, "diff":None, "upat":None}
@@ -134,6 +134,8 @@ class Handler(BaseHTTPRequestHandler):
       with open(os.path.join(os.path.dirname(__file__), "index.html"), "rb") as f: ret = f.read()
     elif (url:=urlparse(self.path)).path == "/profiler":
       with open(os.path.join(os.path.dirname(__file__), "perfetto.html"), "rb") as f: ret = f.read()
+    elif (url:=urlparse(self.path)).path == "/torch":
+      with open(os.path.join(os.path.dirname(__file__), "torch.html"), "rb") as f: ret = f.read()
     elif self.path.startswith(("/assets/", "/lib/")) and '/..' not in self.path:
       try:
         with open(os.path.join(os.path.dirname(__file__), self.path.strip('/')), "rb") as f: ret = f.read()
