@@ -2,7 +2,7 @@ import unittest, decimal, json
 from tinygrad.dtype import dtypes
 from tinygrad.ops import TRACK_MATCH_STATS, TrackedPatternMatcher, UOp, graph_rewrite, track_rewrites
 from tinygrad.codegen.symbolic import symbolic
-from tinygrad.ops import tracked_ctxs as contexts, tracked_keys as keys, _name_cnt, _substitute
+from tinygrad.ops import tracked_ctxs as contexts, tracked_keys as keys, _name_cnt, _substitute, Ops
 from tinygrad.device import ProfileDeviceEvent, ProfileRangeEvent, ProfileGraphEvent, ProfileGraphEntry
 from tinygrad.viz.serve import get_metadata, uop_to_json, to_perfetto
 
@@ -144,6 +144,23 @@ class TestViz(unittest.TestCase):
     fp, lineno = contexts[0][0].loc
     self.assertEqual(lineno, inner_rewrite.__code__.co_firstlineno)
     self.assertEqual(fp, inner_rewrite.__code__.co_filename)
+
+  def test_kernel_graph(self):
+    from tinygrad import Tensor
+    a = Tensor.empty(2, 2)
+    b = Tensor.empty(2, 2)
+    add = a+b
+    mul = add.contiguous()*2
+    mul.schedule()
+    from tinygrad.viz.serve import get_details, get_metadata
+    metadata = get_metadata(keys, contexts)[0][1]
+    idx, kernel_viz = [(i,v) for i,v in enumerate(metadata) if "View Kernel Graph" in v["code_line"]][0]
+    kernel_ctx = contexts[0][idx]
+    kernels: list[UOp] = []
+    for s in kernel_ctx.sink.toposort:
+      if s.op is Ops.KERNEL:
+        kernels.append(s)
+    self.assertEqual(len(kernels), 2)
 
 class TextVizProfiler(unittest.TestCase):
   def test_perfetto_node(self):

@@ -17,7 +17,7 @@ function getTextDims(text) {
 }
 
 onmessage = (e) => {
-  const { graph, additions } = e.data;
+  const { graph, additions, name } = e.data;
   const g = new dagre.graphlib.Graph({ compound: true });
   g.setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
   if (additions.length !== 0) g.setNode("addition", {label: "", style: "fill: rgba(26, 27, 38, 0.5); stroke: none;", padding:0});
