@@ -3,7 +3,7 @@ import multiprocessing, pickle, functools, difflib, os, threading, json, time, s
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 from typing import Any, Callable, TypedDict, Generator
-from tinygrad.helpers import colored, getenv, tqdm, unwrap, word_wrap
+from tinygrad.helpers import colored, getenv, tqdm, unwrap, word_wrap, Context
 from tinygrad.ops import TrackedGraphRewrite, UOp, Ops, lines, GroupOp
 from tinygrad.codegen.kernel import Kernel
 from tinygrad.device import ProfileEvent, ProfileDeviceEvent, ProfileRangeEvent, ProfileGraphEvent
@@ -75,7 +75,17 @@ def uop_to_json(x:UOp) -> dict[int, tuple[str, list[int], str]]:
     graph[id(u)] = (label, [id(x) for x in u.src if x not in excluded], uops_colors.get(u.op, "#ffffff"))
   return graph
 
+def get_linear_details(k:Any, ctx:TrackedGraphRewrite) -> GraphRewriteDetails:
+  from tinygrad.ops import graph_rewrite
+  toposort = list([s for s in ctx.sink.toposort if s.op is Ops.KERNEL])
+  linear = toposort[0].replace(src=())
+  for s in toposort[1:]: linear = s.replace(src=(linear,))
+  return {"graph":uop_to_json(linear), "uop":str(ctx.sink), "changed_nodes":None, "diff":None, "upat":None}
+
 def get_details(k:Any, ctx:TrackedGraphRewrite) -> Generator[GraphRewriteDetails, None, None]:
+  if "Linear" in ctx.name:
+    with Context(TRACK_MATCH_STATS=0): ret = get_linear_details(k, ctx)
+    yield ret
   yield {"graph":uop_to_json(next_sink:=ctx.sink), "uop":str(ctx.sink), "changed_nodes":None, "diff":None, "upat":None}
   replaces: dict[UOp, UOp] = {}
   for u0,u1,upat in tqdm(ctx.matches):
