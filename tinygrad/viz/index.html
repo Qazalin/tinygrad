@@ -293,7 +293,7 @@
   var ret = [];
   var cache = {};
   var kernels = null;
-  var currentUOp = 0;
+  var currentUOp = 5;
   var currentKernel = 0;
   var currentRewrite = 0;
   var expandKernel = true;
@@ -378,7 +378,7 @@
       };
     }
     if (ret.length === 0) return;
-    renderGraph(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes || []);
+    renderGraph(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes || [], isLinear=kernel.name?.includes("Linear"));
     // ***** RHS metadata
     const metadata = document.querySelector(".container.metadata");
     metadata.innerHTML = "";

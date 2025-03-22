@@ -9,7 +9,7 @@ function intersectRect(r1, r2) {
 }
 
 const allWorkers = [];
-window.renderGraph = function(graph, additions) {
+window.renderGraph = function(graph, additions, isLinear=false) {
   while (allWorkers.length) {
     const { worker, timeout } = allWorkers.pop();
     worker.terminate();
@@ -23,7 +23,7 @@ window.renderGraph = function(graph, additions) {
     progressMessage.style.display = "block";
   }, 2000);
   allWorkers.push({worker, timeout});
-  worker.postMessage({graph, additions});
+  worker.postMessage({graph, additions, isLinear});
 
   worker.onmessage = (e) => {
     progressMessage.style.display = "none";

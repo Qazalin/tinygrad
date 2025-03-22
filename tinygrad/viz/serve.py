@@ -60,6 +60,7 @@ def uop_to_json(x:UOp) -> dict[int, tuple[str, list[int], str]]:
     # only exclude CONST VIEW source if it has no other children in the graph
     if u.op is Ops.CONST and len(u.src) != 0 and all(cr.op is Ops.CONST for c in u.src[0].children if (cr:=c()) is not None and cr in toposort):
       excluded.update(u.src)
+    if u.op is Ops.KERNEL: excluded.update([s for s in u.src if s.op is Ops.BUFFER])
   for u in toposort:
     if u in excluded: continue
     argst = str(u.arg)
