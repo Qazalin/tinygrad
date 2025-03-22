@@ -465,19 +465,6 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
       children.setdefault(s, []).append(u)
       in_degree[u] += 1
 
-  # display the toposort graph
-  if getenv("VIZ"):
-    linear_rep: dict[UOp, UOp] = {}
-    for u in sched_sink.toposort:
-      if u.op is Ops.ASSIGN:
-        for ca in children.get(u, {}):
-          ck = ca.src[1]
-          linear_rep[ck] = linear_rep.get(ck, ck).replace(src=tuple(dedup(ck.src+(u.src[1],))))
-    linear_sink = sched_sink.substitute(linear_rep)
-    with Context(TRACK_MATCH_STATS=0):
-      linear_sink = graph_rewrite(linear_sink, PatternMatcher([(UPat(Ops.ASSIGN, name="x"), lambda x: x.src[1])]))
-    graph_rewrite(linear_sink, PatternMatcher([]), name="View Linear Kernel Graph")
-
   queue = deque(k for k,v in in_degree.items() if v == 0)
   schedule: list[ScheduleItem] = []
   var_vals: dict[Variable, int] = {}

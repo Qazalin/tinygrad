@@ -378,7 +378,7 @@
       };
     }
     if (ret.length === 0) return;
-    renderGraph(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes || [], isLinear=kernel.name?.includes("Linear"));
+    renderGraph(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes || []);
     // ***** RHS metadata
     const metadata = document.querySelector(".container.metadata");
     metadata.innerHTML = "";
