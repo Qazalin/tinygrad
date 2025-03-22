@@ -2,7 +2,7 @@ import sys, atexit, pickle
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from tinygrad.ops import UOp, Variable, Ops, GroupOp, PatternMatcher, UPat, graph_rewrite, graph_rewrite_map, track_rewrites, buffers
-from tinygrad.ops import can_pad, identity_element, resolve, view_left, merge_views, TRACK_MATCH_STATS
+from tinygrad.ops import can_pad, identity_element, resolve, view_left, merge_views
 from tinygrad.codegen.symbolic import symbolic_simple
 from tinygrad.helpers import Context, ContextVar, Metadata, all_int, all_same, colored, diskcache_put, prod, dedup, unwrap, flatten, getenv, pluralize
 from tinygrad.helpers import FUSE_CONV_BW, FUSE_ARANGE, DEBUG, CAPTURE_PROCESS_REPLAY, DONT_REALIZE_EXPAND, DONT_GROUP_REDUCES, SPLIT_REDUCEOP
@@ -452,7 +452,7 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
     type_verify(list(sched_sink.toposort), kernel_spec)
 
   # display the final graph
-  if getenv("VIZ") or TRACK_MATCH_STATS >= 2: graph_rewrite(sched_sink, PatternMatcher([]), name="View Kernel Graph")
+  if getenv("VIZ"): graph_rewrite(sched_sink, PatternMatcher([]), name="View Kernel Graph")
 
   # final toposort (bfs)
   children: dict[UOp, list[UOp]] = {}
@@ -464,16 +464,6 @@ def create_schedule_with_vars(big_sink:UOp) -> tuple[list[ScheduleItem], dict[Va
       if s.op is not Ops.ASSIGN: continue
       children.setdefault(s, []).append(u)
       in_degree[u] += 1
-
-  if getenv("VIZ"):
-    linear_rep: dict[UOp, UOp] = {}
-    for u in sched_sink.toposort:
-      if u.op is Ops.ASSIGN:
-        for ca in children.get(u, {}):
-          ck = ca.src[1]
-          linear_rep[ck] = linear_rep.get(ck, ck).replace(src=tuple(dedup(ck.src+(u.src[1],))))
-    linear_sink = sched_sink.substitute(linear_rep)
-    graph_rewrite(linear_sink, PatternMatcher([]), name="View Linear Kernel Graph")
 
   queue = deque(k for k,v in in_degree.items() if v == 0)
   schedule: list[ScheduleItem] = []

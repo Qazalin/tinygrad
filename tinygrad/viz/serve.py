@@ -49,7 +49,7 @@ class GraphRewriteDetails(TypedDict):
   changed_nodes: list[int]|None          # the changed UOp id + all its parents ids
   upat: tuple[tuple[str, int], str]|None # [loc, source_code] of the matched UPat
 
-def uop_to_json(x:UOp, name:str|None=None) -> dict[int, tuple[str, list[int], str]]:
+def uop_to_json(x:UOp) -> dict[int, tuple[str, list[int], str]]:
   assert isinstance(x, UOp)
   # NOTE: this is [id, [label, src_ids, color]]
   graph: dict[int, tuple[str, list[int], str]] = {}
@@ -60,7 +60,6 @@ def uop_to_json(x:UOp, name:str|None=None) -> dict[int, tuple[str, list[int], st
     # only exclude CONST VIEW source if it has no other children in the graph
     if u.op is Ops.CONST and len(u.src) != 0 and all(cr.op is Ops.CONST for c in u.src[0].children if (cr:=c()) is not None and cr in toposort):
       excluded.update(u.src)
-    if name == "View Linear Kernel Graph" and u.op is not Ops.KERNEL: excluded.add(u)
   for u in toposort:
     if u in excluded: continue
     argst = str(u.arg)
@@ -77,12 +76,12 @@ def uop_to_json(x:UOp, name:str|None=None) -> dict[int, tuple[str, list[int], st
   return graph
 
 def get_details(k:Any, ctx:TrackedGraphRewrite) -> Generator[GraphRewriteDetails, None, None]:
-  yield {"graph":uop_to_json(next_sink:=ctx.sink, name=ctx.name), "uop":str(ctx.sink), "changed_nodes":None, "diff":None, "upat":None}
+  yield {"graph":uop_to_json(next_sink:=ctx.sink), "uop":str(ctx.sink), "changed_nodes":None, "diff":None, "upat":None}
   replaces: dict[UOp, UOp] = {}
   for u0,u1,upat in tqdm(ctx.matches):
     replaces[u0] = u1
     new_sink = next_sink.substitute(replaces)
-    yield {"graph": (sink_json:=uop_to_json(new_sink, name=ctx.name)), "uop":str(new_sink), "changed_nodes":[id(x) for x in u1.toposort if id(x) in sink_json],
+    yield {"graph": (sink_json:=uop_to_json(new_sink)), "uop":str(new_sink), "changed_nodes":[id(x) for x in u1.toposort if id(x) in sink_json],
            "diff":list(difflib.unified_diff(pcall(str, u0).splitlines(), pcall(str, u1).splitlines())), "upat":(upat.location, upat.printable())}
     if not ctx.bottom_up: next_sink = new_sink
 
