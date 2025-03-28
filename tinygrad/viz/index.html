@@ -11,7 +11,6 @@
   <script src="assets/cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js"></script>
   <script src="assets/cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/languages/python.min.js"></script>
   <script src="assets/cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/languages/cpp.min.js"></script>
-  <script src="http://127.0.0.1:35729/livereload.js"></script>
   <link rel="stylesheet" href="assets/unpkg.com/@highlightjs/cdn-assets@11.10.0/styles/tokyo-night-dark.min.css" />
   <style>
   * {
@@ -253,10 +252,6 @@
   const inner = svg.select("g");
   const zoom = d3.zoom().scaleExtent([0.05, 2]).on("zoom", ({ transform }) => {
     inner.attr("transform", transform);
-    const axesGroup = inner.select("#axes");
-    if (!axesGroup.empty()) {
-      axesGroup.dispatch("zoom", { detail: { transform } });
-    }
   });
   svg.call(zoom);
   // zoom to fit into view
@@ -279,8 +274,8 @@
   var ret = [];
   var cache = {};
   var kernels = null;
-  var currentUOp = 5;
-  var currentKernel = 0;
+  var currentUOp = 0;
+  var currentKernel = -1;
   var currentRewrite = 0;
   var expandKernel = true;
   const evtSources = [];
@@ -288,7 +283,7 @@
     // ***** LHS kernels list
     if (kernels == null) {
       kernels = await (await fetch("/kernels")).json();
-      currentKernel = 0;
+      currentKernel = -1;
     }
     const kernelList = document.querySelector(".kernel-list");
     kernelList.innerHTML = "";
