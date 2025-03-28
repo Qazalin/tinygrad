@@ -156,11 +156,15 @@ function renderMemoryGraph(graph) {
   const render = d3.select("#bars");
   const yscale = d3.scaleLinear().domain([0, peak]).range([576, 0]);
   const xscale = d3.scaleLinear().domain([0, timestep]).range([0, 1024]);
-  const xaxis = d3.axisBottom(xscale);
   const axesGroup = render.append("g").attr("id", "axes");
   const nbytes_format = (d) => d3.format(".3~s")(d)+"B";
-  axesGroup.append("g").call(d3.axisLeft(yscale).tickFormat(nbytes_format));
+  const yaxis = d3.axisLeft(yscale).tickFormat(nbytes_format);
+  const yaxisRender = axesGroup.append("g").call(yaxis);
   axesGroup.append("g").attr("transform", `translate(0, ${yscale.range()[0]})`).call(d3.axisBottom(xscale).tickFormat(() => ""));
+  axesGroup.on("zoom", (e) => {
+    const { transform } = e.detail;
+    yaxisRender.call(yaxis.scale(transform.rescaleY(yscale)));
+  });
   const polygonGroup = render.append("g").attr("id", "polygons");
   const colors = ["7aa2f7", "ff9e64", "f7768e", "2ac3de", "7dcfff", "1abc9c", "9ece6a", "e0af68", "bb9af7", "9d7cd8", "ff007c"];
   const polygons = polygonGroup.selectAll("polygon").data(Object.values(ret)).join("polygon").attr("points", (d) => {
