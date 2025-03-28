@@ -159,8 +159,9 @@ function renderMemoryGraph(graph) {
   const xaxis = d3.axisBottom(xscale);
   const axesGroup = render.append("g").attr("id", "axes");
   const nbytes_format = (d) => d3.format(".3~s")(d)+"B";
-  axesGroup.append("g").call(d3.axisLeft(yscale).tickFormat(nbytes_format));
-  axesGroup.append("g").attr("transform", `translate(0, ${yscale.range()[0]})`).call(d3.axisBottom(xscale).tickFormat(() => ""));
+  const axesLeft = axesGroup.append("g").call(d3.axisLeft(yscale));
+  axesGroup.append("g").attr("transform", `translate(0, ${yscale.range()[0]})`).call(d3.axisBottom(xscale).tickFormat(() => "").tickSize(0));
+  render.attr("transform", `translate(${axesLeft.node().getBoundingClientRect().x*-1}, 0)`)
   const polygonGroup = render.append("g").attr("id", "polygons");
   const colors = ["7aa2f7", "ff9e64", "f7768e", "2ac3de", "7dcfff", "1abc9c", "9ece6a", "e0af68", "bb9af7", "9d7cd8", "ff007c"];
   const polygons = polygonGroup.selectAll("polygon").data(Object.values(ret)).join("polygon").attr("points", (d) => {
