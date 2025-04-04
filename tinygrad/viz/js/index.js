@@ -186,13 +186,16 @@ function renderMemoryGraph(graph) {
   document.getElementById("zoom-to-fit-btn").click();
 }
 
-function formatTimestamp(ts) {
-  if (ts === 0) return "0";
+// similar to DEBUG=2 + mm:ss format
+function formatTime(ts) {
+  if (ts === 0) return "0"; // no units
   const ms = ts*1e-3;
-  //return `${Math.round(ms,2)}ms`
+  if (ms<10) return `${Math.round(ts,2)}us`;
   if (ms<1e3) return `${Math.round(ms,2)}ms`;
   const ds = new Date(ms);
-  return `${String(ds.getMinutes()).padStart(2, '0')}:${String(ds.getSeconds()).padStart(2, '0')}`;
+  const mins = ds.getMinutes();
+  if (mins === 0) return `${ds.getSeconds()}s`;
+  return `${String(mins).padStart(2, '0')}:${String(ds.getSeconds()).padStart(2, '0')}`;
 }
 
 const shades = ["a24ccd","ae60d3","b973d8","c586dd"];
@@ -219,7 +222,7 @@ function renderProfiler({ traceEvents }) {
   const width = mainRect.width-sideRect.width-20;
   // ** time axis
   const x = d3.scaleLinear().domain([data[0].x, data.at(-1).x+data.at(-1).dur]).range([0, width]);
-  const xaxis = d3.axisBottom(x).tickFormat(formatTimestamp);
+  const xaxis = d3.axisBottom(x).tickFormat(formatTime);
   const gx = render.append("g").call(xaxis);
   // ** rects
   const rects = render.selectAll("rect").data(data).join("rect").attr("x", d => x(d.x)).attr("width", d => x(d.dur)).attr("y", -20)
@@ -249,8 +252,8 @@ function renderProfiler({ traceEvents }) {
   for (const t of data) {
     const tr = table.appendChild(document.createElement("tr"));
     tr.appendChild(document.createElement("td")).innerText = t.name;
-    tr.appendChild(document.createElement("td")).innerText = t.dur_repr;
-    tr.appendChild(document.createElement("td")).innerText = formatTimestamp(t.x);
+    tr.appendChild(document.createElement("td")).innerText = formatTime(t.dur);
+    tr.appendChild(document.createElement("td")).innerText = formatTime(t.x);
   }
   // ** recenter
   svg.call(zoom2.transform, getCenterTranslate("#profiler-render"));
