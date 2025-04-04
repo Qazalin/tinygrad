@@ -70,6 +70,7 @@ function pluralize(num, name, alt=null) {
   return num === 1 ? `${num} ${name}` : `${num} ${alt ?? name+'s'}`
 }
 
+const COLORS = ["7aa2f7", "ff9e64", "f7768e", "2ac3de", "7dcfff", "1abc9c", "9ece6a", "e0af68", "bb9af7", "9d7cd8", "ff007c"];
 function renderMemoryGraph(graph) {
   // ** construct alloc/free traces
   // we can map reads/writes from the kernel graph
@@ -154,7 +155,6 @@ function renderMemoryGraph(graph) {
   axesGroup.append("g").call(d3.axisLeft(yscale).tickFormat(nbytes_format));
   axesGroup.append("g").attr("transform", `translate(0, ${yscale.range()[0]})`).call(d3.axisBottom(xscale).tickFormat(() => ""));
   const polygonGroup = render.append("g").attr("id", "polygons");
-  const colors = ["7aa2f7", "ff9e64", "f7768e", "2ac3de", "7dcfff", "1abc9c", "9ece6a", "e0af68", "bb9af7", "9d7cd8", "ff007c"];
   const polygons = polygonGroup.selectAll("polygon").data(Object.values(ret)).join("polygon").attr("points", (d) => {
     const xs = d.x.map(t => xscale(t));
     const y1 = d.y.map(t => yscale(t));
@@ -162,7 +162,7 @@ function renderMemoryGraph(graph) {
     const p0 = xs.map((x, i) => `${x},${y1[i]}`);
     const p1 = xs.map((x, i) => `${x},${y2[i]}`).reverse();
     return `${p0.join(' ')} ${p1.join(' ')}`;
-  }).attr("fill", d => `#${colors[d.buf.num % colors.length]}`).on("mouseover", (e, { id, buf, x }) => {
+  }).attr("fill", d => `#${COLORS[d.buf.num%colors.length]}`).on("mouseover", (e, { id, buf, x }) => {
     d3.select(e.currentTarget).attr("stroke", "rgba(26, 27, 38, 0.8)").attr("stroke-width", 0.8);
     const metadata = document.querySelector(".container.metadata");
     document.getElementById("current-buf")?.remove();
@@ -186,6 +186,76 @@ function renderMemoryGraph(graph) {
   document.getElementById("zoom-to-fit-btn").click();
 }
 
+function formatTimestamp(ts) {
+  if (ts === 0) return "0";
+  const ms = ts*1e-3;
+  //return `${Math.round(ms,2)}ms`
+  if (ms<1e3) return `${Math.round(ms,2)}ms`;
+  const ds = new Date(ms);
+  return `${String(ds.getMinutes()).padStart(2, '0')}:${String(ds.getSeconds()).padStart(2, '0')}`;
+}
+
+const shades = ["a24ccd","ae60d3","b973d8","c586dd"];
+function renderProfiler({ traceEvents }) {
+  const data = [];
+  let st = 0;
+  let i = 0;
+  let shade = 0;
+  for (const t of traceEvents) {
+    if (t.ph !== "X" || t.tid !== 0) continue;
+    if (i === 0) st = t.ts;
+    i += 1;
+    let color = COLORS[i%COLORS.length];
+    if (t.name.startsWith("batch")) {
+      shade += 1;
+      color = shades[shade%shades.length];
+    }
+    data.push({ name:t.name, dur:t.dur, color: `#${color}`, x: t.ts-st });
+  }
+  // ** main render
+  const render = d3.select("#profiler-render");
+  const mainRect = document.querySelector(".main-container").getBoundingClientRect();
+  const sideRect = document.querySelector(".metadata").getBoundingClientRect();
+  const width = mainRect.width-sideRect.width-20;
+  // ** time axis
+  const x = d3.scaleLinear().domain([data[0].x, data.at(-1).x+data.at(-1).dur]).range([0, width]);
+  const xaxis = d3.axisBottom(x).tickFormat(formatTimestamp);
+  const gx = render.append("g").call(xaxis);
+  // ** rects
+  const rects = render.selectAll("rect").data(data).join("rect").attr("x", d => x(d.x)).attr("width", d => x(d.dur)).attr("y", -20)
+    .attr("fill", d => d.color).attr("height", 10).attr("style", "rx:0;ry:0;stroke-width:0");
+  // ** metadata
+  const metadata = document.querySelector(".metadata");
+  const currThing = metadata.appendChild(document.createElement("div"));
+  currThing.id = "curr-thing";
+  currThing.style = "height: 32px;"
+  rects.on("mouseover", (e, d) => {
+    const p = currThing.appendChild(document.createElement("p"));
+    p.id = "curr-slice";
+    p.textContent = d.name;
+  }).on("mouseout", () => {
+    document.getElementById("curr-slice").remove();
+  });
+  const svg = d3.select("#graph-svg")
+  const zoom2 = d3.zoom().on("zoom", (e) => {
+    d3.select("#profiler-render").attr("transform", e.transform)
+  });
+  svg.call(zoom2);
+  // ** table
+  const table = metadata.appendChild(document.createElement("table"));
+  table.appendChild(document.createElement("th")).innerText = "Name";
+  table.appendChild(document.createElement("th")).innerText = "Duration";
+  table.appendChild(document.createElement("th")).innerText = "Start Time";
+  for (const t of data) {
+    const tr = table.appendChild(document.createElement("tr"));
+    tr.appendChild(document.createElement("td")).innerText = t.name;
+    tr.appendChild(document.createElement("td")).innerText = t.dur_repr;
+    tr.appendChild(document.createElement("td")).innerText = formatTimestamp(t.x);
+  }
+  // ** recenter
+  svg.call(zoom2.transform, getCenterTranslate("#profiler-render"));
+}
+
 // ** zoom and recentering
 
 const zoom = d3.zoom().scaleExtent([0.05, 2]).on("zoom", (e) => d3.select("#render").attr("transform", e.transform));
@@ -193,18 +263,23 @@ d3.select("#graph-svg").call(zoom);
 // zoom to fit into view
 document.getElementById("zoom-to-fit-btn").addEventListener("click", () => {
   const svg = d3.select("#graph-svg");
+  // NOTE: need to reset the zoom before calculating center
   svg.call(zoom.transform, d3.zoomIdentity);
+  svg.call(zoom.transform, getCenterTranslate("#render"));
+});
+
+function getCenterTranslate(selector) {
   const mainRect = document.querySelector(".main-container").getBoundingClientRect();
   const x0 = document.querySelector(".kernel-list-parent").getBoundingClientRect().right;
   const x1 = document.querySelector(".metadata").getBoundingClientRect().left;
   const pad = 16;
   const R = { x: x0+pad, y: mainRect.top+pad, width: (x1>0 ? x1-x0 : mainRect.width)-2*pad, height: mainRect.height-2*pad };
-  const r = document.querySelector("#render").getBoundingClientRect();
-  if (r.width === 0) return;
+  const r = document.querySelector(selector).getBoundingClientRect();
+  if (r.width === 0) return d3.zoomIdentity;
   const scale = Math.min(R.width/r.width, R.height/r.height);
   const [tx, ty] = [R.x+(R.width-r.width*scale)/2, R.y+(R.height-r.height*scale)/2];
-  svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
-});
+  return d3.zoomIdentity.translate(tx, ty).scale(scale)
+}
 
 // **** main VIZ interfacae
 
@@ -222,6 +297,11 @@ function codeBlock(st, language, { loc, wrap }) {
   ret.appendChild(code);
   return ret;
 }
+
+const ANSI_CODES = ['gray','red','green','yellow','blue','magenta','cyan','white'];
+const coloredToHTML = (st) => st.replace(/\u001b\[(\d+)m(.*?)\u001b\[0m/g, (_, code, st) => {
+  return `<span style="${`color: color-mix(in srgb, ${ANSI_CODES[(parseInt(code)-30+60)%60]} 60%, white)`}">${st}</span>`;
+});
 
 // ** hljs extra definitions for UOps and float4
 hljs.registerLanguage("python", (hljs) => ({
@@ -243,6 +323,7 @@ hljs.registerLanguage("cpp", (hljs) => ({
 var ret = [];
 var cache = {};
 var kernels = null;
+var profileData = null;
 const evtSources = [];
 const state = {currentKernel:-1, currentUOp:0, currentRewrite:0, expandKernel:false};
 function setState(ns) {
@@ -250,11 +331,24 @@ function setState(ns) {
   main();
 }
 async function main() {
+  // TODO: this part needs to be cleaned up
+  const lst = document.querySelector(".kernel-list-parent");
+  const btn = document.querySelector(".nav-btn");
+  // ** profiler
+  if (((new URLSearchParams(window.location.search)).get("profiler")) != null) {
+    if (profileData == null) profileData = await (await fetch("/get_profile")).json();
+    lst.style.display = "none";
+    btn.textContent = "UOps";
+    btn.href = "/";
+    return renderProfiler(profileData);
+  }
+  lst.style.display = null;
+  btn.textContent = "Profiler";
   const { currentKernel, currentUOp, currentRewrite, expandKernel } = state;
   // ** left sidebar kernel list
   if (kernels == null) {
     kernels = await (await fetch("/kernels")).json();
-    setState({ currentKernel:-1 });
+    return setState({ currentKernel:-1 });
   }
   const kernelList = document.querySelector(".kernel-list");
   kernelList.innerHTML = "";
@@ -265,10 +359,7 @@ async function main() {
       requestAnimationFrame(() => ul.scrollIntoView({ behavior: "auto", block: "nearest" }));
     }
     const p = ul.appendChild(document.createElement("p"));
-    p.innerHTML = k[0].replace(/\u001b\[(\d+)m(.*?)\u001b\[0m/g, (_, code, st) => {
-      const colors = ['gray','red','green','yellow','blue','magenta','cyan','white'];
-      return `<span style="${`color: color-mix(in srgb, ${colors[(parseInt(code)-30+60)%60]} 60%, white)`}">${st}</span>`;
-    });
+    p.innerHTML = coloredToHTML(k[0]);
     p.onclick = () => {
       setState(i === currentKernel ? { expandKernel:!expandKernel } : { expandKernel:true, currentKernel:i, currentUOp:0, currentRewrite:0 });
     }
