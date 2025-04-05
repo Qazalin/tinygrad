@@ -1,10 +1,11 @@
 var raw = null
 
 const rect = (s) => s.getBoundingClientRect()
-function createTimeline(events) {
-  const g = d3.create("svg:g");
-  g.append("circle").attr("cx", 0).attr("cy", 0).attr("r", 3).attr("fill", "red")
-  return g;
+
+const formatTime = (ms) => {
+  if (ms<1e2) return `${Math.round(ms,2)}us`;
+  if (ms<1e6) return `${Math.round(ms*1e-3,2)}ms`;
+  return `${Math.round(ms*1e-6,2)}s`;
 }
 
 async function main() {
@@ -30,13 +31,13 @@ async function main() {
     }
   }
   // render
+  const PADDING = 16;
   const root = document.querySelector(".main-container");
   root.style = "display: flex; width: 100%; height: 100%"
   const lst = root.appendChild(document.createElement("div"));
-  lst.style = "background: #0f1018; padding: 20px;";
+  lst.style = `background: #0f1018; padding: ${PADDING}px;`;
   const svg = d3.select(root).append("svg").attr("width", "100%").attr("height", "100%");
-  let st = null;
-  let et = null;
+  let maxDuration = null;
   for (const [pid, threadEvents] of Object.entries(events)) {
     if (threadEvents.every((e) => e.length === 0)) continue;
     const procRoot = lst.appendChild(document.createElement("div"));
@@ -48,13 +49,14 @@ async function main() {
       thread.style = "display: flex; padding: 4px;";
       const name = thread.appendChild(document.createElement("p"));
       name.textContent = threadMap[pid][tid].args.name
-      const threadStart = events[0].ts;
-      const threadEnd = events[events.length-1].ts;
-      st = st == null ? threadStart : Math.min(st, threadStart);
-      et = et == null ? threadEnd : Math.max(et, threadEnd);
+      const duration = events[events.length-1].ts-events[0].ts;
+      maxDuration = maxDuration == null ? duration : Math.max(duration, maxDuration);
     }
   }
+  const render = svg.append("g");
   const width = rect(root).width-rect(lst).width;
-  const x = d3.scaleLinear().domain([st, et]).range([0, width]);;
+  const x = d3.scaleLinear().domain([0, maxDuration]).range([PADDING, width-PADDING]);;
+  const TICK_SIZE = 6;
+  const time = render.append("g").call(d3.axisTop(x).tickFormat(formatTime).tickSize(TICK_SIZE)).attr("transform", `translate(0, ${PADDING+TICK_SIZE})`);
 }
 main();
