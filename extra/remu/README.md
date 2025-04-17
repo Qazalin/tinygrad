@@ -9,16 +9,16 @@ Remu is only for testing correctness of program output, it is not a cycle accura
 
 Remu is written in Rust, make sure you have [cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 
-`cargo build --manifest-path ./extra/remu/Cargo.toml --release` will install dependancies and build a binary usable by tinygrad in the `./extra/remu/target/` directory.
+`cargo build --release` will install dependancies and build a binary usable by tinygrad in the `target` directory.
 
 There are 2 dependencies:
 
 1. half: f16 isn't a Rust primitive like f32. This allows for executing instructions with float16 operands.
-2. num_traits: Lack of a generic "Float" type in the Rust std library. This is useful for sharing implementation between f16, f32 and f64 (eg. in comparison ops, see cmpf)
+2. num_traits: Lack of a generic "Float" trait in the Rust std library. This is useful for sharing implementation between f16, f32 and f64 (eg. in comparison ops, see `fn cmpf`)
 
 ## Usage with tinygrad
 
-The latest binaries are released in https://github.com/Qazalin/remu/releases. Alternatively, you can [build remu locally](#build-locally).
+The latest binaries are released in https://github.com/Qazalin/remu/releases. Alternatively, you can [build locally](#build-locally).
 
 Tinygrad does not yet output RDNA3 kernels directly, you will need [LLVM@19](https://github.com/tinygrad/tinygrad/blob/e2ed673c946c8f1774d816c75e52a994c2dd8a88/.github/actions/setup-tinygrad/action.yml#L208).
 
@@ -29,7 +29,7 @@ If you make a change to extra/remu, make sure to rebuild with cargo.
 
 ### DEBUG output
 
-Remu runs each thread one at a time, in a nested for loop, see lib.rs. The DEBUG output prints information about the current thread.
+Remu runs each thread one at a time in a nested for loop, see lib.rs. The DEBUG output prints information about the current thread.
 
 There are 3 sections to the DEBUG output
 
