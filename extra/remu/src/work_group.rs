@@ -1,4 +1,4 @@
-use crate::helpers::{Colorize, GLOBAL_DEBUG};
+use crate::helpers::{Colorize, DEBUG};
 use crate::state::{Register, VecDataStore, WaveValue, VGPR};
 use crate::thread::{Thread, END_PRG};
 use std::collections::HashMap;
@@ -121,7 +121,7 @@ impl<'a> WorkGroup<'a> {
                 vec_reg.default_lane = Some(lane_id);
                 vcc.default_lane = Some(lane_id);
                 exec.default_lane = Some(lane_id);
-                if *GLOBAL_DEBUG {
+                if *DEBUG {
                     let lane = format!("{lane_id} {:08X} ", self.kernel[pc]);
                     let state = match exec.read() {
                         true => "green",
