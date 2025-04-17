@@ -4,7 +4,7 @@ from tinygrad.device import Compiler, CompileError
 from tinygrad.runtime.ops_llvm import LLVMCompiler
 
 def amdgpu_disassemble(lib:bytes):
-  asm = subprocess.check_output(["/opt/rocm/llvm/bin/llvm-objdump", '-d', '-'], input=lib)
+  asm = subprocess.check_output(["llvm-objdump", '-d', '-'], input=lib)
   print('\n'.join([x for x in asm.decode('utf-8').split("\n") if 's_code_end' not in x]))
 
 def check(status):
