@@ -167,7 +167,6 @@ macro_rules! print_instr {
         let kv = format!("{}={:?}", stringify!($arg), $arg);
         print!(" {:<16}", kv);
       )*
-      println!();
     }
   };
 }

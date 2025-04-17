@@ -122,12 +122,12 @@ impl<'a> WorkGroup<'a> {
                 vcc.default_lane = Some(lane_id);
                 exec.default_lane = Some(lane_id);
                 if *DEBUG {
-                    let lane = format!("{lane_id} {:08X} ", self.kernel[pc]);
+                    let lane = format!("{:<2} {:08X} ", lane_id, self.kernel[pc]);
                     let state = match exec.read() {
                         true => "green",
                         false => "gray",
                     };
-                    print!("{:?} {:?} {}", self.id, [x, y, z], lane.color(state));
+                    print!("[{:<3} {:<3} {:<3}] [{:<3} {:<3} {:<3}] {}", self.id[0], self.id[1], self.id[2], x, y, z, lane.color(state));
                 }
                 if !seeded_lanes.contains(&lane_id) && self.wave_state.get(&wave_id).is_none() {
                     match (self.launch_bounds[1] != 1, self.launch_bounds[2] != 1) {
@@ -152,6 +152,9 @@ impl<'a> WorkGroup<'a> {
                     sgpr_co: &mut sgpr_co,
                 };
                 thread.interpret()?;
+                if *DEBUG {
+                   println!();
+                }
                 if thread.scalar {
                     pc = ((pc as isize) + 1 + (thread.pc_offset as isize)) as usize;
                     break;
