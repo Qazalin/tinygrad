@@ -210,6 +210,7 @@ def _suop(lst, uop_fxn, python_fxn):
   return ssimplify(functools.reduce(uop_fxn, uops + ([python_fxn(nums)] if nums else [])))
 def smax(*lst): return _suop(argfix(*lst), UOp.maximum, max)
 def smin(*lst): return _suop(argfix(*lst), UOp.minimum, min)
+def srender(x) -> str: return x.render() if isinstance(x, UOp) else str(x)
 
 def ssimplify(uop): return uop.ssimplify() if isinstance(uop, UOp) else uop
 def sym_infer(uop: Union[UOp, int], var_vals: dict[UOp, int]) -> int: return uop.sym_infer(var_vals) if isinstance(uop, UOp) else uop

@@ -3,8 +3,8 @@ import multiprocessing, pickle, functools, difflib, os, threading, json, time, s
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 from typing import Any, Callable, TypedDict, Generator
-from tinygrad.helpers import colored, getenv, tqdm, unwrap, word_wrap
-from tinygrad.ops import TrackedGraphRewrite, UOp, Ops, lines, GroupOp
+from tinygrad.helpers import colored, getenv, tqdm, unwrap, word_wrap, TRACEMETA
+from tinygrad.ops import TrackedGraphRewrite, UOp, Ops, lines, GroupOp, sint, sint, srender
 from tinygrad.codegen.kernel import Kernel
 from tinygrad.device import ProfileEvent, ProfileDeviceEvent, ProfileRangeEvent, ProfileGraphEvent
 from tinygrad.dtype import dtypes
@@ -49,6 +49,9 @@ class GraphRewriteDetails(TypedDict):
   changed_nodes: list[int]|None          # the changed UOp id + all its parents ids
   upat: tuple[tuple[str, int], str]|None # [loc, source_code] of the matched UPat
 
+def shape_to_str(s:tuple[sint, ...]): return "(" + ','.join(srender(x) for x in s) + ")"
+def mask_to_str(s:tuple[tuple[sint, sint], ...]): return "(" + ','.join(shape_to_str(x) for x in s) + ")"
+
 def uop_to_json(x:UOp) -> dict[int, dict]:
   assert isinstance(x, UOp)
   graph: dict[int, dict] = {}
@@ -63,14 +66,21 @@ def uop_to_json(x:UOp) -> dict[int, dict]:
     if u in excluded: continue
     argst = str(u.arg)
     if u.op is Ops.VIEW:
-      argst = ("\n".join([f"{v.shape} / {v.strides}"+(f"\nMASK {v.mask}" if v.mask is not None else "")+
-                          ("" if v.offset == 0 else f" / {v.offset}") for v in unwrap(u.st).views]))
+      argst = ("\n".join([f"{shape_to_str(v.shape)} / {shape_to_str(v.strides)}"+("" if v.offset == 0 else f" / {srender(v.offset)}")+
+                          (f"\nMASK {mask_to_str(v.mask)}" if v.mask is not None else "") for v in unwrap(u.st).views]))
     label = f"{str(u.op).split('.')[1]}{(chr(10)+word_wrap(argst.replace(':', ''))) if u.arg is not None else ''}"
     if u.dtype != dtypes.void: label += f"\n{u.dtype}"
     for idx,x in enumerate(u.src):
       if x in excluded:
         if x.op is Ops.CONST and dtypes.is_float(u.dtype): label += f"\nCONST{idx} {x.arg:g}"
         else: label += f"\n{x.op.name}{idx} {x.arg}"
+    try:
+      if u.op not in {Ops.VIEW, Ops.BUFFER, Ops.KERNEL, Ops.ASSIGN, Ops.COPY, Ops.SINK, *GroupOp.Buffer} and u.st is not None:
+        label += f"\n{shape_to_str(u.shape)}"
+    except Exception:
+      label += "\n<ISSUE GETTING SHAPE>"
+    # NOTE: kernel already has metadata in arg
+    if TRACEMETA >= 2 and u.metadata is not None and u.op is not Ops.KERNEL: label += "\n"+repr(u.metadata)
     graph[id(u)] = {"label":label, "src":[id(x) for x in u.src if x not in excluded], "color":uops_colors.get(u.op, "#ffffff")}
   return graph
 
