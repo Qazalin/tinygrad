@@ -321,8 +321,12 @@ async function main() {
   }
   // ** right sidebar code blocks
   const metadata = document.querySelector(".metadata");
-  const [code, lang] = kernel.kernel_code != null ? [kernel.kernel_code, "cpp"] : [ret[currentRewrite].uop, "python"];
-  metadata.replaceChildren(codeBlock(kernel.code_line, "python", { loc:kernel.loc, wrap:true }), codeBlock(code, lang, { wrap:false }));
+  if (kernel.kernel_code != null) {
+    metadata.replaceChildren(codeBlock(kernel.code_line, "python", { loc:kernel.loc, wrap:true }), codeBlock(kernel.kernel_code,  "cpp", { wrap:false }),
+      codeBlock(ret[currentRewrite].uop, "python", { wrap:false }));
+  } else {
+    metadata.replaceChildren(codeBlock(kernel.code_line, "python", { loc:kernel.loc, wrap:true }), codeBlock(ret[currentRewrite].uop, "python", { wrap:false }));
+  }
   appendResizer(metadata, { minWidth: 20, maxWidth: 50 });
   // ** rewrite steps
   if (kernel.match_count >= 1) {
