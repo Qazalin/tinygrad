@@ -123,29 +123,17 @@ replace_contiguous = PatternMatcher([
   (UPat(GroupOp.ALU, name="alu"), lambda ctx,alu: alu.replace(src=new_src) if (new_src:=tuple(ctx.get(s, s) for s in alu.src)) != alu.src else None),
 ])
 
-# **** Grouper decides which of the UOps realize
+# **** Realize intermediate UOps
 
-def realize(ctx:dict[UOp, None], tr:UOp) -> None: ctx[tr] = None
-
-def realize_before_view(ctx:dict[UOp, None], view:UOp, tr:UOp) -> None:
-  st = unwrap(view.st)
-  # always realize unsafe pad ops before masked view
-  if any(v.mask is not None for v in st.views) and not can_pad(tr, ctx, cache=dict()): return realize(ctx, tr)
-  # fold simple pads
-  if len(st.views) == 1 and (m:=st.views[-1].mask) is not None and all_int(tr.shape) and resolve(prod(tr.shape) >= prod([y-x for x,y in m])): return
-  # realize before expand
-  if resolve(prod(tr.shape) < prod(st.shape)) and not DONT_REALIZE_EXPAND: return realize(ctx, tr)
-
-do_realize = PatternMatcher([
-  # always realize SINK parents
-  (UPat(Ops.SINK, name="s"), lambda ctx,s: ctx.update((x.base, None) for x in s.src if x.base.op not in ALWAYS_CONTIGUOUS)),
-  # always realize ASSIGN/CONTIGUOUS/GroupOp.Meta
+always_realize = PatternMatcher([
   (UPat({Ops.ASSIGN, Ops.CONTIGUOUS, *GroupOp.Meta}, name="tr"), realize),
-  # realize before expand or unsafe pad ops
+  # realize before EXPAND/unsafe PAD or COPY
   (UPat(Ops.VIEW, src=(UPat(GroupOp.All-ALWAYS_CONTIGUOUS, name="tr"),), name="view"), realize_before_view),
-  # realize before COPY
   (UPat(Ops.COPY, src=(UPat(GroupOp.All-ALWAYS_CONTIGUOUS, name="tr"),), allow_any_len=True), realize),
 ])
+
+# ** custom algorithm for fusing reduce ops with elementwise children
+# this pass is optional, DONT_GROUP_REDUCES=1 disables it globally, FUSE skips this step.
 
 def recursive_group(tr:UOp, st:ShapeTracker, r:UOp, children:defaultdict[UOp, dict[UOp, None]], realizes:dict[UOp, None],
                     reduce_for_op:dict[UOp, UOp], group:dict[UOp, None], cache:dict[tuple[UOp, ShapeTracker], None]) -> None:
@@ -164,12 +152,7 @@ def recursive_group(tr:UOp, st:ShapeTracker, r:UOp, children:defaultdict[UOp, di
     if len(st_childs:=dedup(unwrap(x.st) for x in tr_next.src if x.base == tr)) > 1: return group.setdefault(r)
     recursive_group(tr_next, st+st_childs[0], r, children, realizes, reduce_for_op, group, cache)
 
-def group_realizes(sink:UOp) -> dict[UOp, None]:
-  # start by adding uops that always realize
-  realizes: dict[UOp, None] = {}
-  sink = graph_rewrite(sink, do_realize, ctx=realizes, name="do_realize")
-  if DONT_GROUP_REDUCES: return realizes
-
+def group_reduces(sink:UOp) -> dict[UOp, None]:
   # construct children graph (only for bases)
   children: defaultdict[UOp, dict[UOp, None]] = defaultdict(dict)
   assigns: dict[UOp, None] = {}
@@ -177,8 +160,8 @@ def group_realizes(sink:UOp) -> dict[UOp, None]:
     if u.op in {Ops.VIEW, Ops.SINK}: continue
     if u.op is Ops.ASSIGN: assigns[u.buf_uop] = None
     for s in u.src: children[s.base][u] = None
-
   # find all reduces, and pair them to a elementwise op. if they can't be cleanly paired, force realize the reduce (or a contig child)
+  realizes: dict[UOp, None] = {}
   reduce_for_op: dict[UOp, UOp] = {}
   double_reduces: list[UOp] = []
   for r in toposort:
