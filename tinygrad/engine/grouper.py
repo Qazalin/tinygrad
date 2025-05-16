@@ -471,6 +471,10 @@ insert_fuse = PatternMatcher([
   (UPat(Ops.REDUCE_AXIS, name="root"), fuse_arange),
 ])
 
+insert_contiguous = PatternMatcher([
+  (UPat(GroupOp.All-ALWAYS_CONTIGUOUS, name="x"), lambda ctx,x: x.contiguous() if any(c.op is Ops.SINK for c in ctx[x]) else None),
+])
+
 PROCESS_REPLAY_CAPTURE:dict[int,bytes] = {}
 if CAPTURE_PROCESS_REPLAY:
   import atexit
@@ -491,7 +495,10 @@ def get_becomes_map(big_sink:UOp) -> dict[UOp, UOp]:
   if getenv("VIZ"): graph_rewrite(tensor_map[big_sink], PatternMatcher([]), name="View Tensor Graph")
 
   # group into kernels
-  realize_map = group_realizes(tensor_map[big_sink])
+  children = tensor_map[big_sink].get_children_map()
+  tensor_map = graph_rewrite_map(tensor_map[big_sink], insert_contiguous, ctx=children, bottom_up=True, input_map=tensor_map, name="insert_contiguous")
+  #realize_map = group_realizes(tensor_map[big_sink])
+  realize_map = {u:None for u in tensor_map[big_sink].toposort() if u.op in {Ops.CONTIGUOUS, Ops.ASSIGN, Ops.COPY}}
   tensor_map = graph_rewrite_map(tensor_map[big_sink], create_kernels, ctx=realize_map, bottom_up=True, input_map=tensor_map, name="create_kernels")
 
   # if a kernel depends on a buffer, and that buffer is later assigned to, make the assign depend on the kernel's assign
