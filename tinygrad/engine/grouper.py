@@ -245,11 +245,11 @@ def create_kernel(x:UOp, b:UOp|None=None):
   return buffer.assign(kernel).reshape(x.shape)
 
 DONT_PLACE_IN_KERNEL = {Ops.KERNEL, Ops.ASSIGN, Ops.BUFFER}
-def append_to_kernel(ctx:dict[UOp, None], x:UOp):
+def append_to_kernel(x:UOp):
   new_srcs: list[UOp] = []
   metadata = dict.fromkeys(x.arg.metadata)
   for s in x.src:
-    if s.op in DONT_PLACE_IN_KERNEL or s in ctx: new_srcs.append(s)
+    if s.op in DONT_PLACE_IN_KERNEL: new_srcs.append(s)
     else:
       new_srcs.extend(s.src)
       if s.base.op not in {Ops.CONST, Ops.DEVICE} and (m:=s.metadata): metadata[m] = None
@@ -261,8 +261,6 @@ create_kernels = merge_views+PatternMatcher([
   (UPat(Ops.CONTIGUOUS, name="x"), create_kernel),
   # create a buffer for COPY on the new device
   (UPat(Ops.COPY, src=(UPat(), UPat(Ops.DEVICE)), name="x"), create_kernel),
-  # otherwise check the context if we're realizing this UOp
-  (UPat(GroupOp.All-DONT_PLACE_IN_KERNEL, name="x"), lambda ctx,x: create_kernel(x) if x in ctx else None),
   # walk back the local graph until we reach a realized source
   (UPat(Ops.KERNEL, name="x"), append_to_kernel),
   # remove extra views and constants from SINK
@@ -385,15 +383,13 @@ fix_kernel_ops = PatternMatcher([
   (UPat(Ops.LOAD, src=(UPat.var("glbl"), UPat.var("view"))), check_load_st),
 ])
 
+replace_kernel = PatternMatcher([
+  (UPat(Ops.ASSIGN, name="x"), lambda x:x.src[0]),
+])
+
 def fix_kernel_ast(k:UOp) -> UOp|None:
   if k.arg.ast.op in GroupOp.Meta or all(s.op is Ops.STORE for s in k.arg.ast.src): return None
-  # replace assign sources with a view of the target buffer
-  parents_rep: dict[UOp, UOp] = {}
-  for s in k.src:
-    if s.op is Ops.ASSIGN:
-      for out in s.src[1].arg.ast.src: parents_rep[out] = s.buf_uop.view(unwrap(out.st))
-      parents_rep[s] = s.buf_uop
-  ast = k.arg.ast.substitute(parents_rep, name="replace realized")
+  ast = graph_rewrite(k.arg.ast, replace_kernel, name="replace realized")
   # push views to edges
   ast = graph_rewrite(graph_rewrite(ast, view_left, name="Main View Left"), view_right, name="Main View Right")
   # replace buffer with define_global + add load/store last
@@ -472,6 +468,17 @@ insert_fuse = PatternMatcher([
   (UPat(Ops.REDUCE_AXIS, name="root"), fuse_arange),
 ])
 
+def _insert_contig(ctx:dict[UOp, None], root:UOp):
+  new_src:list[UOp] = []
+  for s in root.src:
+    if s.base in ctx and s.base.op not in ALWAYS_CONTIGUOUS: s = s.base.contiguous().view(unwrap(s.st)) if s.op is Ops.VIEW else s.contiguous()
+    new_src.append(s)
+  if (ns:=tuple(new_src)) != root.src: return root.replace(src=ns)
+
+insert_contiguous = PatternMatcher([
+  (UPat(GroupOp.All-{Ops.CONTIGUOUS}, name="root"), _insert_contig),
+])
+ 
 PROCESS_REPLAY_CAPTURE:dict[int,bytes] = {}
 if CAPTURE_PROCESS_REPLAY:
   import atexit
@@ -493,7 +500,8 @@ def get_becomes_map(big_sink:UOp) -> dict[UOp, UOp]:
 
   # group into kernels
   realize_map = group_realizes(tensor_map[big_sink])
-  tensor_map = graph_rewrite_map(tensor_map[big_sink], create_kernels, ctx=realize_map, bottom_up=True, input_map=tensor_map, name="create_kernels")
+  tensor_map = graph_rewrite_map(tensor_map[big_sink], insert_contiguous, ctx=realize_map, input_map=tensor_map, bottom_up=True, name="insert_contiguous")
+  tensor_map = graph_rewrite_map(tensor_map[big_sink], create_kernels, input_map=tensor_map, name="create_kernels")
 
   # if a kernel depends on a buffer, and that buffer is later assigned to, make the assign depend on the kernel's assign
   kernel_assign: dict[UOp, UOp] = {}
