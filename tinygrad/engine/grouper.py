@@ -67,7 +67,7 @@ def split_reduceop(reduce:UOp, x:UOp):
   # reduce original axes, then split
   return splitted.r(*reduce.arg).r(reduce.arg[0], (len(reduce.shape),)).reshape(reduce.shape)
 
-ALWAYS_CONTIGUOUS = {Ops.CONTIGUOUS, Ops.ASSIGN, Ops.COPY, Ops.BUFFER, Ops.BUFFER_VIEW, Ops.CONST, Ops.BIND, Ops.DEVICE}
+ALWAYS_CONTIGUOUS = {Ops.CONTIGUOUS, Ops.ASSIGN, Ops.COPY, Ops.BUFFER, Ops.BUFFER_VIEW, Ops.CONST, Ops.BIND, Ops.DEVICE, Ops.MSELECT}
 
 sym = symbolic_simple+PatternMatcher([
   # UOp with size 0 is zero
@@ -117,6 +117,8 @@ sym = symbolic_simple+PatternMatcher([
   # put UnaryOps before EXPANDs, if it can fuse with the input
   (UPat(GroupOp.Unary, src=(UPat(Ops.VIEW, src=(UPat(GroupOp.All-ALWAYS_CONTIGUOUS, name="inp"),), name="v"),), name="alu"),
    lambda inp,v,alu: inp.alu(alu.op).view(v.st) if resolve(prod(alu.shape) > v.st.real_size()) else None),
+  # reorder VIEW after MSELECT
+  (UPat(Ops.MSELECT, src=(UPat(Ops.VIEW, name="view"),), name="ms"), lambda ms,view: ms.replace(src=(view.base,)).view(view.st)),
 ])
 
 # support for using a contiguous permuted view instead of the parent view if one exists
