@@ -229,7 +229,24 @@ def diskcache(func:Callable[..., T]):
 
 # *** process replay ***
 
-CAPTURE_PROCESS_REPLAY = getenv("CAPTURE_PROCESS_REPLAY")
+if getenv("CAPTURE_PROCESS_REPLAY"):
+  _PROCESS_REPLAY_CAPTURE:dict[int,bytes] = {}
+  import atexit
+  @atexit.register
+  def save_process_replay():
+    for k,v in _PROCESS_REPLAY_CAPTURE.items(): diskcache_put("process_replay", k, v, prepickled=True)
+
+def process_replay(func:Callable[..., T]):
+  def wrapper(*args, **kwargs) -> T:
+    ret = func(*args, **kwargs)
+    if getenv("CAPTURE_PROCESS_REPLAY") and (k:=id(args[0])) not in _PROCESS_REPLAY_CAPTURE:
+      frm = sys._getframe(1)
+      while (f_back:=frm.f_back) is not None and "unittest" not in f_back.f_code.co_filename: frm = f_back
+      loc = f"{frm.f_code.co_filename.split('/')[-1]}:{frm.f_lineno} {frm.f_code.co_name}"
+      with Context(PICKLE_BUFFERS=0):
+        _PROCESS_REPLAY_CAPTURE[k] = pickle.dumps((func.__name__, args, kwargs, ContextVar._cache, loc, ret))
+    return ret
+  return wrapper
 
 # *** http support ***
 
