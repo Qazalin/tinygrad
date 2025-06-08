@@ -275,8 +275,8 @@ const evtSources = [];
 function getState() {
   const params = new URLSearchParams(window.location.search);
   const getInt = (k, fallback=0) => parseInt(params.get(k) ?? fallback);
-  return { currentCtx:getInt("currentCtx",-1), currentStep:getInt("currentStep"),
-           currentRewrite:getInt("currentRewrite"), expandSteps:params.get("expandSteps")==='true'};
+  return {currentCtx:getInt("currentCtx",-1), currentStep:getInt("currentStep"),
+          currentRewrite:getInt("currentRewrite"), expandSteps:params.get("expandSteps")==='true'};
 }
 
 function setState(ns) {
@@ -286,7 +286,7 @@ function setState(ns) {
   main();
 }
 
-async function main() {
+async function main(recenter=false) {
   const { currentCtx, currentStep, currentRewrite, expandSteps } = getState();
   // ** left sidebar context list
   if (ctxs == null) {
@@ -348,17 +348,17 @@ async function main() {
       const chunk = JSON.parse(e.data);
       ret.push(chunk);
       // if it's the first one render this new rgaph
-      if (ret.length === 1) return main();
+      if (ret.length === currentRewrite+1) return main(recenter=true);
       // otherwise just enable the graph selector
       const ul = document.getElementById(`rewrite-${ret.length-1}`);
       if (ul != null) ul.classList.remove("disabled");
     };
   }
-  if (ret.length === 0) return;
+  if (ret[currentRewrite] == null) return;
   if (ctx.name == "View Memory Graph") {
     renderMemoryGraph(ret[currentRewrite].graph);
   } else {
-    renderDag(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes || [], recenter=currentRewrite === 0);
+    renderDag(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes || [], recenter=recenter || currentRewrite === 0);
   }
   // ** right sidebar code blocks
   const metadata = document.querySelector(".metadata");
