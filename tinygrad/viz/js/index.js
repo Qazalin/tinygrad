@@ -271,17 +271,26 @@ const evtSources = [];
 // rewrite: a single UOp transformation
 // step: collection of rewrites
 // context: collection of steps
-const state = {currentCtx:-1, currentStep:0, currentRewrite:0, expandSteps:false};
+
+function getState() {
+  const params = new URLSearchParams(window.location.search);
+  const getInt = (k, fallback=0) => parseInt(params.get(k) ?? fallback);
+  return { currentCtx:getInt("currentCtx",-1), currentStep:getInt("currentStep"),
+           currentRewrite:getInt("currentRewrite"), expandSteps:params.get("expandSteps")==='true'};
+}
+
 function setState(ns) {
-  Object.assign(state, ns);
+  const params = new URLSearchParams(window.location.search);
+  for (const [k,v] of Object.entries(ns)) params.set(k, v);
+  history.pushState(null, "", `${window.location.pathname}?${params.toString()}`);
   main();
 }
+
 async function main() {
-  const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
+  const { currentCtx, currentStep, currentRewrite, expandSteps } = getState();
   // ** left sidebar context list
   if (ctxs == null) {
     ctxs = await (await fetch("/ctxs")).json();
-    setState({ currentCtx:-1 });
   }
   const ctxList = document.querySelector(".ctx-list");
   ctxList.innerHTML = "";
@@ -419,7 +428,7 @@ appendResizer(document.querySelector(".metadata-parent"), { minWidth: 20, maxWid
 // **** keyboard shortcuts
 
 document.addEventListener("keydown", async function(event) {
-  const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
+  const { currentCtx, currentStep, currentRewrite, expandSteps } = getState();
   // up and down change the step or context from the list
   if (event.key == "ArrowUp") {
     event.preventDefault();
@@ -462,3 +471,4 @@ document.addEventListener("keydown", async function(event) {
 });
 
 main()
+window.addEventListener("popstate", () => { main(); });
