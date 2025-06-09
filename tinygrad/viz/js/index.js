@@ -209,8 +209,30 @@ function renderMemoryGraph(graph) {
   document.getElementById("zoom-to-fit-btn").click();
 }
 
+
+// copied from worker.js, make this module
+const ansiStrip = (st, tag) => st.replace(/\u001b\[(\d+)m(.*?)\u001b\[0m/g, (_,__,st) => st);
+
+var traceEvents;
 async function renderProfiler() {
-  console.log("hi");
+  if (traceEvents == null) {
+    traceEvents = (await (await fetch("/get_profile")).json()).traceEvents;
+  }
+  // move this to serve.py logic
+  const data = {};
+  const proc = [];
+  for (const e of traceEvents) {
+    if (e.ph === "M") {
+      if (e.tid == null) {
+        proc.push(e);
+        data[e.pid] = {};
+      } else {
+        data[e.pid][e.tid] = {...e, events:[]};
+      }
+    } else {
+      data[e.pid][e.tid].events.push(e);
+    }
+  }
 }
 
 // ** zoom and recentering
@@ -325,7 +347,7 @@ async function main() {
     return renderProfiler();
   }
   const step = ctx.steps[currentStep];
-  const cacheKey = `ctx=${currentCtx}&idx=${currentStep}`;
+  const cacheKey = `ctx=${currentCtx-1}&idx=${currentStep}`;
   // close any pending event sources
   let activeSrc = null;
   for (const e of evtSources) {
@@ -339,7 +361,7 @@ async function main() {
   if (!(cacheKey in cache) || (cache[cacheKey].length !== step.match_count+1 && activeSrc == null)) {
     ret = [];
     cache[cacheKey] = ret;
-    const eventSource = new EventSource(`/ctxs?ctx=${currentCtx}&idx=${currentStep}`);
+    const eventSource = new EventSource(`/ctxs?ctx=${currentCtx-1}&idx=${currentStep}`);
     evtSources.push(eventSource);
     eventSource.onmessage = (e) => {
       if (e.data === "END") return eventSource.close();
