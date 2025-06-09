@@ -211,8 +211,11 @@ function renderMemoryGraph(graph) {
   document.getElementById("zoom-to-fit-btn").click();
 }
 
-function renderProfiler() {
+var traceEvents;
+async function renderProfiler() {
   document.querySelector("#graph-svg").style.display = "none";
+  if (traceEvents == null) traceEvents = await (await fetch("/get_profile"));
+  console.log(traceEvents);
 }
 
 // ** zoom and recentering
