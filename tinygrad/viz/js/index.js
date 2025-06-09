@@ -222,7 +222,24 @@ async function renderProfiler() {
   switchRender("profiler");
   if (traceEvents == null) traceEvents = (await (await fetch("/get_profile")).json()).traceEvents;
   const root = document.querySelector(".profiler");
-  console.log(root);
+  const data = [];
+  for (const e of traceEvents) {
+    if (e.name === "process_name") {
+      const div = root.appendChild(document.createElement("div"));
+      div.id = `pid-${e.pid}`;
+      div.innerText = `${e.args.name}`;
+    }
+    else if (e.name === "thread_name") {
+      const div = root.appendChild(document.createElement("div"));
+      div.id = `tid-${e.tid}-${e.pid}`;
+      div.innerText = `${e.args.name}`;
+    }
+    else if (e.ph === "X") {
+      const thread = rect(`#tid-${e.tid}-${e.pid}`);
+      data.push({ ...e, y:thread.y, color:"red" });
+    }
+  }
+  console.log(data);
 }
 
 // ** zoom and recentering
