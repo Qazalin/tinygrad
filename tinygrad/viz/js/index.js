@@ -217,11 +217,20 @@ function renderMemoryGraph(graph) {
   document.getElementById("zoom-to-fit-btn").click();
 }
 
+const formatTime = (t, duration) => {
+  if (duration<=1e3) return `${t}us`;
+  if (duration=1e6) return `${(t*1e-3).toFixed(2)}ms`;
+  return `${(t*1e-6).toFixed(2)}s`;
+}
+
 var traceEvents;
 async function renderProfiler() {
   switchRender("profiler");
+  // ** data
   if (traceEvents == null) traceEvents = (await (await fetch("/get_profile")).json()).traceEvents;
   const root = document.querySelector(".profiler");
+  root.innerHTML = "";
+  const render = d3.select(".profiler").append("svg").attr("style", "position:absolute; width:100%; z-index: 1");
   const data = [];
   for (const e of traceEvents) {
     if (e.name === "process_name") {
@@ -239,7 +248,19 @@ async function renderProfiler() {
       data.push({ ...e, y:thread.y, color:"red" });
     }
   }
-  console.log(data);
+  // ** time axis
+  const timestamps = data.map(e => e.ts);
+  const [st, et] = [Math.min(...timestamps), Math.max(...timestamps)];
+  const duration = et-st;
+  const timescale = d3.scaleLinear().domain([0, duration]).range([0, 1111]);
+  const timeAxis = render.append("g").call(d3.axisBottom(timescale).tickFormat((t) => formatTime(t, duration)));
+  for (e of data) {
+    e.st = e.ts-st;
+    e.x = timescale(e.st);
+    e.width = timescale(e.dur);
+  }
+  render.selectAll("rect").data(data).join("rect").attr("fill", "red").attr("x", d => d.x).attr("y", d => d.y)
+    .attr("width", d => d.width).attr("height", 20);
 }
 
 // ** zoom and recentering
