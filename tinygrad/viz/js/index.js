@@ -16,6 +16,7 @@ const rect = (s) => document.querySelector(s).getBoundingClientRect();
 
 let [workerUrl, worker, timeout] = [null, null, null];
 async function renderDag(graph, additions, recenter=false) {
+  d3.selectAll("#timeline").remove();
   // start calculating the new layout (non-blocking)
   if (worker == null) {
     const resp = await Promise.all(["/assets/dagrejs.github.io/project/dagre/latest/dagre.min.js","/js/worker.js"].map(u => fetch(u)));
@@ -218,6 +219,22 @@ async function renderProfiler() {
   if (traceEvents == null) {
     traceEvents = (await (await fetch("/get_profile")).json()).traceEvents;
   }
+
+  document.querySelector(".progress-message").style.display = "none";
+  for (c of document.getElementById("render").children) c.innerHTML = "";
+
+  const el = document.getElementById('render');
+  const x0 = rect(".ctx-list-parent").right;
+  const x1 = rect(".metadata-parent").left;
+  const root = document.querySelector(".graph").appendChild(document.createElement("div"));
+  root.id = "timeline";
+  root.style.position = "absolute";
+  const PADDING = 20;
+  root.style.left = `${x0+PADDING}px`;
+  root.style.top = `${PADDING}px`;
+  root.style.width = `${x1-x0-PADDING*2}px`;
+  root.style.height = "400px";
+  root.style.backgroundColor = "blue";
   // move this to serve.py logic
   const data = {};
   const proc = [];
