@@ -16,7 +16,6 @@ const rect = (s) => document.querySelector(s).getBoundingClientRect();
 
 let [workerUrl, worker, timeout] = [null, null, null];
 async function renderDag(graph, additions, recenter=false) {
-  d3.selectAll("#timeline").remove();
   // start calculating the new layout (non-blocking)
   if (worker == null) {
     const resp = await Promise.all(["/assets/dagrejs.github.io/project/dagre/latest/dagre.min.js","/js/worker.js"].map(u => fetch(u)));
@@ -34,6 +33,7 @@ async function renderDag(graph, additions, recenter=false) {
     progressMessage.style.display = "none";
     clearTimeout(timeout);
     d3.select("#bars").html("");
+    d3.select("#timeline").html("");
     const g = dagre.graphlib.json.read(e.data);
     // draw nodes
     const STROKE_WIDTH = 1.4;
@@ -213,43 +213,31 @@ function renderMemoryGraph(graph) {
 
 // copied from worker.js, make this module
 const ansiStrip = (st, tag) => st.replace(/\u001b\[(\d+)m(.*?)\u001b\[0m/g, (_,__,st) => st);
+// can you make it not need this?
+/*
+  // ** start with a fresh render
+  const metadata = document.querySelector(".metadata");
+  metadata.innerHTML = "";
+  for (const c of document.querySelector("#render").children) c.innerHTML = "";
+*/
 
 var traceEvents;
 async function renderProfiler() {
   if (traceEvents == null) {
     traceEvents = (await (await fetch("/get_profile")).json()).traceEvents;
   }
-
-  document.querySelector(".progress-message").style.display = "none";
-  for (c of document.getElementById("render").children) c.innerHTML = "";
-
-  const el = document.getElementById('render');
-  const x0 = rect(".ctx-list-parent").right;
-  const x1 = rect(".metadata-parent").left;
-  const root = document.querySelector(".graph").appendChild(document.createElement("div"));
-  root.id = "timeline";
-  root.style.position = "absolute";
-  const PADDING = 20;
-  root.style.left = `${x0+PADDING}px`;
-  root.style.top = `${PADDING}px`;
-  root.style.width = `${x1-x0-PADDING*2}px`;
-  root.style.height = "400px";
-  root.style.backgroundColor = "blue";
-  // move this to serve.py logic
-  const data = {};
-  const proc = [];
-  for (const e of traceEvents) {
-    if (e.ph === "M") {
-      if (e.tid == null) {
-        proc.push(e);
-        data[e.pid] = {};
-      } else {
-        data[e.pid][e.tid] = {...e, events:[]};
-      }
-    } else {
-      data[e.pid][e.tid].events.push(e);
-    }
-  }
+  const root = d3.select("#timeline");
+  // ** time axis
+  const timestamps = traceEvents.map((t) => t.ts).filter(ts => ts!=null);
+  const [st, et] = [Math.min(...timestamps), Math.max(...timestamps)];
+  const duration = et-st;
+  const timeScale = d3.scaleLinear().domain([0, Math.max(...timestamps)-st]).range([0, 1111]);
+  const timeAxis = root.append("g").call(d3.axisBottom(timeScale).tickFormat((t) => {
+    if (duration<=1e3) return `${t}us`;
+    if (durationj=1e6) return `${(t*1e-3).toFixed(2)}ms`;
+    return `${(t*1e-6).toFixed(2)}s`;
+  }));
+  document.getElementById("zoom-to-fit-btn").click();
 }
 
 // ** zoom and recentering
