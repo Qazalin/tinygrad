@@ -1,5 +1,11 @@
 // **** graph renderers
 
+function switchRender(visible) {
+  for (const c of document.querySelector(".main-container").children) {
+    c.style.display = (c.className.includes("container") || c.className === visible) ? "flex" : "none";
+  }
+}
+
 // ** UOp graph
 
 function intersectRect(r1, r2) {
@@ -16,7 +22,7 @@ const rect = (s) => document.querySelector(s).getBoundingClientRect();
 
 let [workerUrl, worker, timeout] = [null, null, null];
 async function renderDag(graph, additions, recenter=false) {
-  document.querySelector("#graph-svg").style.display = "block";
+  switchRender("graph");
   // start calculating the new layout (non-blocking)
   if (worker == null) {
     const resp = await Promise.all(["/assets/dagrejs.github.io/project/dagre/latest/dagre.min.js","/js/worker.js"].map(u => fetch(u)));
@@ -95,7 +101,7 @@ function pluralize(num, name, alt=null) {
 }
 
 function renderMemoryGraph(graph) {
-  eocument.querySelector("#graph-svg").style.display = "block";
+  switchRender("graph");
   // ** construct alloc/free traces
   // we can map reads/writes from the kernel graph
   const actions = [];
@@ -213,13 +219,10 @@ function renderMemoryGraph(graph) {
 
 var traceEvents;
 async function renderProfiler() {
-  document.querySelector("#graph-svg").style.display = "none";
-  if (traceEvents == null) traceEvents = await (await fetch("/get_profile"));
-  const timestamps = traceEvents.map((t) => t.ts).filter(t => t);
-  const [st, et] = Math.min(...timestamps), Math.max(...timestamps);
-  const duration = et-st;
-  const timeScale = d3.scaleLinear().domain([0, duration]):
-  console.log(traceEvents[0]);
+  switchRender("profiler");
+  if (traceEvents == null) traceEvents = (await (await fetch("/get_profile")).json()).traceEvents;
+  const root = document.querySelector(".profiler");
+  console.log(root);
 }
 
 // ** zoom and recentering
