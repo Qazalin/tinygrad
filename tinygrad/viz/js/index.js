@@ -210,6 +210,7 @@ function renderMemoryGraph(graph) {
 }
 
 async function renderProfiler() {
+  console.log("hi");
 }
 
 // ** zoom and recentering
@@ -274,7 +275,7 @@ const evtSources = [];
 // rewrite: a single UOp transformation
 // step: collection of rewrites
 // context: collection of steps
-const state = {currentCtx:-1, currentStep:0, currentRewrite:0, expandSteps:false};
+const state = {currentCtx:0, currentStep:0, currentRewrite:0, expandSteps:false};
 function setState(ns) {
   Object.assign(state, ns);
   main();
