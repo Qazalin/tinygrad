@@ -245,16 +245,21 @@ async function renderProfiler() {
   const [tx, _, scale] = getCenterCoordinates();
   root.attr("transform", `translate(${tx}, 50) scale(${scale})`)
   // ** zoom
-  let lastTransform = d3.zoomIdentity;
   zoom.on("zoom", (e) => {
     const newScale = e.transform.rescaleX(timeScale);
-    const [x, y] = newScale.domain();
-    if (x < domain[0] || y > domain[1]) {
-      return d3.select("#graph-svg").call(zoom.transform, lastTransform);
-    }
-    lastTransform = e.transform;
     timeAxis.call(d3.axisBottom(newScale).tickFormat((t) => formatTime(t, duration)));
+    root.selectAll("rect").attr("x", d => newScale(d.x)).attr("width", d => newScale(d.x+d.dur)-newScale(d.x));
   });
+  // ** junk
+  const data = [];
+  for (const e of traceEvents) {
+    if (e.ph === "M") {
+    } else {
+      data.push({ color:"red", x:e.ts-st, y:10, dur:e.dur, height:20});
+    }
+  }
+  root.selectAll("rect").data(data).join("rect").attr("x", d => timeScale(d.x)).attr("width", d => timeScale(d.dur))
+    .attr("y", d => d.y).attr("height", d => d.height).attr("fill", d => d.color);
 }
 
 // ** zoom and recentering
