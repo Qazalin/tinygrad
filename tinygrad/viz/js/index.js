@@ -16,6 +16,7 @@ const rect = (s) => document.querySelector(s).getBoundingClientRect();
 
 let [workerUrl, worker, timeout] = [null, null, null];
 async function renderDag(graph, additions, recenter=false) {
+  zoom.on("zoom", (e) => d3.select("#render").attr("transform", e.transform));
   // start calculating the new layout (non-blocking)
   if (worker == null) {
     const resp = await Promise.all(["/assets/dagrejs.github.io/project/dagre/latest/dagre.min.js","/js/worker.js"].map(u => fetch(u)));
@@ -221,6 +222,12 @@ const ansiStrip = (st, tag) => st.replace(/\u001b\[(\d+)m(.*?)\u001b\[0m/g, (_,_
   for (const c of document.querySelector("#render").children) c.innerHTML = "";
 */
 
+const formatTime = (t, duration) => {
+  if (duration<=1e3) return `${t}us`;
+  if (duration=1e6) return `${(t*1e-3).toFixed(2)}ms`;
+  return `${(t*1e-6).toFixed(2)}s`;
+}
+
 var traceEvents;
 async function renderProfiler() {
   if (traceEvents == null) {
@@ -231,32 +238,46 @@ async function renderProfiler() {
   const timestamps = traceEvents.map((t) => t.ts).filter(ts => ts!=null);
   const [st, et] = [Math.min(...timestamps), Math.max(...timestamps)];
   const duration = et-st;
-  const timeScale = d3.scaleLinear().domain([0, Math.max(...timestamps)-st]).range([0, 1111]);
-  const timeAxis = root.append("g").call(d3.axisBottom(timeScale).tickFormat((t) => {
-    if (duration<=1e3) return `${t}us`;
-    if (durationj=1e6) return `${(t*1e-3).toFixed(2)}ms`;
-    return `${(t*1e-6).toFixed(2)}s`;
-  }));
-  document.getElementById("zoom-to-fit-btn").click();
+  const domain = [0, Math.max(...timestamps)-st];
+  const timeScale = d3.scaleLinear().domain(domain).range([0, 1111]);
+  const timeAxis = root.append("g").call(d3.axisBottom(timeScale).tickFormat((t) => formatTime(t, duration)));
+  const x0 = rect(".ctx-list-parent").right;
+  const [tx, _, scale] = getCenterCoordinates();
+  root.attr("transform", `translate(${tx}, 50) scale(${scale})`)
+  // ** zoom
+  let lastTransform = d3.zoomIdentity;
+  zoom.on("zoom", (e) => {
+    const newScale = e.transform.rescaleX(timeScale);
+    const [x, y] = newScale.domain();
+    if (x < domain[0] || y > domain[1]) {
+      return d3.select("#graph-svg").call(zoom.transform, lastTransform);
+    }
+    lastTransform = e.transform;
+    timeAxis.call(d3.axisBottom(newScale).tickFormat((t) => formatTime(t, duration)));
+  });
 }
 
 // ** zoom and recentering
 
-const zoom = d3.zoom().on("zoom", (e) => d3.select("#render").attr("transform", e.transform));
+const zoom = d3.zoom();
 d3.select("#graph-svg").call(zoom);
-// zoom to fit into view
-document.getElementById("zoom-to-fit-btn").addEventListener("click", () => {
-  const svg = d3.select("#graph-svg");
-  svg.call(zoom.transform, d3.zoomIdentity);
+
+function getCenterCoordinates() {
   const mainRect = rect(".main-container");
   const x0 = rect(".ctx-list-parent").right;
   const x1 = rect(".metadata-parent").left;
   const pad = 16;
   const R = { x: x0+pad, y: mainRect.top+pad, width: (x1>0 ? x1-x0 : mainRect.width)-2*pad, height: mainRect.height-2*pad };
   const r = rect("#render");
-  if (r.width === 0) return;
+  if (r.width === 0) return [0, 0, 1];
   const scale = Math.min(R.width/r.width, R.height/r.height);
-  const [tx, ty] = [R.x+(R.width-r.width*scale)/2-r.left*scale, R.y+(R.height-r.height*scale)/2];
+  return [R.x+(R.width-r.width*scale)/2-r.left*scale, R.y+(R.height-r.height*scale)/2, scale];
+}
+// zoom to fit into view
+document.getElementById("zoom-to-fit-btn").addEventListener("click", () => {
+  const svg = d3.select("#graph-svg");
+  svg.call(zoom.transform, d3.zoomIdentity);
+  const [tx, ty, scale] = getCenterCoordinates();
   svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
 });
 
