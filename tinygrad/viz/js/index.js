@@ -215,7 +215,11 @@ var traceEvents;
 async function renderProfiler() {
   document.querySelector("#graph-svg").style.display = "none";
   if (traceEvents == null) traceEvents = await (await fetch("/get_profile"));
-  console.log(traceEvents);
+  const timestamps = traceEvents.map((t) => t.ts).filter(t => t);
+  const [st, et] = Math.min(...timestamps), Math.max(...timestamps);
+  const duration = et-st;
+  const timeScale = d3.scaleLinear().domain([0, duration]):
+  console.log(traceEvents[0]);
 }
 
 // ** zoom and recentering
