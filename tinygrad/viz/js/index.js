@@ -16,6 +16,7 @@ const rect = (s) => document.querySelector(s).getBoundingClientRect();
 
 let [workerUrl, worker, timeout] = [null, null, null];
 async function renderDag(graph, additions, recenter=false) {
+  document.querySelector("#graph-svg").style.display = "block";
   // start calculating the new layout (non-blocking)
   if (worker == null) {
     const resp = await Promise.all(["/assets/dagrejs.github.io/project/dagre/latest/dagre.min.js","/js/worker.js"].map(u => fetch(u)));
@@ -94,6 +95,7 @@ function pluralize(num, name, alt=null) {
 }
 
 function renderMemoryGraph(graph) {
+  eocument.querySelector("#graph-svg").style.display = "block";
   // ** construct alloc/free traces
   // we can map reads/writes from the kernel graph
   const actions = [];
@@ -209,6 +211,10 @@ function renderMemoryGraph(graph) {
   document.getElementById("zoom-to-fit-btn").click();
 }
 
+function renderProfiler() {
+  document.querySelector("#graph-svg").style.display = "none";
+}
+
 // ** zoom and recentering
 
 const zoom = d3.zoom().on("zoom", (e) => d3.select("#render").attr("transform", e.transform));
@@ -280,7 +286,7 @@ async function main() {
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
   // ** left sidebar context list
   if (ctxs == null) {
-    ctxs = await (await fetch("/ctxs")).json();
+    ctxs = [{name:"Profiler", steps:[]}, ...(await (await fetch("/ctxs")).json())];
     setState({ currentCtx:-1 });
   }
   const ctxList = document.querySelector(".ctx-list");
@@ -317,8 +323,11 @@ async function main() {
   // ** center graph
   if (currentCtx == -1) return;
   const ctx = ctxs[currentCtx];
+  if (ctx.name == "Profiler") {
+    return renderProfiler();
+  }
   const step = ctx.steps[currentStep];
-  const ckey = `ctx=${currentCtx}&idx=${currentStep}`;
+  const ckey = `ctx=${currentCtx-1}&idx=${currentStep}`;
   // close any pending event sources
   let activeSrc = null;
   for (const e of evtSources) {
@@ -423,18 +432,18 @@ document.addEventListener("keydown", async function(event) {
   // up and down change the step or context from the list
   if (event.key == "ArrowUp") {
     event.preventDefault();
-    if (expandSteps) {
+    if (expandSteps && ctxs[currentCtx].steps.length !== 0) {
       return setState({ currentRewrite:0, currentStep:Math.max(0, currentStep-1) });
     }
-    return setState({ currentStep:0, currentRewrite:0, currentCtx:Math.max(0, currentCtx-1) });
+    return setState({ currentStep:0, currentRewrite:0, currentCtx:Math.max(0, currentCtx-1), expandSteps:false });
   }
   if (event.key == "ArrowDown") {
     event.preventDefault();
-    if (expandSteps) {
+    if (expandSteps && ctxs[currentCtx].steps.length !== 0) {
       const totalUOps = ctxs[currentCtx].steps.length-1;
       return setState({ currentRewrite:0, currentStep:Math.min(totalUOps, currentStep+1) });
     }
-    return setState({ currentStep:0, currentRewrite:0, currentCtx:Math.min(ctxs.length-1, currentCtx+1) });
+    return setState({ currentStep:0, currentRewrite:0, currentCtx:Math.min(ctxs.length-1, currentCtx+1), expandSteps:false });
   }
   // enter toggles focus on a single rewrite stage
   if (event.key == "Enter") {
