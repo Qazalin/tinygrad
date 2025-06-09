@@ -16,7 +16,6 @@ const rect = (s) => document.querySelector(s).getBoundingClientRect();
 
 let [workerUrl, worker, timeout] = [null, null, null];
 async function renderDag(graph, additions, recenter=false) {
-  zoom.on("zoom", (e) => d3.select("#render").attr("transform", e.transform));
   // start calculating the new layout (non-blocking)
   if (worker == null) {
     const resp = await Promise.all(["/assets/dagrejs.github.io/project/dagre/latest/dagre.min.js","/js/worker.js"].map(u => fetch(u)));
@@ -34,7 +33,6 @@ async function renderDag(graph, additions, recenter=false) {
     progressMessage.style.display = "none";
     clearTimeout(timeout);
     d3.select("#bars").html("");
-    d3.select("#timeline").html("");
     const g = dagre.graphlib.json.read(e.data);
     // draw nodes
     const STROKE_WIDTH = 1.4;
@@ -211,78 +209,23 @@ function renderMemoryGraph(graph) {
   document.getElementById("zoom-to-fit-btn").click();
 }
 
-
-// copied from worker.js, make this module
-const ansiStrip = (st, tag) => st.replace(/\u001b\[(\d+)m(.*?)\u001b\[0m/g, (_,__,st) => st);
-// can you make it not need this?
-/*
-  // ** start with a fresh render
-  const metadata = document.querySelector(".metadata");
-  metadata.innerHTML = "";
-  for (const c of document.querySelector("#render").children) c.innerHTML = "";
-*/
-
-const formatTime = (t, duration) => {
-  if (duration<=1e3) return `${t}us`;
-  if (duration=1e6) return `${(t*1e-3).toFixed(2)}ms`;
-  return `${(t*1e-6).toFixed(2)}s`;
-}
-
-var traceEvents;
-async function renderProfiler() {
-  if (traceEvents == null) {
-    traceEvents = (await (await fetch("/get_profile")).json()).traceEvents;
-  }
-  const root = d3.select("#timeline");
-  // ** time axis
-  const timestamps = traceEvents.map((t) => t.ts).filter(ts => ts!=null);
-  const [st, et] = [Math.min(...timestamps), Math.max(...timestamps)];
-  const duration = et-st;
-  const domain = [0, Math.max(...timestamps)-st];
-  const timeScale = d3.scaleLinear().domain(domain).range([0, 1111]);
-  const timeAxis = root.append("g").call(d3.axisBottom(timeScale).tickFormat((t) => formatTime(t, duration)));
-  const x0 = rect(".ctx-list-parent").right;
-  const [tx, _, scale] = getCenterCoordinates();
-  root.attr("transform", `translate(${tx}, 50) scale(${scale})`)
-  // ** zoom
-  zoom.on("zoom", (e) => {
-    const newScale = e.transform.rescaleX(timeScale);
-    timeAxis.call(d3.axisBottom(newScale).tickFormat((t) => formatTime(t, duration)));
-    root.selectAll("rect").attr("x", d => newScale(d.x)).attr("width", d => newScale(d.x+d.dur)-newScale(d.x));
-  });
-  // ** junk
-  const data = [];
-  for (const e of traceEvents) {
-    if (e.ph === "M") {
-    } else {
-      data.push({ color:"red", x:e.ts-st, y:10, dur:e.dur, height:20});
-    }
-  }
-  root.selectAll("rect").data(data).join("rect").attr("x", d => timeScale(d.x)).attr("width", d => timeScale(d.dur))
-    .attr("y", d => d.y).attr("height", d => d.height).attr("fill", d => d.color);
-}
-
 // ** zoom and recentering
 
-const zoom = d3.zoom();
+const zoom = d3.zoom().on("zoom", (e) => d3.select("#render").attr("transform", e.transform));
 d3.select("#graph-svg").call(zoom);
-
-function getCenterCoordinates() {
+// zoom to fit into view
+document.getElementById("zoom-to-fit-btn").addEventListener("click", () => {
+  const svg = d3.select("#graph-svg");
+  svg.call(zoom.transform, d3.zoomIdentity);
   const mainRect = rect(".main-container");
   const x0 = rect(".ctx-list-parent").right;
   const x1 = rect(".metadata-parent").left;
   const pad = 16;
   const R = { x: x0+pad, y: mainRect.top+pad, width: (x1>0 ? x1-x0 : mainRect.width)-2*pad, height: mainRect.height-2*pad };
   const r = rect("#render");
-  if (r.width === 0) return [0, 0, 1];
+  if (r.width === 0) return;
   const scale = Math.min(R.width/r.width, R.height/r.height);
-  return [R.x+(R.width-r.width*scale)/2-r.left*scale, R.y+(R.height-r.height*scale)/2, scale];
-}
-// zoom to fit into view
-document.getElementById("zoom-to-fit-btn").addEventListener("click", () => {
-  const svg = d3.select("#graph-svg");
-  svg.call(zoom.transform, d3.zoomIdentity);
-  const [tx, ty, scale] = getCenterCoordinates();
+  const [tx, ty] = [R.x+(R.width-r.width*scale)/2-r.left*scale, R.y+(R.height-r.height*scale)/2];
   svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
 });
 
@@ -328,7 +271,7 @@ const evtSources = [];
 // rewrite: a single UOp transformation
 // step: collection of rewrites
 // context: collection of steps
-const state = {currentCtx:0, currentStep:0, currentRewrite:0, expandSteps:false};
+const state = {currentCtx:-1, currentStep:0, currentRewrite:0, expandSteps:false};
 function setState(ns) {
   Object.assign(state, ns);
   main();
@@ -337,7 +280,7 @@ async function main() {
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
   // ** left sidebar context list
   if (ctxs == null) {
-    ctxs = [{name:"Profiler", steps:[]}, ...(await (await fetch("/ctxs")).json())];
+    ctxs = await (await fetch("/ctxs")).json();
     setState({ currentCtx:-1 });
   }
   const ctxList = document.querySelector(".ctx-list");
@@ -374,11 +317,8 @@ async function main() {
   // ** center graph
   if (currentCtx == -1) return;
   const ctx = ctxs[currentCtx];
-  if (ctx.name === "Profiler") {
-    return renderProfiler();
-  }
   const step = ctx.steps[currentStep];
-  const cacheKey = `ctx=${currentCtx-1}&idx=${currentStep}`;
+  const cacheKey = `ctx=${currentCtx}&idx=${currentStep}`;
   // close any pending event sources
   let activeSrc = null;
   for (const e of evtSources) {
@@ -392,7 +332,7 @@ async function main() {
   if (!(cacheKey in cache) || (cache[cacheKey].length !== step.match_count+1 && activeSrc == null)) {
     ret = [];
     cache[cacheKey] = ret;
-    const eventSource = new EventSource(`/ctxs?ctx=${currentCtx-1}&idx=${currentStep}`);
+    const eventSource = new EventSource(`/ctxs?ctx=${currentCtx}&idx=${currentStep}`);
     evtSources.push(eventSource);
     eventSource.onmessage = (e) => {
       if (e.data === "END") return eventSource.close();
@@ -483,18 +423,18 @@ document.addEventListener("keydown", async function(event) {
   // up and down change the step or context from the list
   if (event.key == "ArrowUp") {
     event.preventDefault();
-    if (expandSteps && ctxs[currentCtx].steps.length) {
+    if (expandSteps) {
       return setState({ currentRewrite:0, currentStep:Math.max(0, currentStep-1) });
     }
-    return setState({ currentStep:0, currentRewrite:0, currentCtx:Math.max(0, currentCtx-1), expandSteps:false });
+    return setState({ currentStep:0, currentRewrite:0, currentCtx:Math.max(0, currentCtx-1) });
   }
   if (event.key == "ArrowDown") {
     event.preventDefault();
-    if (expandSteps && ctxs[currentCtx].steps.length) {
+    if (expandSteps) {
       const totalUOps = ctxs[currentCtx].steps.length-1;
       return setState({ currentRewrite:0, currentStep:Math.min(totalUOps, currentStep+1) });
     }
-    return setState({ currentStep:0, currentRewrite:0, currentCtx:Math.min(ctxs.length-1, currentCtx+1), expandSteps:false });
+    return setState({ currentStep:0, currentRewrite:0, currentCtx:Math.min(ctxs.length-1, currentCtx+1) });
   }
   // enter toggles focus on a single rewrite stage
   if (event.key == "Enter") {
