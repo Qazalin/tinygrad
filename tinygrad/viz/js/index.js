@@ -40,7 +40,8 @@ async function renderDag(graph, additions, recenter=false) {
       .attr("transform", d => `translate(${d.x},${d.y})`).classed("clickable", d => d.ref != null)
       .on("click", (_,d) => d.ref != null && setState({ expandSteps: true, currentCtx:d.ref, currentStep:0, currentRewrite:0 }));
     nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
-      .attr("x", d => -d.width/2).attr("y", d => -d.height/2).attr("style", d => d.style ?? `stroke:#4a4b57; stroke-width:${STROKE_WIDTH}px;`);
+      .attr("x", d => -d.width/2).attr("y", d => -d.height/2)
+      .attr("style", d => d.style ?? `stroke:${d.tag != null ? '#E54666' : '#4a4b57'}; stroke-width:${STROKE_WIDTH}px;`);
     nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
       const x = (d.width-d.padding*2)/2;
       const y = (d.height-d.padding*2)/2+STROKE_WIDTH;
