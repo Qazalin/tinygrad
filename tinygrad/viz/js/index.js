@@ -217,10 +217,10 @@ function renderMemoryGraph(graph) {
   document.getElementById("zoom-to-fit-btn").click();
 }
 
-const formatTime = (t, duration) => {
-  if (duration<=1e3) return `${t}us`;
-  if (duration=1e6) return `${(t*1e-3).toFixed(2)}ms`;
-  return `${(t*1e-6).toFixed(2)}s`;
+const formatTime = (ts, dur) => {
+  if (dur<=1e3) return `${ts}us`;
+  if (dur<=1e6) return `${(ts*1e-3).toFixed(2)}ms`;
+  return `${(ts*1e-6).toFixed(2)}s`;
 }
 
 var traceEvents;
@@ -228,39 +228,24 @@ async function renderProfiler() {
   switchRender("profiler");
   // ** data
   if (traceEvents == null) traceEvents = (await (await fetch("/get_profile")).json()).traceEvents;
-  const root = document.querySelector(".profiler");
-  root.innerHTML = "";
-  const render = d3.select(".profiler").append("svg").attr("style", "position:absolute; width:100%; z-index: 1");
+  const root = d3.select(".profiler").html("");
+  const px = 22;
+  const render = root.append("svg").attr("id", "profiler-svg").append("g").attr("transform", `translate(${px}, 0)`);
   const data = [];
   for (const e of traceEvents) {
     if (e.name === "process_name") {
-      const div = root.appendChild(document.createElement("div"));
-      div.id = `pid-${e.pid}`;
-      div.innerText = `${e.args.name}`;
-    }
-    else if (e.name === "thread_name") {
-      const div = root.appendChild(document.createElement("div"));
-      div.id = `tid-${e.tid}-${e.pid}`;
-      div.innerText = `${e.args.name}`;
-    }
-    else if (e.ph === "X") {
-      const thread = rect(`#tid-${e.tid}-${e.pid}`);
-      data.push({ ...e, y:thread.y, color:"red" });
+    } else if (e.name === "thread_name") {
+    } else {
+      data.push(e);
     }
   }
-  // ** time axis
-  const timestamps = data.map(e => e.ts);
-  const [st, et] = [Math.min(...timestamps), Math.max(...timestamps)];
+  const timestamps = data.map(t => t.ts);
+  let [st, et] = [Math.min(...timestamps), Math.max(...timestamps)];
+  et += Math.max(...data.filter((t) => t.ts === et).map(t => t.dur));
   const duration = et-st;
-  const timescale = d3.scaleLinear().domain([0, duration]).range([0, 1111]);
-  const timeAxis = render.append("g").call(d3.axisBottom(timescale).tickFormat((t) => formatTime(t, duration)));
-  for (e of data) {
-    e.st = e.ts-st;
-    e.x = timescale(e.st);
-    e.width = timescale(e.dur);
-  }
-  render.selectAll("rect").data(data).join("rect").attr("fill", "red").attr("x", d => d.x).attr("y", d => d.y)
-    .attr("width", d => d.width).attr("height", 20);
+  const timeScale = d3.scaleLinear().domain([0, duration]).range([0, rect("#profiler-svg").width-(2*px)]);
+  const timeAxis = render.append("g").call(d3.axisBottom(timeScale).tickFormat((t) => formatTime(t, duration)));
+
 }
 
 // ** zoom and recentering
