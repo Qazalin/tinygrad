@@ -235,30 +235,58 @@ async function renderProfiler() {
   switchRender("profiler");
   // ** data
   if (traceEvents == null) traceEvents = (await (await fetch("/get_profile")).json()).traceEvents;
+  const root = d3.select(".profiler").html("");
   const data = [];
+  const procs = [];
+  const threads = [];
   for (const e of traceEvents) {
-    if (e.name === "process_name") {}
-    else if (e.name === "thread_name") {}
+    if (e.name === "process_name") {
+      procs.push(e);
+    }
+    else if (e.name === "thread_name") {
+      threads.push(e)
+    }
     else data.push(e);
   }
   // ** draw svgs
-  const root = d3.select(".profiler").html("");
-  const { width, height } = rect(".profiler");
-  const svg = root.append("svg").attr("id", "profiler-svg").attr("viewBox", [0, 0, width, height]).attr("style", "max-width: 100%; height: auto;");
+  const timeline = root.append("div").attr("style", "width: 100%; height: 100%;");
+  const { width, height } = timeline.node().getBoundingClientRect();
+  const svg = timeline.append("svg").attr("id", "profiler-svg")
+    .attr("viewBox", `0 0 ${width} ${height}`)
+    .attr("style", "width: 100%; height: auto;").attr("preserveAspectRatio", "xMinYMin meet");
   const timestamps = data.map(t => t.ts);
   let [st, et] = [Math.min(...timestamps), Math.max(...timestamps)];
   et += Math.max(...data.filter((t) => t.ts === et).map(t => t.dur));
   const duration = et-st;
-  const marginLeft = 20;
+  const marginLeft = 44;
   const x = d3.scaleLinear().domain([0, duration]).range([marginLeft, width-marginLeft]); // this is a scale fn
   const xAxis = d3.axisBottom(x).tickFormat((t) => formatTime(t, duration)); // this is a path drawer
-  const gX = svg.append("g").call(xAxis); // this is a group holding everything together
+  const gX = svg.append("g").call(xAxis).attr("transform", `translate(${marginLeft}, 0)`);
   // TODO: chrome stops when the ticks are the same, we should do the same
   // for now zooming in is allowed to infinity, d3 has a hard stop though
   const zoom = d3.zoom().scaleExtent([1, Infinity]).translateExtent([[0,0],[width, height]]).filter(filter).on("zoom", (e) => {
     gX.call(xAxis.scale(e.transform.rescaleX(x)));
   });
   svg.call(zoom);
+  // add rects for procs
+const procGroup = svg.append("g").attr("class", "procs");
+
+  const rowWidth = rect(".profiler").width-gX.node().getBoundingClientRect().width;
+// vertical space per proc
+const rowHeight = 20;
+const procY = (i) => i * rowHeight + 20; // top padding
+procs.forEach((proc, i) => {
+  const y = procY(i);
+  procGroup.append("rect")
+    .attr("x", 0)
+    .attr("y", y).attr("width", rowWidth - 24).attr("height", rowHeight - 4).attr("fill", "yellow").attr("stroke", "#ccc");
+  procGroup.append("text")
+    .attr("x", 4)
+    .attr("y", y + rowHeight / 2)
+    .attr("dy", "0.35em")
+    .attr("font-size", "12px")
+    .text(proc.args.name);
+});
 }
 
 // ** zoom and recentering
