@@ -228,24 +228,23 @@ async function renderProfiler() {
   switchRender("profiler");
   // ** data
   if (traceEvents == null) traceEvents = (await (await fetch("/get_profile")).json()).traceEvents;
-  const root = d3.select(".profiler").html("");
-  const px = 22;
-  const render = root.append("svg").attr("id", "profiler-svg").append("g").attr("transform", `translate(${px}, 0)`);
   const data = [];
   for (const e of traceEvents) {
-    if (e.name === "process_name") {
-    } else if (e.name === "thread_name") {
-    } else {
-      data.push(e);
-    }
+    if (e.name === "process_name") {}
+    else if (e.name === "thread_name") {}
+    else data.push(e);
   }
+  // ** draw svgs
+  const root = d3.select(".profiler").html("");
+  const { width, height } = rect(".profiler");
+  const svg = root.append("svg").attr("id", "profiler-svg").attr("viewBox", [0, 0, width, height]).attr("style", "max-width: 100%; height: auto;");
   const timestamps = data.map(t => t.ts);
   let [st, et] = [Math.min(...timestamps), Math.max(...timestamps)];
   et += Math.max(...data.filter((t) => t.ts === et).map(t => t.dur));
   const duration = et-st;
-  const timeScale = d3.scaleLinear().domain([0, duration]).range([0, rect("#profiler-svg").width-(2*px)]);
-  const timeAxis = render.append("g").call(d3.axisBottom(timeScale).tickFormat((t) => formatTime(t, duration)));
-
+  const marginLeft = 20;
+  const timeScale = d3.scaleLinear().domain([0, duration]).range([marginLeft, width-marginLeft]);
+  const timeAxis = svg.append("g").call(d3.axisBottom(timeScale).tickFormat((t) => formatTime(t, duration)));
 }
 
 // ** zoom and recentering
