@@ -223,6 +223,13 @@ const formatTime = (ts, dur) => {
   return `${(ts*1e-6).toFixed(2)}s`;
 }
 
+// prevent scrolling then apply the default filter
+// https://observablehq.com/@d3/pan-zoom-axes
+function filter(event) {
+  event.preventDefault();
+  return (!event.ctrlKey || event.type === 'wheel') && !event.button;
+}
+
 var traceEvents;
 async function renderProfiler() {
   switchRender("profiler");
@@ -243,8 +250,15 @@ async function renderProfiler() {
   et += Math.max(...data.filter((t) => t.ts === et).map(t => t.dur));
   const duration = et-st;
   const marginLeft = 20;
-  const timeScale = d3.scaleLinear().domain([0, duration]).range([marginLeft, width-marginLeft]);
-  const timeAxis = svg.append("g").call(d3.axisBottom(timeScale).tickFormat((t) => formatTime(t, duration)));
+  const x = d3.scaleLinear().domain([0, duration]).range([marginLeft, width-marginLeft]); // this is a scale fn
+  const xAxis = d3.axisBottom(x).tickFormat((t) => formatTime(t, duration)); // this is a path drawer
+  const gX = svg.append("g").call(xAxis); // this is a group holding everything together
+  // TODO: chrome stops when the ticks are the same, we should do the same
+  // for now zooming in is allowed to infinity, d3 has a hard stop though
+  const zoom = d3.zoom().scaleExtent([1, Infinity]).translateExtent([[0,0],[width, height]]).filter(filter).on("zoom", (e) => {
+    gX.call(xAxis.scale(e.transform.rescaleX(x)));
+  });
+  svg.call(zoom);
 }
 
 // ** zoom and recentering
