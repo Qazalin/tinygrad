@@ -86,13 +86,13 @@ class TestMultiTensor(unittest.TestCase):
       ei.run()
     self.assertEqual(len(set(names)), 1, "function was relinearized")
 
-  @unittest.skip("this doesn't fold because shard_ calls contiguous on all lbs")
   def test_sharded_memory(self):
     # Buffer may be stuck in track_cross_buffer
     for x in (d0, d1, d2, d3, d4): Device[x].synchronize()
     mem_base = GlobalCounters.mem_used
 
     X = Tensor.ones(256).contiguous().realize()
+    assert int(os.getenv("VIZ", "0")) == 0
     assert GlobalCounters.mem_used-mem_base== X.dtype.itemsize * 256, GlobalCounters.mem_used-mem_base
     X.shard_(devices_4).realize()
     for x in (d0, d1, d2, d3, d4): Device[x].synchronize()
