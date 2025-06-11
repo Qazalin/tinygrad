@@ -14,17 +14,10 @@ function intersectRect(r1, r2) {
 
 const rect = (s) => document.querySelector(s).getBoundingClientRect();
 
-let [workerUrl, worker, timeout] = [null, null, null];
+let worker, timeout;
 async function renderDag(graph, additions, recenter=false) {
   // start calculating the new layout (non-blocking)
-  if (worker == null) {
-    const resp = await Promise.all(["/assets/dagrejs.github.io/project/dagre/latest/dagre.min.js","/js/worker.js"].map(u => fetch(u)));
-    workerUrl = URL.createObjectURL(new Blob([(await Promise.all(resp.map((r) => r.text()))).join("\n")], { type: "application/javascript" }));
-    worker = new Worker(workerUrl);
-  } else {
-    worker.terminate();
-    worker = new Worker(workerUrl);
-  }
+  if (worker == null) worker = new Worker("/js/worker.js");
   if (timeout != null) clearTimeout(timeout);
   const progressMessage = document.querySelector(".progress-message");
   timeout = setTimeout(() => {progressMessage.style.display = "block"}, 2000);
@@ -79,7 +72,6 @@ async function renderDag(graph, additions, recenter=false) {
     edgeLabels.selectAll("text").data(e => [g.edge(e).label]).join("text").text(d => d).attr("dy", "0.35em");
     if (recenter) document.getElementById("zoom-to-fit-btn").click();
   };
-
 }
 
 // ** Memory graph (WIP)
