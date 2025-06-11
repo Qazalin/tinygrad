@@ -14,15 +14,21 @@ function intersectRect(r1, r2) {
 
 const rect = (s) => document.querySelector(s).getBoundingClientRect();
 
-let worker, timeout;
+let worker, completed, timeout;
 async function renderDag(graph, additions, recenter=false) {
   // start calculating the new layout (non-blocking)
   if (worker == null) worker = new Worker("/js/worker.js");
-  if (timeout != null) clearTimeout(timeout);
+  else if (!completed) {
+    worker.terminate();
+    worker = new Worker("/js/worker.js");
+    clearTimeout(timeout);
+  }
+  completed = false;
   const progressMessage = document.querySelector(".progress-message");
   timeout = setTimeout(() => {progressMessage.style.display = "block"}, 2000);
   worker.postMessage({graph, additions, ctxs});
   worker.onmessage = (e) => {
+    completed = true;
     progressMessage.style.display = "none";
     clearTimeout(timeout);
     d3.select("#bars").html("");
@@ -72,6 +78,7 @@ async function renderDag(graph, additions, recenter=false) {
     edgeLabels.selectAll("text").data(e => [g.edge(e).label]).join("text").text(d => d).attr("dy", "0.35em");
     if (recenter) document.getElementById("zoom-to-fit-btn").click();
   };
+
 }
 
 // ** Memory graph (WIP)
