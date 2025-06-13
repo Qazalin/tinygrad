@@ -244,6 +244,7 @@ document.addEventListener("contextmenu", e => e.ctrlKey && e.preventDefault())
 var traceEvents;
 const colors = ["7aa2f7", "ff9e64", "f7768e", "2ac3de", "7dcfff", "1abc9c", "9ece6a", "e0af68", "bb9af7", "9d7cd8", "ff007c"];
 async function renderProfiler() {
+  document.querySelector(".main-container").classList.toggle("collapsed", true);
   switchRender("profiler");
   if (traceEvents == null) {
     const st = performance.now();
@@ -307,7 +308,6 @@ async function renderProfiler() {
         const width = scale(e.ts+e.dur-st)-x;
         const height = 20;
         const y = 20;
-        if (width < 0.5) continue;
         ctx.fillStyle = `#${colors[i%colors.length]}`;
         ctx.fillRect(x, y, width, height);
       }
@@ -515,7 +515,7 @@ async function main() {
 let isCollapsed = false;
 document.querySelector(".collapse-btn").addEventListener("click", (e) => {
   isCollapsed = !isCollapsed;
-  document.querySelector(".main-container").classList.toggle("collapsed", isCollapsed);
+  document.queryselector(".main-container").classlist.toggle("collapsed", iscollapsed);
   e.currentTarget.blur();
   e.currentTarget.style.transform = isCollapsed ? "rotate(180deg)" : "rotate(0deg)";
   window.dispatchEvent(new Event("resize"));
