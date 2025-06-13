@@ -277,6 +277,7 @@ async function renderProfiler() {
   const ctx = canvas.getContext("2d");
   const dpr = window.devicePixelRatio || 1;
   const logicalHeight = rect(".profiler").height;
+  const textWidthCache = {}
   function render(transform=null) {
     ctx.save();
     ctx.clearRect(0, 0, canvas.width/dpr, canvas.height/dpr);
@@ -312,13 +313,28 @@ async function renderProfiler() {
     // rects
     for (const [i, e] of traceEvents.entries()) {
       if (e.ph === "X") {
+        // base rect
         const x = scale(e.ts-st);
         const width = scale(e.ts+e.dur-st)-x;
+        // if (width < 0.5) continue;
         const height = 20;
         const procRect = rect(`#proc-${e.pid}`);
         const y = procRect.y-(Y_OFFSET*2);
         ctx.fillStyle = `#${colors[i%colors.length]}`;
         ctx.fillRect(x, y, width, height);
+        // labels
+        let labelWidth = textWidthCache[e.name];
+        if (labelWidth == null) {
+          labelWidth = ctx.measureText(e.name).width
+          textWidthCache[e.name] = labelWidth;
+        }
+        if (labelWidth<width) {
+          ctx.fillStyle = "white";
+          ctx.font = "10px sans-serif";
+          ctx.textBaseline = "middle";
+          ctx.textAlign = "left";
+          ctx.fillText(e.name, x+2, y+height/2);
+        }
       }
     }
     ctx.restore();
