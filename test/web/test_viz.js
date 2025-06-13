@@ -1,6 +1,11 @@
 const { spawn } = require("child_process");
 const puppeteer = require("puppeteer");
 
+const now = () => {
+  const t = new Date();
+  return t.toISOString();
+}
+
 async function main() {
   // ** start viz server
   const proc = spawn("python", ["-u", "-c", "from tinygrad import Tensor; Tensor.arange(4).realize()"], { env: { ...process.env, VIZ:"1" },
@@ -14,6 +19,24 @@ async function main() {
   try {
     browser = await puppeteer.launch({ headless: true });
     page = await browser.newPage();
+    page.on("request", (r) => {
+      console.log(`${now()} [REQUEST START]`, r.method(), r.url());
+    });
+    page.on("requestfailed", req => {
+      console.log(`${now()} ✖`, req.failure().errorText, req.url());
+    });
+    page.on("response", async res => {
+      const h = res.headers();
+      const len = h["content-length"] ?? "-";
+      console.log(`${now()} ←`, res.status(), res.request().url(), "len", len);
+    });
+    page.on("requestfinished", async req => {
+      const res = req.response();
+      if (res) {
+        const buf = await res.buffer();
+        console.log(`${now()} [REQUEST FINISH]`, req.url(), "actual", buf.length, "bytes");
+      }
+    });
     const res = await page.goto("http://localhost:8000", { waitUntil:"domcontentloaded" });
     if (res.status() !== 200) throw new Error("Failed to load page");
     const scheduleSelector = await page.waitForSelector("ul");
