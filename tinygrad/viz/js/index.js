@@ -253,6 +253,14 @@ async function renderProfiler() {
   }
   const root = document.querySelector(".profiler");
   root.innerHTML = "";
+  const Y_OFFSET = 20;
+  // ** devices on the y axis
+  const procList = d3.select(root).append("div").attr("style", `width: 20%; height: 100%; padding-top: ${Y_OFFSET}px;`);
+  for (const e of traceEvents) {
+    if (e.name === "process_name") {
+      procList.append("div").text(e.args.name).attr("id", `proc-${e.pid}`);
+    }
+  }
   // ** time axis
   // 1. time counters
   // NOTE: Using Math.min/max can lead to "max callstack size exceeded" errors if there are a lot of traceEvents
@@ -307,7 +315,8 @@ async function renderProfiler() {
         const x = scale(e.ts-st);
         const width = scale(e.ts+e.dur-st)-x;
         const height = 20;
-        const y = 20;
+        const procRect = rect(`#proc-${e.pid}`);
+        const y = procRect.y-(Y_OFFSET*2);
         ctx.fillStyle = `#${colors[i%colors.length]}`;
         ctx.fillRect(x, y, width, height);
       }
