@@ -244,7 +244,6 @@ document.addEventListener("contextmenu", e => e.ctrlKey && e.preventDefault())
 var traceEvents;
 const colors = ["7aa2f7", "ff9e64", "f7768e", "2ac3de", "7dcfff", "1abc9c", "9ece6a", "e0af68", "bb9af7", "9d7cd8", "ff007c"];
 async function renderProfiler() {
-  document.querySelector(".main-container").classList.toggle("collapsed", true);
   switchRender("profiler");
   if (traceEvents == null) {
     const st = performance.now();
@@ -278,7 +277,9 @@ async function renderProfiler() {
   const dpr = window.devicePixelRatio || 1;
   const logicalHeight = rect(".profiler").height;
   const textWidthCache = {}
+  const allRects = [];
   function render(transform=null) {
+    allRects.length = 0; // clear in-place
     ctx.save();
     ctx.clearRect(0, 0, canvas.width/dpr, canvas.height/dpr);
     var scale = d3.scaleLinear().domain([0, duration]).range([0, canvas.width]);
@@ -322,6 +323,9 @@ async function renderProfiler() {
         const y = procRect.y-(Y_OFFSET*2);
         ctx.fillStyle = `#${colors[i%colors.length]}`;
         ctx.fillRect(x, y, width, height);
+        if (width > 0.5) {
+          allRects.push({ x, y, width, height, ...e });
+        }
         // labels
         let labelWidth = textWidthCache[e.name];
         if (labelWidth == null) {
@@ -339,6 +343,7 @@ async function renderProfiler() {
     }
     ctx.restore();
   }
+  // resizing
   function resize() {
     const logicalWidth = rect(".profiler").width;
     canvas.width = logicalWidth*dpr;
@@ -350,13 +355,39 @@ async function renderProfiler() {
     render();
   }
   resize();
+  // zooming
   window.addEventListener("resize", resize);
   const zoom = d3.zoom().scaleExtent([1, Infinity]).translateExtent([[0,0],[canvas.width,0]]).filter(filter).on("zoom", e => {
     render(e.transform);
   })
   d3.select(canvas).call(zoom);
   document.getElementById("zoom-to-fit-btn").addEventListener("click", () => d3.select(canvas).call(zoom.transform, d3.zoomIdentity));
+  // clicking
+  canvas.addEventListener("click", (e) => {
+    const { top, left, width, height } = rect(canvas);
+    const clickX = (e.clientX - left) * (canvas.width / width);
+    const clickY = (e.clientY - top) * (canvas.height / height);
+    const logicalX = clickX / dpr;
+    const logicalY = clickY / dpr;
+    for (const r of allRects) {
+      if (logicalX >= r.x && logicalX <= r.x + r.width && logicalY >= r.y && logicalY <= r.y + r.height) {
+        console.log("Clicked on", r);
+        for (const [i,c] of ctxs.entries()) {
+          if (ansiStrip(c.name) == r.name) {
+            console.log("found", c);
+            // TODO: this is copied from the kernelize code
+            history.replaceState(state, "");
+            history.pushState(state, "");
+            return setState({ expandSteps: true, currentCtx:i, currentStep:0, currentRewrite:0 });
+          }
+        }
+        break;
+      }
+    }
+  });
 }
+
+const ansiStrip = (name) => name.replace(/\x1b\[\d+m(.*?)\x1b\[0m/g, "$1")
 
 // ** zoom and recentering
 
