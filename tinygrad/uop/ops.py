@@ -358,7 +358,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
     return dsrcs[0]._device if len(dsrcs:=[x for x in self.src if x._device is not None]) != 0 else None
   @property
   def buf_uop(self) -> UOp:
-    if self.op is Ops.BUFFER: return self
+    if self.op in {Ops.BUFFER, Ops.BUFFER_VIEW}: return self
     if self.op is Ops.MSELECT: return self.src[0].buf_uop.mselect(self.arg)
     if self.op is Ops.MSTACK: return UOp(Ops.MSTACK, self.dtype, src=tuple(x.buf_uop for x in self.src))
     assert self.op is Ops.ASSIGN, f"must be ASSIGN {self.op}"
@@ -378,10 +378,11 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
       ret.bufs = [cast(Buffer, x.buffer) for x in self.src]
       assert all_same([x.size for x in ret.bufs]) and all_same([x.dtype for x in ret.bufs]), "multibuffers mismatch buffers"
       return ret
-    assert self.op is Ops.BUFFER, f"must be BUFFER {self.op}"
+    assert self.op in {Ops.BUFFER, Ops.BUFFER_VIEW}, f"must be BUFFER/BUFFER_VIEW {self.op}"
     if (cret:=buffers.get(self)) is not None: return cret
     rdtype = self.dtype if isinstance(self.dtype, ImageDType) else self.dtype.base
     if isinstance(self.device, tuple): ret = MultiBuffer(self.device, self.size, rdtype).ref(1)
+    elif self.op is Ops.BUFFER_VIEW: ret = self.src[0].buffer.view(self.size, self.dtype, self.arg[1]*self.src[0].dtype.itemsize)
     else: ret = Buffer(self.device, self.size, rdtype).ref(1)
     buffers[self] = ret
     return ret

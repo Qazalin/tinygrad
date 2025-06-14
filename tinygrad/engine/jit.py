@@ -6,7 +6,7 @@ from tinygrad.device import Buffer, Compiled, Device, MultiBuffer
 from tinygrad.dtype import DType
 from tinygrad.uop.ops import UOp, Variable, sym_infer, Ops
 from tinygrad.shape.shapetracker import ShapeTracker
-from tinygrad.engine.realize import ExecItem, capturing, ViewOp, BufferCopy, BufferXfer, CompiledRunner, Runner, Estimates
+from tinygrad.engine.realize import ExecItem, capturing, BufferCopy, BufferXfer, CompiledRunner, Runner, Estimates
 from tinygrad.engine.memory import _internal_memory_planner
 from tinygrad.nn.state import get_parameters
 from dataclasses import dataclass
@@ -50,7 +50,6 @@ def apply_graph_to_jit(jit_cache: list[ExecItem], input_rawbuffers: list[Buffer]
         ji_graph_dev = Device[unwrap(ji.bufs[0]).device]
         # All *Multi*GraphRunner support graphing BufferXfers
         can_be_graphed = ji_graph_dev.graph is not None and issubclass(graph_class(ji_graph_dev), MultiGraphRunner)
-      case ViewOp(): continue # ViewOps are just ignored
       case _: can_be_graphed = False # Everything else is not graphed and flushes existing graph if it's being constructed
 
     is_multigraph = can_be_graphed and issubclass(graph_class(ji_graph_dev), MultiGraphRunner)

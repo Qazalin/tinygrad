@@ -1,7 +1,7 @@
 from typing import cast
 from dataclasses import dataclass, field
 from collections import deque, defaultdict
-from tinygrad.uop.ops import UOp, Variable, Ops, UPat, PatternMatcher, graph_rewrite, buffers
+from tinygrad.uop.ops import UOp, Variable, Ops, UPat, PatternMatcher, graph_rewrite
 from tinygrad.device import Buffer, MultiBuffer
 from tinygrad.helpers import Metadata, unwrap, merge_dicts
 
@@ -55,7 +55,7 @@ def create_schedule_with_vars(sched_sink:UOp) -> tuple[list[ScheduleItem], dict[
             assert ss.op is Ops.ASSIGN
             children[ss.src[1]].append(k)
             in_degree[k] += 1
-      elif s.op is Ops.BUFFER:
+      elif s.op in {Ops.BUFFER, Ops.BUFFER_VIEW}:
         pass  # a BUFFER is already realized, nothing to do here
       else:
         raise RuntimeError(f"input to kernel must be ASSIGN or BUFFER, not {s.op}")
@@ -70,11 +70,6 @@ def create_schedule_with_vars(sched_sink:UOp) -> tuple[list[ScheduleItem], dict[
     local_var_vals: list[dict[Variable, int]] = []
     ast = graph_rewrite(k.arg.ast, pm_unbind, ctx=local_var_vals, name="unbind vars")
     var_vals = merge_dicts([var_vals, *local_var_vals])
-    # create subbuffers if needed
-    if ast.op is Ops.BUFFER_VIEW:
-      base = k.src[1].buf_uop.buffer
-      assert isinstance(base, Buffer), "base can't be MultiBuffer"
-      buffers[k.src[0]] = base.view(k.size, ast.dtype, ast.arg[1]*base.dtype.itemsize)
     ubufs = tuple(s.buf_uop.buffer for s in k.src)
     if any(isinstance(x, MultiBuffer) for x in ubufs):
       assert all(isinstance(x, MultiBuffer) for x in ubufs), "kernel must all be multibuffer"

@@ -43,6 +43,8 @@ buffer_spec = PatternMatcher([
   (UPat(Ops.BUFFER_VIEW, src=(UPat(Ops.BUFFER),), name="buf_view"),
    lambda buf_view: isinstance(buf_view.arg, tuple) and len(buf_view.arg) == 2 and all(isinstance(arg, (int, UOp)) for arg in buf_view.arg)),
   (UPat(Ops.BUFFER_VIEW, src=(UPat(Ops.MSTACK, src=UPat(Ops.BUFFER)),)), lambda: True),
+  # double subbuffer is allowed and supported
+  (UPat(Ops.BUFFER_VIEW, src=(UPat(Ops.BUFFER_VIEW),)), lambda: True),
   # allow VIEW here. TODO: what views specifically are allowed? does this mess with gradient?
   (UPat(Ops.VIEW), lambda: True),
 ])
