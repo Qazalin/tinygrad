@@ -223,6 +223,21 @@ function renderMemoryGraph(graph) {
   document.getElementById("zoom-to-fit-btn").click();
 }
 
+const ANSI_COLORS = ['gray','red','green','yellow','blue','magenta','cyan','white'];
+function splitColored(text) {
+  const re = /\u001b\[(\d+)m(.*?)\u001b\[0m/g;
+  const ret = [];
+  let [lastIndex, match] = [0, null];
+  while ((match = re.exec(text))) {
+    const [_, code, part] = match;
+    if (pre=text.slice(lastIndex, match.index)) ret.push({ part:pre });
+    ret.push({ part, color:ANSI_COLORS[(code-30+60)%60] });
+    lastIndex = re.lastIndex;
+  }
+  if (last=text.slice(lastIndex)) ret.push({ part:last });
+  return ret;
+}
+
 function formatTime(ts, dur) {
   if (dur<=1e3) return `${ts}us`;
   if (dur<=1e6) return `${(ts*1e-3).toFixed(2)}ms`;
@@ -333,11 +348,15 @@ async function renderProfiler() {
         textWidthCache[e.name] = labelWidth;
       }
       if (labelWidth<width) {
-        ctx.fillStyle = "black";
-        ctx.font = "10px sans-serif";
-        ctx.textBaseline = "middle";
-        ctx.textAlign = "left";
-        ctx.fillText(e.name, x+2, y+height/2);
+        let currX = x + 2;
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'left';
+        ctx.font = '10px sans-serif';
+        for (const { part, color } of splitColored(name_map[e.name]?.name || e.name)) {
+          ctx.fillStyle = color || "black";
+          ctx.fillText(part, currX, y + height / 2);
+          currX += ctx.measureText(part).width;
+        }
       }
     }
     ctx.restore();
