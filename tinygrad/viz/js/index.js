@@ -38,11 +38,13 @@ async function renderDag(graph, additions, recenter=false) {
     const STROKE_WIDTH = 1.4;
     const nodes = d3.select("#nodes").selectAll("g").data(g.nodes().map(id => g.node(id)), d => d).join("g")
       .attr("transform", d => `translate(${d.x},${d.y})`).classed("clickable", d => d.ref != null)
-      .on("click", (_,d) => {
+      .on("click", (ev,d) => {
         if (d.ref != null) {
           // NOTE: browser does a structured clone, passing a mutable object is safe.
-          history.replaceState(state, "");
-          history.pushState(state, "");
+          const { x, y, k } = d3.zoomTransform(ev.target);
+          const backState = { state, zoomLevel:{ target:"#graph-svg", x, y, k }};
+          history.replaceState(backState, "");
+          history.pushState(backState, "");
           setState({ expandSteps: true, currentCtx:d.ref, currentStep:0, currentRewrite:0 });
         }
       });
@@ -303,7 +305,10 @@ function setState(ns) {
   main();
 }
 window.addEventListener("popstate", (e) => {
-  if (e.state != null) setState(e.state);
+  if (e.state == null) return;
+  const { state, zoomLevel } = e.state;
+  setState(state);
+  d3.select(zoomLevel.target).call(zoom.transform, d3.zoomIdentity.translate(zoomLevel.x, zoomLevel.y).scale(zoomLevel.k));
 });
 
 async function main() {
