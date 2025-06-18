@@ -60,6 +60,9 @@ class ProfileDeviceEvent(ProfileEvent):
 class ProfileRangeEvent(ProfileEvent): device:str; name:str; st:decimal.Decimal; en:decimal.Decimal; is_copy:bool # noqa: E702
 
 @dataclass(frozen=True)
+class ProfileBufferEvent(ProfileEvent): buf_id:int; ts:int; buf:dict|None=None; alloc:bool=True; # noqa: E702
+
+@dataclass(frozen=True)
 class ProfileProgramEvent(ProfileEvent): device:str; name:str; lib:bytes|None; base:int|None # noqa: E702
 
 @dataclass(frozen=True)
@@ -105,6 +108,7 @@ class MultiBuffer:
   def __repr__(self): return f"<multibuf real:{self.is_allocated()} device:{tuple(x.device for x in self.bufs)} size:{self.size} dtype:{self.dtype}>"
 
 class Buffer:
+  if PROFILE: profile_events = []
   def __init__(self, device:str, size:int, dtype:DType, opaque:Any=None, options:Optional[BufferSpec]=None, initial_value:Optional[bytes]=None,
                uop_refcount=0, base:Optional[Buffer]=None, offset:int=0, preallocate=False):
     if isinstance(dtype, ImageDType): options = BufferSpec(image=dtype) # TODO: image hack shouldn't be here. where should it be?
@@ -147,12 +151,16 @@ class Buffer:
     else:
       self._buf = opaque if opaque is not None else self.allocator.alloc(self.nbytes, self.options)
       if not self.device.startswith("DISK"): GlobalCounters.mem_used += self.nbytes
+      if PROFILE:
+        bufdict = {"nbytes":self.nbytes, "dtype":str(self.dtype), "device":str(self.device)}
+        Buffer.profile_events.append(ProfileBufferEvent(id(self), int(decimal.Decimal(time.perf_counter_ns()) / 1000), bufdict))
     return self
   def deallocate(self):
     assert self.is_allocated(), "buffer must be allocated to deallocate"
     if DEBUG is not None and DEBUG >= 7: print(f"buffer: deallocate {self.nbytes} bytes on {self.device}")
     if self._base is None and (self.options is None or self.options.external_ptr is None):
       if GlobalCounters is not None and not self.device.startswith("DISK"): GlobalCounters.mem_used -= self.nbytes
+      if PROFILE: Buffer.profile_events.append(ProfileBufferEvent(id(self), int(decimal.Decimal(time.perf_counter_ns()) / 1000), alloc=False))
       self.allocator.free(self._buf, self.nbytes, self.options)
     elif self._base is not None: self._base.allocated_views -= 1
     del self._buf
@@ -386,7 +394,7 @@ if PROFILE:
     for dev in devs: dev.synchronize()
     for dev in devs: dev._at_profile_finalize()
 
-    with open(fn:=temp("profile.pkl", append_user=True), "wb") as f: pickle.dump(Compiled.profile_events, f)
+    with open(fn:=temp("profile.pkl", append_user=True), "wb") as f: pickle.dump((Compiled.profile_events, Buffer.profile_events), f)
 
     if not getenv("SQTT", 0):
       from tinygrad.uop.ops import launch_viz

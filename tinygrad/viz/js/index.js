@@ -89,51 +89,31 @@ async function renderDag(graph, additions, recenter=false) {
 
 // ** Memory graph (WIP)
 
-DTYPE_SIZE = {"bool": 1, "char": 1, "uchar": 1, "short": 2, "ushort": 2, "int": 4, "uint": 4,
-              "long": 8, "ulong": 8, "half": 2, "bfloat": 2, "float": 4, "double": 8}
 function getBuffer(e) {
-  const [_, size, dtype, num, device] = e.label.split("\n");
-  return {nbytes:size*DTYPE_SIZE[dtype.split("dtypes.")[1]], dtype, device:device.split(" ")[1], num:parseInt(num.split(" ")[1])};
+  return e;
 }
 
 function pluralize(num, name, alt=null) {
   return num === 1 ? `${num} ${name}` : `${num} ${alt ?? name+'s'}`
 }
 
-function renderMemoryGraph(graph) {
+var bufProfileEvents;
+async function renderMemoryGraph() {
+  if (bufProfileEvents == null) bufProfileEvents = await (await fetch("/get_buffer_profile")).json()
   displayGraph("graph");
-  // ** construct alloc/free traces
-  // we can map reads/writes from the kernel graph
-  const actions = [];
   const children = new Map(); // {buffer: [...assign]}
-  for (const [k,v] of Object.entries(graph)) {
-    if (!v.label.startsWith("ASSIGN")) continue;
-    actions.push({ op: "write", buffer: v.src[0] });
-    for (const ks of graph[v.src[1]].src) {
-      const node = graph[ks];
-      const s = node.label.startsWith("ASSIGN") ? node.src[0] : ks;
-      if (!children.has(s)) children.set(s, []);
-      children.get(s).push(v);
-      if (s !== v.src[0]) actions.push({ op: "read", buffer: s });
-    }
-  }
+  const graph = {};
   const prealloc = new Set();
   const traces = [];
-  for (const a of actions) {
-    // a buffer is allocated immediately before the first write
-    // TODO: we don't know the buffer is preallocated if there's only an assign in the graph
-    if (a.op === "write") {
-      traces.push({ type: "alloc", buffer: a.buffer });
-    }
-    else {
-      if (traces.find(t => t.buffer === a.buffer && t.type === "alloc") == null) {
-        prealloc.add(a.buffer);
-      }
-      else if (a === actions.findLast(({ buffer }) => buffer === a.buffer)) {
-        traces.push({type: "free", buffer: a.buffer });
-      }
+  for (const e of bufProfileEvents) {
+    if (e.alloc) {
+      traces.push({ type: "alloc", buffer: e.buf_id });
+      graph[e.buf_id] = { ...e.buf, num:Object.keys(graph).length };
+    } else {
+      traces.push({type: "free", buffer: e.buf_id });
     }
   }
+  traces.sort((a,b) => b.ts-a.ts);
   // ** get coordinates and layout for each buffer
   const ret = {};
   let timestep = 0; // x
@@ -213,7 +193,6 @@ function renderMemoryGraph(graph) {
     d3.select(e.currentTarget).attr("stroke", null).attr("stroke-width", null);
     document.getElementById("current-buf")?.remove()
   });
-  // TODO: add the kernel line here
   document.getElementById("zoom-to-fit-btn").click();
 }
 
@@ -485,7 +464,7 @@ window.addEventListener("popstate", (e) => {
 async function main() {
   // ** left sidebar context list
   if (ctxs == null) {
-    ctxs = [{ name:"Profiler", steps:[] }];
+    ctxs = [{ name:"Memory", steps:[] }, { name:"Profiler", steps:[] }];
     for (const r of (await (await fetch("/ctxs")).json())) ctxs.push(r);
     const ctxList = document.querySelector(".ctx-list");
     for (const [i,{name, steps}] of ctxs.entries()) {
@@ -510,15 +489,17 @@ async function main() {
         }
       }
     }
-    return setState({ currentCtx:-1 });
+    return setState({ currentCtx:0 });
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
   if (currentCtx == -1) return;
   const ctx = ctxs[currentCtx];
+  // TODO: make these the same thing
+  if (ctx.name === "Memory") return renderMemoryGraph();
   if (ctx.name === "Profiler") return renderProfiler();
   const step = ctx.steps[currentStep];
-  const ckey = `ctx=${currentCtx-1}&idx=${currentStep}`;
+  const ckey = `ctx=${currentCtx-2}&idx=${currentStep}`;
   // close any pending event sources
   let activeSrc = null;
   for (const e of evtSources) {
@@ -546,11 +527,7 @@ async function main() {
     };
   }
   if (ret.length === 0) return;
-  if (step.name == "View Memory Graph") {
-    renderMemoryGraph(ret[currentRewrite].graph);
-  } else {
-    renderDag(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes || [], recenter=currentRewrite === 0);
-  }
+  renderDag(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes || [], recenter=currentRewrite === 0);
   // ** right sidebar code blocks
   const metadata = document.querySelector(".metadata");
   const [code, lang] = ctx.kernel_code != null ? [ctx.kernel_code, "cpp"] : [ret[currentRewrite].uop, "python"];

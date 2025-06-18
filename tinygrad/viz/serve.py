@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import multiprocessing, pickle, functools, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, decimal, socketserver
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 from typing import Any, TypedDict, Generator
@@ -151,6 +152,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError): return
       ret, content_type = json.dumps(ctxs).encode(), "application/json"
     elif url.path == "/get_profile" and perfetto_profile is not None: ret, content_type = perfetto_profile, "application/json"
+    elif url.path == "/get_buffer_profile" and perfetto_profile is not None: ret, content_type = json.dumps(list(map(asdict, profile[1]))).encode("utf-8"), "application/json"
     else: status_code = 404
 
     # send response
@@ -196,7 +198,7 @@ if __name__ == "__main__":
   # NOTE: this context is a tuple of list[keys] and list[values]
   ctxs = get_metadata(*contexts) if contexts is not None else []
 
-  perfetto_profile = to_perfetto(profile) if profile is not None else None
+  perfetto_profile = to_perfetto(profile[0]) if profile is not None else None
 
   server = TCPServerWithReuse(('', PORT), Handler)
   reloader_thread = threading.Thread(target=reloader)
