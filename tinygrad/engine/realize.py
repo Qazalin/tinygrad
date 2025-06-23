@@ -13,7 +13,7 @@ from tinygrad.uop.spec import type_verify
 
 # **************** Program Creation ****************
 
-@track_rewrites(name=lambda _ast,_renderer,ret:ret)
+@track_rewrites(name=lambda _ast,_renderer,ret,**_:ret)
 def get_program(ast:UOp, renderer:Renderer, opts_override:Sequence[Opt]|None=None, name_override:str|None=None) -> ProgramSpec:
   """
   Transform an AST into a ProgramSpec. May trigger BEAM search.
