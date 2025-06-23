@@ -61,7 +61,6 @@ def diff(offset:int) -> None:
       warnings.warn(f"detected changes in over {MAX_DIFF_PCT}%. skipping further diff generation.", ProcessReplayWarning)
       early_stop.set()
       break
-    loc = "<pending>"
     try:
       name, args, kwargs, ctx_vals, loc, ret = pickle.loads(row[0])
       ctx_vars = {k:v.value for k,v in ctx_vals.items() if k != "DEBUG" and (var:=ContextVar._cache.get(k)) is not None and var.value != v.value}
@@ -69,12 +68,12 @@ def diff(offset:int) -> None:
       with Context(**ctx_vars): good, compare, metadata = replayer(ret, *args, **kwargs)
       if good != compare:
         for m in metadata: trunc_log(m)
+        logging.info(loc)
         for line in difflib.unified_diff(good.splitlines(), compare.splitlines()):
           logging.info(colored(line, "red" if line.startswith("-") else "green" if line.startswith("+") else None))
         if ctx_vars: logging.info(ctx_vars)
         warnings.warn("PROCESS REPLAY DETECTED CHANGE", ProcessReplayWarning)
     except Exception as e:
-      logging.info(loc)
       changed += 1
       warnings.warn(e, ProcessReplayWarning)
   conn.commit()
