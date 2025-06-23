@@ -6,6 +6,7 @@ from tinygrad.helpers import VERSION, Context, ContextVar, colored, db_connectio
 from tinygrad.kernelize.kernelize import get_kernelize_map
 from tinygrad.renderer import Renderer, ProgramSpec
 from tinygrad.engine.realize import get_program
+from tinygrad.opt import get_optimized_ast
 from tinygrad.uop.ops import UOp, Ops
 
 # *** process replay settings
@@ -41,7 +42,8 @@ def replay_kernelize(ret:dict[UOp, UOp], big_sink:UOp) -> tuple[str, str, tuple[
   return to_str(new_sink), to_str(ret[big_sink]), (big_sink,)
 
 def replay_get_program(k:ProgramSpec, ast:UOp, renderer:Renderer) -> tuple[str, str, tuple[Any, ...]]:
-  k2 = get_program(ast, renderer, opts_override=k.applied_opts, name_override=k.name)
+  optimized_ast = get_optimized_ast(ast, renderer, opts_override=k.applied_opts, name_override=k.name)
+  k2 = get_program(optimized_ast, renderer)
   def to_str(ret:ProgramSpec) -> str: return ret.src
   return to_str(k2), to_str(k), (k.ast, renderer, k.applied_opts)
 
