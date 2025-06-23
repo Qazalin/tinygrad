@@ -232,9 +232,11 @@ function formatTime(ts, dur) {
 const colors = ["#1D1F2A", "#2A2D3D", "#373B4F", "#444862", "#12131A", "#2F3244", "#3B3F54", "#4A4E65", "#181A23", "#232532", "#313548", "#404459"];
 
 var data, canvasZoom, zoomLevel = d3.zoomIdentity;
+var programList = "";
 async function renderProfiler() {
   displayGraph("profiler");
-  d3.select(".metadata").html("");
+  const metadata = document.querySelector(".metadata");
+  metadata.replaceChildren(programList);
   if (data != null) return;
   // fetch and process data
   const { traceEvents } = await (await fetch("/get_profile")).json();
@@ -257,6 +259,7 @@ async function renderProfiler() {
   const [tickSize, padding] = [10, 8];
   const deviceList = document.getElementById("device-list");
   deviceList.style.paddingTop = `${tickSize+padding}px`;
+  programList = metadata.appendChild(document.createElement("div"));
   const canvas = document.getElementById("timeline");
   const ctx = canvas.getContext("2d");
   const canvasTop = rect(canvas).top;
@@ -292,6 +295,8 @@ async function renderProfiler() {
         nameMap.set(e.name, { bgColor:colors[i%colors.length], labelParts });
       }
       data.push({ x:start, dur:e.dur, name:e.name, height, y, ...nameMap.get(e.name) });
+      const prog = programList.appendChild(document.createElement("div"));
+      prog.innerText = e.name;
     }
     // lastly, adjust device rect by number of levels
     div.style.height = `${baseHeight*levels.length}px`;
@@ -515,7 +520,7 @@ async function main() {
         }
       }
     }
-    return setState({ currentCtx:-1 });
+    return setState({ currentCtx:0 });
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
