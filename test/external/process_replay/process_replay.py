@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # compare kernels created by HEAD against master
 import os, multiprocessing, logging, pickle, sqlite3, difflib, warnings, itertools
+os.environ["CAPTURE_PROCESS_REPLAY"] = "0"
 from typing import Callable, Any
 from tinygrad.helpers import VERSION, Context, ContextVar, colored, db_connection, getenv, tqdm
 from tinygrad.kernelize.kernelize import get_kernelize_map
@@ -15,7 +16,6 @@ PAGE_SIZE = getenv("PAGE_SIZE", 100)
 REF = os.getenv("GITHUB_REF_NAME", "")
 MAX_DIFF_PCT = getenv("PROCESS_REPLAY_MAX_DIFF_PCT", 20)
 TABLE_NAME = f"process_replay_{VERSION}"
-os.environ["CAPTURE_PROCESS_REPLAY"] = "0"
 early_stop = multiprocessing.Event()
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 MAX_LINES = 500
