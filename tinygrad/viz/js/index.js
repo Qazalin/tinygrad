@@ -141,6 +141,10 @@ async function renderProfiler() {
     const { y:baseY, height:baseHeight } = rect(div);
     const levelHeight = baseHeight-padding;
     const offsetY = baseY-canvasTop+padding/2;
+    if (k === "TINY") {
+      const sorted = [...timeline.shapes].sort((a, b) => b.dur - a.dur)
+      console.log(sorted);
+    }
     for (const [i,e] of timeline.shapes.entries()) {
       const label = parseColors(e.name).map(({ color, st }) => ({ color, st, width:ctx.measureText(st).width }));
       const colorKey = e.cat ?? e.name;
@@ -439,7 +443,7 @@ async function main() {
         }
       }
     }
-    return setState({ currentCtx:-1 });
+    return setState({ currentCtx:0 });
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
