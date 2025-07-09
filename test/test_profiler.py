@@ -189,6 +189,8 @@ class TestProfiler(unittest.TestCase):
     graphs = [[helper_exec_op(device, bufs[0], [bufs[1], bufs[2]]), helper_exec_op(device, bufs[0], [bufs[3], bufs[4]]),]]
     with helper_collect_profile(dev:=TestProfiler.d0) as profile:
       helper_test_graphs(dev.graph, graphs, runs=2)
+    # remove copy noise
+    profile = [e for e in profile if not (isinstance(e, ProfileRangeEvent) and e.is_copy)]
     for p in profile:
       print(p)
 
