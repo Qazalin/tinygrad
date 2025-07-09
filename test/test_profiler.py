@@ -183,22 +183,16 @@ class TestProfiler(unittest.TestCase):
 
   @unittest.skipUnless(Device[Device.DEFAULT].graph is not None, "graph support required")
   def test_graph(self):
-    # stuff needed to batch two add kernels
-    from tinygrad.engine.realize import ExecItem
-    op = Tensor.empty(N:=32, dtype=dtypes.int)+Tensor.empty(N, dtype=dtypes.int)
-    ast = op.schedule()[0].ast
-    prg = get_runner(op.device, ast)
-    inputs = [a1, b1, a2, b2] = [Tensor.randint(N).realize().uop.buffer for _ in range(4)]
-    out = Tensor.empty(N, dtype=dtypes.int).uop.buffer.ensure_allocated()
-    eis = [ExecItem(prg, [out, a1, b1]), ExecItem(prg, [out, a2, b2])]
-
+    from test.test_graph import helper_alloc_rawbuffer, helper_exec_op, helper_test_graphs
+    device = TestProfiler.d0.device
+    bufs = [helper_alloc_rawbuffer(device, fill=True) for _ in range(5)]
+    graphs = [[helper_exec_op(device, bufs[0], [bufs[1], bufs[2]]), helper_exec_op(device, bufs[0], [bufs[3], bufs[4]]),]]
     with helper_collect_profile(dev:=TestProfiler.d0) as profile:
-      g = dev.graph(eis, inputs, {})
-      g(inputs, {}, wait=True)
-
-    print(profile)
-    out_np = out.numpy()
-    self.assertListEqual(out_np.tolist(), (a2.numpy()+b2.numpy()).tolist())
+      helper_test_graphs(dev.graph, graphs, runs=2)
+    profile, _ = helper_profile_filter_device(profile, TestProfiler.d0.device)
+    profile = [e for e in profile if isinstance(e, ProfileRangeEvent) and not e.is_copy]
+    for p in profile:
+      print(p)
 
 if __name__ == "__main__":
   unittest.main()
