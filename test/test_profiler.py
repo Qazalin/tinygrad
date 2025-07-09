@@ -181,5 +181,30 @@ class TestProfiler(unittest.TestCase):
     # record start/end time up to exit (error or success)
     self.assertGreater(range_events[0].en-range_events[0].st, range_events[1].en-range_events[1].st)
 
+  @unittest.skipUnless(Device[Device.DEFAULT].graph is not None, "graph support required")
+  def test_graph(self):
+    import numpy as np
+    from tinygrad.device import Device, Buffer
+    from tinygrad.tensor import Tensor
+    from tinygrad.helpers import Context
+    from tinygrad.dtype import dtypes
+    from tinygrad.engine.realize import get_runner, ExecItem
+
+    with Context(TRACK_MATCH_STATS=0, PROFILE=0, DEBUG=0):
+      N = 32
+      op = Tensor.empty(N, dtype=dtypes.int)+Tensor.empty(N, dtype=dtypes.int)
+      op.kernelize()
+      prg = get_runner(op.device, op.uop.src[1].arg.ast)
+      a1, b1, a2, b2 = [Tensor(np.random.randint(-100, 100, size=N, dtype=np.int32)).realize().uop.buffer for _ in range(4)]
+      buf_out = Tensor.empty(N, dtype=dtypes.int).uop.buffer.ensure_allocated()
+      eis = [ExecItem(prg, [buf_out, a1, b1]), ExecItem(prg, [buf_out, a2, b2])]
+      for e in eis: e.run()
+
+    mg = Device[op.device].graph(eis, [a1, b1, a2, b2], {})
+    time_us = mg([a1, b1, a2, b2], {}, wait=True)
+    out_np = buf_out.numpy()
+    with Context(TRACK_MATCH_STATS=0, PROFILE=0, DEBUG=0):
+      np.testing.assert_allclose(out_np, a2.numpy()+b2.numpy())
+
 if __name__ == "__main__":
   unittest.main()
