@@ -183,28 +183,22 @@ class TestProfiler(unittest.TestCase):
 
   @unittest.skipUnless(Device[Device.DEFAULT].graph is not None, "graph support required")
   def test_graph(self):
-    import numpy as np
-    from tinygrad.device import Device, Buffer
-    from tinygrad.tensor import Tensor
-    from tinygrad.helpers import Context
-    from tinygrad.dtype import dtypes
-    from tinygrad.engine.realize import get_runner, ExecItem
+    # stuff needed to batch two add kernels
+    from tinygrad.engine.realize import ExecItem
+    op = Tensor.empty(N:=32, dtype=dtypes.int)+Tensor.empty(N, dtype=dtypes.int)
+    ast = op.schedule()[0].ast
+    prg = get_runner(op.device, ast)
+    inputs = [a1, b1, a2, b2] = [Tensor.randint(N).realize().uop.buffer for _ in range(4)]
+    out = Tensor.empty(N, dtype=dtypes.int).uop.buffer.ensure_allocated()
+    eis = [ExecItem(prg, [out, a1, b1]), ExecItem(prg, [out, a2, b2])]
 
-    with Context(TRACK_MATCH_STATS=0, PROFILE=0, DEBUG=0):
-      N = 32
-      op = Tensor.empty(N, dtype=dtypes.int)+Tensor.empty(N, dtype=dtypes.int)
-      op.kernelize()
-      prg = get_runner(op.device, op.uop.src[1].arg.ast)
-      a1, b1, a2, b2 = [Tensor(np.random.randint(-100, 100, size=N, dtype=np.int32)).realize().uop.buffer for _ in range(4)]
-      buf_out = Tensor.empty(N, dtype=dtypes.int).uop.buffer.ensure_allocated()
-      eis = [ExecItem(prg, [buf_out, a1, b1]), ExecItem(prg, [buf_out, a2, b2])]
-      for e in eis: e.run()
+    with helper_collect_profile(dev:=TestProfiler.d0) as profile:
+      g = dev.graph(eis, inputs, {})
+      g(inputs, {}, wait=True)
 
-    mg = Device[op.device].graph(eis, [a1, b1, a2, b2], {})
-    time_us = mg([a1, b1, a2, b2], {}, wait=True)
-    out_np = buf_out.numpy()
-    with Context(TRACK_MATCH_STATS=0, PROFILE=0, DEBUG=0):
-      np.testing.assert_allclose(out_np, a2.numpy()+b2.numpy())
+    print(profile)
+    out_np = out.numpy()
+    self.assertListEqual(out_np.tolist(), (a2.numpy()+b2.numpy()).tolist())
 
 if __name__ == "__main__":
   unittest.main()
