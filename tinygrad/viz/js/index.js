@@ -133,13 +133,13 @@ async function renderProfiler() {
   // color by key (name/category/device)
   const colorMap = new Map();
   const data = {shapes:[], axes:{}};
-  for (const [k, { timeline, mem }] of Object.entries(layout)) {
+  for (const { device, timeline, mem }] of layout) {
     if (timeline.shapes.length === 0 && mem.shapes.length == 0) continue;
     const div = deviceList.appendChild(document.createElement("div"));
-    div.innerText = k;
+    div.innerText = device;
     div.style.padding = `${padding}px`;
     div.onclick = () => { // TODO: make this feature more visible
-      focusedDevice = k === focusedDevice ? null : k;
+      focusedDevice = device === focusedDevice ? null : device;
       renderProfiler();
     }
     const { y:baseY, height:baseHeight } = rect(div);
@@ -149,7 +149,7 @@ async function renderProfiler() {
     for (const e of timeline.shapes) {
       if (e.depth === 0) colorKey = e.cat ?? e.name;
       if (!colorMap.has(colorKey)) {
-        const colors = devColors[k] ?? devColors.DEFAULT;
+        const colors = devColors[device] ?? devColors.DEFAULT;
         colorMap.set(colorKey, colors[colorMap.size%colors.length]);
       }
       const fillColor = lighten(colorMap.get(colorKey), e.depth);

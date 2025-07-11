@@ -240,7 +240,7 @@ class TestVizProfiler(unittest.TestCase):
 
     j = json.loads(get_profile(prof))
 
-    dev_events = j['layout']['NV']['timeline']['shapes']
+    dev_events = j['layout'][0]['timeline']['shapes']
     self.assertEqual(len(dev_events), 1)
     event = dev_events[0]
     self.assertEqual(event['name'], 'E_2')
@@ -253,7 +253,7 @@ class TestVizProfiler(unittest.TestCase):
 
     j = json.loads(get_profile(prof))
 
-    event = j['layout']['NV']['timeline']['shapes'][0]
+    event = j['layout'][0]['timeline']['shapes'][0]
     self.assertEqual(event['name'], 'COPYxx')
     self.assertEqual(event['st'], 900) # diff clock
     self.assertEqual(event['dur'], 10)
@@ -268,23 +268,23 @@ class TestVizProfiler(unittest.TestCase):
 
     j = json.loads(get_profile(prof))
 
-    devices = list(j['layout'])
-    self.assertEqual(devices[0], 'NV Graph')
-    self.assertEqual(devices[1], 'NV')
-    self.assertEqual(devices[2], 'NV:1')
+    devices = j['layout']
+    self.assertEqual(devices[0]['device'], 'NV Graph')
+    self.assertEqual(devices[1]['device'], 'NV')
+    self.assertEqual(devices[2]['device'], 'NV:1')
 
-    nv_events = j['layout']['NV']['timeline']['shapes']
+    nv_events = j['layout'][1]['timeline']['shapes']
     self.assertEqual(nv_events[0]['name'], 'E_25_4n2')
     self.assertEqual(nv_events[0]['st'], 0)
     self.assertEqual(nv_events[0]['dur'], 2)
     #self.assertEqual(j['devEvents'][6]['pid'], j['devEvents'][0]['pid'])
 
-    nv1_events = j['layout']['NV:1']['timeline']['shapes']
+    nv1_events = j['layout'][2]['timeline']['shapes']
     self.assertEqual(nv1_events[0]['name'], 'NV -> NV:1')
     self.assertEqual(nv1_events[0]['st'], 954)
     #self.assertEqual(j['devEvents'][7]['pid'], j['devEvents'][3]['pid'])
 
-    graph_events = j['layout']['NV Graph']['timeline']['shapes']
+    graph_events = j['layout'][0]['timeline']['shapes']
     self.assertEqual(graph_events[0]['st'], nv_events[0]['st'])
     self.assertEqual(graph_events[0]['st']+graph_events[0]['dur'], nv1_events[0]['st']+nv1_events[0]['dur'])
 
@@ -295,10 +295,10 @@ def _alloc(b:int):
 
 class TestVizMemoryLayout(TestViz):
   def test_double_alloc(self):
-    a = _alloc(1)
+    _a = _alloc(1)
     _b = _alloc(1)
     profile_ret = json.loads(get_profile(Buffer.profile_events))
-    ret = profile_ret["layout"][a.device]["mem"]
+    ret = profile_ret["layout"][0]["mem"]
     self.assertEqual(ret["peak"], 2)
     self.assertEqual(ret["shapes"][0]["x"], [0, 2])
     self.assertEqual(ret["shapes"][1]["x"], [1, 2])
@@ -306,9 +306,9 @@ class TestVizMemoryLayout(TestViz):
   def test_del_once(self):
     a = _alloc(1)
     del a
-    b = _alloc(1)
+    _b = _alloc(1)
     profile_ret = json.loads(get_profile(Buffer.profile_events))
-    ret = profile_ret["layout"][b.device]["mem"]
+    ret = profile_ret["layout"][0]["mem"]
     self.assertEqual(ret["peak"], 1)
     self.assertEqual(ret["shapes"][0]["x"], [0, 2])
     self.assertEqual(ret["shapes"][1]["x"], [2, 3])
@@ -319,9 +319,9 @@ class TestVizMemoryLayout(TestViz):
     a = _alloc(1)
     _b = _alloc(1)
     del a
-    c = _alloc(1)
+    _c = _alloc(1)
     profile_ret = json.loads(get_profile(Buffer.profile_events))
-    ret = profile_ret["layout"][c.device]["mem"]
+    ret = profile_ret["layout"][0]["mem"]
     self.assertEqual(ret["peak"], 2)
     self.assertEqual(ret["shapes"][0]["x"], [0, 3])
     self.assertEqual(ret["shapes"][1]["x"], [1, 3, 3, 4])
