@@ -1,6 +1,6 @@
-import os, pathlib, struct, ctypes, tempfile, functools, contextlib, decimal, platform
+import os, pathlib, struct, ctypes, tempfile, functools, contextlib, decimal, platform, subprocess, time, signal
 from typing import Any, cast
-from tinygrad.helpers import prod, to_mv, getenv, round_up, cache_dir, T, init_c_struct_t, PROFILE, ProfileRangeEvent, cpu_profile
+from tinygrad.helpers import prod, to_mv, getenv, round_up, cache_dir, T, init_c_struct_t, PROFILE, ProfileRangeEvent, cpu_profile, fetch
 from tinygrad.device import Compiled, Compiler, CompileError, LRUAllocator, ProfileDeviceEvent
 from tinygrad.renderer.cstyle import MetalRenderer
 
@@ -88,6 +88,30 @@ class MetalDevice(Compiled):
         Compiled.profile_events += [ProfileRangeEvent(self.device, lb, st, en, is_copy=lb.startswith("COPY"))]
     self.mtl_buffers_in_flight.clear()
 
+  xctrace_proc = None
+  @classmethod
+  def start_xctrace(cls):
+    if PROFILE.value < 2 or cls.xctrace_proc is not None: return
+    # fetch xctrace config
+    cfg = "https://gist.githubusercontent.com/Qazalin/96680d79e12ab18f19403ac696ced8d2/raw/33af6e90a28d19b45bad2bf6864b9129c8ea576a/GPUCounter.xml"
+    cfg_loc = os.path.expanduser("~/Library/Application Support/Instruments/Templates/GPUCounter.tracetemplate")
+    os.system(f"plutil -convert xml1 -o '{cfg_loc}' {fetch(cfg)}")
+    # attach gpu counter recorder to this PID
+    os.system("rm -rf "+(output:="/tmp/metal.trace"))
+    cls.xctrace_proc = subprocess.Popen(["xctrace", "record", "--template", "GPUCounter", "--output", output, "--attach", str(os.getpid()),
+                                         "--notify-tracing-started", NOTIFY_KEY:="com.tinygrad.xctrace.started"])
+    subprocess.check_output(["notifyutil", "-1", NOTIFY_KEY])
+
+  def _at_profile_finalize(self):
+    if (proc:=MetalDevice.xctrace_proc) is not None:
+      # give xctrace time to collect counters. Otherwise the values get cut off. TODO: is there a better way?
+      try:
+        print("Shutting down xctrace...")
+        time.sleep(1)
+        proc.send_signal(signal.SIGINT)
+        proc.wait()
+      except Exception as e: proc.terminate()
+
 def metal_src_to_library(device:MetalDevice, src:str) -> objc_instance:
   options = msg("new", objc_instance)(libobjc.objc_getClass(b"MTLCompileOptions"))
   msg("setFastMathEnabled:")(options, getenv("METAL_FAST_MATH"))
@@ -170,6 +194,7 @@ class MetalProgram:
     self.max_total_threads: int = cast(int, msg("maxTotalThreadsPerThreadgroup", ctypes.c_ulong)(self.pipeline_state))
 
   def __call__(self, *bufs, global_size:tuple[int,int,int]=(1,1,1), local_size:tuple[int,int,int]=(1,1,1), vals:tuple[int, ...]=(), wait=False):
+    self.dev.start_xctrace()
     if prod(local_size) > self.max_total_threads:
       exec_width = msg("threadExecutionWidth", ctypes.c_ulong)(self.pipeline_state)
       memory_length = msg("staticThreadgroupMemoryLength", ctypes.c_ulong)(self.pipeline_state)
