@@ -511,16 +511,15 @@ async function main() {
   const [code, lang] = ctx.fmt != null ? [ctx.fmt, "cpp"] : [ret[currentRewrite].uop, "python"];
   metadata.replaceChildren(codeBlock(step.code_line, "python", { loc:step.loc, wrap:true }), codeBlock(code, lang, { wrap:false }));
   if (ctx.runtime_stats != null) {
-    const { counter_agg, counter_info } = ctx.runtime_stats[0].stats;
     const metrics = {
-      "ALU": [
+      "ALU Throughput": [
         "10", "11", "12", "13", "14", "15", "16", "17",
         "18", "19", "20", "21", "22", "23"
       ],
-      "DRAM": [
-        "60", "61", "62", "63", "64"
+      "DRAM Throughput": [
+        "60", "61", "62", "63",
       ],
-      "SRAM": [
+      "SRAM Throughput": [
         "6", "24", "25", "26", "27", "28", "29", "30", "31", "32",
         "33", "34", "35", "36", "37", "38", "39",
         "40", "41", "42", "43", "44", "45", "46",
@@ -535,15 +534,46 @@ async function main() {
         "48", "49", "50", "51"
       ]
     };
+    const metricUnits = {
+      "Bandwidth": " GB/s"
+    }
+    for (const [i,ss] of ctx.runtime_stats.entries()) {
+      const p = metadata.appendChild(document.createElement("p"));
+      p.innerText = `Run ${i+1}`;
+    const { counter_agg, counter_info } = ss.stats;
     const table = metadata.appendChild(document.createElement("table"));
+    const tr = table.appendChild(document.createElement("tr"));
+    tr.appendChild(document.createElement("td")).textContent = "Duration";
+    tr.appendChild(document.createElement("td")).textContent = formatTime(ss.duration);
+    const detailsContainer = metadata.appendChild(document.createElement("div"));
     for (const [k,lst] of Object.entries(metrics)) {
       const values = lst.map(i => ({ i, value:counter_agg[i] })).sort((a, b) => b.value - a.value);
       const limit = Math.max(...values.map(v => v.value));
-      // table row has two data points in it:
-      // <k> <limit>
       const tr = table.appendChild(document.createElement("tr"));
       tr.appendChild(document.createElement("td")).textContent = k;
-      tr.appendChild(document.createElement("td")).textContent = limit.toFixed(2);
+      tr.appendChild(document.createElement("td")).textContent = limit.toFixed(2)+(metricUnits[k] ?? "%");
+      const detailsTable = document.createElement("table");
+      detailsTable.id = k;
+      for (const v of values) {
+        const tr = detailsTable.appendChild(document.createElement("tr"));
+        tr.appendChild(document.createElement("td")).textContent = counter_info[v.i]["name"];
+        let fmt = metricUnits[k];
+        if (fmt == null) {
+          fmt = counter_info[v.i].type === "Percentage" ? "%" : "";
+        }
+        tr.appendChild(document.createElement("td")).textContent = v.value.toFixed(2)+(metricUnits[k] ?? "%");
+      }
+      tr.onclick = () => {
+        for (const ctr of table.children) {
+          ctr.classList.remove("active");
+        }
+        if (detailsContainer.children[k] != null) detailsContainer.innerHTML = "";
+        else {
+          detailsContainer.replaceChildren(detailsTable);
+          tr.classList.add("active");
+        }
+      }
+    }
     }
   }
   // ** rewrite steps
