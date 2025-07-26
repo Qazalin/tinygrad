@@ -511,18 +511,40 @@ async function main() {
   const [code, lang] = ctx.fmt != null ? [ctx.fmt, "cpp"] : [ret[currentRewrite].uop, "python"];
   metadata.replaceChildren(codeBlock(step.code_line, "python", { loc:step.loc, wrap:true }), codeBlock(code, lang, { wrap:false }));
   if (ctx.runtime_stats != null) {
-    const div = metadata.appendChild(document.createElement("div"));
-    div.className = "rewrite-container";
-    div.style.overflow = "auto";
-    const s = ctx.runtime_stats[0]
-    const i = 0;
-    const code = document.createElement("code");
-    code.className = "hljs";
-    const span = code.appendChild(document.createElement("span"));
-    span.innerText = "ALU";
-    const ret = document.createElement("pre");
-    ret.appendChild(code);
-    div.appendChild(ret);
+    const { counter_agg, counter_info } = ctx.runtime_stats[0].stats;
+    const metrics = {
+      "ALU": [
+        "10", "11", "12", "13", "14", "15", "16", "17",
+        "18", "19", "20", "21", "22", "23"
+      ],
+      "DRAM": [
+        "60", "61", "62", "63", "64"
+      ],
+      "SRAM": [
+        "6", "24", "25", "26", "27", "28", "29", "30", "31", "32",
+        "33", "34", "35", "36", "37", "38", "39",
+        "40", "41", "42", "43", "44", "45", "46",
+        "47"
+      ],
+      "Bandwidth": [
+        "58", "59", "60"
+      ],
+      "Occupancy": [
+        "1", "2", "3", "4", "5",
+        "7", "8", "9",
+        "48", "49", "50", "51"
+      ]
+    };
+    const table = metadata.appendChild(document.createElement("table"));
+    for (const [k,lst] of Object.entries(metrics)) {
+      const values = lst.map(i => ({ i, value:counter_agg[i] })).sort((a, b) => b.value - a.value);
+      const limit = Math.max(...values.map(v => v.value));
+      // table row has two data points in it:
+      // <k> <limit>
+      const tr = table.appendChild(document.createElement("tr"));
+      tr.appendChild(document.createElement("td")).textContent = k;
+      tr.appendChild(document.createElement("td")).textContent = limit.toFixed(2);
+    }
   }
   // ** rewrite steps
   if (step.match_count >= 1) {
