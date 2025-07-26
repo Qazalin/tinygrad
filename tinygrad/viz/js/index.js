@@ -464,7 +464,12 @@ async function main() {
         }
       }
     }
-    return setState({ currentCtx:-1 });
+    return setState({
+    "currentCtx": 13,
+    "currentStep": 0,
+    "currentRewrite": 0,
+    "expandSteps": true
+});
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
@@ -508,12 +513,16 @@ async function main() {
   if (ctx.runtime_stats != null) {
     const div = metadata.appendChild(document.createElement("div"));
     div.className = "rewrite-container";
-    div.style.maxHeight = "200px";
     div.style.overflow = "auto";
-    for (const [i, s] of ctx.runtime_stats.entries()) {
-      const fmt = `${s.device}  ${i+1} ${formatTime(s.duration)}`;
-      div.appendChild(codeBlock(fmt, "txt"));
-    }
+    const s = ctx.runtime_stats[0]
+    const i = 0;
+    const code = document.createElement("code");
+    code.className = "hljs";
+    const span = code.appendChild(document.createElement("span"));
+    span.innerText = "ALU";
+    const ret = document.createElement("pre");
+    ret.appendChild(code);
+    div.appendChild(ret);
   }
   // ** rewrite steps
   if (step.match_count >= 1) {

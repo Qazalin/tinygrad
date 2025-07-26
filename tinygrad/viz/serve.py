@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import multiprocessing, pickle, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, socketserver, functools, codecs, subprocess
-import xml.etree.ElementTree as ET, statistics
+import xml.etree.ElementTree as ET
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
@@ -206,20 +206,19 @@ def get_metal_counters(st:int, et:int):
   time_info = list(xctrace_export("time-info"))[0]
   num, denom = [int(f.text) for f in time_info["timebase-info"].findall("mach-timebase-info-field")]
   start_time = Decimal(time_info["mabs-epoch"])*Decimal(num/denom)
-  # aggregate counter values in this time range
   counter_info = {int(r["counter-id"]):r for r in xctrace_export("gpu-counter-info")}
-  counter_values:dict[int, list[float]] = {}
+  # calculate the mean counter values in the passed in time range
+  acc:dict[int, int] = {}
+  samples:dict[int, int] = {}
   for r in xctrace_export("gpu-counter-value"):
     sample_ts = (start_time+Decimal(r["timestamp"]))/Decimal(1e3)
     if sample_ts < st: continue
     if sample_ts > et: break
-    counter_values.setdefault(int(r["counter-id"]), []).append(float(r["value"]))
-  ret:dict[str, float] = {}
-  for k,v in counter_values.items():
-    ret[counter_info[k]["name"]] = statistics.mean(v)
-  for name,lst in MTL_COUNTER_GROUPS.items():
-    if (vals:=[r for c in lst if (info:=counter_info[c])["type"] == "Percentage" and (r:=ret.get(info["name"]))]): ret[name] = max(vals)
-  return ret
+    if (counter_id:=r["counter-id"]) not in acc: acc[counter_id], samples[counter_id] = 0, 0
+    acc[counter_id] += float(r["value"])
+    samples[counter_id] += 1
+  counter_agg = {k:v/samples[k] for k,v in acc.items()}
+  return {"counter_info":counter_info, "counter_agg":counter_agg}
 
 hw_counters = {"METAL":get_metal_counters}
 
