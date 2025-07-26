@@ -535,16 +535,50 @@ async function main() {
         "48", "49", "50", "51"
       ]
     };
-    const table = metadata.appendChild(document.createElement("table"));
-    for (const [k,lst] of Object.entries(metrics)) {
-      const values = lst.map(i => ({ i, value:counter_agg[i] })).sort((a, b) => b.value - a.value);
-      const limit = Math.max(...values.map(v => v.value));
-      // table row has two data points in it:
-      // <k> <limit>
-      const tr = table.appendChild(document.createElement("tr"));
-      tr.appendChild(document.createElement("td")).textContent = k;
-      tr.appendChild(document.createElement("td")).textContent = limit.toFixed(2);
+const table = metadata.appendChild(document.createElement("table"));
+table.className = "metric-table"; // for styling
+const tbody = table.appendChild(document.createElement("tbody"));
+for (const [k, lst] of Object.entries(metrics)) {
+  const values = lst.map(i => ({ i, value: counter_agg[i] }))
+    .sort((a, b) => b.value - a.value);
+  const limit = Math.max(...values.map(v => v.value));
+
+  const tr = tbody.appendChild(document.createElement("tr"));
+  tr.className = "summary-row";
+  tr.style.cursor = "pointer";
+
+  const tdKey = tr.appendChild(document.createElement("td"));
+  tdKey.textContent = k;
+
+  const tdLimit = tr.appendChild(document.createElement("td"));
+  tdLimit.textContent = limit.toFixed(2);
+
+  // Sub-row container
+  const subTr = tbody.appendChild(document.createElement("tr"));
+  subTr.className = "sub-row";
+  subTr.style.display = "none";
+
+  const subTd = subTr.appendChild(document.createElement("td"));
+  subTd.colSpan = 2;
+  const innerTable = document.createElement("table");
+  innerTable.className = "inner-table";
+  subTd.appendChild(innerTable);
+    for (const { i, value } of values) {
+      const row = innerTable.appendChild(document.createElement("tr"));
+
+      const nameTd = document.createElement("td");
+      nameTd.textContent = counter_info[i].name;
+
+      const valueTd = document.createElement("td");
+      valueTd.textContent = value.toFixed(2);
+      row.appendChild(nameTd);
+      row.appendChild(valueTd);
     }
+
+    tr.addEventListener("click", () => {
+      subTr.style.display = subTr.style.display === "none" ? "table-row" : "none";
+    });
+  }
   }
   // ** rewrite steps
   if (step.match_count >= 1) {

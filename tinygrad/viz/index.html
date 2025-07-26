@@ -226,38 +226,47 @@
   }
 
 
-table {
+.metric-table {
   width: 100%;
-  margin-top: 1em;
-  background-color: #1a1b26; /* matches .hljs background */
-  color: #f0f0f5;
-}
-
-table {
-  border-collapse: separate; /* Required for border-radius to work */
+  border-collapse: separate;
   border-spacing: 0;
-  border-radius: 8px; /* Or whatever radius you want */
-  overflow: hidden;   /* Ensures inner corners are clipped */
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: #1a1b26;
+  color: #f0f0f5;
+  font-family: monospace;
+  font-size: 0.95em;
 }
 
-th, td {
+.metric-table td, .metric-table th {
   padding: 8px 12px;
-  text-align: left;
   border-bottom: 1px solid #2c2f40;
-}
-tr:last-child td {
-  border-bottom: none;
+  vertical-align: top;
 }
 
-tr:hover {
+.metric-table .summary-row:hover {
   background-color: #2a2d3a;
 }
 
-th {
-  background-color: #222431;
-  color: #9aa5ce; /* matches .hljs text color */
-  font-weight: bold;
+.sub-row td {
+  padding: 0;
+  border: none;
 }
+
+.inner-table {
+  width: 100%;
+  border-collapse: collapse;
+  background-color: #181926;
+}
+
+.inner-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #2a2d3a;
+  overflow: auto;
+  white-space: nowrap;
+  max-width: 215px;
+}
+
   </style>
 </head>
 <body>
