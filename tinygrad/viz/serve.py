@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlparse
 from typing import Any, TypedDict, Generator
 from tinygrad.helpers import colored, getenv, tqdm, unwrap, word_wrap, TRACEMETA, ProfileEvent, ProfileRangeEvent, TracingKey
 from tinygrad.uop.ops import TrackedGraphRewrite, UOp, Ops, printable, GroupOp, srender, sint
-from tinygrad.device import ProfileDeviceEvent, ProfileGraphEvent, ProfileGraphEntry, ProfilePointEvent, Device
+from tinygrad.device import ProfileDeviceEvent, ProfileGraphEvent, ProfileGraphEntry, ProfilePointEvent, ProfileProgramEvent, Device
 from tinygrad.renderer import ProgramSpec
 from tinygrad.dtype import dtypes
 
@@ -210,13 +210,19 @@ def get_llvm_mca(asm:str, mtriple:str, mcpu:str) -> dict:
   for x in rows: x["segs"] = {k:{"width":(v/max_usage)*100, "value":v} for k,v in x["segs"].items()}
   return {"rows":rows, "cols":["Opcode", "Latency", "HW Resources"], "segments":data["TargetInfo"]["Resources"]}
 
+def get_sqtt(asm:str, prg:ProgramSpec) -> dict:
+  prg_runs = [e for e in profile if isinstance(e, ProfileProgramEvent) and e.name==prg.function_name and e.device==prg.device]
+  if not prg_runs: return {"src":asm}
+  return {"src":"SQTT_TODO"}
+
 def get_disassembly(ctx:list[str]):
   if not isinstance(prg:=contexts[0][int(ctx[0])].ret, ProgramSpec): return
   lib = (compiler:=Device[prg.device].compiler).compile(prg.src)
   with redirect_stdout(buf:=io.StringIO()): compiler.disassemble(lib)
   disasm_str = buf.getvalue()
   from tinygrad.runtime.ops_llvm import llvm, LLVMCompiler
-  if isinstance(compiler, LLVMCompiler):
+  if prg.device.startswith("AMD") and getenv("SQTT"): ret = get_sqtt(disasm_str, prg)
+  elif isinstance(compiler, LLVMCompiler):
     mtriple = ctypes.string_at(llvm.LLVMGetTargetMachineTriple(tm:=compiler.target_machine)).decode()
     mcpu = ctypes.string_at(llvm.LLVMGetTargetMachineCPU(tm)).decode()
     ret = get_llvm_mca(disasm_str, mtriple, mcpu)
