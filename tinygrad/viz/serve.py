@@ -211,9 +211,19 @@ def get_llvm_mca(asm:str, mtriple:str, mcpu:str) -> dict:
   return {"rows":rows, "cols":["Opcode", "Latency", "HW Resources"], "segments":data["TargetInfo"]["Resources"]}
 
 def get_sqtt(asm:str, prg:ProgramSpec) -> dict:
+  from tinygrad.viz.sqtt_parser import sqtt_parse, isa_map
   prg_runs = [e for e in profile if isinstance(e, ProfileProgramEvent) and e.name==prg.function_name and e.device==prg.device]
   if not prg_runs: return {"src":asm}
-  return {"src":"SQTT_TODO"}
+  # take the first run for now, this should probably be a list of runs
+  # since cache placement can impact timings, avg of different launches might not be a good idea
+  pc_start = prg_runs[0].base
+  rows:list = []
+  max_duration = 0
+  for pc,inst in sqtt_parse(profile).items():
+    rows.append({"data":[isa_map.get(pc, "missing")], "segs":{"stall":inst.stall, "hidden": max(inst.duration-inst.stall, 0)}})
+    max_duration = max(max_duration, inst.duration)
+  for r in rows: r["segs"] = {i:{"width":(v/max_duration)*100, "value": v} for i,v in enumerate(r["segs"].values())}
+  return {"rows":rows, "cols":["Opcode", "Latency"], "segments": ["stall", "hidden"]}
 
 def get_disassembly(ctx:list[str]):
   if not isinstance(prg:=contexts[0][int(ctx[0])].ret, ProgramSpec): return
