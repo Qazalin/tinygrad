@@ -3,12 +3,9 @@ from tinygrad.runtime.ops_amd import ProfileSQTTEvent
 from tinygrad.device import ProfileProgramEvent
 from tinygrad.helpers import getenv, temp
 
-if not os.path.exists(fn:=temp("buf.att")):
-  with open(temp("profile.pkl", append_user=True), "rb") as f: profile = pickle.load(f)
-  for e in profile:
-    if isinstance(e, ProfileSQTTEvent):
-      with open(fn, "wb") as f: f.write(e.blob)
-      break
+# run something with SQTT=1 PROFILE=1 to get raw shader engine SQTT buffers
+with open(temp("profile.pkl", append_user=True), "rb") as f: profile = pickle.load(f)
+se_blobs = [e.blob for e in profile if isinstance(e, ProfileSQTTEvent)]
 
 lib = ctypes.CDLL("/opt/rocm/lib/librocprof-trace-decoder.so")
 
@@ -17,9 +14,7 @@ att_parse_data_fn = lib.rocprof_trace_decoder_parse_data
 att_info_fn = lib.rocprof_trace_decoder_get_info_string
 att_status_fn = lib.rocprof_trace_decoder_get_status_string
 
-# raw shader engine data:
-with open(fn, "rb") as f: raw_data = f.read()
-
+raw_data = se_blobs[1]
 # https://github.com/ROCm/rocprofiler-sdk/blob/fd6f96ffb54054b405a6f05f800c64394126672d/source/lib/rocprofiler-sdk/thread_trace/decode.cpp#L151
 class TraceData(ctypes.Structure):
   _fields_ = [("data", ctypes.POINTER(ctypes.c_uint8)), ("size", ctypes.c_uint64),]
@@ -49,7 +44,7 @@ def trace_callback(record_type_id, trace_events, trace_size, userdata):
 
 # https://github.com/ROCm/rocprofiler-sdk/blob/fd6f96ffb54054b405a6f05f800c64394126672d/source/lib/rocprofiler-sdk/thread_trace/decode.cpp#L172
 def isa_callback(instr, mem_size_ptr, size_ptr, pc, user):
-  print("[isa_cb] Called")
+  print("[isa_cb] Called", instr, mem_size_ptr, size_ptr, pc, user)
   return 0
 
 status = att_parse_data_fn(se_data_callback_t(copy_trace_data), trace_callback_t(trace_callback), isa_callback_t(isa_callback), ctypes.cast(userdata_ptr, ctypes.c_void_p))
