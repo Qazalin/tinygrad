@@ -1,12 +1,26 @@
 import pickle, subprocess, sys, os, ctypes, enum, contextlib, io
 from tinygrad.runtime.ops_amd import ProfileSQTTEvent
-from tinygrad.device import ProfileProgramEvent
+from tinygrad.device import ProfileProgramEvent, Device
 from tinygrad.helpers import getenv, temp
 
 # run something with SQTT=1 PROFILE=1 to get raw shader engine SQTT buffers
 with open(temp("profile.pkl", append_user=True), "rb") as f: profile = pickle.load(f)
+
+# some preprocess stuff
 se_blobs = [e.blob for e in profile if isinstance(e, ProfileSQTTEvent)]
-programs = {e.base:e for e in profile if isinstance(e, ProfileProgramEvent)}
+isa_map = {}
+isa_lst = []
+for e in profile:
+  if not isinstance(e, ProfileProgramEvent): continue
+  with contextlib.redirect_stdout(buf:=io.StringIO()): Device[e.device].compiler.disassemble(e.lib)
+  disasm_str = buf.getvalue()
+  for line in disasm_str.splitlines()[6:]:
+    if not (line:=line.strip()): continue
+    instr, rest = line.split("//")
+    pc_str = rest.split(":")[0]
+    va = int(pc_str.strip(), 16)
+    isa_map[e.base+va] = instr.strip()
+    isa_lst = instr.strip()
 
 lib = ctypes.CDLL("/opt/rocm/lib/librocprof-trace-decoder.so")
 
@@ -15,7 +29,8 @@ att_parse_data_fn = lib.rocprof_trace_decoder_parse_data
 att_info_fn = lib.rocprof_trace_decoder_get_info_string
 att_status_fn = lib.rocprof_trace_decoder_get_status_string
 
-raw_data = se_blobs[0]+se_blobs[1]
+raw_data = se_blobs[0]+se_blobs[1]+se_blobs[2]+se_blobs[3]+se_blobs[4]
+
 # https://github.com/ROCm/rocprofiler-sdk/blob/fd6f96ffb54054b405a6f05f800c64394126672d/source/lib/rocprofiler-sdk/thread_trace/decode.cpp#L151
 class TraceData(ctypes.Structure):
   _fields_ = [("data", ctypes.POINTER(ctypes.c_uint8)), ("size", ctypes.c_uint64),]
@@ -175,27 +190,24 @@ def trace_callback(record_type_int, events_ptr, size, user):
 # https://github.com/ROCm/rocprofiler-sdk/blob/fd6f96ffb54054b405a6f05f800c64394126672d/source/lib/rocprofiler-sdk/thread_trace/decode.cpp#L172
 ROCPROFILER_THREAD_TRACE_DECODER_STATUS_SUCCESS = 0
 ROCPROFILER_THREAD_TRACE_DECODER_STATUS_ERROR_OUT_OF_RESOURCES = 4
+ROCPROFILER_THREAD_TRACE_DECODER_STATUS_ERROR_INVALID_ARGUMENT = 3
 
-prg = None
+i = 0
 def isa_callback(instr_ptr, mem_size_ptr, size_ptr, pc, user):
-  global prg
-  if prg is None: prg = disassemble(programs[pc.addr])
-  print(prg)
-  max_len = size_ptr[0]  # size_ptr is IN/OUT
-  fake_isa = b"v_add_f32 v0, v1, v2"  # pretend this is disassembled from PC
+  #print(f"0x{pc.addr:x} {isa_map.get(pc.addr)}", pc.marker_id)
+  if (isa:=isa_map.get(pc.addr)) is None:
+    return ROCPROFILER_THREAD_TRACE_DECODER_STATUS_ERROR_INVALID_ARGUMENT
 
-  # If not enough space, return size required
-  if len(fake_isa) + 1 > max_len:
-    size_ptr[0] = len(fake_isa) + 1
+  isa_bytes = isa.encode("utf-8")
+  max_len = size_ptr[0]
+  if len(isa_bytes) + 1 > max_len:
+    size_ptr[0] = len(isa_bytes) + 1  # include null terminator
     return ROCPROFILER_THREAD_TRACE_DECODER_STATUS_ERROR_OUT_OF_RESOURCES
 
-  # Write fake_isa to instr_ptr (as a c_char array)
-  ctypes.memmove(instr_ptr, fake_isa, len(fake_isa))
-  instr_ptr[len(fake_isa)] = 0  # null-terminate if needed
-
-  size_ptr[0] = len(fake_isa)
-  mem_size_ptr[0] = 4  # pretend 4-byte instruction
-
+  ctypes.memmove(instr_ptr, isa_bytes, len(isa_bytes))
+  instr_ptr[len(isa_bytes)] = 0  # null-terminate
+  size_ptr[0] = len(isa_bytes) + 1
+  mem_size_ptr[0] = 4 
   return ROCPROFILER_THREAD_TRACE_DECODER_STATUS_SUCCESS
 
 status = att_parse_data_fn(se_data_callback_t(copy_trace_data), trace_callback_t(trace_callback), isa_callback_t(isa_callback), ctypes.cast(userdata_ptr, ctypes.c_void_p))

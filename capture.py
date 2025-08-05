@@ -10,3 +10,5 @@ from tinygrad import Tensor
 a = Tensor.empty(4)
 b = Tensor.empty(4)
 (a+b).realize()
+
+(a*b).realize()
