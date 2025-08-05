@@ -1,4 +1,4 @@
-import pickle, subprocess, sys, os, ctypes, enum
+import pickle, subprocess, sys, os, ctypes, enum, contextlib, io
 from tinygrad.runtime.ops_amd import ProfileSQTTEvent
 from tinygrad.device import ProfileProgramEvent
 from tinygrad.helpers import getenv, temp
@@ -6,6 +6,7 @@ from tinygrad.helpers import getenv, temp
 # run something with SQTT=1 PROFILE=1 to get raw shader engine SQTT buffers
 with open(temp("profile.pkl", append_user=True), "rb") as f: profile = pickle.load(f)
 se_blobs = [e.blob for e in profile if isinstance(e, ProfileSQTTEvent)]
+programs = {e.base:e for e in profile if isinstance(e, ProfileProgramEvent)}
 
 lib = ctypes.CDLL("/opt/rocm/lib/librocprof-trace-decoder.so")
 
@@ -18,6 +19,11 @@ raw_data = se_blobs[0]+se_blobs[1]
 # https://github.com/ROCm/rocprofiler-sdk/blob/fd6f96ffb54054b405a6f05f800c64394126672d/source/lib/rocprofiler-sdk/thread_trace/decode.cpp#L151
 class TraceData(ctypes.Structure):
   _fields_ = [("data", ctypes.POINTER(ctypes.c_uint8)), ("size", ctypes.c_uint64),]
+
+# https://github.com/ROCm/rocprofiler-sdk/blob/fd6f96ffb54054b405a6f05f800c64394126672d/source/include/rocprofiler-sdk/experimental/thread-trace/trace_decoder_types.h#L49
+class PC(ctypes.Structure):
+  _fields_ = [("addr", ctypes.c_size_t), ("marker_id", ctypes.c_size_t)]
+
 data_buf = ctypes.create_string_buffer(raw_data)
 userdata = TraceData(ctypes.cast(data_buf, ctypes.POINTER(ctypes.c_uint8)), len(raw_data))
 userdata_ptr = ctypes.pointer(userdata)
@@ -25,8 +31,7 @@ userdata_ptr = ctypes.pointer(userdata)
 # mostly from https://github.com/ROCm/rocprofiler-sdk/blob/fd6f96ffb54054b405a6f05f800c64394126672d/source/lib/rocprofiler-sdk/thread_trace/trace_decoder_api.h
 se_data_callback_t = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.POINTER(ctypes.POINTER(ctypes.c_uint8)), ctypes.POINTER(ctypes.c_uint64), ctypes.c_void_p)
 trace_callback_t   = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p)
-# isa cb inferred from https://github.com/ROCm/rocprofiler-sdk/blob/fd6f96ffb54054b405a6f05f800c64394126672d/source/lib/rocprofiler-sdk/thread_trace/decode.cpp#L172
-isa_callback_t     = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(ctypes.c_char), ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64), ctypes.c_void_p, ctypes.c_void_p)
+isa_callback_t     = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(ctypes.c_char), ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64), PC, ctypes.c_void_p)
 
 # https://github.com/ROCm/rocprofiler-sdk/blob/fd6f96ffb54054b405a6f05f800c64394126672d/source/lib/rocprofiler-sdk/thread_trace/decode.cpp#L162C64-L162C72
 def copy_trace_data(buffer:ctypes.POINTER(ctypes.POINTER(ctypes.c_uint8)), buffer_size:ctypes.POINTER(ctypes.c_uint64), userdata:ctypes.c_void_p) -> int:
@@ -72,9 +77,6 @@ class InstCategory(enum.IntEnum):
   MESSAGE = 11
   BVH = 12
   LAST = 13
-
-class PC(ctypes.Structure):
-  _fields_ = [("addr", ctypes.c_size_t), ("marker_id", ctypes.c_size_t)]
 
 class Occupancy(ctypes.Structure):
   _fields_ = [
@@ -174,7 +176,11 @@ def trace_callback(record_type_int, events_ptr, size, user):
 ROCPROFILER_THREAD_TRACE_DECODER_STATUS_SUCCESS = 0
 ROCPROFILER_THREAD_TRACE_DECODER_STATUS_ERROR_OUT_OF_RESOURCES = 4
 
+prg = None
 def isa_callback(instr_ptr, mem_size_ptr, size_ptr, pc, user):
+  global prg
+  if prg is None: prg = disassemble(programs[pc.addr])
+  print(prg)
   max_len = size_ptr[0]  # size_ptr is IN/OUT
   fake_isa = b"v_add_f32 v0, v1, v2"  # pretend this is disassembled from PC
 
