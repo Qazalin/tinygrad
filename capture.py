@@ -7,6 +7,6 @@ os.environ["SQTT"] = "1"
 os.environ["DEBUG"] = "2"
 
 from tinygrad import Tensor
-a = Tensor.empty(32, 32)
-b = Tensor.empty(32, 32)
-(a@b).realize()
+a = Tensor.empty(4)
+b = Tensor.empty(4)
+(a+b).realize()
