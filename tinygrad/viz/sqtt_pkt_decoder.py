@@ -43,23 +43,28 @@ def trace_cb(record_type, events_ptr, n, data_ptr):
       wave = ctypes.cast(events_ptr, ctypes.POINTER(Wave))[i]
       for j in range(wave.instructions_size):
         instr = wave.instructions_array[j]
+        print(instr.pc.addr, instr.pc.marker_id)
         # this probably fixes itself when the disassembler is correct
         if instr.pc.addr == 0: code = "<null>"
         else:
           code, _ = data.instructions[instr.pc.addr]
           if (p:=data.programs.get(instr.pc.addr)) is not None: print(p.name)
         ii += 1
-        print(f"{ii:2d} PC=0x{instr.pc.addr:012x} {code:<50} duration={instr.duration}, stall={instr.stall}")
+        #print(f"{ii:2d} PC=0x{instr.pc.addr:012x} {code:<50} duration={instr.duration}, stall={instr.stall}")
   return TRACE_DECODER_STATUS_SUCCESS
 
 @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(ctypes.c_char), ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64), PC,
                   ctypes.POINTER(TraceData))
 def isa_cb(instr_ptr, mem_size_ptr, size_ptr, pc, data_ptr):
   instructions = data_ptr.contents.instructions
-  if pc.addr not in instructions: return TRACE_DECODER_STATUS_ERROR_INVALID_ARGUMENT
   code, size = instructions[pc.addr]
-  code_bytes = code.split(" ")[0].encode("utf-8")
-  if len(code_bytes)+1>size_ptr[0]: return TRACE_DECODER_STATUS_ERROR_OUT_OF_RESOURCES
+  cc = code.split(" ")[0]
+  if "branch" in cc:
+    size = 4
+  code_bytes = cc.encode("utf-8")
+  print(f"{pc.addr:012X}", code, size)
+  if len(code_bytes)+1>size_ptr[0]:
+    return TRACE_DECODER_STATUS_ERROR_OUT_OF_RESOURCES
   ctypes.memmove(instr_ptr, code_bytes, len(code_bytes))
   instr_ptr[len(code_bytes)] = 0
   size_ptr[0] = len(code_bytes)+1
@@ -67,18 +72,22 @@ def isa_cb(instr_ptr, mem_size_ptr, size_ptr, pc, data_ptr):
   return TRACE_DECODER_STATUS_SUCCESS
 
 # TODO: use llvm for this, it is very wrong
+
+def is_word(s:str) -> bool:
+  try: return int(s, 16) <= 0xFFFFFFFF
+  except ValueError: return False
+
 def disasm_prg(p:ProfileProgramEvent) -> Generator[tuple[int, str, int], None, None]:
   with contextlib.redirect_stdout(buf:=io.StringIO()): Device[p.device].compiler.disassemble(unwrap(p.lib))
   i = 0
   for line in buf.getvalue().splitlines()[6:]:
     if not (line:=line.strip()): continue
     i += 1
-    print(f"{i:2d} {line}")
     code, rest = line.split("//")
     pc, opcode = rest.split(":", 1)
-    # wrong with loops
+    words = [w for w in opcode.strip().split(" ") if is_word(w)]
     offset = int(pc.strip(), 16)
-    yield unwrap(p.base)+offset, code.strip(), 4*len(opcode.strip().split(" "))
+    yield unwrap(p.base)+offset, code.strip(), 4*len(words)
 
 def decode_sqtt_packets(profile:list[ProfileEvent]):
   sqtt_events:list[ProfileSQTTEvent] = []
