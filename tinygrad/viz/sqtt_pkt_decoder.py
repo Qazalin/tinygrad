@@ -33,7 +33,6 @@ TRACE_DECODER_STATUS_SUCCESS = 0
 TRACE_DECODER_STATUS_ERROR_OUT_OF_RESOURCES = 2
 TRACE_DECODER_STATUS_ERROR_INVALID_ARGUMENT = 3
 
-ii = 0
 @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(TraceData))
 def trace_cb(record_type, events_ptr, n, data_ptr):
   global ii
@@ -43,26 +42,23 @@ def trace_cb(record_type, events_ptr, n, data_ptr):
       wave = ctypes.cast(events_ptr, ctypes.POINTER(Wave))[i]
       for j in range(wave.instructions_size):
         instr = wave.instructions_array[j]
-        # this probably fixes itself when the disassembler is correct
-        if instr.pc.addr == 0: code = "<null>"
-        else:
-          code, _ = data.instructions[instr.pc.addr]
-          if (p:=data.programs.get(instr.pc.addr)) is not None: print(p.name)
-        ii += 1
-        #print(f"{ii:2d} 0x{instr.pc.addr:012x} {code:<50}")
-        #print(f"{ii:2d} PC=0x{instr.pc.addr:012x} {code:<50} duration={instr.duration}, stall={instr.stall}")
+        code, _ = data.instructions[instr.pc.addr]
+        if (p:=data.programs.get(instr.pc.addr)) is not None: print(p.name)
+        print(f"{j:{len(str(wave.instructions_size))}d} PC=0x{instr.pc.addr:012x} {code:<50} duration={instr.duration}, stall={instr.stall}")
   return TRACE_DECODER_STATUS_SUCCESS
+
+# TODO: use llvm for ISA parsing....
 
 @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(ctypes.c_char), ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64), PC,
                   ctypes.POINTER(TraceData))
 def isa_cb(instr_ptr, mem_size_ptr, size_ptr, pc, data_ptr):
   instructions = data_ptr.contents.instructions
   code, size = instructions[pc.addr]
-  cc = code.split(" ")[0]
-  if "branch" in cc:
-    size = 4
+  # what's this?
+  cc = code
+  if "delay" in code: cc = code.split(" ")[0]
+  if "s_endpgm" in code: size = 0
   code_bytes = cc.encode("utf-8")
-  print(f"[isa_cb] {pc.addr:012X}", code, size)
   if len(code_bytes)+1>size_ptr[0]:
     return TRACE_DECODER_STATUS_ERROR_OUT_OF_RESOURCES
   ctypes.memmove(instr_ptr, code_bytes, len(code_bytes))
@@ -70,8 +66,6 @@ def isa_cb(instr_ptr, mem_size_ptr, size_ptr, pc, data_ptr):
   size_ptr[0] = len(code_bytes)+1
   mem_size_ptr[0] = size
   return TRACE_DECODER_STATUS_SUCCESS
-
-# TODO: use llvm for this, it is very wrong
 
 def is_word(s:str) -> bool:
   try: return int(s, 16) <= 0xFFFFFFFF
