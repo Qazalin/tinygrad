@@ -43,13 +43,13 @@ def trace_cb(record_type, events_ptr, n, data_ptr):
       wave = ctypes.cast(events_ptr, ctypes.POINTER(Wave))[i]
       for j in range(wave.instructions_size):
         instr = wave.instructions_array[j]
-        print(instr.pc.addr, instr.pc.marker_id)
         # this probably fixes itself when the disassembler is correct
         if instr.pc.addr == 0: code = "<null>"
         else:
           code, _ = data.instructions[instr.pc.addr]
           if (p:=data.programs.get(instr.pc.addr)) is not None: print(p.name)
         ii += 1
+        #print(f"{ii:2d} 0x{instr.pc.addr:012x} {code:<50}")
         #print(f"{ii:2d} PC=0x{instr.pc.addr:012x} {code:<50} duration={instr.duration}, stall={instr.stall}")
   return TRACE_DECODER_STATUS_SUCCESS
 
@@ -62,7 +62,7 @@ def isa_cb(instr_ptr, mem_size_ptr, size_ptr, pc, data_ptr):
   if "branch" in cc:
     size = 4
   code_bytes = cc.encode("utf-8")
-  print(f"{pc.addr:012X}", code, size)
+  print(f"[isa_cb] {pc.addr:012X}", code, size)
   if len(code_bytes)+1>size_ptr[0]:
     return TRACE_DECODER_STATUS_ERROR_OUT_OF_RESOURCES
   ctypes.memmove(instr_ptr, code_bytes, len(code_bytes))
@@ -87,6 +87,7 @@ def disasm_prg(p:ProfileProgramEvent) -> Generator[tuple[int, str, int], None, N
     pc, opcode = rest.split(":", 1)
     words = [w for w in opcode.strip().split(" ") if is_word(w)]
     offset = int(pc.strip(), 16)
+    #print(f"{i:2d} {p.base+offset:012X}", code)
     yield unwrap(p.base)+offset, code.strip(), 4*len(words)
 
 def decode_sqtt_packets(profile:list[ProfileEvent]):
