@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import multiprocessing, pickle, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, socketserver, functools, codecs, io
+import multiprocessing, pickle, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, socketserver, functools, codecs, io, types
 import subprocess, ctypes
 from contextlib import redirect_stdout
 from decimal import Decimal
@@ -198,7 +198,7 @@ def get_runtime_stats(key) -> list[dict]:
 def get_llvm_mca(asm:str, mtriple:str, mcpu:str) -> dict:
   target_args = [f"-mtriple={mtriple}", f"-mcpu={mcpu}"]
   # disassembly output can include headers / metadata, skip if llvm-mca can't parse those lines
-  data = json.loads(subprocess.check_output(["llvm-mca","-skip-unsupported-instructions=parse-failure","--json","-"]+target_args, input=asm.encode()))
+  data = json.loads(subprocess.check_output(["llvm-mca","--json","-"]+target_args, input=asm.encode()))
   cr = data["CodeRegions"][0]
   rows:list = [{"data":[instr], "segs":{}} for instr in cr["Instructions"]]
   for i,info in enumerate(cr["InstructionInfoView"]["InstructionList"]): rows[i]["data"].append(info["Latency"])
@@ -216,6 +216,11 @@ def get_disassembly(ctx:list[str]):
   lib = (compiler:=Device[prg.device].compiler).compile(prg.src)
   with redirect_stdout(buf:=io.StringIO()): compiler.disassemble(lib)
   disasm_str = buf.getvalue()
+  if prg.device.startswith("AMD") and getenv("SQTT"):
+    from tinygrad.viz.sqtt_pkt_decoder import decode_sqtt_packets
+    for e in decode_sqtt_packets(profile):
+      yield e
+    return
   from tinygrad.runtime.ops_llvm import llvm, LLVMCompiler
   if isinstance(compiler, LLVMCompiler):
     mtriple = ctypes.string_at(llvm.LLVMGetTargetMachineTriple(tm:=compiler.target_machine)).decode()
@@ -239,7 +244,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path.endswith(".css"): content_type = "text/css"
       except FileNotFoundError: status_code = 404
     elif (query:=parse_qs(url.query)):
-      if url.path == "/disasm": ret, content_type = get_disassembly(**query), "application/json"
+      if url.path == "/disasm":
+        if isinstance((ret:=get_disassembly(**query)), types.GeneratorType): return self.stream_json(ret)
+        content_type = "application/json"
       else: return self.stream_json(get_details(contexts[1][int(query["ctx"][0])][int(query["idx"][0])]))
     elif url.path == "/ctxs": ret, content_type = json.dumps(ctxs).encode(), "application/json"
     elif url.path == "/get_profile" and profile_ret is not None: ret, content_type = profile_ret, "application/json"
