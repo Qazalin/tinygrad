@@ -1,4 +1,4 @@
-import ctypes, enum, contextlib, io
+import ctypes, enum, contextlib, io, multiprocessing
 from typing import Generator
 from tinygrad.helpers import init_c_struct_t, fetch, unwrap
 from tinygrad.runtime.ops_amd import ProfileSQTTEvent
@@ -84,7 +84,7 @@ def disasm_prg(p:ProfileProgramEvent) -> Generator[tuple[int, str, int], None, N
     #print(f"{i:2d} {p.base+offset:012X}", code)
     yield unwrap(p.base)+offset, code.strip(), 4*len(words)
 
-def decode_sqtt_packets(profile:list[ProfileEvent]):
+def worker(profile:list[ProfileEvent]):
   sqtt_events:list[ProfileSQTTEvent] = []
   prgs:dict[int, ProfileProgramEvent] = {}
   inst:dict[int, tuple[str, int]] = {}
@@ -101,3 +101,13 @@ def decode_sqtt_packets(profile:list[ProfileEvent]):
   decoder_path = fetch("https://github.com/ROCm/rocprof-trace-decoder/raw/5420409ad0963b2d76450add067b9058493ccbd0/releases/linux_glibc_2_28_x86_64/librocprof-trace-decoder.so")
   decoder = ctypes.CDLL(str(decoder_path))
   decoder.rocprof_trace_decoder_parse_data(copy_cb, trace_cb, isa_cb, ctypes.pointer(trace_data))
+
+def decode_sqtt_packets(profile:list[ProfileEvent]):
+  p = multiprocessing.Process(target=worker, args=(profile,))
+  p.start()
+  try:
+    p.join()
+  except KeyboardInterrupt:
+    print("decoder is shutting down...")
+    p.terminate()
+    p.join()

@@ -24,6 +24,7 @@ WAIT_REG_MEM_FUNCTION_GEQ = 5 # >=
 REMU_PATHS = ["extra/remu/target/release/libremu.so", "libremu.so", "/usr/local/lib/libremu.so",
               "extra/remu/target/release/libremu.dylib", "libremu.dylib", "/usr/local/lib/libremu.dylib", "/opt/homebrew/lib/libremu.dylib"]
 def _try_dlopen_remu():
+  return
   for path in REMU_PATHS:
     try:
       remu = ctypes.CDLL(path)
