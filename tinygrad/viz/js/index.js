@@ -420,7 +420,12 @@ hljs.registerLanguage("cpp", (hljs) => ({
 }));
 
 var ret = [];
-var cache = {};
+const cache = {};
+function getCacheKey(url) {
+  const u = new URL(url);
+  return u.pathname + u.search;
+}
+
 var ctxs = null;
 const evtSources = [];
 // VIZ displays graph rewrites in 3 levels, from bottom-up:
@@ -494,8 +499,7 @@ async function main() {
   // close any pending event sources
   let activeSrc = null;
   for (const e of evtSources) {
-    const url = new URL(e.url);
-    if (url.pathname+url.search !== ckey) e.close();
+    if (getCacheKey(e.url) !== ckey) e.close();
     else if (e.readyState === EventSource.OPEN) activeSrc = e;
   }
   if (ctx.name === "Profiler") return renderProfiler();
@@ -552,21 +556,22 @@ async function main() {
   // ** UOp view (default)
   // if we don't have a complete cache yet we start streaming rewrites in this step
   if (!(ckey in cache) || (cache[ckey].length !== step.match_count+1 && activeSrc == null)) {
-    ret = [];
-    cache[ckey] = ret;
+    cache[ckey] = [];
     const eventSource = new EventSource(ckey);
     evtSources.push(eventSource);
     eventSource.onmessage = (e) => {
-      if (e.data === "END") return eventSource.close();
+      if (e.data === "END") return e.currentTarget.close();
       const chunk = JSON.parse(e.data);
-      ret.push(chunk);
+      const dest = cache[getCacheKey(e.currentTarget.url)];
+      dest.push(chunk);
       // if it's the first one render this new rgaph
-      if (ret.length === 1) return main();
+      if (dest.length === 1) return main();
       // otherwise just enable the graph selector
-      const ul = document.getElementById(`rewrite-${ret.length-1}`);
+      const ul = document.getElementById(`rewrite-${dest.length-1}`);
       if (ul != null) ul.classList.remove("disabled");
     };
   }
+  ret = cache[ckey];
   if (ret.length === 0) return;
   renderDag(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes || [], recenter=currentRewrite === 0);
   // ** right sidebar code blocks
