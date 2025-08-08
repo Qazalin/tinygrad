@@ -1,90 +1,104 @@
-import ctypes, enum, contextlib, io, multiprocessing
+import ctypes, enum, contextlib, io, threading, queue, json
 from typing import Generator
 from tinygrad.helpers import init_c_struct_t, fetch, unwrap
 from tinygrad.runtime.ops_amd import ProfileSQTTEvent
 from tinygrad.device import ProfileProgramEvent, ProfileEvent, Device
 
-TraceData = init_c_struct_t((("data", ctypes.POINTER(ctypes.c_uint8)), ("size", ctypes.c_uint64), ("programs", ctypes.py_object),
-                             ("instructions", ctypes.py_object)))
+# ** base structs
+
+TraceData = init_c_struct_t((
+  # raw sqtt input bufs
+  ("buf_ptr", ctypes.POINTER(ctypes.c_uint8)), ("sz", ctypes.c_uint64),
+  # internal PC address table
+  ("programs", ctypes.py_object), ("instructions", ctypes.py_object),
+  # output queue
+  ("sink", ctypes.py_object), ("stop", ctypes.py_object),
+))
+
+class RecordType(enum.IntEnum): GFXIP = 0; OCCUPANCY = 1; WAVE = 3; INFO = 4
+PC = init_c_struct_t((("addr", ctypes.c_size_t), ("marker_id", ctypes.c_size_t)))
+Inst = init_c_struct_t((("category", ctypes.c_uint32, 8), ("stall", ctypes.c_uint32, 24), ("duration", ctypes.c_int32), ("time", ctypes.c_int64),
+                        ("pc", PC)))
+Wave = init_c_struct_t((
+  ("cu", ctypes.c_uint8), ("simd", ctypes.c_uint8), ("wave_id", ctypes.c_uint8), ("contexts", ctypes.c_uint8),
+  ("_rsvd1", ctypes.c_uint32), ("_rsvd2", ctypes.c_uint32), ("_rsvd3", ctypes.c_uint32),
+  ("begin_time", ctypes.c_int64), ("end_time", ctypes.c_int64),
+  ("timeline_size", ctypes.c_size_t), ("instructions_size", ctypes.c_size_t),
+  ("timeline_array", ctypes.c_void_p), ("instructions_array", ctypes.POINTER(Inst))
+))
+
+TRACE_DECODER_STATUS_SUCCESS = 0
+TRACE_DECODER_STATUS_ERROR_OUT_OF_RESOURCES = 2
+
+SENTINEL = {"type":"__end__"}
+
+# ** disassembly helper, this should probably use LLVM
+
+def is_word(s:str) -> bool:
+  try: return int(s, 16) <= 0xFFFFFFFF
+  except ValueError: return False
+
+def disasm_prg(p:ProfileProgramEvent):
+  with contextlib.redirect_stdout(buf:=io.StringIO()): Device[p.device].compiler.disassemble(unwrap(p.lib))
+  for line in buf.getvalue().splitlines()[6:]:
+    if not (line:=line.strip()): continue
+    code, rest = line.split("//"); pc, opcode = rest.split(":", 1)
+    words = [w for w in opcode.strip().split(" ") if is_word(w)]
+    pc_offset = int(pc.strip(), 16)
+    yield unwrap(p.base)+pc_offset, code.strip(), 4*len(words)
+
+# ** decoder callbacks
 
 @ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.POINTER(ctypes.POINTER(ctypes.c_uint8)), ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(TraceData))
 def copy_cb(buf, buf_size, data_ptr):
   data = data_ptr.contents
-  chunk = data.size #min(data.size, CHUNK_SIZE)
-  buf[0] = data.data
-  buf_size[0] = ret = data.size
-  data.data = ctypes.cast(ctypes.addressof(data.data.contents)+chunk, ctypes.POINTER(ctypes.c_uint8))
-  data.size -= chunk
-  return ret
+  buf[0] = data.buf_ptr
+  buf_size[0] = copied_sz = data.sz
+  data.data = ctypes.cast(ctypes.addressof(data.buf_ptr.contents), ctypes.POINTER(ctypes.c_uint8))
+  data.sz = 0
+  return copied_sz
 
-class RecordType(enum.IntEnum): GFXIP = 0; OCCUPANCY = 1; WAVE = 3; INFO = 4 # noqa: E702
-
-PC = init_c_struct_t((("addr", ctypes.c_size_t), ("marker_id", ctypes.c_size_t)))
-
-Inst = init_c_struct_t((("category", ctypes.c_uint32, 8), ("stall", ctypes.c_uint32, 24), ("duration", ctypes.c_int32), ("time", ctypes.c_int64),
-                        ("pc", PC)))
-
-Wave = init_c_struct_t((("cu", ctypes.c_uint8), ("simd", ctypes.c_uint8), ("wave_id", ctypes.c_uint8), ("contexts", ctypes.c_uint8),
-                        ("_rsvd1", ctypes.c_uint32), ("_rsvd2", ctypes.c_uint32), ("_rsvd3", ctypes.c_uint32), ("begin_time", ctypes.c_int64),
-                        ("end_time", ctypes.c_int64), ("timeline_size", ctypes.c_size_t), ("instructions_size", ctypes.c_size_t),
-                        ("timeline_array", ctypes.c_void_p), ("instructions_array", ctypes.POINTER(Inst))))
-
-TRACE_DECODER_STATUS_SUCCESS = 0
-TRACE_DECODER_STATUS_ERROR_OUT_OF_RESOURCES = 2
-TRACE_DECODER_STATUS_ERROR_INVALID_ARGUMENT = 3
-
-@ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(TraceData))
-def trace_cb(record_type, events_ptr, n, data_ptr):
-  global ii
-  data = data_ptr.contents
-  if record_type == RecordType.WAVE:
-    for i in range(n):
-      wave = ctypes.cast(events_ptr, ctypes.POINTER(Wave))[i]
-      for j in range(wave.instructions_size):
-        instr = wave.instructions_array[j]
-        code, _ = data.instructions[instr.pc.addr]
-        if (p:=data.programs.get(instr.pc.addr)) is not None: print(p.name)
-        print(f"{j:{len(str(wave.instructions_size))}d} PC=0x{instr.pc.addr:012x} {code:<50} duration={instr.duration}, stall={instr.stall}")
-  return TRACE_DECODER_STATUS_SUCCESS
-
-# TODO: use llvm for ISA parsing....
-
-@ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(ctypes.c_char), ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64), PC,
-                  ctypes.POINTER(TraceData))
+@ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(ctypes.c_char), ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64), PC, ctypes.POINTER(TraceData))
 def isa_cb(instr_ptr, mem_size_ptr, size_ptr, pc, data_ptr):
   instructions = data_ptr.contents.instructions
   code, size = instructions[pc.addr]
-  # what's this?
-  cc = code
-  if "delay" in code: cc = code.split(" ")[0]
+  # HACKS: delay instructions don't have any clks?
+  cc = code.split(" ")[0] if "delay" in code else code
   if "s_endpgm" in code: size = 0
   code_bytes = cc.encode("utf-8")
-  if len(code_bytes)+1>size_ptr[0]:
-    return TRACE_DECODER_STATUS_ERROR_OUT_OF_RESOURCES
+  if len(code_bytes)+1 > size_ptr[0]: return TRACE_DECODER_STATUS_ERROR_OUT_OF_RESOURCES
   ctypes.memmove(instr_ptr, code_bytes, len(code_bytes))
   instr_ptr[len(code_bytes)] = 0
   size_ptr[0] = len(code_bytes)+1
   mem_size_ptr[0] = size
   return TRACE_DECODER_STATUS_SUCCESS
 
-def is_word(s:str) -> bool:
-  try: return int(s, 16) <= 0xFFFFFFFF
-  except ValueError: return False
+def push(rec:dict, sink) -> None:
+  try: sink.put(rec, timeout=0.5)
+  except queue.Full: pass
 
-def disasm_prg(p:ProfileProgramEvent) -> Generator[tuple[int, str, int], None, None]:
-  with contextlib.redirect_stdout(buf:=io.StringIO()): Device[p.device].compiler.disassemble(unwrap(p.lib))
-  i = 0
-  for line in buf.getvalue().splitlines()[6:]:
-    if not (line:=line.strip()): continue
-    i += 1
-    code, rest = line.split("//")
-    pc, opcode = rest.split(":", 1)
-    words = [w for w in opcode.strip().split(" ") if is_word(w)]
-    offset = int(pc.strip(), 16)
-    #print(f"{i:2d} {p.base+offset:012X}", code)
-    yield unwrap(p.base)+offset, code.strip(), 4*len(words)
+@ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(TraceData))
+def trace_cb(record_type, events_ptr, n, data_ptr):
+  data = data_ptr.contents
+  if record_type != RecordType.WAVE: return TRACE_DECODER_STATUS_SUCCESS
+  for i in range(n):
+    if data.stop.is_set(): break
+    wave = ctypes.cast(events_ptr, ctypes.POINTER(Wave))[i]
+    push({"type":"wave_begin","cu":wave.cu,"simd":wave.simd,"wave_id":wave.wave_id,"begin_time":wave.begin_time,"end_time":wave.end_time}, data.sink)
+    for j in range(wave.instructions_size):
+      if data.stop.is_set(): break
+      instr = wave.instructions_array[j]
+      code, _ = data.instructions.get(instr.pc.addr, ("<unknown>", 0))
+      if (p:=data.programs.get(instr.pc.addr)) is not None: push({"type":"prg", "prg":p.name}, data.sink)
+      push({"type":"inst","idx":j,"pc":f"0x{instr.pc.addr:012x}","code":code,"duration":instr.duration,"stall":instr.stall, "time":instr.time,
+            "cu":wave.cu, "simd":wave.simd, "wave_id":wave.wave_id}, data.sink)
+    push({"type":"wave_end","wave_id":wave.wave_id}, data.sink)
+  return TRACE_DECODER_STATUS_SUCCESS
 
-def worker(profile:list[ProfileEvent]):
+# ** main decoder loop
+
+def _worker(profile:list[ProfileEvent], q:queue.Queue, stop:threading.Event):
+  # gather events from the profile trace
   sqtt_events:list[ProfileSQTTEvent] = []
   prgs:dict[int, ProfileProgramEvent] = {}
   inst:dict[int, tuple[str, int]] = {}
@@ -93,21 +107,28 @@ def worker(profile:list[ProfileEvent]):
     if isinstance(e, ProfileProgramEvent) and e.device.startswith("AMD"):
       prgs[unwrap(e.base)] = e
       for pc,code,sz in disasm_prg(e): inst[pc] = (code, sz)
-
-  sqtt_blobs = b"".join([s.blob for s in sqtt_events])
-  trace_data = TraceData(ctypes.cast(ctypes.create_string_buffer(sqtt_blobs), ctypes.POINTER(ctypes.c_uint8)), len(sqtt_blobs), prgs, inst)
-
-  # this seems to be a standalone blob, doesn't ship with any of the AMD software
-  decoder_path = fetch("https://github.com/ROCm/rocprof-trace-decoder/raw/5420409ad0963b2d76450add067b9058493ccbd0/releases/linux_glibc_2_28_x86_64/librocprof-trace-decoder.so")
-  decoder = ctypes.CDLL(str(decoder_path))
-  decoder.rocprof_trace_decoder_parse_data(copy_cb, trace_cb, isa_cb, ctypes.pointer(trace_data))
-
-def decode_sqtt_packets(profile:list[ProfileEvent]):
-  p = multiprocessing.Process(target=worker, args=(profile,))
-  p.start()
+  # pass to decoder, this doesn't ship with any of the AMD stuff. It is a standalone blob, no rocm install required.
+  sqtt_buf = ctypes.create_string_buffer(b"".join([s.blob for s in sqtt_events]))
+  td = TraceData(ctypes.cast(sqtt_buf, ctypes.POINTER(ctypes.c_uint8)), len(sqtt_buf), prgs, inst, q, stop)
+  decoder = ctypes.CDLL(str(fetch("https://github.com/ROCm/rocprof-trace-decoder/raw/5420409ad0963b2d76450add067b9058493ccbd0/releases/linux_glibc_2_28_x86_64/librocprof-trace-decoder.so")))
   try:
-    p.join()
-  except KeyboardInterrupt:
-    print("decoder is shutting down...")
-    p.terminate()
-    p.join()
+    decoder.rocprof_trace_decoder_parse_data(copy_cb, trace_cb, isa_cb, ctypes.pointer(td))
+  finally:
+    try: q.put(SENTINEL, timeout=0.1)
+    except Exception: pass
+
+def decode_sqtt_packets(profile:list[ProfileEvent]) -> Generator[dict, None, None]:
+  # put it in a daemon thread to propagate ctrl+c from Python to C
+  q = queue.Queue(maxsize=1024)
+  stop = threading.Event()
+  t = threading.Thread(target=_worker, args=(profile, q, stop), daemon=True)
+  t.start()
+  try:
+    while True:
+      item = q.get()
+      if item == SENTINEL: break
+      yield item
+  except GeneratorExit: stop.set()
+  finally:
+    stop.set()
+    t.join(timeout=1)
