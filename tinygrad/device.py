@@ -333,6 +333,9 @@ if PROFILE:
     for dev in devs: dev._at_profile_finalize()
 
     with open(fn:=temp("profile.pkl", append_user=True), "wb") as f: pickle.dump(cpu_events+Compiled.profile_events+Buffer.profile_events, f)
+    if getenv("SQTT"):
+      from tinygrad.viz.sqtt_pkt_decoder import decode_sqtt_packets
+      decode_sqtt_packets(Compiled.profile_events)
 
     if not getenv("SQTT", 0):
       from tinygrad.uop.ops import launch_viz
