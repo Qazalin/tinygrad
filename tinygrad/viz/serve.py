@@ -215,22 +215,50 @@ def get_llvm_mca(asm:str, mtriple:str, mcpu:str) -> dict:
   for i,usage in instr_usage.items(): rows[i].append([[k, v, (v/max_usage)*100] for k,v in usage.items()])
   return {"rows":rows, "cols":["Opcode", "Latency", {"title":"HW Resources", "labels":resource_labels}], "summary":summary}
 
+def get_sqtt(name:str, profile):
+  from tinygrad.viz.sqtt_pkt_decoder import decode_sqtt_packets
+  def find_program(name:str, profile) -> Generator[dict, None, None]:
+    i = 0
+    found = None
+    for pkt in decode_sqtt_packets(profile):
+      if pkt["type"] == "prg" and pkt["prg"]["name"] == name: found = pkt["prg"]
+      if not found or pkt["type"] != "inst": continue
+      if i > pkt["idx"]:
+        rem = found["asm"][i:pkt["idx"]]
+        for r in rem: yield {"code":r, "duration":0, "stall":0}
+      yield pkt
+      i += 1
+
+  max_clks = 0
+  instruction_timing = []
+  for e in find_program(name, profile):
+    total_clk = e["duration"]
+    if total_clk > max_clks: max_clks = total_clk
+    instruction_timing.append(e)
+
+  rows = []
+  for e in instruction_timing:
+    total_clk = e["duration"]
+    scale = total_clk/max_clks
+    stall = e["stall"]
+    stall_pct = ((stall/total_clk)*100)*scale
+    hidden_pct = (100*scale)-stall_pct
+    rows.append([e["code"], [[0, stall, stall_pct], [1, total_clk-stall, hidden_pct]]])
+  return {"rows":rows, "cols":["Opcode", {"title":"Latency", "labels":["Stall", "Hidden"]}], "summary":[]}
+
 def get_disassembly(ctx:list[str]):
   if not isinstance(prg:=contexts[0][int(ctx[0])].ret, ProgramSpec): return
   lib = (compiler:=Device[prg.device].compiler).compile(prg.src)
   with redirect_stdout(buf:=io.StringIO()): compiler.disassemble(lib)
   disasm_str = buf.getvalue()
-  if prg.device.startswith("AMD") and getenv("SQTT"):
-    from tinygrad.viz.sqtt_pkt_decoder import decode_sqtt_packets
-    for e in decode_sqtt_packets(profile):
-      yield e
-    return
-  from tinygrad.runtime.ops_llvm import llvm, LLVMCompiler
-  if isinstance(compiler, LLVMCompiler):
-    mtriple = ctypes.string_at(llvm.LLVMGetTargetMachineTriple(tm:=compiler.target_machine)).decode()
-    mcpu = ctypes.string_at(llvm.LLVMGetTargetMachineCPU(tm)).decode()
-    ret = get_llvm_mca(disasm_str, mtriple, mcpu)
-  else: ret = {"src":disasm_str}
+  if prg.device.startswith("AMD") and getenv("SQTT"): ret = get_sqtt(prg.function_name, profile)
+  else:
+    from tinygrad.runtime.ops_llvm import llvm, LLVMCompiler
+    if isinstance(compiler, LLVMCompiler):
+      mtriple = ctypes.string_at(llvm.LLVMGetTargetMachineTriple(tm:=compiler.target_machine)).decode()
+      mcpu = ctypes.string_at(llvm.LLVMGetTargetMachineCPU(tm)).decode()
+      ret = get_llvm_mca(disasm_str, mtriple, mcpu)
+    else: ret = {"src":disasm_str}
   return json.dumps(ret).encode()
 
 # ** HTTP server

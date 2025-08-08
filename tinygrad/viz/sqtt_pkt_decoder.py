@@ -89,7 +89,7 @@ def trace_cb(record_type, events_ptr, n, data_ptr):
       if data.stop.is_set(): break
       instr = wave.instructions_array[j]
       code, _ = data.instructions.get(instr.pc.addr, ("<unknown>", 0))
-      if (p:=data.programs.get(instr.pc.addr)) is not None: push({"type":"prg", "prg":p.name}, data.sink)
+      if (p:=data.programs.get(instr.pc.addr)) is not None: push({"type":"prg", "prg":p}, data.sink)
       push({"type":"inst","idx":j,"pc":f"0x{instr.pc.addr:012x}","code":code,"duration":instr.duration,"stall":instr.stall, "time":instr.time,
             "cu":wave.cu, "simd":wave.simd, "wave_id":wave.wave_id}, data.sink)
     push({"type":"wave_end","wave_id":wave.wave_id}, data.sink)
@@ -105,8 +105,11 @@ def _worker(profile:list[ProfileEvent], q:queue.Queue, stop:threading.Event):
   for e in profile:
     if isinstance(e, ProfileSQTTEvent): sqtt_events.append(e)
     if isinstance(e, ProfileProgramEvent) and e.device.startswith("AMD"):
-      prgs[unwrap(e.base)] = e
-      for pc,code,sz in disasm_prg(e): inst[pc] = (code, sz)
+      asm:list[str] = []
+      for pc,code,sz in disasm_prg(e):
+        inst[pc] = (code, sz)
+        asm.append(code)
+      prgs[unwrap(e.base)] = {"name":e.name, "asm":asm}
   # pass to decoder, this doesn't ship with any of the AMD stuff. It is a standalone blob, no rocm install required.
   sqtt_buf = ctypes.create_string_buffer(b"".join([s.blob for s in sqtt_events]))
   td = TraceData(ctypes.cast(sqtt_buf, ctypes.POINTER(ctypes.c_uint8)), len(sqtt_buf), prgs, inst, q, stop)
