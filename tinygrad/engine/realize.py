@@ -52,10 +52,9 @@ extern "C" __attribute__((global)) void test(float* data0, float* data1) {
   asm volatile("s_nop 0x16");
 }
   """
-  global_size = [32*4, 1, 1]
-  local_size = [32*32, 1, 1]
+  global_size = [1, 1, 1]
+  local_size = [1, 1, 1]
   ret = ProgramSpec("test", src, renderer.device, ast, None, global_size=global_size, local_size=local_size)
-  print(src)
   return ret
 
 # **************** Runners ****************

@@ -9,7 +9,7 @@ TraceData = init_c_struct_t((
   # raw sqtt input buffer
   ("buf_ptr", ctypes.POINTER(ctypes.c_uint8)), ("sz", ctypes.c_uint64),
   # internal PC address table
-  #("programs", ctypes.py_object), ("instructions", ctypes.py_object),
+  ("programs", ctypes.py_object),
 ))
 
 class RecordType(enum.IntEnum): GFXIP = 0; OCCUPANCY = 1; WAVE = 3; INFO = 4 # noqa: E702
@@ -44,6 +44,11 @@ Occupancy = init_c_struct_t((
 
 class DecoderStatus(enum.IntEnum): SUCCESS = 0; OUT_OF_RESOURCES = 2; INVALID_ARG = 3 # noqa: E702
 
+
+def kill():
+  import os, signal
+  os.kill(os.getpid(), signal.SIGTERM)
+
 # ** callbacks
 
 @ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.POINTER(ctypes.POINTER(ctypes.c_uint8)), ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(TraceData))
@@ -70,8 +75,6 @@ def decode_occupancy(events:ctypes.POINTER(Occupancy), n:int, data:TraceData):
   print("compute_units: ", compute_units)
   print("simds: ", simds)
   print("slots: ", slots)
-  import os, signal
-  os.kill(os.getpid(), signal.SIGTERM)
 
 @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(TraceData))
 def trace_cb(record_type, events_ptr, n, data_ptr):
@@ -84,6 +87,9 @@ def trace_cb(record_type, events_ptr, n, data_ptr):
                   ctypes.POINTER(TraceData))
 def isa_cb(instr_ptr, mem_size_ptr, size_ptr, pc, data_ptr):
   if DEBUG >= 2: print(f"[isa_cb] {pc.addr} {pc.marker_id}")
+  data = data_ptr.contents
+  print(data.programs.keys())
+  print(data.programs[pc.addr])
   return DecoderStatus.SUCCESS
 
 # ** main loop
@@ -98,7 +104,7 @@ def worker(profile:list[ProfileEvent]):
 
   # pass to the "decoder", this doesn't ship with any of the AMD stuff. It is a standalone blob, no rocm install required.
   sqtt_blobs = b"".join([s.blob for s in sqtt_events])
-  trace_data = TraceData(ctypes.cast(ctypes.create_string_buffer(sqtt_blobs), ctypes.POINTER(ctypes.c_uint8)), len(sqtt_blobs))
+  trace_data = TraceData(ctypes.cast(ctypes.create_string_buffer(sqtt_blobs), ctypes.POINTER(ctypes.c_uint8)), len(sqtt_blobs), prog_events)
   decoder_path = fetch("https://github.com/ROCm/rocprof-trace-decoder/raw/5420409ad0963b2d76450add067b9058493ccbd0/releases/linux_glibc_2_28_x86_64/librocprof-trace-decoder.so")
   decoder = ctypes.CDLL(str(decoder_path))
   decoder.rocprof_trace_decoder_parse_data(copy_cb, trace_cb, isa_cb, ctypes.pointer(trace_data))
