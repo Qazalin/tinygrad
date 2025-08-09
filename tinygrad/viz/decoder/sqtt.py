@@ -57,18 +57,21 @@ def copy_cb(buf, buf_size, data_ptr):
   return copied_sz
 
 def decode_occupancy(events:ctypes.POINTER(Occupancy), n:int, data:TraceData):
-  print(f"Parsing {n//2} wavefronts")
+  print(f"Recieved {n} occupancy events")
   compute_units = set()
   simds = set()
   slots = set()
   for i in range(n):
     e = events[i]
+    print(f"pc_base={e.pc.addr:0X} {'wave_start' if e.start else 'wave_end  '} clk={e.time} cu={e.cu} simd={e.simd} slot={e.slot}")
     compute_units.add(e.cu)
     simds.add(e.simd)
     slots.add((e.simd, e.slot))
-  print(compute_units)
-  print(simds)
-  print(slots)
+  print("compute_units: ", compute_units)
+  print("simds: ", simds)
+  print("slots: ", slots)
+  import os, signal
+  os.kill(os.getpid(), signal.SIGTERM)
 
 @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(TraceData))
 def trace_cb(record_type, events_ptr, n, data_ptr):
@@ -81,7 +84,6 @@ def trace_cb(record_type, events_ptr, n, data_ptr):
                   ctypes.POINTER(TraceData))
 def isa_cb(instr_ptr, mem_size_ptr, size_ptr, pc, data_ptr):
   if DEBUG >= 2: print(f"[isa_cb] {pc.addr} {pc.marker_id}")
-  raise KeyboardInterrupt
   return DecoderStatus.SUCCESS
 
 # ** main loop

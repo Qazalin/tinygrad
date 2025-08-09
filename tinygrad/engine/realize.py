@@ -43,9 +43,20 @@ def get_program(ast:UOp, renderer:Renderer|None=None, opts:list[Opt]|None=None) 
   # print and render
   if DEBUG >= 6: print_uops(uops)
   src = renderer.render(uops)
-
-  return ProgramSpec(uops[-1].arg.name if uops[-1].arg is not None else "test", src, renderer.device, ast, uops,
-                     global_size=[1,1,1] if renderer.has_local else None, local_size=[1,1,1] if renderer.has_local else None)
+  src = """
+typedef long unsigned int size_t;
+extern "C" __attribute__((device, const)) size_t __ockl_get_local_id(unsigned int);
+extern "C" __attribute__((device, const)) size_t __ockl_get_group_id(unsigned int);
+extern "C" __attribute__((device, const)) size_t __ockl_get_local_size(unsigned int);
+extern "C" __attribute__((global)) void test(float* data0, float* data1) {
+  asm volatile("s_nop 0x16");
+}
+  """
+  global_size = [32*4, 1, 1]
+  local_size = [32*32, 1, 1]
+  ret = ProgramSpec("test", src, renderer.device, ast, None, global_size=global_size, local_size=local_size)
+  print(src)
+  return ret
 
 # **************** Runners ****************
 
@@ -67,7 +78,7 @@ class CompiledRunner(Runner):
     else:
       with cpu_profile(TracingKey(f"compile {p.name}", (p.function_name,), cat="compiler"), "TINY"):
         self.lib = Device[p.device].compiler.compile_cached(p.src)
-    if DEBUG >= 7: Device[p.device].compiler.disassemble(self.lib)
+    Device[p.device].compiler.disassemble(self.lib)
     self._prg = Device[p.device].runtime(p.function_name, self.lib) if prg is None else prg
     super().__init__(p.name, p.device, p.estimates)
 
@@ -81,6 +92,7 @@ class CompiledRunner(Runner):
       local_size = optimize_local_size(self._prg, global_size, rawbufs)
       global_size = [g//l if g%l == 0 else g/l for g,l in zip(global_size, local_size)]
       self.p = replace(self.p, global_size=global_size, local_size=local_size)
+    print(f"launching with global_size={global_size}, local_size={local_size}")
     lra = {}
     if global_size:
       lra['global_size'] = tuple(global_size)
@@ -102,7 +114,7 @@ class BufferCopy(Runner):
     super().__init__(colored(name, "yellow"), dest_device, Estimates(lds=total_sz, mem=total_sz))
   def copy(self, dest, src):
     disk_supports_fast_copyout = src.device.startswith("DISK") and hasattr(src.allocator.dev, 'io_uring') and \
-      getattr(src.allocator.dev, 'fd', None) is not None and dest.allocator.supports_copy_from_disk
+      getattr(src.allocator.dev, 'fd', None) is not None
     if src.device.startswith("DISK") and hasattr(dest.allocator, 'copy_from_disk') and disk_supports_fast_copyout and src.nbytes >= 4096:
       dest.allocator.copy_from_disk(dest._buf, src._buf, src.nbytes)
     elif src.device.startswith("DISK") and hasattr(dest.allocator, '_as_buffer'):
