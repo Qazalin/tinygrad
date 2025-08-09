@@ -62,6 +62,9 @@ class ProfilePointEvent(ProfileEvent): device:str; name:str; st:decimal.Decimal;
 class ProfileProgramEvent(ProfileEvent): device:str; name:str; lib:bytes|None; base:int|None # noqa: E702
 
 @dataclass(frozen=True)
+class ProfileSQTTEvent(ProfileEvent): device:str; se:int; blob:bytes; itrace:bool # noqa: E702
+
+@dataclass(frozen=True)
 class ProfileGraphEntry: device:str; name:str; st_id:int; en_id:int; is_copy:bool # noqa: E702
 
 @dataclass(frozen=True)

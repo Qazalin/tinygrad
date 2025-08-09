@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from tinygrad.runtime.support.hcq import HCQCompiled, HCQAllocator, HCQBuffer, HWQueue, CLikeArgsState, HCQSignal, HCQProgram, FileIOInterface
 from tinygrad.runtime.support.hcq import MMIOInterface
 from tinygrad.uop.ops import sint
-from tinygrad.device import Compiled, DMAFdRef, BufferSpec
+from tinygrad.device import Compiled, DMAFdRef, BufferSpec, ProfileSQTTEvent
 from tinygrad.helpers import getenv, to_mv, round_up, data64_le, all_same, flatten, DEBUG, AMD_LLVM, PROFILE, ProfileEvent, suppress_finalizing
 from tinygrad.renderer.cstyle import AMDRenderer
 from tinygrad.renderer.llvmir import AMDLLVMRenderer
@@ -480,9 +480,6 @@ class AMDAllocator(HCQAllocator['AMDDevice']):
     self.dev.iface.free(opaque)
 
   def _map(self, buf:HCQBuffer): return self.dev.iface.map(buf._base if buf._base is not None else buf)
-
-@dataclass(frozen=True)
-class ProfileSQTTEvent(ProfileEvent): device:str; se:int; blob:bytes; itrace:bool # noqa: E702
 
 @dataclass
 class AMDQueueDesc:
