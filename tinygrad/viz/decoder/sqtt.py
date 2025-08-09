@@ -58,7 +58,17 @@ def copy_cb(buf, buf_size, data_ptr):
 
 def decode_occupancy(events:ctypes.POINTER(Occupancy), n:int, data:TraceData):
   print(f"Parsing {n//2} wavefronts")
-  print(events[0].time)
+  compute_units = set()
+  simds = set()
+  slots = set()
+  for i in range(n):
+    e = events[i]
+    compute_units.add(e.cu)
+    simds.add(e.simd)
+    slots.add((e.simd, e.slot))
+  print(compute_units)
+  print(simds)
+  print(slots)
 
 @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(TraceData))
 def trace_cb(record_type, events_ptr, n, data_ptr):
