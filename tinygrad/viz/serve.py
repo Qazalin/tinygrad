@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import multiprocessing, pickle, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, socketserver, functools, codecs, io
+import multiprocessing, pickle, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, socketserver, functools, codecs, io, gzip
 import subprocess, ctypes
 from contextlib import redirect_stdout
 from decimal import Decimal
@@ -233,7 +233,7 @@ def get_disassembly(ctx:list[str]):
 
 class Handler(BaseHTTPRequestHandler):
   def do_GET(self):
-    ret, status_code, content_type = b"", 200, "text/html"
+    ret, status_code, content_type, compress = b"", 200, "text/html", False
 
     if (url:=urlparse(self.path)).path == "/":
       with open(os.path.join(os.path.dirname(__file__), "index.html"), "rb") as f: ret = f.read()
@@ -247,14 +247,21 @@ class Handler(BaseHTTPRequestHandler):
       if url.path == "/disasm": ret, content_type = get_disassembly(**query), "application/json"
       else: return self.stream_json(get_details(contexts[1][int(query["ctx"][0])][int(query["idx"][0])]))
     elif url.path == "/ctxs": ret, content_type = json.dumps(ctxs).encode(), "application/json"
-    elif url.path == "/get_profile" and profile_ret is not None: ret, content_type = profile_ret, "application/json"
+    elif url.path == "/get_profile" and profile_ret is not None: ret, content_type, compress = profile_ret, "application/json", True
     else: status_code = 404
 
     # send response
     self.send_response(status_code)
     self.send_header('Content-Type', content_type)
-    self.send_header('Content-Length', str(len(ret)))
+    if compress:
+      self.send_header('Content-Encoding', 'gzip')
+      self.send_header('Vary', 'Accept-Encoding')
+    else:
+      self.send_header('Content-Length', str(len(ret)))
     self.end_headers()
+    if compress:
+      with gzip.GzipFile(fileobj=self.wfile, mode="wb") as gz:
+        return gz.write(ret)
     return self.wfile.write(ret)
 
   def stream_json(self, source:Generator):
