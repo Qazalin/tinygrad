@@ -236,10 +236,10 @@ async function renderProfiler() {
     ctx.save();
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
     // rescale to match current zoom
-    const xscale = d3.scaleLinear().domain([0, et-st]).range([0, canvas.clientWidth]);
+    const xscale = d3.scaleLinear().domain([0, et-st]).range(xrange=[0, canvas.clientWidth]);
     xscale.domain(xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale));
     const zoomDomain = transform != null ? xscale.domain() : null;
-    drawLine(ctx, xscale.range(), [0, 0]);
+    drawLine(ctx, xrange, [0, 0]);
     const partitions = []; let prev = 0;
     for (const tick of xscale.ticks()) {
       // tick line
@@ -263,13 +263,19 @@ async function renderProfiler() {
         ctx.fillText(formatUnit(tick, data.axes.y.fmt), tickSize+2, y);
       }
     }
+    const config = { visiblePct:10 };
     // draw shapes
     for (const [_, { offsetY, shapes }] of data.tracks) {
       for (const e of shapes) {
         const [start, end] = e.width != null ? [e.x, e.x+e.width] : [e.x[0], e.x[e.x.length-1]];
         if (zoomDomain != null && (start>zoomDomain[1]|| end<zoomDomain[0])) continue;
         if (LOD) {
-          continue;
+          const stx = xscale(start), etx = xscale(end);
+          const partition = partitions.find(p => etx<=p[1]) ?? partitions.at(-1);
+          const pixelWidth = etx-stx;
+          const paritionWidth = partition[1]-partition[0];
+          const pct = (pixelWidth/paritionWidth)*100;
+          if (pct < config.visiblePct) continue;
         }
         ctx.fillStyle = e.fillColor;
         // generic polygon
