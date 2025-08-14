@@ -292,23 +292,32 @@ async function renderProfiler() {
         const currMerge = mergedRects.get(pix);
         const mergeKey = e.y+"|";
         let m = currMerge.get(mergeKey);
-        if (m == null) m = { x0:start, x1:e.width, etx, height:e.height, y:e.y, fillColor:e.fillColor, count:1 };
+        if (m == null) {
+          m = { x:start, width:e.width, etx, height:e.height, y:e.y, fillColor:e.fillColor, count:1 };
+          currMerge.set(mergeKey, m);
+        }
         else {
-          if (stx-m.etx <= config.minMergeGap) {
-            m.x1 = end;
+          const gap = stx-m.etx;
+          if (gap <= config.minMergeGap) {
+            m.width += e.width;
             m.etx = etx;
             m.count++;
           } else {
-            finalShapes.push({ x:m.x0, width:m.x1-m.x0, height:m.height, y:m.y, fillColor:m.fillColor, arg:{tooltipText:`merged ${m.count} events`}});
-            m = { x0:start, x1:e.width, etx, height:e.height, y:e.y, fillColor:e.fillColor, count:1 };
+            if (m.count > 1) m.arg = { tooltipText: `merged ${m.count} events` };
+            finalShapes.push({ ...m });
+            // reset
+            m.x = start;
+            m.width = e.width;
+            m.height = e.height;
+            m.y = e.y;
+            m.fillColor = e.fillColor;
+            m.count = 1;
           }
         }
-        currMerge.set(mergeKey, m);
       }
-
       for (const [k, cmap] of mergedRects) {
         for (const [kk, m] of cmap) {
-          finalShapes.push({ x:m.x0, width:m.x1-m.x0, height:m.height, y:m.y, fillColor:m.fillColor, arg:{tooltipText:`merged ${m.count} events`}});
+          finalShapes.push({ ...m, arg:{tooltipText:`merged ${m.count} events`}});
         }
       }
       for (const e of finalShapes) {
