@@ -319,7 +319,7 @@ async function renderProfiler() {
         const [start, end] = e.width != null ? [e.x, e.x+e.width] : [e.x[0], e.x[e.x.length-1]];
         ctx.fillStyle = e.fillColor;
         // generic polygon
-        if (e.width == null) {
+        if (e.width == null && false) {
           const x = e.x.map(xscale);
           ctx.beginPath();
           ctx.moveTo(x[0], offsetY+e.y0[0]);
