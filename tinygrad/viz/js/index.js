@@ -263,10 +263,11 @@ async function renderProfiler() {
         ctx.fillText(formatUnit(tick, data.axes.y.fmt), tickSize+2, y);
       }
     }
-    const config = { visiblePct:10 };
+    const config = { visiblePct:10, minMergeGap:1 };
     // draw shapes
     for (const [_, { offsetY, shapes }] of data.tracks) {
       const finalShapes = [];
+      const mergedRects = new Map();
       for (const e of shapes) {
         const [start, end] = e.width != null ? [e.x, e.x+e.width] : [e.x[0], e.x[e.x.length-1]];
         if (zoomDomain != null && (start>zoomDomain[1]|| end<zoomDomain[0])) continue;
@@ -275,7 +276,9 @@ async function renderProfiler() {
           continue;
         }
         const stx = xscale(start), etx = xscale(end);
-        const partition = partitions.find(p => etx<=p[1]) ?? partitions.at(-1);
+        let pix = partitions.findIndex(p => etx<=p[1]);
+        if (pix == -1) pix = partitions.length-1;
+        const partition = partitions[pix];
         const pixelWidth = etx-stx;
         const paritionWidth = partition[1]-partition[0];
         const pct = (pixelWidth/paritionWidth)*100;
@@ -284,7 +287,29 @@ async function renderProfiler() {
           finalShapes.push(e);
           continue;
         }
-        finalShapes.push({ ...e, fillColor:"red", arg:{tooltipText:"maybe hide this?"}});
+        if (!mergedRects.has(pix)) mergedRects.set(pix, new Map());
+        if (e.height == null) continue; // FIXME
+        const currMerge = mergedRects.get(pix);
+        const mergeKey = e.y+"|";
+        let m = currMerge.get(mergeKey);
+        if (m == null) m = { x0:start, x1:e.width, etx, height:e.height, y:e.y, fillColor:e.fillColor, count:1 };
+        else {
+          if (stx-m.etx <= config.minMergeGap) {
+            m.x1 = end;
+            m.etx = etx;
+            m.count++;
+          } else {
+            finalShapes.push({ x:m.x0, width:m.x1-m.x0, height:m.height, y:m.y, fillColor:m.fillColor, arg:{tooltipText:`merged ${m.count} events`}});
+            m = { x0:start, x1:e.width, etx, height:e.height, y:e.y, fillColor:e.fillColor, count:1 };
+          }
+        }
+        currMerge.set(mergeKey, m);
+      }
+
+      for (const [k, cmap] of mergedRects) {
+        for (const [kk, m] of cmap) {
+          finalShapes.push({ x:m.x0, width:m.x1-m.x0, height:m.height, y:m.y, fillColor:m.fillColor, arg:{tooltipText:`merged ${m.count} events`}});
+        }
       }
       for (const e of finalShapes) {
         const [start, end] = e.width != null ? [e.x, e.x+e.width] : [e.x[0], e.x[e.x.length-1]];
