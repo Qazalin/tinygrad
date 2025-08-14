@@ -124,7 +124,6 @@ const cycleColors = (lst, i) => lst[i%lst.length];
 
 const createPolygons = (source, area) => {
   const shapes = [];
-  if (LOD) return [];
   const yscale = d3.scaleLinear().domain([0, source.peak]).range([area, 0]);
   for (const [i,e] of source.shapes.entries()) {
     const x = e.x.map((i,_) => (source.timestamps[i] ?? data.et)-data.st);
@@ -213,7 +212,7 @@ async function renderProfiler() {
       }
       const arg = { tooltipText:formatTime(e.dur)+(e.info != null ? "\n"+e.info : ""), ...ref };
       // offset y by depth
-      if (!LOD) shapes.push({x:e.st-st, y:levelHeight*e.depth, width:e.dur, height:levelHeight, arg, label, fillColor });
+      shapes.push({x:e.st-st, y:levelHeight*e.depth, width:e.dur, height:levelHeight, arg, label, fillColor });
     }
     // position shapes on the canvas and scale to fit fixed area
     let area = mem.shapes.length === 0 ? 0 : areaScale(mem.peak);
@@ -241,10 +240,12 @@ async function renderProfiler() {
     xscale.domain(xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale));
     const zoomDomain = transform != null ? xscale.domain() : null;
     drawLine(ctx, xscale.range(), [0, 0]);
+    const partitions = []; let prev = 0;
     for (const tick of xscale.ticks()) {
       // tick line
       const x = xscale(tick);
       drawLine(ctx, [x, x], [0, tickSize])
+      partitions.push([prev, x]); prev = x;
       // tick label
       ctx.textBaseline = "top";
       ctx.textAlign = "left";
@@ -267,6 +268,9 @@ async function renderProfiler() {
       for (const e of shapes) {
         const [start, end] = e.width != null ? [e.x, e.x+e.width] : [e.x[0], e.x[e.x.length-1]];
         if (zoomDomain != null && (start>zoomDomain[1]|| end<zoomDomain[0])) continue;
+        if (LOD) {
+          continue;
+        }
         ctx.fillStyle = e.fillColor;
         // generic polygon
         if (e.width == null) {
