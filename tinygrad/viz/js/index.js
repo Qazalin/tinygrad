@@ -124,6 +124,7 @@ const cycleColors = (lst, i) => lst[i%lst.length];
 
 const createPolygons = (source, area) => {
   const shapes = [];
+  if (LOD) return [];
   const yscale = d3.scaleLinear().domain([0, source.peak]).range([area, 0]);
   for (const [i,e] of source.shapes.entries()) {
     const x = e.x.map((i,_) => (source.timestamps[i] ?? data.et)-data.st);
@@ -144,6 +145,7 @@ const drawLine = (ctx, x, y) => {
 }
 
 var data, focusedDevice, canvasZoom, zoomLevel = d3.zoomIdentity;
+const LOD = !window.location.search.includes("lod=0");
 async function renderProfiler() {
   displayGraph("profiler");
   d3.select(".metadata").html("");
@@ -209,7 +211,7 @@ async function renderProfiler() {
       }
       const arg = { tooltipText:formatTime(e.dur)+(e.info != null ? "\n"+e.info : ""), ...ref };
       // offset y by depth
-      shapes.push({x:e.st-st, y:levelHeight*e.depth, width:e.dur, height:levelHeight, arg, label, fillColor });
+      if (!LOD) shapes.push({x:e.st-st, y:levelHeight*e.depth, width:e.dur, height:levelHeight, arg, label, fillColor });
     }
     // position shapes on the canvas and scale to fit fixed area
     let area = mem.shapes.length === 0 ? 0 : areaScale(mem.peak);
@@ -503,7 +505,7 @@ async function main() {
         }
       }
     }
-    return setState({ currentCtx:-1 });
+    return setState({ currentCtx:0 });
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
