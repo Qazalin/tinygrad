@@ -237,39 +237,31 @@ async function renderProfiler() {
     ctx.save();
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
     // rescale to match current zoom
-    const totalDuration = et-st;
     const xscale = d3.scaleLinear().domain([0, et-st]).range([0, canvas.clientWidth]);
     xscale.domain(xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale));
     const zoomDomain = transform != null ? xscale.domain() : null;
+    drawLine(ctx, xscale.range(), [0, 0]);
+    for (const tick of xscale.ticks()) {
+      // tick line
+      const x = xscale(tick);
+      drawLine(ctx, [x, x], [0, tickSize])
+      // tick label
+      ctx.textBaseline = "top";
+      ctx.textAlign = "left";
+      ctx.fillText(formatTime(tick, et-st), x+ctx.lineWidth+2, tickSize);
+    }
     let yscale = null;
     if (data.axes.y != null) {
       yscale = d3.scaleLinear().domain(data.axes.y.domain).range(data.axes.y.range);
+      drawLine(ctx, [0, 0], yscale.range());
+      for (const tick of yscale.ticks()) {
+        const y = yscale(tick);
+        drawLine(ctx, [0, tickSize], [y, y]);
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(formatUnit(tick, data.axes.y.fmt), tickSize+2, y);
+      }
     }
-    // divide the screen into time buckets
-    const domain = xscale.domain();
-    let dt = Math.min(clampPow2((domain[1]-domain[0])/canvas.clientWidth), totalDuration);
-    let t0 = Math.floor(domain[0]/dt)*dt, t1 = Math.ceil(domain[1]/dt)*dt;
-    let paritionCount = Math.ceil((t1-t0)/dt);
-    if (paritionCount > 100) {
-      dt *= paritionCount/100;
-      t0 = Math.floor(domain[0] / dt) * dt; t1 = Math.ceil(domain[1] / dt) * dt; paritionCount = Math.ceil((t1 - t0) / dt);
-    }
-    const showPartitionGrid = true;
-    if (showPartitionGrid) {
-      ctx.save();
-      for (let t=t0; t<=t1; t+=dt) drawLine(ctx, [xscale(t), xscale(t)], [0, tickSize*2], { color:"red" });
-      ctx.restore();
-    }
-    /*
-    console.log(timePerPixel);
-    const showBucketGrid = true;
-    if (showBucketGrid) {
-      ctx.save(); ctx.globalAlpha = 0.15; ctx.strokeStyle = "#888";
-      for (let t=bucketT0; t<=bucketT1; t+=dt) drawLine(ctx, [xscale(t), xscale(t)], [0, tickSize]);
-      ctx.restore();
-    }
-    */
-
     // draw shapes
     for (const [_, { offsetY, shapes }] of data.tracks) {
       for (const e of shapes) {
@@ -316,27 +308,6 @@ async function renderProfiler() {
           labelWidth += l.width;
           labelX += l.width;
         }
-      }
-    }
-    // draw axes
-    drawLine(ctx, xscale.range(), [0, 0]);
-    for (const tick of xscale.ticks()) {
-      // tick line
-      const x = xscale(tick);
-      drawLine(ctx, [x, x], [0, tickSize])
-      // tick label
-      ctx.textBaseline = "top";
-      ctx.textAlign = "left";
-      ctx.fillText(formatTime(tick, et-st), x+ctx.lineWidth+2, tickSize);
-    }
-    if (yscale != null) {
-      drawLine(ctx, [0, 0], yscale.range());
-      for (const tick of yscale.ticks()) {
-        const y = yscale(tick);
-        drawLine(ctx, [0, tickSize], [y, y]);
-        ctx.textAlign = "left";
-        ctx.textBaseline = "middle";
-        ctx.fillText(formatUnit(tick, data.axes.y.fmt), tickSize+2, y);
       }
     }
     ctx.restore();
