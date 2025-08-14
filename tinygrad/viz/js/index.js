@@ -136,13 +136,15 @@ const createPolygons = (source, area) => {
   return shapes;
 }
 
-const drawLine = (ctx, x, y) => {
+const drawLine = (ctx, x, y, opts=null) => {
   ctx.beginPath();
   ctx.moveTo(x[0], y[0]);
   ctx.lineTo(x[1], y[1]);
-  ctx.fillStyle = ctx.strokeStyle = "#f0f0f5";
+  ctx.fillStyle = ctx.strokeStyle = opts?.color || "#f0f0f5";
   ctx.stroke();
 }
+
+const clampPow2 = (v, min=1, max=Number.MAX_SAFE_INTEGER) => Math.min(Math.max(1 << Math.round(Math.log2(Math.max(v, 1))), min), max);
 
 var data, focusedDevice, canvasZoom, zoomLevel = d3.zoomIdentity;
 const LOD = !window.location.search.includes("lod=0");
@@ -235,6 +237,7 @@ async function renderProfiler() {
     ctx.save();
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
     // rescale to match current zoom
+    const totalDuration = et-st;
     const xscale = d3.scaleLinear().domain([0, et-st]).range([0, canvas.clientWidth]);
     xscale.domain(xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale));
     const zoomDomain = transform != null ? xscale.domain() : null;
@@ -242,6 +245,31 @@ async function renderProfiler() {
     if (data.axes.y != null) {
       yscale = d3.scaleLinear().domain(data.axes.y.domain).range(data.axes.y.range);
     }
+    // divide the screen into time buckets
+    const domain = xscale.domain();
+    let dt = Math.min(clampPow2((domain[1]-domain[0])/canvas.clientWidth), totalDuration);
+    let t0 = Math.floor(domain[0]/dt)*dt, t1 = Math.ceil(domain[1]/dt)*dt;
+    let paritionCount = Math.ceil((t1-t0)/dt);
+    if (paritionCount > 100) {
+      dt *= paritionCount/100;
+      t0 = Math.floor(domain[0] / dt) * dt; t1 = Math.ceil(domain[1] / dt) * dt; paritionCount = Math.ceil((t1 - t0) / dt);
+    }
+    const showPartitionGrid = true;
+    if (showPartitionGrid) {
+      ctx.save();
+      for (let t=t0; t<=t1; t+=dt) drawLine(ctx, [xscale(t), xscale(t)], [0, tickSize*2], { color:"red" });
+      ctx.restore();
+    }
+    /*
+    console.log(timePerPixel);
+    const showBucketGrid = true;
+    if (showBucketGrid) {
+      ctx.save(); ctx.globalAlpha = 0.15; ctx.strokeStyle = "#888";
+      for (let t=bucketT0; t<=bucketT1; t+=dt) drawLine(ctx, [xscale(t), xscale(t)], [0, tickSize]);
+      ctx.restore();
+    }
+    */
+
     // draw shapes
     for (const [_, { offsetY, shapes }] of data.tracks) {
       for (const e of shapes) {
