@@ -275,9 +275,13 @@ async function renderProfiler() {
           const pixelWidth = etx-stx;
           const paritionWidth = partition[1]-partition[0];
           const pct = (pixelWidth/paritionWidth)*100;
-          if (pct < config.visiblePct) continue;
+          if (pct < config.visiblePct) {
+            e.tempFillColor = "red";
+          } else {
+            e.tempFillColor = null;
+          }
         }
-        ctx.fillStyle = e.fillColor;
+        ctx.fillStyle = e.tempFillColor ?? e.fillColor;
         // generic polygon
         if (e.width == null) {
           const x = e.x.map(xscale);
