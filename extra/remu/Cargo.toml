@@ -13,3 +13,10 @@ num-traits = "0.2.17"
 
 [dev-dependencies]
 float-cmp = "0.9.0"
+
+[profile.release]
+debug = true
+strip = false
+
+[build]
+rustflags = ["-C","force-frame-pointers=yes"]
