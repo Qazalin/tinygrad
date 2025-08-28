@@ -186,11 +186,16 @@ async function renderProfiler() {
   // place devices on the y axis and set vertical positions
   const [tickSize, padding] = [10, 8];
   const deviceList = profiler.append("div").attr("id", "device-list").style("padding-top", tickSize+padding+"px");
-  const canvas = profiler.append("canvas").attr("id", "timeline").node();
+  // the profiler defines two canvas elements, based on behavior on zoom:
+  // 1. Axis canvas: Changes resolution details of the time axis ticks based on zoom.
+  // 2. Path canvas: Re-scales pre compiled Path2D objects using the transformation matrix.
+  const canvasGroup = profiler.append("div").attr("id", "canvas-group");
+  const axisCanvas = canvasGroup.append("canvas").attr("id", "axis-canvas").node();
+  const pathCanvas = canvasGroup.append("canvas").attr("id", "timeline").node();
   // NOTE: scrolling via mouse can only zoom the graph
-  canvas.addEventListener("wheel", e => (e.stopPropagation(), e.preventDefault()), { passive:false });
-  const ctx = canvas.getContext("2d");
-  const canvasTop = rect(canvas).top;
+  canvasGroup.node().addEventListener("wheel", e => (e.stopPropagation(), e.preventDefault()), { passive:false });
+  const canvasTop = rect(canvasGroup.node()).top;
+  const ctx = pathCanvas.getContext("2d");
   // color by key (name/category/device)
   const colorMap = new Map();
   data = {tracks:new Map(), axes:{}};
@@ -290,69 +295,13 @@ async function renderProfiler() {
   updateProgress({ "show":false });
   // draw events on a timeline
   const dpr = window.devicePixelRatio || 1;
-  const ellipsisWidth = ctx.measureText("...").width;
-  const rectLst = [];
-  function render(transform) {
-    zoomLevel = transform;
-    rectLst.length = 0;
+  function renderAxis(transform) {
+    const ctx = axisCanvas.getContext("2d");
     ctx.save();
-    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-    // rescale to match current zoom
-    const xscale = d3.scaleLinear().domain([0, dur]).range([0, canvas.clientWidth]);
-    xscale.domain(xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale));
-    const zoomDomain = transform != null ? xscale.domain() : null;
-    let yscale = null;
-    if (data.axes.y != null) {
-      yscale = d3.scaleLinear().domain(data.axes.y.domain).range(data.axes.y.range);
-    }
-    // draw shapes
-    for (const [_, { offsetY, shapes }] of data.tracks) {
-      for (const e of shapes) {
-        const [start, end] = e.width != null ? [e.x, e.x+e.width] : [e.x[0], e.x[e.x.length-1]];
-        if (zoomDomain != null && (start>zoomDomain[1]|| end<zoomDomain[0])) continue;
-        ctx.fillStyle = e.fillColor;
-        // generic polygon
-        if (e.width == null) {
-          const x = e.x.map(xscale);
-          const p = new Path2D();
-          p.moveTo(x[0], offsetY+e.y0[0]);
-          for (let i=1; i<x.length; i++) p.lineTo(x[i], offsetY+e.y0[i]);
-          for (let i=x.length-1; i>=0; i--) p.lineTo(x[i], offsetY+e.y1[i]);
-          p.closePath();
-          ctx.fill(p);
-          // NOTE: y coordinates are in reverse order
-          for (let i = 0; i < x.length - 1; i++) {
-            let tooltipText = e.arg.tooltipText;
-            if (yscale != null && ((yaxisVal=yscale.invert(offsetY+e.y1[i]))>0)) {
-              tooltipText += `\nTotal: ${formatUnit(yaxisVal, data.axes.y.fmt)}`;
-            }
-            rectLst.push({ x0:x[i], x1:x[i+1], y0:offsetY+e.y1[i], y1:offsetY+e.y0[i], arg:{...e.arg, tooltipText} });
-          }
-          continue;
-        }
-        // contiguous rect
-        const x = xscale(start);
-        const width = xscale(end)-x;
-        ctx.fillRect(x, offsetY+e.y, width, e.height);
-        rectLst.push({ y0:offsetY+e.y, y1:offsetY+e.y+e.height, x0:x, x1:x+width, arg:e.arg });
-        // add label
-        if (e.label == null) continue;
-        ctx.textAlign = "left";
-        ctx.textBaseline = "middle";
-        let [labelX, labelWidth] = [x+2, 0];
-        const labelY = offsetY+e.y+e.height/2;
-        for (const [i,l] of e.label.entries()) {
-          if (labelWidth+l.width+(i===e.label.length-1 ? 0 : ellipsisWidth)+2 > width) {
-            if (labelWidth !== 0) ctx.fillText("...", labelX, labelY);
-            break;
-          }
-          ctx.fillStyle = l.color;
-          ctx.fillText(l.st, labelX, labelY);
-          labelWidth += l.width;
-          labelX += l.width;
-        }
-      }
-    }
+    ctx.clearRect(0, 0, axisCanvas.clientWidth, axisCanvas.clientHeight);
+    // zoom increase resolution of the x axis ticks
+    const xscale = d3.scaleLinear().domain([0, dur]).range([0, axisCanvas.clientWidth]);
+    xscale.domain(xscale.range().map(transform.invertX, transform).map(xscale.invert, xscale));
     // draw axes
     drawLine(ctx, xscale.range(), [0, 0]);
     for (const tick of xscale.ticks()) {
@@ -364,39 +313,49 @@ async function renderProfiler() {
       ctx.textAlign = "left";
       ctx.fillText(formatTime(tick, dur), x+ctx.lineWidth+2, tickSize);
     }
-    if (yscale != null) {
-      drawLine(ctx, [0, 0], yscale.range());
-      for (const tick of yscale.ticks()) {
-        const y = yscale(tick);
-        drawLine(ctx, [0, tickSize], [y, y]);
-        ctx.textAlign = "left";
-        ctx.textBaseline = "middle";
-        ctx.fillText(formatUnit(tick, data.axes.y.fmt), tickSize+2, y);
-      }
-    }
     ctx.restore();
+  }
+
+  const ellipsisWidth = ctx.measureText("...").width;
+  const rectLst = [];
+  function renderPaths(transform) {
+  }
+
+  function render(transform) {
+    renderAxis(transform);
+    renderPaths(transform);
   }
 
   function resize() {
     const profiler = document.querySelector(".profiler");
     // NOTE: use clientWidth to account for the scrollbar
     let [width, height] = [profiler.clientWidth, profiler.scrollHeight];
+    // canvas is on the right side
     width -= rect("#device-list").width+padding;
-    canvas.width = width*dpr;
-    canvas.height = height*dpr;
-    canvas.style.height = `${height}px`;
-    canvas.style.width = `${width}px`;
-    ctx.scale(dpr, dpr);
-    d3.select(canvas).call(canvasZoom.transform, zoomLevel);
+    pathCanvas.width = width*dpr;        axisCanvas.width = width*dpr;
+    pathCanvas.style.width = width+"px"; axisCanvas.style.width = width+"px";
+    // stack axis canvas on top of paths canvas
+    const axisHeight = tickSize+padding;
+    axisCanvas.height = axisHeight;
+    axisCanvas.style.height = axisHeight+"px";
+    height -= axisHeight;
+    pathCanvas.height = height*dpr;
+    pathCanvas.style.height = height;
+    // scale both canvases to the dpr
+    pathCanvas.getContext("2d").scale(dpr, dpr);
+    axisCanvas.getContext("2d").scale(dpr, dpr);
+    // restore existing zoom
+    canvasGroup.call(canvasZoom.transform, zoomLevel);
   }
 
   canvasZoom = d3.zoom().filter(vizZoomFilter).scaleExtent([1, Infinity]).translateExtent([[0,0], [Infinity,0]]).on("zoom", e => render(e.transform));
-  d3.select(canvas).call(canvasZoom);
+  canvasGroup.call(canvasZoom);
   document.addEventListener("contextmenu", e => e.ctrlKey && e.preventDefault());
 
   resize();
   window.addEventListener("resize", resize);
 
+  const canvas = pathCanvas;
   function findRectAtPosition(x, y) {
     const { top, left, width, height } = rect(canvas);
     const X = ((x-left) * (canvas.width/width))/dpr;
@@ -433,7 +392,7 @@ d3.select("#graph-svg").call(svgZoom);
 
 // zoom to fit into view
 document.getElementById("zoom-to-fit-btn").addEventListener("click", () => {
-  const canvas = d3.select("#timeline");
+  const canvas = d3.select("#canvas-group");
   if (!canvas.empty() && rect(canvas.node()).width !== 0) {
     return canvas.call(canvasZoom.transform, d3.zoomIdentity);
   }
