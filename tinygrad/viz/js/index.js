@@ -139,7 +139,7 @@ const formatUnit = (d, unit="") => d3.format(".3~s")(d)+unit;
 
 const colorScheme = {TINY:["#1b5745", "#354f52", "#354f52", "#1d2e62", "#63b0cd"],
   DEFAULT:["#2b2e39", "#2c2f3a", "#31343f", "#323544", "#2d303a", "#2e313c", "#343746", "#353847", "#3c4050", "#404459", "#444862", "#4a4e65"],
-  BUFFER:["#3A57B7","#5066C1","#6277CD","#7488D8","#8A9BE3","#A3B4F2"],
+  BUFFER:["#5a189a","#7b2cbf","#9d4edd","#c77dff","#e0aaff","#48bfe3","#56cfe1","#64dfdf","#5aedc9","#80ffdb", "#ff595e","#ff924c","#ffca3a","#c5ca30","#8ac926","#36949d","#1982c4","#4267ac","#565aa0","#6a4c93"],
   CATEGORICAL:["#ff8080", "#F4A261", "#C8F9D4", "#8D99AE", "#F4A261", "#ffffa2", "#ffffc0", "#87CEEB"],}
 const cycleColors = (lst, i) => lst[i%lst.length];
 
@@ -236,7 +236,7 @@ async function renderProfiler() {
     } else {
       const peak = u64();
       const height = heightScale(peak);
-      const yscale = d3.scaleLinear().domain([0, peak]).range([height, 0]);
+      const yscale = d3.scaleLinear().domain([0, peak]).range([canvas.clientHeight, 0]);
       let x = 0, y = 0;
       const buf_shapes = new Map(), temp = new Map();
       const timestamps = [];
@@ -267,8 +267,9 @@ async function renderProfiler() {
         v.y.push(v.y.at(-1));
       }
       timestamps.push(dur);
+      const xscale = d3.scaleLinear().domain([0, dur]).range([0, canvas.clientWidth]);
       for (const [_, {dtype, sz, nbytes, y, x:steps}] of buf_shapes) {
-        const x = steps.map(s => timestamps[s]);
+        const x = steps.map(s => xscale(timestamps[s]));
         const arg = {tooltipText:`${dtype} len:${formatUnit(sz)}\n${formatUnit(nbytes, "B")}`};
         shapes.push({ x, y0:y.map(yscale), y1:y.map(y0 => yscale(y0+nbytes)), arg, fillColor:cycleColors(colorScheme.BUFFER, shapes.length) });
       }
@@ -292,24 +293,40 @@ async function renderProfiler() {
   const dpr = window.devicePixelRatio || 1;
   const ellipsisWidth = ctx.measureText("...").width;
   function render(transform) {
-    zoomLevel = transform;
-    ctx.save();
-    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    ctx.clearRect(0, 0, W, H);
+    ctx.setTransform(transform.k, 0, 0, 1, transform.x, 0);
     const { shapes, offsetY } = data.tracks.get("NULL Memory");
-    const xscale = d3.scaleLinear().domain([0, dur]).range([0, canvas.clientWidth]);
-    xscale.domain(xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale));
+    // visible window in WORLD units
+    const vx0 = (0 - transform.x) / transform.k;
+    const vx1 = (W - transform.x) / transform.k;
+    const vy0 = 0 - offsetY;          // d=1 below, so y in px; adjust if you scale y
+    const vy1 = H - offsetY;
     for (const e of shapes) {
+      if (e.path == null) {
+        const X = e.x, Y0 = e.y0, Y1 = e.y1, n = X.length;
+        const p = new Path2D();
+        p.moveTo(X[0], Y0[0]);
+        for (let i = 1; i < n; i++) p.lineTo(X[i], Y0[i]);
+        for (let i = n - 1; i >= 0; i--) p.lineTo(X[i], Y1[i]);
+        p.closePath();
+        e.path = p; 
+        let minY=Infinity, maxY=-Infinity;
+        for (let i=0;i<n;i++) {
+          const a=Y0[i], b=Y1[i];
+          if (a<minY) minY=a; if (b<minY) minY=b;
+          if (a>maxY) maxY=a; if (b>maxY) maxY=b;
+        }
+        e.bbox = { minX: X[0], maxX: X[n-1], minY, maxY };
+      }
+      const b = e.bbox;
+      // fast reject (1px pad to avoid pop-in)
+      if (b.maxX < vx0 - 1 || b.minX > vx1 + 1) continue;
+      if (b.maxY < vy0 - 1 || b.minY > vy1 + 1) continue;
       ctx.fillStyle = e.fillColor;
-      const x = e.x.map(xscale);
-      const X = x, Y0 = e.y0, Y1 = e.y1, n = X.length;
-      ctx.beginPath();
-      ctx.moveTo(X[0], Y0[0]);
-      for (let i = 1; i < n; i++) ctx.lineTo(X[i], Y0[i]);
-      for (let i = n - 1; i >= 0; i--) ctx.lineTo(X[i], Y1[i]);
-      ctx.closePath();
-      ctx.fill();
+      ctx.fill(e.path);
     }
-    ctx.restore();
+    ctx.setTransform(1,0,0,1,0,0);
   }
 
   function resize() {
