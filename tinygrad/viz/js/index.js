@@ -316,9 +316,56 @@ async function renderProfiler() {
     ctx.restore();
   }
 
+  let xscale = null;
+  function buildPath(e, offsetY) {
+    const path = new Path2D();
+    let bbox = {};
+    if (e.width == null) { // generic polygon
+      const x = e.x.map(xscale);
+      path.moveTo(x[0], offsetY+e.y0[0]);
+      for (let i=1; i<x.length; i++) path.lineTo(x[i], offsetY+e.y0[i]);
+      for (let i=x.length-1; i>=0; i--) path.lineTo(x[i], offsetY+e.y1[i]);
+      path.closePath();
+      const n = x.length;
+      let minY=Infinity, maxY=-Infinity;
+      for (let i=0;i<n;i++) {
+        const a=offsetY+e.y0[i], b=offsetY+e.y1[i];
+        if (a<minY) minY=a; if (a>maxY) maxY=a;
+        if (b<minY) minY=b; if (b>maxY) maxY=b;
+      }
+      bbox = {minX:x[0], maxX:x[n-1], minY, maxY}
+    } else { // contiguous rect
+      const x = xscale(e.x);
+      const width = xscale(e.x+e.width)-x;
+      path.rect(x, y=offsetY+e.y, w=width, h=e.height);
+      bbox = {minX:x, maxX:x+w, minY:y, maxY:y+h}
+    }
+    return { path, bbox };
+  }
+
   const ellipsisWidth = ctx.measureText("...").width;
   const rectLst = [];
   function renderPaths(transform) {
+    const ctx = pathCanvas.getContext("2d");
+    ctx.clearRect(0, 0, W=pathCanvas.clientWidth, H=pathCanvas.clientHeight);
+    ctx.setTransform(transform.k, 0, 0, 1, transform.x, 0);
+    // visible window in WORLD units
+    const vx0 = (0 - transform.x) / transform.k;
+    const vx1 = (W - transform.x) / transform.k;
+    for (const [_, { offsetY, shapes }] of data.tracks) {
+      const vy0 = 0 - offsetY;          // d=1 below, so y in px; adjust if you scale y
+      const vy1 = H - offsetY;
+      for (const e of shapes) {
+        if (e.shape == null) e.shape = buildPath(e, offsetY);
+        const b = e.shape.bbox;
+        // fast reject (1px pad to avoid pop-in)
+        if (b.maxX < vx0 - 1 || b.minX > vx1 + 1) continue;
+        if (b.maxY < vy0 - 1 || b.minY > vy1 + 1) continue;
+        ctx.fillStyle = e.fillColor;
+        ctx.fill(e.shape.path);
+      }
+    }
+    ctx.setTransform(1, 0, 0, 1, 1, 0);
   }
 
   function render(transform) {
@@ -345,6 +392,7 @@ async function renderProfiler() {
     pathCanvas.getContext("2d").scale(dpr, dpr);
     axisCanvas.getContext("2d").scale(dpr, dpr);
     // restore existing zoom
+    xscale = d3.scaleLinear().domain([0, dur]).range([0, pathCanvas.clientWidth]);
     canvasGroup.call(canvasZoom.transform, zoomLevel);
   }
 
