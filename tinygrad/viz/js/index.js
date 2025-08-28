@@ -291,88 +291,23 @@ async function renderProfiler() {
   // draw events on a timeline
   const dpr = window.devicePixelRatio || 1;
   const ellipsisWidth = ctx.measureText("...").width;
-  const rectLst = [];
   function render(transform) {
     zoomLevel = transform;
-    rectLst.length = 0;
     ctx.save();
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-    // rescale to match current zoom
+    const { shapes, offsetY } = data.tracks.get("NULL Memory");
     const xscale = d3.scaleLinear().domain([0, dur]).range([0, canvas.clientWidth]);
     xscale.domain(xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale));
-    const zoomDomain = transform != null ? xscale.domain() : null;
-    let yscale = null;
-    if (data.axes.y != null) {
-      yscale = d3.scaleLinear().domain(data.axes.y.domain).range(data.axes.y.range);
-    }
-    // draw shapes
-    for (const [_, { offsetY, shapes }] of data.tracks) {
-      for (const e of shapes) {
-        const [start, end] = e.width != null ? [e.x, e.x+e.width] : [e.x[0], e.x[e.x.length-1]];
-        if (zoomDomain != null && (start>zoomDomain[1]|| end<zoomDomain[0])) continue;
-        ctx.fillStyle = e.fillColor;
-        // generic polygon
-        if (e.width == null) {
-          const x = e.x.map(xscale);
-          ctx.beginPath();
-          ctx.moveTo(x[0], offsetY+e.y0[0]);
-          for (let i=1; i<x.length; i++) ctx.lineTo(x[i], offsetY+e.y0[i]);
-          for (let i=x.length-1; i>=0; i--) ctx.lineTo(x[i], offsetY+e.y1[i]);
-          ctx.closePath();
-          ctx.fill();
-          // NOTE: y coordinates are in reverse order
-          for (let i = 0; i < x.length - 1; i++) {
-            let tooltipText = e.arg.tooltipText;
-            if (yscale != null && ((yaxisVal=yscale.invert(offsetY+e.y1[i]))>0)) {
-              tooltipText += `\nTotal: ${formatUnit(yaxisVal, data.axes.y.fmt)}`;
-            }
-            rectLst.push({ x0:x[i], x1:x[i+1], y0:offsetY+e.y1[i], y1:offsetY+e.y0[i], arg:{...e.arg, tooltipText} });
-          }
-          continue;
-        }
-        // contiguous rect
-        const x = xscale(start);
-        const width = xscale(end)-x;
-        ctx.fillRect(x, offsetY+e.y, width, e.height);
-        rectLst.push({ y0:offsetY+e.y, y1:offsetY+e.y+e.height, x0:x, x1:x+width, arg:e.arg });
-        // add label
-        if (e.label == null) continue;
-        ctx.textAlign = "left";
-        ctx.textBaseline = "middle";
-        let [labelX, labelWidth] = [x+2, 0];
-        const labelY = offsetY+e.y+e.height/2;
-        for (const [i,l] of e.label.entries()) {
-          if (labelWidth+l.width+(i===e.label.length-1 ? 0 : ellipsisWidth)+2 > width) {
-            if (labelWidth !== 0) ctx.fillText("...", labelX, labelY);
-            break;
-          }
-          ctx.fillStyle = l.color;
-          ctx.fillText(l.st, labelX, labelY);
-          labelWidth += l.width;
-          labelX += l.width;
-        }
-      }
-    }
-    // draw axes
-    drawLine(ctx, xscale.range(), [0, 0]);
-    for (const tick of xscale.ticks()) {
-      // tick line
-      const x = xscale(tick);
-      drawLine(ctx, [x, x], [0, tickSize])
-      // tick label
-      ctx.textBaseline = "top";
-      ctx.textAlign = "left";
-      ctx.fillText(formatTime(tick, dur), x+ctx.lineWidth+2, tickSize);
-    }
-    if (yscale != null) {
-      drawLine(ctx, [0, 0], yscale.range());
-      for (const tick of yscale.ticks()) {
-        const y = yscale(tick);
-        drawLine(ctx, [0, tickSize], [y, y]);
-        ctx.textAlign = "left";
-        ctx.textBaseline = "middle";
-        ctx.fillText(formatUnit(tick, data.axes.y.fmt), tickSize+2, y);
-      }
+    for (const e of shapes) {
+      ctx.fillStyle = e.fillColor;
+      const x = e.x.map(xscale);
+      const X = x, Y0 = e.y0, Y1 = e.y1, n = X.length;
+      ctx.beginPath();
+      ctx.moveTo(X[0], Y0[0]);
+      for (let i = 1; i < n; i++) ctx.lineTo(X[i], Y0[i]);
+      for (let i = n - 1; i >= 0; i--) ctx.lineTo(X[i], Y1[i]);
+      ctx.closePath();
+      ctx.fill();
     }
     ctx.restore();
   }
@@ -396,7 +331,8 @@ async function renderProfiler() {
 
   resize();
   window.addEventListener("resize", resize);
-
+  
+  /*
   function findRectAtPosition(x, y) {
     const { top, left, width, height } = rect(canvas);
     const X = ((x-left) * (canvas.width/width))/dpr;
@@ -423,6 +359,7 @@ async function renderProfiler() {
     } else tooltip.style.display = "none";
   });
   canvas.addEventListener("mouseleave", () => document.getElementById("tooltip").style.display = "none");
+  */
 }
 
 // ** zoom and recentering
