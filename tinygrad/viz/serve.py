@@ -192,7 +192,8 @@ def get_profile(profile:list[ProfileEvent]) -> bytes|None:
   dtype_size:dict[str, int] = {}
   for k,v in dev_events.items():
     v.sort(key=lambda e:e[0])
-    layout[k] = timeline_layout(v, start_ts, scache)
+    if k != "NULL": continue
+    #layout[k] = timeline_layout(v, start_ts, scache)
     layout[f"{k} Memory"] = mem_layout(v, start_ts, unwrap(end_ts), peaks, dtype_size, scache)
   ret = [b"".join([struct.pack("<B", len(k)), k.encode(), v]) for k,v in layout.items() if v is not None]
   index = json.dumps({"strings":list(scache), "dtypeSize":dtype_size}).encode()
