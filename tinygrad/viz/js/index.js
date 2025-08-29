@@ -137,7 +137,7 @@ function formatTime(ts, dur=ts) {
 }
 const formatUnit = (d, unit="") => d3.format(".3~s")(d)+unit;
 
-const colorScheme = {TINY:["#1b5745", "#354f52", "#354f52", "#1d2e62", "#63b0cd"],
+const colorScheme = {TINY:["#1b5745", "#354f52", "#354f52", "#1d2e62", "#3656B6"],
   DEFAULT:["#2b2e39", "#2c2f3a", "#31343f", "#323544", "#2d303a", "#2e313c", "#343746", "#353847", "#3c4050", "#404459", "#444862", "#4a4e65"],
   BUFFER:["#3A57B7","#5066C1","#6277CD","#7488D8","#8A9BE3","#A3B4F2"],
   CATEGORICAL:["#ff8080", "#F4A261", "#C8F9D4", "#8D99AE", "#F4A261", "#ffffa2", "#ffffc0", "#87CEEB"],}
@@ -220,7 +220,7 @@ async function renderProfiler() {
         } else levels[depth] = et;
         if (depth === 0) colorKey = e.cat ?? e.name;
         if (!colorMap.has(colorKey)) colorMap.set(colorKey, cycleColors(colorScheme[k] ?? colorScheme.DEFAULT, colorMap.size));
-        const fillColor = d3.color(colorMap.get(colorKey)).brighter(depth).toString();
+        const fillColor = d3.color(colorMap.get(colorKey)).brighter(depth*0.7).toString();
         const label = parseColors(e.name).map(({ color, st }) => ({ color, st, width:ctx.measureText(st).width }));
         if (e.ref != null) ref = {ctx:e.ref, step:0};
         else if (ref != null) {
@@ -290,6 +290,8 @@ async function renderProfiler() {
   updateProgress({ "show":false });
   // draw events on a timeline
   const dpr = window.devicePixelRatio || 1;
+  const roundPixel = (v) => Math.round(v*dpr)/dpr;
+  const minWidth = 1*dpr;
   const ellipsisWidth = ctx.measureText("...").width;
   const rectLst = [];
   function render(transform) {
@@ -331,8 +333,8 @@ async function renderProfiler() {
           continue;
         }
         // contiguous rect
-        const x = xscale(start);
-        const width = xscale(end)-x;
+        const x = roundPixel(xscale(start));
+        const width = Math.max(roundPixel(xscale(end))-x, minWidth);
         ctx.fillRect(x, offsetY+e.y, width, e.height);
         rectLst.push({ y0:offsetY+e.y, y1:offsetY+e.y+e.height, x0:x, x1:x+width, arg:e.arg });
         // add label
