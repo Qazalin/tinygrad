@@ -821,7 +821,7 @@ def track_rewrites(name:Callable[..., str|TracingKey]|bool=True, replay:bool=Fal
   def _decorator(func):
     def __wrapper(*args, **kwargs):
       fn = func.__name__
-      key = TracingKey(n:=f"{fn} n{next(_name_cnt.setdefault(fn, itertools.count(1)))}", (n,), cat=fn)
+      key = TracingKey(n:=f"{fn} n{next(_name_cnt.setdefault(fn, itertools.count(1)))}", (n,))
       with cpu_profile(key, "TINY") as e:
         ret = func(*args, **kwargs)
       if TRACK_MATCH_STATS >= 2 and callable(name):
