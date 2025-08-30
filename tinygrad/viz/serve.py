@@ -27,19 +27,19 @@ uops_colors = {Ops.LOAD: "#ffc0c0", Ops.STORE: "#87CEEB", Ops.CONST: "#e0e0e0", 
 # ** Metadata for a track_rewrites scope
 
 ref_map:dict[Any, int] = {}
-def get_metadata(keys:list[TracingKey], contexts:list[list[TrackedGraphRewrite]]) -> list[dict]:
+def get_metadata(contexts:list[list[TrackedGraphRewrite]]) -> list[dict]:
   ret = []
-  for i,(k,v) in enumerate(zip(keys, contexts)):
+  for i,v in enumerate(contexts):
     steps = [{"name":s.name, "loc":s.loc, "depth":s.depth, "match_count":len(s.matches), "code_line":printable(s.loc),
               "query":f"/ctxs?ctx={i}&idx={j}"} for j,s in enumerate(v)]
-    ret.append(r:={"name":k.display_name, "steps":steps})
+    ret.append(r:={"name":"test", "steps":steps})
     # use the first key to get runtime profiling data about this context
     if getenv("PROFILE_VALUE") >= 2 and k.keys: r["runtime_stats"] = get_runtime_stats(k.keys[0])
     # program spec metadata
-    if isinstance(k.ret, ProgramSpec):
+    if isinstance("test", ProgramSpec):
       steps.append({"name":"View Disassembly", "query":f"/disasm?ctx={i}"})
-      r["fmt"] = k.ret.src
-    for key in k.keys: ref_map[key] = i
+      r["fmt"] = "test"
+    for key in []: ref_map[key] = i
   return ret
 
 # ** Complete rewrite details for a graph_rewrite call
@@ -92,7 +92,7 @@ def uop_to_json(x:UOp) -> dict[int, dict]:
 
 @functools.cache
 def _reconstruct(a:int):
-  op, dtype, src, arg, *rest = contexts[2][a]
+  op, dtype, src, arg, *rest = contexts[1][a]
   arg = type(arg)(_reconstruct(arg.ast), arg.metadata) if op is Ops.KERNEL else arg
   return UOp(op, dtype, tuple(_reconstruct(s) for s in src), arg, *rest)
 
@@ -140,13 +140,15 @@ def timeline_layout(dev_events:list[tuple[int, int, float, DevEvent]], start_ts:
   for st,et,dur,e in dev_events:
     if isinstance(e, ProfilePointEvent) and e.name == "exec": exec_points[e.key] = e.arg
     if dur == 0: continue
-    name, cat, info = e.name, None, None
+    name, cat, info, ref = e.name, None, None, None
+    """
     if (ref:=ref_map.get(name)) is not None:
       name = ctxs[ref]["name"]
       if isinstance(p:=contexts[0][ref].ret, ProgramSpec) and (ei:=exec_points.get(p.name)) is not None:
         info = f"{sym_infer(p.estimates.ops, ei['var_vals'])/(t:=dur*1e3):.2f} GFLOPS {sym_infer(p.estimates.mem, ei['var_vals'])/t:4.1f}"+ \
                f"|{sym_infer(p.estimates.lds,ei['var_vals'])/t:.1f} GB/s\n{ei['metadata']}"
-    elif isinstance(e.name, TracingKey):
+    """
+    if isinstance(e.name, TracingKey):
       name, cat = e.name.display_name, e.name.cat
       ref = next((v for k in e.name.keys if (v:=ref_map.get(k)) is not None), None)
     events.append(struct.pack("<IIIfBI", enum_str(name, scache), option(ref), st-start_ts, dur,
@@ -256,7 +258,7 @@ class Handler(BaseHTTPRequestHandler):
       except FileNotFoundError: status_code = 404
     elif (query:=parse_qs(url.query)):
       if url.path == "/disasm": ret, content_type = get_disassembly(**query), "application/json"
-      else: return self.stream_json(get_details(contexts[1][int(query["ctx"][0])][int(query["idx"][0])]))
+      else: return self.stream_json(get_details(contexts[0][int(query["ctx"][0])][int(query["idx"][0])]))
     elif url.path == "/ctxs": ret, content_type = json.dumps(ctxs).encode(), "application/json"
     elif url.path == "/get_profile" and profile_ret: ret, content_type = profile_ret, "application/octet-stream"
     else: status_code = 404
@@ -315,7 +317,7 @@ if __name__ == "__main__":
   contexts, profile = load_pickle(args.kernels), load_pickle(args.profile)
 
   # NOTE: this context is a tuple of list[keys] and list[values]
-  ctxs = get_metadata(*contexts[:2]) if contexts else []
+  ctxs = get_metadata(contexts[0]) if contexts else []
 
   profile_ret = get_profile(profile)
 
