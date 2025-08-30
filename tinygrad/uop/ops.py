@@ -843,10 +843,8 @@ def track_rewrites(name:Callable[..., str|TracingKey]|bool=True, replay:bool=Fal
 
 def track_matches(func):
   def _track_func(*args, **kwargs):
-    name = kwargs.get("name", "<unnamed>")
-    if tracking:=(TRACK_MATCH_STATS >= 2):
-      name = f"{(frm:=sys._getframe(1)).f_code.co_filename}:{frm.f_lineno}"
-    with cpu_profile(name, "TINY", display=tracking):
+    name = kwargs.get("name", f"{(frm:=sys._getframe(1)).f_code.co_filename}:{frm.f_lineno}" if TRACK_MATCH_STATS>=2 else "")
+    with cpu_profile(name, "TINY", display=TRACK_MATCH_STATS >= 2):
       ret = func(*args, **kwargs)
     return ret
   return _track_func
