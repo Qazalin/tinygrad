@@ -807,16 +807,7 @@ VIZ = ContextVar("VIZ", 0)
 TRACK_MATCH_STATS = ContextVar("TRACK_MATCH_STATS", 2 if VIZ else 0)
 match_stats:dict[UPat, list[int|float]] = dict()
 
-@dataclass(frozen=True)
-class TrackedGraphRewrite:
-  loc:tuple[str, int]                    # location that called graph_rewrite
-  sink:int                               # the sink input to graph_rewrite
-  matches:list[tuple[int, int, tuple]]   # before/after UOp, UPat location
-  name:str|None                          # optional name of the rewrite
-  depth:int                              # depth if it's a subrewrite
-  bottom_up:bool
-
-tracked_ctxs:list[list[TrackedGraphRewrite]] = []
+tracked_matches:list[tuple[int, int, tuple]] = []
 _name_cnt:dict[str, itertools.count] = {}
 
 if getenv("CAPTURE_PROCESS_REPLAY"):
@@ -831,7 +822,6 @@ def track_rewrites(name:Callable[..., str|TracingKey]|bool=True, replay:bool=Fal
     def __wrapper(*args, **kwargs):
       fn = func.__name__
       key = TracingKey(n:=f"{fn} n{next(_name_cnt.setdefault(fn, itertools.count(1)))}", (n,), cat=fn)
-      if TRACK_MATCH_STATS >= 2: tracked_ctxs.append([])
       with cpu_profile(key, "TINY") as e:
         ret = func(*args, **kwargs)
       if TRACK_MATCH_STATS >= 2 and callable(name):
@@ -851,17 +841,13 @@ def track_rewrites(name:Callable[..., str|TracingKey]|bool=True, replay:bool=Fal
     return __wrapper
   return _decorator
 
-active_rewrites:list[TrackedGraphRewrite] = []
 def track_matches(func):
   def _track_func(*args, **kwargs):
-    if tracking:=(TRACK_MATCH_STATS >= 2 and tracked_ctxs):
-      loc = ((frm:=sys._getframe(1)).f_code.co_filename, frm.f_lineno)
-      depth = len(active_rewrites)
-      tracked_ctxs[-1].append(ctx:=TrackedGraphRewrite(loc, track_uop(args[0]), [], kwargs.get("name", None), depth, kwargs.get("bottom_up", False)))
-      active_rewrites.append(ctx)
-    with cpu_profile(kwargs.get("name", "<unnamed>"), "TINY", display=tracking):
+    name = kwargs.get("name", "<unnamed>")
+    if tracking:=(TRACK_MATCH_STATS >= 2):
+      name = f"{(frm:=sys._getframe(1)).f_code.co_filename}:{frm.f_lineno}"
+    with cpu_profile(name, "TINY", display=tracking):
       ret = func(*args, **kwargs)
-    if tracking: active_rewrites.pop()
     return ret
   return _track_func
 
@@ -878,15 +864,15 @@ class TrackedPatternMatcher(PatternMatcher):
       match_stats[p][1] += 1
       try: ret = match(uop, ctx)
       except Exception as e:
-        if TRACK_MATCH_STATS >= 2 and active_rewrites and not isinstance(e, RewriteNotReady):
-          active_rewrites[-1].matches.append((track_uop(uop), track_uop(UOp(Ops.REWRITE_ERROR, src=uop.src, arg=str(sys.exc_info()[1]))), p.location))
+        if TRACK_MATCH_STATS >= 2 and not isinstance(e, RewriteNotReady):
+          tracked_matches.append((track_uop(uop), track_uop(UOp(Ops.REWRITE_ERROR, src=uop.src, arg=str(sys.exc_info()[1]))), p.location))
         raise
       if ret is not None and ret is not uop:
         match_stats[p][0] += 1
         match_stats[p][3] += (et:=time.perf_counter()-st)
         if TRACK_MATCH_STATS >= 3: print(f"{et*1e6:7.2f} us -- ", printable(p.location))
-        if TRACK_MATCH_STATS >= 2 and isinstance(ret, UOp) and active_rewrites:
-          active_rewrites[-1].matches.append((track_uop(uop), track_uop(ret), p.location))
+        if TRACK_MATCH_STATS >= 2 and isinstance(ret, UOp):
+          tracked_matches.append((track_uop(uop), track_uop(ret), p.location))
         return ret
       match_stats[p][2] += time.perf_counter()-st
     return None
@@ -898,8 +884,8 @@ if TRACK_MATCH_STATS or PROFILE:
   def print_match_stats():
     if TRACK_MATCH_STATS >= 2:
       with open(fn:=temp("rewrites.pkl", append_user=True), "wb") as f:
-        print(f"rewrote {len(tracked_ctxs)} graphs and matched {sum(len(r.matches) for x in tracked_ctxs for r in x)} times, saved to {fn}")
-        pickle.dump((tracked_ctxs, uop_fields), f)
+        print(f"matched {len(tracked_matches)} times, saved to {fn}")
+        pickle.dump((tracked_matches, uop_fields), f)
     if VIZ: launch_viz(VIZ, temp("rewrites.pkl", append_user=True))
     if getenv("PRINT_MATCH_STATS", TRACK_MATCH_STATS.value):
       ret = [0,0,0.0,0.0]

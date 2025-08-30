@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 from typing import Any, TypedDict, Generator
 from tinygrad.helpers import colored, getenv, tqdm, unwrap, word_wrap, TRACEMETA, ProfileEvent, ProfileRangeEvent, TracingKey, ProfilePointEvent
-from tinygrad.uop.ops import TrackedGraphRewrite, UOp, Ops, printable, GroupOp, srender, sint, sym_infer
+from tinygrad.uop.ops import UOp, Ops, printable, GroupOp, srender, sint, sym_infer
 from tinygrad.device import ProfileDeviceEvent, ProfileGraphEvent, ProfileGraphEntry, Device
 from tinygrad.renderer import ProgramSpec
 from tinygrad.dtype import dtypes
@@ -27,8 +27,14 @@ uops_colors = {Ops.LOAD: "#ffc0c0", Ops.STORE: "#87CEEB", Ops.CONST: "#e0e0e0", 
 # ** Metadata for a track_rewrites scope
 
 ref_map:dict[Any, int] = {}
-def get_metadata(contexts:list[list[TrackedGraphRewrite]]) -> list[dict]:
+def get_metadata(contexts:list[tuple]) -> list[dict]:
   ret = []
+  for i,v in enumerate(contexts):
+    before, after, loc = v
+    steps = [{"name":"test", "loc":loc, "depth":0, "match_count":1, "code_line":printable(loc),
+              "query":f"/ctxs?ctx={i}&idx=0"}]
+    ret.append({"name":f"match_{i}", "steps":steps})
+  """
   for i,v in enumerate(contexts):
     steps = [{"name":s.name, "loc":s.loc, "depth":s.depth, "match_count":len(s.matches), "code_line":printable(s.loc),
               "query":f"/ctxs?ctx={i}&idx={j}"} for j,s in enumerate(v)]
@@ -40,6 +46,7 @@ def get_metadata(contexts:list[list[TrackedGraphRewrite]]) -> list[dict]:
       steps.append({"name":"View Disassembly", "query":f"/disasm?ctx={i}"})
       r["fmt"] = "test"
     for key in []: ref_map[key] = i
+  """
   return ret
 
 # ** Complete rewrite details for a graph_rewrite call
@@ -96,8 +103,9 @@ def _reconstruct(a:int):
   arg = type(arg)(_reconstruct(arg.ast), arg.metadata) if op is Ops.KERNEL else arg
   return UOp(op, dtype, tuple(_reconstruct(s) for s in src), arg, *rest)
 
-def get_details(ctx:TrackedGraphRewrite) -> Generator[GraphRewriteDetails, None, None]:
-  yield {"graph":uop_to_json(next_sink:=_reconstruct(ctx.sink)), "uop":str(next_sink), "changed_nodes":None, "diff":None, "upat":None}
+def get_details(match:tuple[int, int, tuple[str, int]]) -> Generator[GraphRewriteDetails, None, None]:
+  yield {"graph":uop_to_json(next_sink:=_reconstruct(match[0])), "uop":str(next_sink), "changed_nodes":None, "diff":None, "upat":None}
+  """
   replaces: dict[UOp, UOp] = {}
   for u0_num,u1_num,upat_loc in tqdm(ctx.matches):
     replaces[u0:=_reconstruct(u0_num)] = u1 = _reconstruct(u1_num)
@@ -106,7 +114,7 @@ def get_details(ctx:TrackedGraphRewrite) -> Generator[GraphRewriteDetails, None,
     yield {"graph":(sink_json:=uop_to_json(new_sink)), "uop":str(new_sink), "changed_nodes":[id(x) for x in u1.toposort() if id(x) in sink_json],
            "diff":list(difflib.unified_diff(str(u0).splitlines(), str(u1).splitlines())), "upat":(upat_loc, printable(upat_loc))}
     if not ctx.bottom_up: next_sink = new_sink
-
+  """
 # encoder helpers
 
 def enum_str(s, cache:dict[str, int]) -> int:
@@ -141,16 +149,14 @@ def timeline_layout(dev_events:list[tuple[int, int, float, DevEvent]], start_ts:
     if isinstance(e, ProfilePointEvent) and e.name == "exec": exec_points[e.key] = e.arg
     if dur == 0: continue
     name, cat, info, ref = e.name, None, None, None
-    """
-    if (ref:=ref_map.get(name)) is not None:
+    if isinstance(e.name, TracingKey):
+      name, cat = e.name.display_name, e.name.cat
+      ref = next((v for k in e.name.keys if (v:=ref_map.get(k)) is not None), None)
+    elif (ref:=ref_map.get(name)) is not None:
       name = ctxs[ref]["name"]
       if isinstance(p:=contexts[0][ref].ret, ProgramSpec) and (ei:=exec_points.get(p.name)) is not None:
         info = f"{sym_infer(p.estimates.ops, ei['var_vals'])/(t:=dur*1e3):.2f} GFLOPS {sym_infer(p.estimates.mem, ei['var_vals'])/t:4.1f}"+ \
                f"|{sym_infer(p.estimates.lds,ei['var_vals'])/t:.1f} GB/s\n{ei['metadata']}"
-    """
-    if isinstance(e.name, TracingKey):
-      name, cat = e.name.display_name, e.name.cat
-      ref = next((v for k in e.name.keys if (v:=ref_map.get(k)) is not None), None)
     events.append(struct.pack("<IIIfBI", enum_str(name, scache), option(ref), st-start_ts, dur,
                               option(None if cat is None else enum_str(cat, category_enum)), enum_str(info or "", scache)))
   return struct.pack("<BI", 0, len(events))+b"".join(events) if events else None
@@ -258,7 +264,7 @@ class Handler(BaseHTTPRequestHandler):
       except FileNotFoundError: status_code = 404
     elif (query:=parse_qs(url.query)):
       if url.path == "/disasm": ret, content_type = get_disassembly(**query), "application/json"
-      else: return self.stream_json(get_details(contexts[0][int(query["ctx"][0])][int(query["idx"][0])]))
+      else: return self.stream_json(get_details(contexts[0][int(query["ctx"][0])]))
     elif url.path == "/ctxs": ret, content_type = json.dumps(ctxs).encode(), "application/json"
     elif url.path == "/get_profile" and profile_ret: ret, content_type = profile_ret, "application/octet-stream"
     else: status_code = 404
@@ -312,14 +318,11 @@ if __name__ == "__main__":
   stop_reloader = threading.Event()
   multiprocessing.current_process().name = "VizProcess"    # disallow opening of devices
   st = time.perf_counter()
-  print("*** viz is starting")
+  #print("*** viz is starting")
 
   contexts, profile = load_pickle(args.kernels), load_pickle(args.profile)
-
-  # NOTE: this context is a tuple of list[keys] and list[values]
-  ctxs = get_metadata(contexts[0]) if contexts else []
-
   profile_ret = get_profile(profile)
+  ctxs = get_metadata(contexts[0]) if contexts else []
 
   server = TCPServerWithReuse(('', PORT), Handler)
   reloader_thread = threading.Thread(target=reloader)
