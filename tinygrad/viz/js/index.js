@@ -128,6 +128,67 @@ async function renderDag(graph, additions, recenter=false) {
 
 }
 
+// ** zoom logger
+
+function createZoomLogger() {
+  let active = false, replaying = false, t0 = 0, events = [];
+  function start() { events = []; t0 = performance.now(); active = true }
+  function pause() { active = false }
+  function log(t) { if (active && !replaying) events.push({ t: performance.now() - t0, tr: d3.zoomIdentity.translate(t.x, t.y).scale(t.k: }) }
+  function save(name) { localStorage.setItem("zoom_log:" + name, JSON.stringify(events.map(e => ({ t: e.t, k: e.tr.k, x: e.tr.x, y: e.tr.y })))) };
+  function load(name) {
+    const data = JSON.parse(localStorage.getItem("zoom_log:" + name));
+    events = data.map(d => ({ t: d.t, tr: d3.zoomIdentity.translate(d.x, d.y).scale(d.k) }));
+  }
+  function replay(name) {
+    if (name) load(name);
+    if (!events.length || replaying) return;
+    replaying = true;
+    let i = 0, start = performance.now();
+    const timeline = d3.select("#timeline");
+    const timer = d3.timer(() => {
+      const elapsed = performance.now() - start;
+      while (i < events.length && events[i].t <= elapsed) {
+        timeline.call(canvasZoom.transform, events[i].tr);
+        i++;
+      }
+      if (i >= events.length) { timer.stop(); replaying = false }
+    });
+  }
+  function ui() {
+    let recording = false;
+    const root = d3.select("body").append("div")
+      .attr("id", "zoom-rec-controls")
+      .style("position", "absolute").style("top", "4px").style("left", "50%")
+      .style("transform", "translateX(-50%)").style("z-index", "4")
+      .style("display", "flex").style("gap", "8px").style("align-items", "center");
+
+    const recBtn = root.append("button").attr("class", "btn");
+    const nameInput = root.append("input").attr("placeholder", "name")
+      .style("height", "32px").style("min-width", "160px").style("padding", "0 8px")
+      .style("background", "#0f1018").style("border", "1px solid #4a4b56")
+      .style("color", "#f0f0f5").style("outline", "none").style("border-radius", "4px");
+    const saveBtn = root.append("button").attr("class", "btn").text("Save");
+    const replayBtn = root.append("button").attr("class", "btn").text("Replay");
+
+    function paint() {
+      recBtn.text(recording ? "Recording" : "Record")
+        .style("background", recording ? "#22c55e" : "#1a1b26")
+        .style("border", `1px solid ${recording ? "#22c55e" : "#4a4b56"}`)
+        .style("border-radius", "4px").style("color", "white");
+    }
+
+    recBtn.on("click", () => { recording ? pause() : start(); recording = !recording; paint(); });
+    saveBtn.on("click", () => { const n = nameInput.property("value").trim(); if (n) save(n); });
+    replayBtn.on("click", () => { const n = nameInput.property("value").trim(); replay(n || undefined); });
+
+    paint();
+  }
+  ui();
+  return { start, pause, log, save, load };
+}
+const zoomLogger = createZoomLogger();
+
 // ** profiler graph
 
 function formatTime(ts, dur=ts) {
@@ -390,7 +451,10 @@ async function renderProfiler() {
     d3.select(canvas).call(canvasZoom.transform, zoomLevel);
   }
 
-  canvasZoom = d3.zoom().filter(vizZoomFilter).scaleExtent([1, Infinity]).translateExtent([[0,0], [Infinity,0]]).on("zoom", e => render(e.transform));
+  canvasZoom = d3.zoom().filter(vizZoomFilter).scaleExtent([1, Infinity]).translateExtent([[0,0], [Infinity,0]]).on("zoom", e => {
+    zoomLogger.log(e.transform);
+    render(e.transform)
+  });
   d3.select(canvas).call(canvasZoom);
   document.addEventListener("contextmenu", e => e.ctrlKey && e.preventDefault());
 
