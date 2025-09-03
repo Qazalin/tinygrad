@@ -743,7 +743,7 @@ jobs:
       - name: Run pytest (amd)
         run: python -m pytest test/external/external_test_am.py --durations=20
       - name: Run other test
-        run: FORWARD_ONLY=1 DEBUG=2 PYTHONPATH=. MOCKGPU=1 AMD=1 python test/test_ops.py TestOps.test_padded_conv3d
+        run: FORWARD_ONLY=1 DEBUG=7 PYTHONPATH=. MOCKGPU=1 AMD=1 python test/test_ops.py TestOps.test_padded_conv3d
       - name: Run TRANSCENDENTAL math
         run: TRANSCENDENTAL=2 python -m pytest -n=auto test/test_ops.py::TestOps::test_sin test/test_ops.py::TestOps::test_cos test/test_ops.py::TestOps::test_tan test/test_ops.py::TestOps::test_exp test/test_ops.py::TestOps::test_log --durations=20
       - name: Run TestOps.test_add with SQTT
