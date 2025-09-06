@@ -1,6 +1,6 @@
-import unittest, decimal, json, struct, contextlib
+import unittest, decimal, json, struct, contextlib, pickle
 from dataclasses import dataclass
-from typing import Generator
+from typing import ContextManager
 
 from tinygrad.uop.ops import UOp, UPat, Ops, PatternMatcher, TrackedPatternMatcher
 from tinygrad.uop.ops import graph_rewrite, track_rewrites, TRACK_MATCH_STATS
@@ -10,8 +10,16 @@ from tinygrad.helpers import PROFILE, colored, ansistrip, flatten, TracingKey, P
 from tinygrad.device import Buffer
 
 from tinygrad.uop.ops import tracked_keys, tracked_ctxs, uop_fields, _name_cnt
-from tinygrad.viz.serve import get_metadata, uop_to_json, get_details, GraphRewriteDetails, _reconstruct
-traces = [(tracked_keys, tracked_ctxs, uop_fields)]
+from tinygrad.viz.serve import get_metadata, uop_to_json, get_details, GraphRewriteDetails
+
+@contextlib.contextmanager
+def capture_viz() -> ContextManager[bytearray]:
+  strace = bytearray()
+  with Context(TRACK_MATCH_STATS=2, PROFILE=1):
+    yield strace
+  strace[:] = pickle.dumps(traces:=[(tracked_keys, tracked_ctxs, uop_fields)])
+  for t in [*traces[0], _name_cnt]: t.clear()
+  Buffer.profile_events.clear()
 
 @dataclass
 class VizEntry:
@@ -19,15 +27,10 @@ class VizEntry:
   graphs:list[GraphRewriteDetails]
 
 @contextlib.contextmanager
-def capture_viz():
-  ret:list[GraphRewriteDetails] = []
-  with Context(TRACK_MATCH_STATS=2, PROFILE=1):
-    yield ret
-  for trace,li in zip(tracked_ctxs[0], get_metadata(traces)):
-    ret.append(VizEntry(li, [step["graph"] for step in get_details(trace)]))
-  for t in [*traces[0], _name_cnt]: t.clear()
-  Buffer.profile_events.clear()
-  _reconstruct.cache_clear()
+def load_viz(strace:bytes) -> ContextManager[list[VizEntry]]:
+  dtrace = pickle.loads(strace)
+  yield [VizEntry(li, [step["graph"] for step in get_details(trace)])
+         for trace, li in zip(dtrace[0][1][0], get_metadata(dtrace))]
 
 @track_rewrites(name=True)
 def exec_rewrite(sink:UOp, pm_lst:list[PatternMatcher], names:None|list[str]=None) -> UOp:
@@ -38,7 +41,7 @@ def exec_rewrite(sink:UOp, pm_lst:list[PatternMatcher], names:None|list[str]=Non
 class TestViz(unittest.TestCase):
   def test_simple(self):
     a = UOp.variable("a", 0, 10)
-    with capture_viz() as lst:
+    with load_viz() as lst:
       exec_rewrite((a+0)*1, [sym])
     # VIZ displays rewrites in groups of tracked functions
     self.assertEqual(len(lst), 1)
@@ -49,7 +52,7 @@ class TestViz(unittest.TestCase):
 
   def test_rewrites(self):
     a = UOp.variable("a", 0, 10)
-    with capture_viz() as lst:
+    with load_viz() as lst:
       exec_rewrite(a*1, [sym])
       exec_rewrite(a*2, [sym])
     self.assertEqual(len(lst), 2)
@@ -59,7 +62,7 @@ class TestViz(unittest.TestCase):
 
   def test_steps(self):
     a = UOp.variable("a", 0, 10)
-    with capture_viz() as lst:
+    with load_viz() as lst:
       exec_rewrite(a+1, [PatternMatcher([]), PatternMatcher([])], ["x", "y"])
     steps = lst[0]["steps"]
     # steps can optionally have a name
@@ -69,7 +72,7 @@ class TestViz(unittest.TestCase):
   def test_rewrite_location(self):
     def inner(sink): return graph_rewrite(sink, PatternMatcher([]))
     def outer(sink): return inner(sink)
-    with capture_viz() as lst:
+    with load_viz() as lst:
       outer(UOp.variable("a", 1, 10))
     # step location comes from inner rewrite
     fp, lineno = lst[0]["steps"][0]["loc"]
@@ -83,7 +86,7 @@ class TestViz(unittest.TestCase):
       return x.replace(arg=x.arg+1)
     err_pm = PatternMatcher([(UPat.cvar("x"), count_3),])
     a = UOp.const(dtypes.int, 1)
-    with capture_viz() as lst, self.assertRaises(AssertionError):
+    with load_viz() as lst, self.assertRaises(AssertionError):
       exec_rewrite(a, [err_pm])
     err_step = lst[0]["steps"][0]
     self.assertEqual(err_step["match_count"], 4) # 3 successful rewrites + 1 err
@@ -92,14 +95,14 @@ class TestViz(unittest.TestCase):
     a = UOp.variable("a", 1, 10)
     @track_rewrites()
     def name_default(): return graph_rewrite(a, PatternMatcher([]))
-    with capture_viz() as lst: name_default()
+    with load_viz() as lst: name_default()
     self.assertEqual(lst[0]["name"], "name_default n1")
 
   # name can also come from a function that returns a string
   def test_dyn_name_fxn(self):
     @track_rewrites(name=lambda *args,ret,**kwargs: ret.render())
     def name_from_fxn(s:UOp, arg:list|None=None): return graph_rewrite(s, PatternMatcher([]))
-    with capture_viz() as lst:
+    with load_viz() as lst:
       name_from_fxn(UOp.variable("a", 1, 10)+1, arg=["test"])
     # name gets deduped by the function call counter
     self.assertEqual(lst[0]["name"], "(a+1) n1")
@@ -108,7 +111,7 @@ class TestViz(unittest.TestCase):
   def test_tracing_key(self):
     @track_rewrites(name=lambda inp,ret: TracingKey("custom_name", (inp,)))
     def test(s:UOp): return graph_rewrite(s, PatternMatcher([]))
-    with capture_viz() as lst:
+    with load_viz() as lst:
       test(UOp.variable("a", 1, 10)+1)
     # NOTE: names from TracingKey do not get deduped
     self.assertEqual(lst[0]["name"], "custom_name")
@@ -129,7 +132,7 @@ class TestViz(unittest.TestCase):
       (UPat(Ops.DEFINE_VAR, name="x"), lambda x: x.replace(op=Ops.CONST)),
       (UPat(Ops.CONST, name="x"), lambda x: x.replace(op=Ops.DEFINE_VAR)),
     ])
-    with capture_viz() as lst, self.assertRaises(RuntimeError):
+    with load_viz() as lst, self.assertRaises(RuntimeError):
       exec_rewrite(a, [pm])
     graphs = flatten(g.values() for g in lst[0].graphs)
     self.assertEqual(graphs[0], uop_to_json(a)[id(a)])
@@ -142,7 +145,7 @@ class TestViz(unittest.TestCase):
     a = UOp.variable("a", 0, 10)
     z = UOp.const(dtypes.index, 0)
     alu = a*z
-    with capture_viz() as lst:
+    with load_viz() as lst:
       exec_rewrite(alu, [sym])
     self.assertEqual(len(lst), 1)
     graphs = lst[0].graphs
@@ -179,7 +182,7 @@ class TestVizTree(unittest.TestCase):
     d = UOp.variable("d",0,10)
     sink = UOp.sink(a+b, c+d)
     def tree_rewrite(): return graph_rewrite(sink, root, name="root")
-    with capture_viz() as lst:
+    with load_viz() as lst:
       tree_rewrite()
     steps = lst[0].li["steps"]
     self.assertEqual(len(steps), 1+2+4)
@@ -202,22 +205,24 @@ class TestVizGC(unittest.TestCase):
     init = bufs_allocated()
     a = UOp.new_buffer("NULL", 10, dtypes.char)
     a.buffer.allocate()
-    with capture_viz() as lst:
+    with capture_viz() as strace:
       exec_rewrite(a, [PatternMatcher([])])
     del a
+    with load_viz(strace) as lst:
+      self.assertEqual(len(lst), 1)
     self.assertEqual(bufs_allocated()-init, 0)
-    self.assertEqual(len(lst), 1)
 
   @unittest.skip("it's not generic enough to handle arbitrary UOps in arg")
   def test_gc_uop_in_arg(self):
     init = bufs_allocated()
     a = UOp.new_buffer("NULL", 10, dtypes.char)
     a.buffer.allocate()
-    exec_rewrite(UOp(Ops.CUSTOM, src=(a,), arg=a), [PatternMatcher([])])
+    with capture_viz() as strace:
+      exec_rewrite(UOp(Ops.CUSTOM, src=(a,), arg=a), [PatternMatcher([])])
     del a
+    with load_viz(strace) as lst:
+      self.assertEqual(len(lst), 1)
     self.assertEqual(bufs_allocated()-init, 0)
-    lst = get_viz_list()
-    self.assertEqual(len(lst), 1)
 
 # VIZ integrates with other parts of tinygrad
 
