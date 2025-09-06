@@ -207,7 +207,7 @@ async function renderProfiler() {
   for (let i=0; i<layoutsLen; i++) {
     const nameLen = view.getUint8(offset, true); offset += 1;
     const k = textDecoder.decode(new Uint8Array(buf, offset, nameLen)); offset += nameLen;
-    const div = deviceList.append("div").attr("id", k).text(k).style("border-top-width", "1px");
+    const div = deviceList.append("div").attr("id", k).style("border-top-width", "1px");
     const { y:baseY, height:baseHeight } = rect(div.node());
     const offsetY = baseY-canvasTop;
     const shapes = [];
@@ -242,7 +242,7 @@ async function renderProfiler() {
         // offset y by depth
         shapes.push({x:e.st, y:levelHeight*depth, width:e.dur, height:levelHeight, arg, label, fillColor });
       }
-      div.style("height", levelHeight*levels.length+"px").style("pointerEvents", "none");
+      div.style("height", levelHeight*levels.length+"px").style("pointerEvents", "none").text(k);
     } else {
       const peak = u64();
       let x = 0, y = 0;
@@ -285,7 +285,8 @@ async function renderProfiler() {
         shapes.push({ x, y0:y.map(yscale), y1:y.map(y0 => yscale(y0+nbytes)), arg, fillColor:cycleColors(colorScheme.BUFFER, shapes.length) });
       }
       data.tracks.set(k, { shapes, offsetY, peak, scaleFactor:(maxheight*4)/rowHeight });
-      div.style("height", rowHeight+"px").style("cursor", "pointer").on("click", (e) => {
+      // div.style("height", rowHeight+"px").style("cursor", "pointer").text(`${k}: ${formatUnit(peak, "B")}`).on("click", (e) => {
+      div.style("height", rowHeight+"px").style("cursor", "pointer").text(k).on("click", (e) => {
         const newFocus = e.currentTarget.id === focusedDevice ? null : e.currentTarget.id;
         let offset = 0;
         for (const [tid, track] of data.tracks) {
