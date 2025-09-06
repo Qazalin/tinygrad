@@ -328,7 +328,6 @@ async function renderProfiler() {
     ctx.lineTo(w, magic);
     ctx.moveTo(w, axisHeight+magic);
     ctx.lineTo(magic, axisHeight+magic);
-    // time ticks
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
     for (const tick of xscale.ticks()) {
@@ -357,6 +356,16 @@ async function renderProfiler() {
       ctx.fillText(formatUnit(maxVal, data.axes.y.fmt), tickX, d3.min(yscale.range())+fontSize+magic);
     }
     ctx.stroke();
+    // shapes
+    const { shapes, offsetY } = data.tracks.get("CUDA Graph");
+    for (const e of shapes) {
+      ctx.fillStyle = "#fe8121";
+      const x = xscale(e.x);
+      const width = xscale(e.x+e.width)-x;
+      const y = offsetY+e.y;
+      ctx.fillRect(x, y, width, 24);
+      console.log(x, y, width);
+    }
   }
 
   function renderOld(transform) {
