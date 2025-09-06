@@ -167,9 +167,8 @@ const cap = (p) => {
 
 const drawLine = (ctx, x, y, opts) => {
   ctx.beginPath();
-  const px = 0.5;
-  ctx.moveTo(clmp(x[0])+px, clmp(y[0])+px);
-  ctx.lineTo(clmp(x[1])+px, clmp(y[1])+px);
+  ctx.moveTo(x[0], y[0]);
+  ctx.lineTo(x[1], y[1]);
   ctx.fillStyle = ctx.strokeStyle = opts?.color || "#f0f0f5";
   ctx.stroke();
 }
@@ -302,7 +301,55 @@ async function renderProfiler() {
   const dpr = window.devicePixelRatio || 1;
   const ellipsisWidth = ctx.measureText("...").width;
   const rectLst = [];
-  function render(transform) {
+
+  function render2(transform) {
+    zoomLevel = transform;
+    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    const w = canvas.clientWidth;
+    const xscale = d3.scaleLinear().domain([0, dur]).range([0, w]);
+    const visibleX = xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale);
+    xscale.domain(visibleX);
+    const yscale = data.axes.y != null ? d3.scaleLinear().domain(data.axes.y.domain).range(data.axes.y.range) : null;
+    // axes
+    ctx.strokeStyle = "#4a4b56";
+    ctx.fillStyle = "#f0f0f5";
+    const xrange = xscale.range(); // pixels
+    const axisHeight = tickSize*2;
+    const magic = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(magic, magic);
+    ctx.lineTo(w, magic);
+    ctx.moveTo(w, axisHeight+magic);
+    ctx.lineTo(magic, axisHeight+magic);
+    // time ticks
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    const space = 3;
+    for (const tick of xscale.ticks()) {
+      const x = xscale(tick);
+      const pixel = Math.round(x);
+      if (pixel === 0) continue;
+      ctx.moveTo(pixel+magic, tickSize+magic+space);
+      ctx.lineTo(pixel+magic, tickSize*2+magic);
+      ctx.fillText(formatTime(tick, dur), pixel+magic, tickSize+magic+space);
+    }
+    for (const [k, { offsetY }] of data.tracks) {
+      ctx.moveTo(magic, offsetY+magic);
+      ctx.lineTo(w, offsetY+magic);
+    }
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const tick of (yscale?.ticks() || [])) {
+      const y = yscale(tick);
+      const pixel = Math.round(y);
+      ctx.moveTo(magic, pixel+magic);
+      ctx.lineTo(magic+tickSize, pixel+magic);
+      ctx.fillText(formatUnit(tick, data.axes.y.fmt), magic+tickSize*2+4, pixel+magic);
+    }
+    ctx.stroke();
+  }
+
+  function renderOld(transform) {
     zoomLevel = transform;
     rectLst.length = 0;
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
@@ -411,9 +458,11 @@ async function renderProfiler() {
     canvas.height = height*dpr;
     canvas.style.height = `${height}px`;
     canvas.style.width = `${width}px`;
+    console.log(canvas.width, canvas.height);
     ctx.scale(dpr, dpr);
     d3.select(canvas).call(canvasZoom.transform, zoomLevel);
   }
+  const render = render2;
 
   canvasZoom = d3.zoom().filter(vizZoomFilter).scaleExtent([1, Infinity]).translateExtent([[0,0], [Infinity,0]]).on("zoom", e => render(e.transform));
   d3.select(canvas).call(canvasZoom);
