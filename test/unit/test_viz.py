@@ -1,4 +1,4 @@
-import unittest, decimal, json, struct
+import unittest, decimal, json, struct, contextlib
 from dataclasses import dataclass
 from typing import Generator
 
@@ -9,40 +9,34 @@ from tinygrad.dtype import dtypes
 from tinygrad.helpers import PROFILE, colored, ansistrip, flatten, TracingKey, ProfileRangeEvent, ProfileEvent, Context, cpu_events, profile_marker
 from tinygrad.device import Buffer
 
+from tinygrad.uop.ops import tracked_keys, tracked_ctxs, uop_fields
+from tinygrad.viz.serve import get_metadata, uop_to_json, get_details, GraphRewriteDetails
+traces = [(tracked_keys, tracked_ctxs, uop_fields)]
+
+@dataclass
+class VizEntry:
+  li:dict
+  graphs:list[GraphRewriteDetails]
+
+@contextlib.contextmanager
+def capture_viz():
+  ret:list[GraphRewriteDetails] = []
+  with Context(TRACK_MATCH_STATS=2, PROFILE=1):
+    yield ret
+  for trace,li in zip(tracked_ctxs[0], get_metadata(traces)):
+    ret.append(VizEntry(li, [step["graph"] for step in get_details(trace)]))
+
 @track_rewrites(name=True)
 def exec_rewrite(sink:UOp, pm_lst:list[PatternMatcher], names:None|list[str]=None) -> UOp:
   for i,pm in enumerate(pm_lst):
     sink = graph_rewrite(sink, TrackedPatternMatcher(pm.patterns), name=names[i] if names else None)
   return sink
 
-# real VIZ=1 pickles these tracked values
-from tinygrad.uop.ops import tracked_keys, tracked_ctxs, uop_fields, active_rewrites, _name_cnt
-traces = [(tracked_keys, tracked_ctxs, uop_fields)]
-from tinygrad.viz.serve import get_metadata, uop_to_json, get_details
-def get_viz_list(): return get_metadata(traces)
-def get_viz_details(rewrite_idx:int, step:int) -> Generator[dict, None, None]:
-  lst = get_viz_list()
-  assert len(lst) > rewrite_idx, "only loaded {len(lst)} traces, expecting at least {idx}"
-  return get_details(tracked_ctxs[rewrite_idx][step])
-
-class BaseTestViz(unittest.TestCase):
-  def setUp(self):
-    # clear the global context
-    for lst in [tracked_keys, tracked_ctxs, active_rewrites, _name_cnt]: lst.clear()
-    Buffer.profile_events.clear()
-    self.tms = TRACK_MATCH_STATS.value
-    self.profile = PROFILE.value
-    TRACK_MATCH_STATS.value = 2
-    PROFILE.value = 1
-  def tearDown(self):
-    TRACK_MATCH_STATS.value = self.tms
-    PROFILE.value = self.profile
-
-class TestViz(BaseTestViz):
+class TestViz(unittest.TestCase):
   def test_simple(self):
     a = UOp.variable("a", 0, 10)
-    exec_rewrite((a+0)*1, [sym])
-    lst = get_viz_list()
+    with capture_viz() as lst:
+      exec_rewrite((a+0)*1, [sym])
     # VIZ displays rewrites in groups of tracked functions
     self.assertEqual(len(lst), 1)
     # each group has a list of steps
@@ -52,9 +46,9 @@ class TestViz(BaseTestViz):
 
   def test_rewrites(self):
     a = UOp.variable("a", 0, 10)
-    exec_rewrite(a*1, [sym])
-    exec_rewrite(a*2, [sym])
-    lst = get_viz_list()
+    with capture_viz() as lst:
+      exec_rewrite(a*1, [sym])
+      exec_rewrite(a*2, [sym])
     self.assertEqual(len(lst), 2)
     # names dedup using a counter
     self.assertEqual(lst[0]["name"], "exec_rewrite n1")
@@ -62,8 +56,9 @@ class TestViz(BaseTestViz):
 
   def test_steps(self):
     a = UOp.variable("a", 0, 10)
-    exec_rewrite(a+1, [PatternMatcher([]), PatternMatcher([])], ["x", "y"])
-    steps = get_viz_list()[0]["steps"]
+    with capture_viz() as lst:
+      exec_rewrite(a+1, [PatternMatcher([]), PatternMatcher([])], ["x", "y"])
+    steps = lst[0]["steps"]
     # steps can optionally have a name
     self.assertEqual(steps[0]["name"], "x")
     self.assertEqual(steps[1]["name"], "y")
@@ -71,8 +66,8 @@ class TestViz(BaseTestViz):
   def test_rewrite_location(self):
     def inner(sink): return graph_rewrite(sink, PatternMatcher([]))
     def outer(sink): return inner(sink)
-    outer(UOp.variable("a", 1, 10))
-    lst = get_viz_list()
+    with capture_viz() as lst:
+      outer(UOp.variable("a", 1, 10))
     # step location comes from inner rewrite
     fp, lineno = lst[0]["steps"][0]["loc"]
     self.assertEqual(fp, inner.__code__.co_filename)
@@ -85,8 +80,8 @@ class TestViz(BaseTestViz):
       return x.replace(arg=x.arg+1)
     err_pm = PatternMatcher([(UPat.cvar("x"), count_3),])
     a = UOp.const(dtypes.int, 1)
-    with self.assertRaises(AssertionError): exec_rewrite(a, [err_pm])
-    lst = get_viz_list()
+    with capture_viz() as lst, self.assertRaises(AssertionError):
+      exec_rewrite(a, [err_pm])
     err_step = lst[0]["steps"][0]
     self.assertEqual(err_step["match_count"], 4) # 3 successful rewrites + 1 err
 
@@ -94,16 +89,15 @@ class TestViz(BaseTestViz):
     a = UOp.variable("a", 1, 10)
     @track_rewrites()
     def name_default(): return graph_rewrite(a, PatternMatcher([]))
-    name_default()
-    lst = get_viz_list()
+    with capture_viz() as lst: name_default()
     self.assertEqual(lst[0]["name"], "name_default n1")
 
   # name can also come from a function that returns a string
   def test_dyn_name_fxn(self):
     @track_rewrites(name=lambda *args,ret,**kwargs: ret.render())
     def name_from_fxn(s:UOp, arg:list|None=None): return graph_rewrite(s, PatternMatcher([]))
-    name_from_fxn(UOp.variable("a", 1, 10)+1, arg=["test"])
-    lst = get_viz_list()
+    with capture_viz() as lst:
+      name_from_fxn(UOp.variable("a", 1, 10)+1, arg=["test"])
     # name gets deduped by the function call counter
     self.assertEqual(lst[0]["name"], "(a+1) n1")
 
@@ -111,8 +105,8 @@ class TestViz(BaseTestViz):
   def test_tracing_key(self):
     @track_rewrites(name=lambda inp,ret: TracingKey("custom_name", (inp,)))
     def test(s:UOp): return graph_rewrite(s, PatternMatcher([]))
-    test(UOp.variable("a", 1, 10)+1)
-    lst = get_viz_list()
+    with capture_viz() as lst:
+      test(UOp.variable("a", 1, 10)+1)
     # NOTE: names from TracingKey do not get deduped
     self.assertEqual(lst[0]["name"], "custom_name")
 
@@ -132,8 +126,9 @@ class TestViz(BaseTestViz):
       (UPat(Ops.DEFINE_VAR, name="x"), lambda x: x.replace(op=Ops.CONST)),
       (UPat(Ops.CONST, name="x"), lambda x: x.replace(op=Ops.DEFINE_VAR)),
     ])
-    with self.assertRaises(RuntimeError): exec_rewrite(a, [pm])
-    graphs = flatten(x["graph"].values() for x in get_viz_details(0, 0))
+    with capture_viz() as lst, self.assertRaises(RuntimeError):
+      exec_rewrite(a, [pm])
+    graphs = flatten(g.values() for g in lst[0].graphs)
     self.assertEqual(graphs[0], uop_to_json(a)[id(a)])
     self.assertEqual(graphs[1], uop_to_json(b)[id(b)])
     # fallback to NOOP with the error message
@@ -144,10 +139,10 @@ class TestViz(BaseTestViz):
     a = UOp.variable("a", 0, 10)
     z = UOp.const(dtypes.index, 0)
     alu = a*z
-    exec_rewrite(alu, [sym])
-    lst = get_viz_list()
+    with capture_viz() as lst:
+      exec_rewrite(alu, [sym])
     self.assertEqual(len(lst), 1)
-    graphs = [x["graph"] for x in get_viz_details(0, 0)]
+    graphs = lst[0].graphs
     # embed const in the parent node when possible
     self.assertEqual(list(graphs[0]), [id(a), id(alu)])
     self.assertEqual(list(graphs[1]), [id(z)])
@@ -169,7 +164,7 @@ def root_rewrite(root:UOp):
   return root.replace(src=new_src)
 root = TrackedPatternMatcher([(UPat(Ops.SINK, src=UPat(Ops.ADD), name="root"), root_rewrite),])
 
-class TestVizTree(BaseTestViz):
+class TestVizTree(unittest.TestCase):
   def assertStepEqual(self, step:dict, want:dict):
     for k,v in want.items():
       self.assertEqual(step[k], v, f"failed at '{k}': {v} != {step[k]}\n{step=}")
@@ -199,7 +194,7 @@ def bufs_allocated() -> int:
   gc.collect()
   return sum([isinstance(x, Buffer) for x in gc.get_objects()])
 
-class TestVizGC(BaseTestViz):
+class TestVizGC(unittest.TestCase):
   def test_gc(self):
     init = bufs_allocated()
     a = UOp.new_buffer("NULL", 10, dtypes.char)
@@ -226,7 +221,7 @@ class TestVizGC(BaseTestViz):
 from tinygrad import Tensor, Device
 from tinygrad.engine.realize import get_program
 
-class TestVizIntegration(BaseTestViz):
+class TestVizIntegration(unittest.TestCase):
   # kernelize has a custom name function in VIZ
   def test_kernelize_tracing(self):
     a = Tensor.empty(4, 4)
@@ -427,7 +422,7 @@ def _alloc(b:int):
   a.uop.buffer.allocate()
   return a
 
-class TestVizMemoryLayout(BaseTestViz):
+class TestVizMemoryLayout(unittest.TestCase):
   def test_double_alloc(self):
     a = _alloc(1)
     _b = _alloc(1)
