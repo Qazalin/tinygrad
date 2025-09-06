@@ -150,10 +150,11 @@ const rescaleTrack = (source, tid, k) => {
       e.y1[i] = e.y1[i]*k;
     }
   }
-  const change = (source.height*k)-source.height;
   const div = document.getElementById(tid);
-  div.style.height = rect(div).height+change+"px";
-  source.height = source.height*k;
+  const prvHeight = rect(div).height;
+  const newHeight = prvHeight*k;
+  div.style.height = newHeight+"px";
+  const change = newHeight-prvHeight;
   return change;
 }
 
@@ -244,8 +245,6 @@ async function renderProfiler() {
       div.style("height", levelHeight*levels.length+"px").style("pointerEvents", "none");
     } else {
       const peak = u64();
-      const height = heightScale(peak);
-      const yscale = d3.scaleLinear().domain([0, peak]).range([height, 0]);
       let x = 0, y = 0;
       const buf_shapes = new Map(), temp = new Map();
       const timestamps = [];
@@ -276,13 +275,17 @@ async function renderProfiler() {
         v.y.push(v.y.at(-1));
       }
       timestamps.push(dur);
+      const height = Math.round(heightScale(peak));
+      const rowHeight = Math.max(baseHeight, height);
+      const base = Math.max(0, rowHeight-height);
+      const yscale = d3.scaleLinear().domain([0, peak]).range([height+base, base]);
       for (const [_, {dtype, sz, nbytes, y, x:steps}] of buf_shapes) {
         const x = steps.map(s => timestamps[s]);
         const arg = {tooltipText:`${dtype} len:${formatUnit(sz)}\n${formatUnit(nbytes, "B")}`};
         shapes.push({ x, y0:y.map(yscale), y1:y.map(y0 => yscale(y0+nbytes)), arg, fillColor:cycleColors(colorScheme.BUFFER, shapes.length) });
       }
-      data.tracks.set(k, { shapes, offsetY, height, peak, scaleFactor:maxheight*4/height });
-      div.style("height", height+"px").style("cursor", "pointer").on("click", (e) => {
+      data.tracks.set(k, { shapes, offsetY, peak, scaleFactor:(maxheight*4)/rowHeight });
+      div.style("height", rowHeight+"px").style("cursor", "pointer").on("click", (e) => {
         const newFocus = e.currentTarget.id === focusedDevice ? null : e.currentTarget.id;
         let offset = 0;
         for (const [tid, track] of data.tracks) {
@@ -290,7 +293,8 @@ async function renderProfiler() {
           if (tid === newFocus) offset += rescaleTrack(track, tid, track.scaleFactor);
           else if (tid === focusedDevice) offset += rescaleTrack(track, tid, 1/track.scaleFactor);
         }
-        data.axes.y = newFocus != null ? { domain:[0, (t=data.tracks.get(newFocus)).peak], range:[t.offsetY+t.height, t.offsetY], fmt:"B" } : null;
+        const t = data.tracks.get(newFocus);
+        data.axes.y = newFocus != null ? { domain:[0, t.peak], range:[t.offsetY+rect(div.node()).height, t.offsetY], fmt:"B" } : null;
         focusedDevice = newFocus;
         return resize();
       });
@@ -316,6 +320,8 @@ async function renderProfiler() {
     const xrange = xscale.range(); // pixels
     const axisHeight = tickSize*2;
     const magic = 0.5;
+    const space = 3;
+    const fontSize = 8;
     ctx.beginPath();
     ctx.moveTo(magic, magic);
     ctx.lineTo(w, magic);
@@ -324,7 +330,6 @@ async function renderProfiler() {
     // time ticks
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
-    const space = 3;
     for (const tick of xscale.ticks()) {
       const x = xscale(tick);
       const pixel = Math.round(x);
@@ -337,14 +342,18 @@ async function renderProfiler() {
       ctx.moveTo(magic, offsetY+magic);
       ctx.lineTo(w, offsetY+magic);
     }
-    ctx.textAlign = "center";
+    ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    for (const tick of (yscale?.ticks() || [])) {
-      const y = yscale(tick);
-      const pixel = Math.round(y);
-      ctx.moveTo(magic, pixel+magic);
-      ctx.lineTo(magic+tickSize, pixel+magic);
-      ctx.fillText(formatUnit(tick, data.axes.y.fmt), magic+tickSize*2+4, pixel+magic);
+    if (yscale != null) {
+      const tickX = magic+space;
+      const ticks = yscale.ticks().slice(1, -1);
+      for (const tick of ticks) {
+        const y = yscale(tick);
+        const pixel = Math.round(y);
+        ctx.fillText(formatUnit(tick, data.axes.y.fmt), tickX, pixel+magic);
+      }
+      const maxVal = d3.max(yscale.domain());
+      ctx.fillText(formatUnit(maxVal, data.axes.y.fmt), tickX, d3.min(yscale.range())+fontSize+magic);
     }
     ctx.stroke();
   }
@@ -458,7 +467,6 @@ async function renderProfiler() {
     canvas.height = height*dpr;
     canvas.style.height = `${height}px`;
     canvas.style.width = `${width}px`;
-    console.log(canvas.width, canvas.height);
     ctx.scale(dpr, dpr);
     d3.select(canvas).call(canvasZoom.transform, zoomLevel);
   }
