@@ -9,8 +9,8 @@ from tinygrad.dtype import dtypes
 from tinygrad.helpers import PROFILE, colored, ansistrip, flatten, TracingKey, ProfileRangeEvent, ProfileEvent, Context, cpu_events, profile_marker
 from tinygrad.device import Buffer
 
-from tinygrad.uop.ops import tracked_keys, tracked_ctxs, uop_fields
-from tinygrad.viz.serve import get_metadata, uop_to_json, get_details, GraphRewriteDetails
+from tinygrad.uop.ops import tracked_keys, tracked_ctxs, uop_fields, _name_cnt
+from tinygrad.viz.serve import get_metadata, uop_to_json, get_details, GraphRewriteDetails, _reconstruct
 traces = [(tracked_keys, tracked_ctxs, uop_fields)]
 
 @dataclass
@@ -25,6 +25,9 @@ def capture_viz():
     yield ret
   for trace,li in zip(tracked_ctxs[0], get_metadata(traces)):
     ret.append(VizEntry(li, [step["graph"] for step in get_details(trace)]))
+  for t in [*traces[0], _name_cnt]: t.clear()
+  Buffer.profile_events.clear()
+  _reconstruct.cache_clear()
 
 @track_rewrites(name=True)
 def exec_rewrite(sink:UOp, pm_lst:list[PatternMatcher], names:None|list[str]=None) -> UOp:
@@ -176,9 +179,9 @@ class TestVizTree(unittest.TestCase):
     d = UOp.variable("d",0,10)
     sink = UOp.sink(a+b, c+d)
     def tree_rewrite(): return graph_rewrite(sink, root, name="root")
-    tree_rewrite()
-    lst = get_viz_list()
-    steps = lst[0]["steps"]
+    with capture_viz() as lst:
+      tree_rewrite()
+    steps = lst[0].li["steps"]
     self.assertEqual(len(steps), 1+2+4)
     self.assertStepEqual(steps[0], {"name":"root", "depth":0, "match_count":1})
     self.assertStepEqual(steps[1], {"name":"branch_0", "depth":1, "match_count":1})
@@ -199,10 +202,10 @@ class TestVizGC(unittest.TestCase):
     init = bufs_allocated()
     a = UOp.new_buffer("NULL", 10, dtypes.char)
     a.buffer.allocate()
-    exec_rewrite(a, [PatternMatcher([])])
+    with capture_viz() as lst:
+      exec_rewrite(a, [PatternMatcher([])])
     del a
     self.assertEqual(bufs_allocated()-init, 0)
-    lst = get_viz_list()
     self.assertEqual(len(lst), 1)
 
   @unittest.skip("it's not generic enough to handle arbitrary UOps in arg")
