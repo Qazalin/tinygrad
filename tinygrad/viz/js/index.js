@@ -175,6 +175,7 @@ const drawLine = (ctx, x, y, opts) => {
 }
 
 var data, focusedDevice, canvasZoom, zoomLevel = d3.zoomIdentity;
+var currEvents;
 async function renderProfiler() {
   displayGraph("profiler");
   d3.select(".metadata").html("");
@@ -355,17 +356,49 @@ async function renderProfiler() {
       const maxVal = d3.max(yscale.domain());
       ctx.fillText(formatUnit(maxVal, data.axes.y.fmt), tickX, d3.min(yscale.range())+fontSize+magic);
     }
+    /*
+    // debug lines
+    const screenWidth = xscale.range()[1];
+    const H = canvas.clientHeight;
+    for (let i=0; i<screenWidth; i+=10) {
+      ctx.moveTo(i+magic, magic);
+      ctx.lineTo(i+magic, H);
+    }
+    */
     ctx.stroke();
     // shapes
+    let visible = 0;
     const { shapes, offsetY } = data.tracks.get("CUDA Graph");
+    const W = d3.max(xscale.range());
+    const [t0, t1] = xscale.domain();
+    const binW = (t1 - t0) / W;
+    const rects = [];
     for (const e of shapes) {
-      ctx.fillStyle = "#fe8121";
-      const x = xscale(e.x);
-      const width = xscale(e.x+e.width)-x;
-      const y = offsetY+e.y;
-      ctx.fillRect(x, y, width, 24);
-      console.log(x, y, width);
+      const start = e.x, end = e.x+e.width;
+      if (start>visibleX[1] || end<visibleX[0]) continue;
+      visible += 1;
+      if (e.y !== 0) throw new Error("todo!");
+      const x0 = xscale(e.x);
+      const x1 = xscale(e.x+e.width);
+      const st = Math.floor(x0), et = Math.floor(x1);
+      const width = et-st;
+      rects.push({x:st, width});
     }
+    const widths = rects.map(r => r.width);
+    const maxHeight = 30;
+    const step = 10;
+    let depthScale = d3.scaleLinear().domain([d3.min(widths), d3.max(widths)]).range([1, step]); // 1px at the minimum.
+    if (new Set(depthScale.domain()).size === 1) depthScale = () => step;
+    rectLst.length = 0;
+    ctx.fillStyle = "#fe8121";
+    for (const r of rects) {
+      const height = Math.floor(depthScale(r.width)*(maxHeight/step));
+      console.log(height);
+      rectLst.push({ x0:r.x, x1:r.x+r.width, y0:offsetY, y1:offsetY+height, arg:{tooltipText:"hi!"} });
+      const base = maxHeight-height;
+      ctx.fillRect(r.x, base+offsetY, r.width, height)
+    }
+    console.log("visible events", visible, "rects drawn", "totalPixels", rects.length, W);
   }
 
   function renderOld(transform) {
@@ -478,7 +511,8 @@ async function renderProfiler() {
     canvas.style.height = `${height}px`;
     canvas.style.width = `${width}px`;
     ctx.scale(dpr, dpr);
-    d3.select(canvas).call(canvasZoom.transform, zoomLevel);
+    const t = d3.zoomIdentity.translate(-23261.449816779346, 654.5).scale(18.302895571261132);
+    d3.select(canvas).call(canvasZoom.transform, t);
   }
   const render = render2;
 
