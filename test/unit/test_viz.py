@@ -26,10 +26,9 @@ class VizEntry:
   li:dict
   graphs:list[GraphRewriteDetails]
 
-@contextlib.contextmanager
-def load_viz(strace:bytes) -> ContextManager[list[VizEntry]]:
+def load_viz(strace:bytes) -> list[VizEntry]:
   dtrace = pickle.loads(strace)
-  yield [VizEntry(li, [step["graph"] for step in get_details(trace)])
+  return [VizEntry(li, [step["graph"] for step in get_details(trace)])
          for trace, li in zip(dtrace[0][1][0], get_metadata(dtrace))]
 
 @track_rewrites(name=True)
@@ -41,7 +40,7 @@ def exec_rewrite(sink:UOp, pm_lst:list[PatternMatcher], names:None|list[str]=Non
 class TestViz(unittest.TestCase):
   def test_simple(self):
     a = UOp.variable("a", 0, 10)
-    with load_viz() as lst:
+    with capture_viz() as trace:
       exec_rewrite((a+0)*1, [sym])
     # VIZ displays rewrites in groups of tracked functions
     self.assertEqual(len(lst), 1)
@@ -233,27 +232,29 @@ class TestVizIntegration(unittest.TestCase):
   # kernelize has a custom name function in VIZ
   def test_kernelize_tracing(self):
     a = Tensor.empty(4, 4)
-    Tensor.kernelize(a+1, a+2)
-    lst = get_viz_list()
+    with load_viz() as lst:
+      Tensor.kernelize(a+1, a+2)
     self.assertEqual(len(lst), 1)
     self.assertEqual(lst[0]["name"], "Schedule 2 Kernels n1")
 
   # codegen supports rendering of code blocks
   def test_codegen_tracing(self):
-    ast = Tensor.schedule(Tensor.empty(4)+Tensor.empty(4))[0].ast
-    prg = get_program(ast, Device[Device.DEFAULT].renderer)
-    lst = get_viz_list()
+    with capture_viz() as strace:
+      ast = Tensor.schedule(Tensor.empty(4)+Tensor.empty(4))[0].ast
+      prg = get_program(ast, Device[Device.DEFAULT].renderer)
+    lst = load_viz(strace)
     self.assertEqual(len(lst), 2)
-    self.assertEqual(lst[0]["name"], "Schedule 1 Kernel n1")
-    self.assertEqual(lst[1]["name"], prg.name)
+    self.assertEqual(lst[0].li["name"], "Schedule 1 Kernel n1")
+    self.assertEqual(lst[1].li["name"], prg.name)
 
   def test_metadata_tracing(self):
     with Context(TRACEMETA=2):
       a = Tensor.empty(1)
       b = Tensor.empty(1)
       metadata = (alu:=a+b).uop.metadata
-      alu.kernelize()
-      graph = next(get_viz_details(0, 0))["graph"]
+      with capture_viz() as strace:
+        alu.kernelize()
+      graph = load_viz(strace)[0].graphs[0]
     self.assertEqual(len([n for n in graph.values() if repr(metadata) in n["label"]]), 1)
 
   # tracing also works without a track_rewrites context
