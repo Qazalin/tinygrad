@@ -227,7 +227,7 @@ async function renderProfiler() {
           ref = stepIdx === -1 ? null : {ctx:ref.ctx, step:stepIdx};
         }
         const htmlLabel = label.map(({color, st}) => `<span style="color:${color}">${st}</span>`).join('');
-        const arg = { tooltipText:htmlLabel+"\n"+formatTime(e.dur)+(e.info != null ? "\n"+e.info : ""), ...ref };
+        const arg = { tooltipText:htmlLabel+"\n"+formatTime(e.dur)+"\n"+formatTime(e.st)+(e.info != null ? "\n"+e.info : ""), ...ref };
         // offset y by depth
         shapes.push({x:e.st, y:levelHeight*depth, width:e.dur, height:levelHeight, arg, label, fillColor });
       }
@@ -310,14 +310,14 @@ async function renderProfiler() {
     xscale.domain(visibleX);
     // draw shapes
     for (const [k, { offsetY, shapes }] of data.tracks) {
-      if (k !== "METAL") continue;
+      if (k !== "NULL") continue;
       for (const e of shapes) {
         const start = e.x, end = e.x+e.width;
         if (start>visibleX[1] || end<visibleX[0]) continue;
         ctx.fillStyle = e.fillColor;
         // contiguous rect
         const x = xscale(start), y = offsetY+e.y;
-        const width = xscale(end)-x;
+        const width = Math.max(1, xscale(end)-x);
         ctx.fillRect(x, y, width, e.height);
         rectLst.push({ y0:y, y1:y+e.height, x0:x, x1:x+width, arg:e.arg });
         // add label
@@ -364,6 +364,7 @@ async function renderProfiler() {
       drawLine(ctx, [x, x], [0, canvas.clientHeight], { color:m.color });
       ctx.fillText(m.name, x+2, 1);
     }
+    console.log(rectLst.length);
   }
 
   function resize() {
