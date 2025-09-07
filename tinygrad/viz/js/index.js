@@ -145,10 +145,8 @@ const cycleColors = (lst, i) => lst[i%lst.length];
 
 const rescaleTrack = (source, tid, k) => {
   for (const e of source.shapes) {
-    for (let i=0; i<e.y0.length; i++) {
-      e.y0[i] = e.y0[i]*k;
-      e.y1[i] = e.y1[i]*k;
-    }
+    e.y *= k;
+    e.height *= k;
   }
   const change = (source.height*k)-source.height;
   const div = document.getElementById(tid);
@@ -268,10 +266,19 @@ async function renderProfiler() {
       timestamps.push(dur);
       const height = heightScale(peak);
       const yscale = d3.scaleLinear().domain([0, peak]).range([height, 0]);
+      let bufCount = 0;
       for (const [_, {dtype, sz, nbytes, y, x:steps}] of buf_shapes) {
         const x = steps.map(s => timestamps[s]);
-        const arg = {tooltipText:`${dtype} len:${formatUnit(sz)}\n${formatUnit(nbytes, "B")}`};
-        shapes.push({ x, y0:y.map(yscale), y1:y.map(y0 => yscale(y0+nbytes)), arg, fillColor:cycleColors(colorScheme.BUFFER, shapes.length) });
+        const arg = {tooltipText: `${dtype} len:${formatUnit(sz)}\n${formatUnit(nbytes, "B")}`};
+        const fillColor = cycleColors(colorScheme.BUFFER, bufCount);
+        bufCount += 1;
+        // each step is a contiguous rect
+        for (let i = 0; i < x.length - 1; i++) {
+          const start = x[i], end = x[i+1];
+          const y0px = yscale(y[i]), y1px = yscale(y[i] + nbytes);
+          const h = y0px - y1px;
+          shapes.push({ x:start, width:end-start, y:y1px, height:h, arg, fillColor });
+        }
       }
       data.tracks.set(k, { shapes, offsetY, height, peak, scaleFactor:maxheight*4/height });
       div.style("height", height+padding+"px").style("cursor", "pointer").on("click", (e) => {
@@ -308,21 +315,6 @@ async function renderProfiler() {
         else { start = e.x; end = e.x+e.width; }
         if (start>visibleX[1] || end<visibleX[0]) continue;
         ctx.fillStyle = e.fillColor;
-        // generic polygon
-        if (e.width == null) {
-          const x = e.x.map(xscale);
-          const p = new Path2D();
-          p.moveTo(x[0], offsetY+e.y0[0]);
-          for (let i=1; i<x.length; i++) p.lineTo(x[i], offsetY+e.y0[i]);
-          for (let i=x.length-1; i>=0; i--) p.lineTo(x[i], offsetY+e.y1[i]);
-          p.closePath();
-          ctx.fill(p);
-          // NOTE: y coordinates are in reverse order
-          for (let i = 0; i<x.length-1; i++) {
-            rectLst.push({ x0:x[i], x1:x[i+1], y0:offsetY+e.y1[i], y1:offsetY+e.y0[i], arg:e.arg });
-          }
-          continue;
-        }
         // contiguous rect
         const x = xscale(start);
         const width = xscale(end)-x;
