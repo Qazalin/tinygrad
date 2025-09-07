@@ -227,9 +227,10 @@ async function renderProfiler() {
           ref = stepIdx === -1 ? null : {ctx:ref.ctx, step:stepIdx};
         }
         const htmlLabel = label.map(({color, st}) => `<span style="color:${color}">${st}</span>`).join('');
+        const name = label.map(({color, st}) => st).join('');
         const arg = { tooltipText:htmlLabel+"\n"+formatTime(e.dur)+"\n"+formatTime(e.st)+(e.info != null ? "\n"+e.info : ""), ...ref };
         // offset y by depth
-        shapes.push({x:e.st, y:levelHeight*depth, width:e.dur, height:levelHeight, arg, label, fillColor });
+        shapes.push({name, x:e.st, y:levelHeight*depth, width:e.dur, height:levelHeight, arg, label, fillColor });
       }
       div.style("height", levelHeight*levels.length+padding+"px").style("pointerEvents", "none");
     } else {
@@ -296,6 +297,90 @@ async function renderProfiler() {
     }
   }
   updateProgress({ "show":false });
+  // blocks datastructure
+  const EVENTS_PER_BLOCK = 16;
+  const NULL_EVENT = {x:0, y:0, width:0, height:0, arg:0}; // TODO: this y isn't depth?
+  class TraceBlock {
+    constructor() {
+      this.len = 0;
+      this.events = Array(EVENTS_PER_BLOCK).fill(NULL_EVENT); // list[Event]
+    }
+    is_full() {
+      return this.len === EVENTS_PER_BLOCK;
+    }
+    push(e) {
+      if (this.is_full()) throw new Error("TraceBlock is full");
+      this.events[this.len] = e;
+      this.len += 1;
+    }
+  }
+  class BlockPool {
+    constructor() {
+      this.blocks = []; // list[TrackeBlock]
+    }
+    alloc() {
+      const i = this.blocks.length;
+      this.blocks.push(new TraceBlock());
+      return i;
+    }
+  }
+  class Track {
+    constructor() {
+      this.block_locs = []; // list[u32]
+    }
+
+    new_block(pool) {
+      const nb = pool.alloc();
+      this.block_locs.push(nb);
+      return nb
+    }
+
+    push(e, pool) {
+      let last = this.block_locs.at(-1);
+      if (last == null || pool.blocks[last].is_full()) last = this.new_block(pool);
+      pool.blocks[last].push(e);
+    }
+  }
+  const events = data.tracks.get("NULL").shapes;
+  const pool = new BlockPool();
+  const track = new Track();
+  for (const e of events) {
+    track.push(e, pool);
+  }
+  // aggregator
+  //// note: rust max_by_key returns the last one if there's multiple with max
+  const last_longest = (tb) => tb.events.reduce((mx, e) => e.width >= mx.width ? e : mx);
+  const longest_combine = (tb1, tb2) => tb1.width > tb2.width ? tb1 : tb2;
+  const trailing_ones = (x) => Math.clz32(~x & (x + 1)) ^ 31;
+  // implicit forest
+  class IForest {
+    constructor() {
+      this.vals = []; // list[LongestEvent]
+    }
+    push(block) { // TraceBlock
+      this.vals.push(last_longest(block));
+      // We want to index the first level every 2 nodes, 2nd level every 4 nodes...
+      // This happens to correspond to the number of trailing ones in the index
+      const len = this.vals.length;
+      const levels_to_index = trailing_ones(len)-1;
+      // Complete unfinished aggregation nodes which are now ready
+      let cur = len-1; // The leaf we just pushed
+      for (let level=0; level<levels_to_index; level++) {
+        const prev_higher_level = cur-(1 << level); // nodes at a level reach 2^level
+        const combined = longest_combine(this.vals[prev_higher_level], this.vals[cur]);
+        this.vals[prev_higher_level] = combined;
+        cur = prev_higher_level;
+      }
+      // Push new aggregation node going back one level further than we aggregated
+      this.vals.push(this.vals[len-(1 << levels_to_index)]);
+    }
+  }
+  const forest = new IForest();
+  for (const i of track.block_locs) {
+    forest.push(pool.blocks[i]);
+  }
+  console.log(forest.vals);
+
   // draw events on a timeline
   const ns = (v) => Math.round(v * 1000);
   const dpr = window.devicePixelRatio || 1;
