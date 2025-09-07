@@ -309,17 +309,17 @@ async function renderProfiler() {
     const visibleX = xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale);
     xscale.domain(visibleX);
     // draw shapes
-    for (const [_, { offsetY, shapes }] of data.tracks) {
+    for (const [k, { offsetY, shapes }] of data.tracks) {
+      if (k !== "METAL") continue;
       for (const e of shapes) {
-        if (e.width == null) { start = e.x[0]; end = end = e.x[e.x.length-1]; }
-        else { start = e.x; end = e.x+e.width; }
+        const start = e.x, end = e.x+e.width;
         if (start>visibleX[1] || end<visibleX[0]) continue;
         ctx.fillStyle = e.fillColor;
         // contiguous rect
-        const x = xscale(start);
+        const x = xscale(start), y = offsetY+e.y;
         const width = xscale(end)-x;
-        ctx.fillRect(x, offsetY+e.y, width, e.height);
-        rectLst.push({ y0:offsetY+e.y, y1:offsetY+e.y+e.height, x0:x, x1:x+width, arg:e.arg });
+        ctx.fillRect(x, y, width, e.height);
+        rectLst.push({ y0:y, y1:y+e.height, x0:x, x1:x+width, arg:e.arg });
         // add label
         if (e.label == null) continue;
         ctx.textAlign = "left";
