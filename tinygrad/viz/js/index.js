@@ -297,6 +297,7 @@ async function renderProfiler() {
   }
   updateProgress({ "show":false });
   // draw events on a timeline
+  const ns = (v) => Math.round(v * 1000);
   const dpr = window.devicePixelRatio || 1;
   const ellipsisWidth = ctx.measureText("...").width;
   const rectLst = [];
@@ -308,6 +309,15 @@ async function renderProfiler() {
     const xscale = d3.scaleLinear().domain([0, dur]).range([0, canvas.clientWidth]);
     const visibleX = xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale);
     xscale.domain(visibleX);
+    const viewRange = [ns(visibleX[0]), ns(visibleX[1])];
+    const nsPerPx = Math.floor((viewRange[1]-viewRange[0])/canvas.clientWidth);
+    const minEventPx = 2;
+    let step = nsPerPx * minEventPx;
+    // round step up to next power of two
+    step = 1 << (32 - Math.clz32(Math.floor(step - 1)));
+    step = Math.max(1, step);
+    const qstart = viewRange[0]-(viewRange[0]%step);
+    const qend = viewRange[1]-(viewRange[1]%step)+step;
     // draw shapes
     for (const [k, { offsetY, shapes }] of data.tracks) {
       if (k !== "NULL") continue;
@@ -364,7 +374,6 @@ async function renderProfiler() {
       drawLine(ctx, [x, x], [0, canvas.clientHeight], { color:m.color });
       ctx.fillText(m.name, x+2, 1);
     }
-    console.log(rectLst.length);
   }
 
   function resize() {
