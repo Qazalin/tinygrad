@@ -267,7 +267,7 @@ async function renderProfiler() {
       }
       timestamps.push(dur);
       const height = heightScale(peak);
-      const yscale = d3.scaleLinear().domain([0, peak]).range([height, 0]);
+      const yscale = d3.scaleLinear().domain([0, peak]).rangeRound([height, 0]);
       for (const [_, {dtype, sz, nbytes, y, x:steps}] of buf_shapes) {
         const x = steps.map(s => timestamps[s]);
         const arg = {tooltipText:`${dtype} len:${formatUnit(sz)}\n${formatUnit(nbytes, "B")}`};
