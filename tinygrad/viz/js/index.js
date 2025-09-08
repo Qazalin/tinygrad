@@ -163,7 +163,7 @@ const colorScheme = {TINY:["#1b5745", "#354f52", "#354f52", "#1d2e62", "#63b0cd"
 const cycleColors = (lst, i) => lst[i%lst.length];
 
 const rescaleTrack = (source, tid, k) => {
-  for (const e of source.shapes) {
+  for (const e of source.shapes.events) {
     for (let i=0; i<e.y0.length; i++) {
       e.y0[i] = e.y0[i]*k;
       e.y1[i] = e.y1[i]*k;
@@ -311,10 +311,8 @@ async function renderProfiler() {
   // draw events on a timeline
   const dpr = window.devicePixelRatio || 1;
   const ellipsisWidth = ctx.measureText("...").width;
-  const rectLst = [];
   function render(transform) {
     zoomLevel = transform;
-    rectLst.length = 0;
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
     // rescale to match current zoom
     const xscale = d3.scaleLinear().domain([0, dur]).range([0, canvas.clientWidth]);
@@ -336,17 +334,12 @@ async function renderProfiler() {
           for (let i=x.length-1; i>=0; i--) p.lineTo(x[i], offsetY+e.y1[i]);
           p.closePath();
           ctx.fill(p);
-          // NOTE: y coordinates are in reverse order
-          for (let i = 0; i<x.length-1; i++) {
-            rectLst.push({ x0:x[i], x1:x[i+1], y0:offsetY+e.y1[i], y1:offsetY+e.y0[i], arg:e.arg });
-          }
           continue;
         }
         // contiguous rect
         const x = xscale(e.x);
         const width = xscale(e.x+e.width)-x;
         ctx.fillRect(x, offsetY+e.y, width, e.height);
-        rectLst.push({ y0:offsetY+e.y, y1:offsetY+e.y+e.height, x0:x, x1:x+width, arg:e.arg });
         // add label
         if (e.label == null) continue;
         ctx.textAlign = "left";
@@ -416,9 +409,11 @@ async function renderProfiler() {
     const { top, left, width, height } = rect(canvas);
     const X = ((x-left) * (canvas.width/width))/dpr;
     const Y = ((y-top) * (canvas.height/height))/dpr;
+    /*
     for (const r of rectLst) {
       if (Y>=r.y0 && Y<=r.y1 && X>=r.x0 && X<=r.x1) return r.arg;
     }
+    */
   }
 
   canvas.addEventListener("click", e => {
