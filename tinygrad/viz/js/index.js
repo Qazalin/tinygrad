@@ -131,22 +131,48 @@ async function renderDag(graph, additions, recenter=false) {
 // ** profiler graph
 
 const perfCounter = [];
-class RangeTree {
-  constructor(name) { this.data = []; this.name = name; }
+class RangeIndex {
+  constructor(name) {
+    this.data = [];
+    this.name = name;
+  }
   push(e) {
     this.data.push(e);
   }
-  *query(start, end, timestep) {
-    let visible = 0;
-    for (const e of this.data) {
-      const st = e.width == null ? e.x[0] : e.x;
-      const et = e.width == null ? e.x.at(-1) : e.x+e.width;
-      if (st > end || et < st) continue;
-      visible += 1;
-      yield e;
-    }
-    perfCounter.push({ name:this.name, total:this.data.length, visible, query:[start, end] });
+
+  *query(start, end, timestamp) {
+    if (this.data[0]?.width == null) yield* this.queryPath(start, end, timestamp);
+    else yield* this.queryRect(start, end, timestamp);
   }
+
+  *queryPath(start, end, timestamp) {
+    for (const e of this.data) {
+      const x = e.x, y0 = e.y0, y1 = e.y1;
+      if (x[x.length - 1] <= start || x[0] >= end) continue;
+      else if (x[0] >= start && x[x.length - 1] <= end) yield { x, y0, y1, arg: e.arg, fillColor: e.fillColor };
+      else {
+        let i0 = 0; while (i0 < x.length && x[i0] < start) i0++;
+        let i1 = x.length - 1; while (i1 >= 0 && x[i1] > end) i1--;
+        const X = [], Y0 = [], Y1 = [];
+        if (i0 > 0 && x[i0] > start) { const j = i0 - 1, t = (start - x[j]) / (x[i0] - x[j]); X.push(start); Y0.push(y0[j] + (y0[i0] - y0[j]) * t); Y1.push(y1[j] + (y1[i0] - y1[j]) * t); }
+        for (let i = i0; i <= i1; i++) { X.push(x[i]); Y0.push(y0[i]); Y1.push(y1[i]); }
+        if (i1 < x.length - 1 && x[i1] < end) { const j = i1 + 1, t = (end - x[i1]) / (x[j] - x[i1]); X.push(end); Y0.push(y0[i1] + (y0[j] - y0[i1]) * t); Y1.push(y1[i1] + (y1[j] - y1[i1]) * t); }
+        if (X.length < 2) continue;
+        yield { x: X, y0: Y0, y1: Y1, arg: e.arg, fillColor: e.fillColor };
+      }
+    }
+  }
+
+  *queryRect(start, end, timestamp) {
+    for (const e of this.data) {
+      if (e.x + e.width <= start || e.x >= end) continue;
+      else if (e.x < start) yield {x:start,y:e.y,width:e.x+e.width-start,height:e.height,arg:e.arg,label:e.label,fillColor:e.fillColor};
+      else if (e.x+e.width > end) yield {x:e.x,y:e.y,width:end-e.x,height:e.height,arg:e.arg,label:e.label,fillColor:e.fillColor};
+      else yield {x:e.x,y:e.y,width:e.width,height:e.height,arg:e.arg,label:e.label,fillColor:e.fillColor};
+    }
+  }
+
+
 }
 
 function formatTime(ts, dur=ts) {
@@ -220,7 +246,7 @@ async function renderProfiler() {
     const div = deviceList.append("div").attr("id", k).text(k).style("padding", padding+"px");
     const { y:baseY, height:baseHeight } = rect(div.node());
     const offsetY = baseY-canvasTop+padding/2;
-    const shapes = new RangeTree();
+    const shapes = new RangeIndex();
     const EventTypes = {TIMELINE:0, MEMORY:1};
     const eventType = u8(), eventsLen = u32();
     if (eventType === EventTypes.TIMELINE) {
