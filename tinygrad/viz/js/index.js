@@ -130,18 +130,22 @@ async function renderDag(graph, additions, recenter=false) {
 
 // ** profiler graph
 
+const perfCounter = [];
 class RangeTree {
-  constructor() { this.events = []; }
+  constructor(name) { this.events = []; this.name = name; }
   push(e) {
     this.events.push(e);
   }
   *query(start, end, timestep) {
+    let visible = 0;
     for (const e of this.events) {
       const st = e.width == null ? e.x[0] : e.x;
       const et = e.width == null ? e.x.at(-1) : e.x+e.width;
       if (st > end || et < st) continue;
+      visible += 1;
       yield e;
     }
+    perfCounter.push({ name:this.name, total:this.events.length, visible, query:[start, end] });
   }
 }
 
@@ -216,7 +220,7 @@ async function renderProfiler() {
     const div = deviceList.append("div").attr("id", k).text(k).style("padding", padding+"px");
     const { y:baseY, height:baseHeight } = rect(div.node());
     const offsetY = baseY-canvasTop+padding/2;
-    const shapes = new RangeTree();
+    const shapes = new RangeTree(k);
     const EventTypes = {TIMELINE:0, MEMORY:1};
     const eventType = u8(), eventsLen = u32();
     if (eventType === EventTypes.TIMELINE) {
