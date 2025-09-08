@@ -130,6 +130,25 @@ async function renderDag(graph, additions, recenter=false) {
 
 // ** profiler graph
 
+const perfCounter = [];
+class RangeTree {
+  constructor(name) { this.data = []; this.name = name; }
+  push(e) {
+    this.data.push(e);
+  }
+  *query(start, end, timestep) {
+    let visible = 0;
+    for (const e of this.data) {
+      const st = e.width == null ? e.x[0] : e.x;
+      const et = e.width == null ? e.x.at(-1) : e.x+e.width;
+      if (st > end || et < st) continue;
+      visible += 1;
+      yield e;
+    }
+    perfCounter.push({ name:this.name, total:this.data.length, visible, query:[start, end] });
+  }
+}
+
 function formatTime(ts, dur=ts) {
   if (dur<=1e3) return `${ts.toFixed(2)}us`;
   if (dur<=1e6) return `${(ts*1e-3).toFixed(2)}ms`;
@@ -144,7 +163,7 @@ const colorScheme = {TINY:["#1b5745", "#354f52", "#354f52", "#1d2e62", "#63b0cd"
 const cycleColors = (lst, i) => lst[i%lst.length];
 
 const rescaleTrack = (source, tid, k) => {
-  for (const e of source.shapes) {
+  for (const e of source.shapes.data) {
     for (let i=0; i<e.y0.length; i++) {
       e.y0[i] = e.y0[i]*k;
       e.y1[i] = e.y1[i]*k;
@@ -201,7 +220,7 @@ async function renderProfiler() {
     const div = deviceList.append("div").attr("id", k).text(k).style("padding", padding+"px");
     const { y:baseY, height:baseHeight } = rect(div.node());
     const offsetY = baseY-canvasTop+padding/2;
-    const shapes = [];
+    const shapes = new RangeTree();
     const EventTypes = {TIMELINE:0, MEMORY:1};
     const eventType = u8(), eventsLen = u32();
     if (eventType === EventTypes.TIMELINE) {
@@ -271,7 +290,7 @@ async function renderProfiler() {
       for (const [_, {dtype, sz, nbytes, y, x:steps}] of buf_shapes) {
         const x = steps.map(s => timestamps[s]);
         const arg = {tooltipText:`${dtype} len:${formatUnit(sz)}\n${formatUnit(nbytes, "B")}`};
-        shapes.push({ x, y0:y.map(yscale), y1:y.map(y0 => yscale(y0+nbytes)), arg, fillColor:cycleColors(colorScheme.BUFFER, shapes.length) });
+        shapes.push({ x, y0:y.map(yscale), y1:y.map(y0 => yscale(y0+nbytes)), arg, fillColor:cycleColors(colorScheme.BUFFER, shapes.data.length) });
       }
       data.tracks.set(k, { shapes, visible:[], offsetY, height, peak, scaleFactor:maxheight*4/height });
       div.style("height", height+padding+"px").style("cursor", "pointer").on("click", (e) => {
@@ -298,14 +317,12 @@ async function renderProfiler() {
     // rescale to match current zoom
     const xscale = d3.scaleLinear().domain([0, dur]).range([0, canvas.clientWidth]);
     const visibleX = xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale);
+    const start = visibleX[0], end = visibleX[1];
+    const step = (end-start) / (canvas.clientWidth*dpr);
     xscale.domain(visibleX);
     // draw shapes
-    for (const [_, { offsetY, shapes, visible }] of data.tracks) {
-      visible.length = 0;
-      for (const e of shapes) {
-        if (e.width == null) { start = e.x[0]; end = end = e.x[e.x.length-1]; }
-        else { start = e.x; end = e.x+e.width; }
-        if (start>visibleX[1] || end<visibleX[0]) continue;
+    for (const [_, { offsetY, shapes }] of data.tracks) {
+      for (const e of shapes.query(start, end, step)) {
         ctx.fillStyle = e.fillColor;
         // generic polygon
         if (e.width == null) {
@@ -316,17 +333,12 @@ async function renderProfiler() {
           for (let i=x.length-1; i>=0; i--) p.lineTo(x[i], offsetY+e.y1[i]);
           p.closePath();
           ctx.fill(p);
-          // NOTE: y coordinates are in reverse order
-          for (let i = 0; i<x.length-1; i++) {
-            visible.push({ x0:x[i], x1:x[i+1], y0:offsetY+e.y1[i], y1:offsetY+e.y0[i], arg:e.arg });
-          }
           continue;
         }
         // contiguous rect
-        const x = xscale(start);
-        const width = xscale(end)-x;
+        const x = xscale(e.x);
+        const width = xscale(e.x+e.width)-x;
         ctx.fillRect(x, offsetY+e.y, width, e.height);
-        visible.push({ y0:offsetY+e.y, y1:offsetY+e.y+e.height, x0:x, x1:x+width, arg:e.arg });
         // add label
         if (e.label == null) continue;
         ctx.textAlign = "left";
@@ -568,7 +580,7 @@ async function main() {
         }
       }
     }
-    return setState({ currentCtx:-1 });
+    return setState({ currentCtx:0 });
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
