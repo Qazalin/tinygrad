@@ -313,6 +313,9 @@ async function renderProfiler() {
       this.events[this.len] = e;
       this.len += 1;
     }
+    start_time() {
+      return this.events[0].x;
+    }
   }
   class BlockPool {
     constructor() {
@@ -341,7 +344,7 @@ async function renderProfiler() {
       pool.blocks[last].push(e);
     }
   }
-  const events = data.tracks.get("NULL").shapes;
+  const events = data.tracks.get("METAL").shapes;
   const pool = new BlockPool();
   const track = new Track();
   for (const e of events) {
@@ -350,8 +353,14 @@ async function renderProfiler() {
   // aggregator
   //// note: rust max_by_key returns the last one if there's multiple with max
   const last_longest = (tb) => tb.events.reduce((mx, e) => e.width >= mx.width ? e : mx);
-  const longest_combine = (tb1, tb2) => tb1.width > tb2.width ? tb1 : tb2;
+  const longest_combine = (tb1, tb2) => tb1 == null ? tb2 : tb2 == null ? tb1 : tb1.width > tb2.width ? tb1 : tb2;
   const trailing_ones = (x) => Math.clz32(~x & (x + 1)) ^ 31;
+// helpers (unsigned 32-bit)
+  const lsp = x => { x = x>>>0; return (x & -x)>>>0; };            // offset past largest tree with left index x
+  const msp = x => { x = x>>>0; return x ? (1 << (31 - Math.clz32(x)))>>>0 : 0; }; // offset past largest tree up to x long
+  const largest_prefix_inside_skip = (min, max) => lsp((min|msp((max-min)>>>0))>>>0);
+  const agg_node = (i, off) => i + (off>>>1) - 1;
+  //
   // implicit forest
   class IForest {
     constructor() {
@@ -374,18 +383,71 @@ async function renderProfiler() {
       // Push new aggregation node going back one level further than we aggregated
       this.vals.push(this.vals[len-(1 << levels_to_index)]);
     }
+    rangeQuery(start, end) {
+          let s = (start<<1)>>>0, e = (end<<1)>>>0; // translate to interior indices
+          const n = this.vals.length>>>0;
+          if (s>n || e>n) throw new Error(`range ${start}..${end} not inside 0..${n>>>1}`);
+          let acc = null;
+          while (s < e) {
+                  const skip = largest_prefix_inside_skip(s, e);
+                  acc = longest_combine(acc, this.vals[agg_node(s, skip)]);
+                  s = (s + skip)>>>0;
+                }
+          return acc;
+        }
   }
   const forest = new IForest();
   for (const i of track.block_locs) {
     forest.push(pool.blocks[i]);
   }
-  console.log(forest.vals);
+
+  function binarySearch(arr, key, f) {
+    let lo = 0, hi = arr.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      const v = f(arr[mid]);
+      if (v < key) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  function aggregate_by_steps(start, end, step) {
+    const ret = [];
+    let block_i = 0;
+    let target_time = start;
+    const combined = {b:null};
+    outer: while (true) {
+      if (block_i >= track.block_locs.length) break;
+      let blks = track.block_locs.slice(block_i);
+      const bsearch_res = binarySearch(blks, target_time, i => ns(pool.blocks[i].start_time()));
+      if (bsearch_res > 1) {
+        const skip = bsearch_res - 1;
+        const pre = forest.rangeQuery(block_i, block_i + skip);
+        combined.b = longest_combine(combined.b, pre);
+        block_i += skip; 
+      }
+      const block = pool.blocks[track.block_locs[block_i]];
+      for (const e of block.events) {
+        while (ns(e.x) >= target_time) {
+          ret.push(combined.b);
+          combined.b = null;
+          if (target_time >= end) break outer;
+          target_time += step;
+        }
+        combined.b = longest_combine(combined.b, e);
+      }
+      block_i += 1;
+    }
+    return ret;
+  }
 
   // draw events on a timeline
   const ns = (v) => Math.round(v * 1000);
   const dpr = window.devicePixelRatio || 1;
   const ellipsisWidth = ctx.measureText("...").width;
   const rectLst = [];
+  const FAST = true;
   function render(transform) {
     zoomLevel = transform;
     rectLst.length = 0;
@@ -395,7 +457,8 @@ async function renderProfiler() {
     const visibleX = xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale);
     xscale.domain(visibleX);
     const viewRange = [ns(visibleX[0]), ns(visibleX[1])];
-    const nsPerPx = Math.floor((viewRange[1]-viewRange[0])/canvas.clientWidth);
+    const pixelWidth = canvas.clientWidth*dpr;
+    const nsPerPx = Math.floor((viewRange[1]-viewRange[0])/pixelWidth);
     const minEventPx = 2;
     let step = nsPerPx * minEventPx;
     // round step up to next power of two
@@ -403,12 +466,18 @@ async function renderProfiler() {
     step = Math.max(1, step);
     const qstart = viewRange[0]-(viewRange[0]%step);
     const qend = viewRange[1]-(viewRange[1]%step)+step;
+    const visible = aggregate_by_steps(qstart, qend, step);
     // draw shapes
     for (const [k, { offsetY, shapes }] of data.tracks) {
-      if (k !== "NULL") continue;
-      for (const e of shapes) {
+      if (k !== "METAL") continue;
+      const shape_spec = FAST ? visible : shapes; 
+      for (const e of shape_spec) {
+        if (e == null) continue;
         const start = e.x, end = e.x+e.width;
-        if (start>visibleX[1] || end<visibleX[0]) continue;
+        // not needed for binary search agg
+        if (!FAST) {
+          if (start>visibleX[1] || end<visibleX[0]) continue;
+        }
         ctx.fillStyle = e.fillColor;
         // contiguous rect
         const x = xscale(start), y = offsetY+e.y;
