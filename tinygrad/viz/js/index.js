@@ -130,30 +130,6 @@ async function renderDag(graph, additions, recenter=false) {
 
 // ** profiler graph
 
-class TraceTree {
-  constructor() { this.tracks = new Map(); }
-  set(k, v) {
-    const { shapes, ...rest } = v;
-    const index = new RangeIndex(v.shapes);
-    this.tracks.set(k, { index, ...rest });
-  }
-  get(k) { return this.tracks.get(k); }
-  [Symbol.iterator]() { return this.tracks[Symbol.iterator](); }
-}
-
-class RangeIndex {
-  constructor(events) {
-    this.events = events;
-  }
-  query(trange, step) {
-    const ret = [];
-    for (const e of this.events) {
-      ret.push(e);
-    }
-    return ret;
-  }
-}
-
 function formatTime(ts, dur=ts) {
   if (dur<=1e3) return `${ts.toFixed(2)}us`;
   if (dur<=1e6) return `${(ts*1e-3).toFixed(2)}ms`;
@@ -217,7 +193,7 @@ async function renderProfiler() {
   const canvasTop = rect(canvas).top;
   // color by key (name/device)
   const colorMap = new Map();
-  data = {tracks:new TraceTree(), axes:{}};
+  data = {tracks:new Map(), axes:{}};
   const heightScale = d3.scaleLinear().domain([0, peak]).range([4,maxheight=100]);
   for (let i=0; i<layoutsLen; i++) {
     const nameLen = view.getUint8(offset, true); offset += 1;
@@ -325,14 +301,12 @@ async function renderProfiler() {
     const xscale = d3.scaleLinear().domain([0, dur]).range([0, canvas.clientWidth]);
     const visibleX = xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale);
     xscale.domain(visibleX);
-    const pixelWidth = canvas.clientWidth*dpr;
-    const timeStep = (visibleX[1]-visibleX[0])/pixelWidth;
     // draw shapes
-    for (const [_, { offsetY, index }] of data.tracks) {
-      const shapes = index.query(visibleX, timeStep);
+    for (const [_, { offsetY, shapes }] of data.tracks) {
       for (const e of shapes) {
         if (e.width == null) { start = e.x[0]; end = end = e.x[e.x.length-1]; }
         else { start = e.x; end = e.x+e.width; }
+        if (start>visibleX[1] || end<visibleX[0]) continue;
         ctx.fillStyle = e.fillColor;
         // generic polygon
         if (e.width == null) {
@@ -384,7 +358,7 @@ async function renderProfiler() {
     }
     if (data.axes.y != null) {
       drawLine(ctx, [0, 0], data.axes.y.range);
-      const yscale = d3.scaleLinear().domain(data.axes.y.domain).rangeRound(data.axes.y.range);
+      const yscale = d3.scaleLinear().domain(data.axes.y.domain).range(data.axes.y.range);
       for (const tick of yscale.ticks()) {
         const y = yscale(tick);
         drawLine(ctx, [0, tickSize], [y, y]);
