@@ -130,6 +130,21 @@ async function renderDag(graph, additions, recenter=false) {
 
 // ** profiler graph
 
+class RangeTree {
+  constructor() { this.events = []; }
+  push(e) {
+    this.events.push(e);
+  }
+  *query(start, end, timestep) {
+    for (const e of this.events) {
+      const st = e.width == null ? e.x[0] : e.x;
+      const et = e.width == null ? e.x.at(-1) : e.x+e.width;
+      if (st > end || et < st) continue;
+      yield e;
+    }
+  }
+}
+
 function formatTime(ts, dur=ts) {
   if (dur<=1e3) return `${ts.toFixed(2)}us`;
   if (dur<=1e6) return `${(ts*1e-3).toFixed(2)}ms`;
@@ -201,7 +216,7 @@ async function renderProfiler() {
     const div = deviceList.append("div").attr("id", k).text(k).style("padding", padding+"px");
     const { y:baseY, height:baseHeight } = rect(div.node());
     const offsetY = baseY-canvasTop+padding/2;
-    const shapes = [];
+    const shapes = new RangeTree();
     const EventTypes = {TIMELINE:0, MEMORY:1};
     const eventType = u8(), eventsLen = u32();
     if (eventType === EventTypes.TIMELINE) {
@@ -271,7 +286,7 @@ async function renderProfiler() {
       for (const [_, {dtype, sz, nbytes, y, x:steps}] of buf_shapes) {
         const x = steps.map(s => timestamps[s]);
         const arg = {tooltipText:`${dtype} len:${formatUnit(sz)}\n${formatUnit(nbytes, "B")}`};
-        shapes.push({ x, y0:y.map(yscale), y1:y.map(y0 => yscale(y0+nbytes)), arg, fillColor:cycleColors(colorScheme.BUFFER, shapes.length) });
+        shapes.push({ x, y0:y.map(yscale), y1:y.map(y0 => yscale(y0+nbytes)), arg, fillColor:cycleColors(colorScheme.BUFFER, shapes.events.length) });
       }
       data.tracks.set(k, { shapes, offsetY, height, peak, scaleFactor:maxheight*4/height });
       div.style("height", height+padding+"px").style("cursor", "pointer").on("click", (e) => {
@@ -300,13 +315,13 @@ async function renderProfiler() {
     // rescale to match current zoom
     const xscale = d3.scaleLinear().domain([0, dur]).range([0, canvas.clientWidth]);
     const visibleX = xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale);
+    const start = visibleX[0], end = visibleX[1];
+    const step = (end-start) / (canvas.clientWidth*dpr);
     xscale.domain(visibleX);
     // draw shapes
     for (const [_, { offsetY, shapes }] of data.tracks) {
-      for (const e of shapes) {
-        if (e.width == null) { start = e.x[0]; end = end = e.x[e.x.length-1]; }
-        else { start = e.x; end = e.x+e.width; }
-        if (start>visibleX[1] || end<visibleX[0]) continue;
+      const visible = shapes.query(start, end, step);
+      for (const e of visible) {
         ctx.fillStyle = e.fillColor;
         // generic polygon
         if (e.width == null) {
@@ -324,8 +339,8 @@ async function renderProfiler() {
           continue;
         }
         // contiguous rect
-        const x = xscale(start);
-        const width = xscale(end)-x;
+        const x = xscale(e.x);
+        const width = xscale(e.x+e.width)-x;
         ctx.fillRect(x, offsetY+e.y, width, e.height);
         rectLst.push({ y0:offsetY+e.y, y1:offsetY+e.y+e.height, x0:x, x1:x+width, arg:e.arg });
         // add label
