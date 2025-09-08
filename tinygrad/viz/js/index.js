@@ -344,7 +344,8 @@ async function renderProfiler() {
       pool.blocks[last].push(e);
     }
   }
-  const events = data.tracks.get("METAL").shapes;
+  SELECT = "NULL Memory"
+  const events = data.tracks.get(SELECT).shapes;
   const pool = new BlockPool();
   const track = new Track();
   for (const e of events) {
@@ -469,7 +470,7 @@ async function renderProfiler() {
     const visible = aggregate_by_steps(qstart, qend, step);
     // draw shapes
     for (const [k, { offsetY, shapes }] of data.tracks) {
-      if (k !== "METAL") continue;
+      if (k !== SELECT) continue;
       const shape_spec = FAST ? visible : shapes; 
       for (const e of shape_spec) {
         if (e == null) continue;
