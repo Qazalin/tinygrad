@@ -47,35 +47,19 @@ function addTags(root) {
   root.selectAll("text").data(d => [d]).join("text").text(d => d).attr("dy", "0.35em");
 }
 
-let startTime = null;
-function log(msg) {
-  if (startTime == null) startTime = performance.now();
-  const elapsed = (performance.now() - startTime) * 1e3;
-  console.log(`[+${formatTime(elapsed)}] ${msg}`);
+let [workerUrl, worker] = [null, null];
+async function initWorker() {
+  const resp = await Promise.all(["/assets/dagrejs.github.io/project/dagre/latest/dagre.min.js","/js/worker.js"].map(u => fetch(u)));
+  workerUrl = URL.createObjectURL(new Blob([(await Promise.all(resp.map((r) => r.text()))).join("\n")], { type: "application/javascript" }));
 }
 
-let [workerUrl, worker] = [null, null];
-let workerCount = 0;
-async function renderDag(graph, additions, recenter=false) {
+function renderDag(graph, additions, recenter=false) {
   // start calculating the new layout (non-blocking)
   updateProgress({ start:true });
-  if (worker == null) {
-    log("waiting for worker script from server...");
-    const resp = await Promise.all(["/assets/dagrejs.github.io/project/dagre/latest/dagre.min.js","/js/worker.js"].map(u => fetch(u)));
-    workerUrl = URL.createObjectURL(new Blob([(await Promise.all(resp.map((r) => r.text()))).join("\n")], { type: "application/javascript" }));
-    worker = new Worker(workerUrl);
-  } else {
-    log(`terminating worker ${worker.id}`);
-    worker.terminate();
-    worker = new Worker(workerUrl);
-  }
-  worker.id = workerCount;
-  workerCount += 1;
-  const workerId = worker.id;
-  log(`Starting worker with ID ${workerId}`);
+  if (worker != null) worker.terminate();
+  worker = new Worker(workerUrl);
   worker.postMessage({graph, additions});
   worker.onmessage = (e) => {
-    log(`Received message from worker ID ${workerId}`);
     displayGraph("graph");
     updateProgress({ start:false });
     const g = dagre.graphlib.json.read(e.data);
@@ -182,13 +166,15 @@ const drawLine = (ctx, x, y, opts) => {
 }
 
 var data, focusedDevice, canvasZoom, zoomLevel = d3.zoomIdentity;
-async function renderProfiler() {
+async function renderProfiler(signal) {
+  if (signal.aborted) return;
   displayGraph("profiler");
   d3.select(".metadata").html("");
   // layout once!
   if (data != null) return updateProgress({ start:false });
   const profiler = d3.select(".profiler").html("");
-  const buf = await (await fetch("/get_profile")).arrayBuffer();
+  const buf = await (await fetch("/get_profile", signal)).arrayBuffer();
+  if (signal.aborted) return;
   const view = new DataView(buf);
   let offset = 0;
   const u8 = () => { const ret = view.getUint8(offset); offset += 1; return ret; }
@@ -524,7 +510,7 @@ hljs.registerLanguage("cpp", (hljs) => ({
 var ret = [];
 var cache = {};
 var ctxs = null;
-const evtSources = [];
+let controller = null, activeSrc = null;
 // VIZ displays graph rewrites in 3 levels, from bottom-up:
 // rewrite: a single UOp transformation
 // step: collection of rewrites
@@ -578,15 +564,8 @@ async function main() {
         inner.id = `step-${i}-${j}`;
         inner.innerText = `${u.name ?? u.loc[0].replaceAll("\\", "/").split("/").pop()+':'+u.loc[1]}`+(u.match_count ? ` - ${u.match_count}` : '');
         inner.style.marginLeft = `${8*u.depth}px`;
-        const txt = inner.innerText;
         inner.onclick = (e) => {
-          // note: chrome devtools doesn't show markers unless it's a "range", add a fake start and end
-          // https://stackoverflow.com/questions/46693223/using-performance-mark-with-chrome-dev-tools-performance-tab
-          const eventName = `click_to: ${txt}`;
-          performance.mark(eventName+"_start");
           e.stopPropagation();
-          performance.mark(eventName+"_end");
-          performance.measure(eventName, eventName+"_start", eventName+"_end");
           setState({ currentStep:j, currentCtx:i, currentRewrite:0 });
         }
       }
@@ -599,20 +578,19 @@ async function main() {
   const ctx = ctxs[currentCtx];
   const step = ctx.steps[currentStep];
   const ckey = step?.query;
-  // close any pending event sources
-  let activeSrc = null;
-  for (const e of evtSources) {
-    const url = new URL(e.url);
-    if (url.pathname+url.search !== ckey) e.close();
-    else if (e.readyState === EventSource.OPEN) activeSrc = e;
-  }
-  if (ctx.name === "Profiler") return renderProfiler();
+  // close any pending async operations
+  if (controller != null) controller.abort(ckey);
+  controller = new AbortController();
+  const signal = controller.signal;
+  if (ctx.name === "Profiler") return renderProfiler(signal);
+  if (workerUrl == null) await initWorker();
   if (ckey in cache) {
     ret = cache[ckey];
   }
   // ** Disassembly view
   if (ckey.startsWith("/disasm")) {
-    if (!(ckey in cache)) cache[ckey] = ret = await (await fetch(ckey)).json();
+    if (!(ckey in cache)) cache[ckey] = ret = await (await fetch(ckey, signal)).json();
+    if (signal.aborted) return;
     displayGraph("disasm");
     const root = document.createElement("div");
     root.className = "raw-text";
@@ -659,13 +637,12 @@ async function main() {
   }
   // ** UOp view (default)
   // if we don't have a complete cache yet we start streaming rewrites in this step
-  if (!(ckey in cache) || (cache[ckey].length !== step.match_count+1 && activeSrc == null)) {
+  if (!(ckey in cache) || (cache[ckey].length !== step.match_count+1 && activeSrc?.readyState !== EventSource.OPEN)) {
     ret = [];
     cache[ckey] = ret;
-    const eventSource = new EventSource(ckey);
-    evtSources.push(eventSource);
-    eventSource.onmessage = (e) => {
-      if (e.data === "END") return eventSource.close();
+    activeSrc = new EventSource(ckey);
+    activeSrc.onmessage = (e) => {
+      if (e.data === "END") return activeSrc.close();
       const chunk = JSON.parse(e.data);
       ret.push(chunk);
       // if it's the first one render this new rgaph
@@ -675,6 +652,10 @@ async function main() {
       if (ul != null) ul.classList.remove("disabled");
     };
   }
+  signal.addEventListener("abort", (e) => {
+    if (e.currentTarget.reason === ckey) return; // keep the source open if the stream didn't change.
+    activeSrc.close(); activeSrc = null;
+  }, { once:true });
   if (ret.length === 0) return;
   renderDag(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes || [], recenter=currentRewrite === 0);
   // ** right sidebar code blocks
