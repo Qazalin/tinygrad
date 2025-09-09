@@ -47,20 +47,35 @@ function addTags(root) {
   root.selectAll("text").data(d => [d]).join("text").text(d => d).attr("dy", "0.35em");
 }
 
+let startTime = null;
+function log(msg) {
+  if (startTime == null) startTime = performance.now();
+  const elapsed = (performance.now() - startTime) * 1e3;
+  console.log(`[+${formatTime(elapsed)}] ${msg}`);
+}
+
 let [workerUrl, worker] = [null, null];
+let workerCount = 0;
 async function renderDag(graph, additions, recenter=false) {
   // start calculating the new layout (non-blocking)
   updateProgress({ start:true });
   if (worker == null) {
+    log("waiting for worker script from server...");
     const resp = await Promise.all(["/assets/dagrejs.github.io/project/dagre/latest/dagre.min.js","/js/worker.js"].map(u => fetch(u)));
     workerUrl = URL.createObjectURL(new Blob([(await Promise.all(resp.map((r) => r.text()))).join("\n")], { type: "application/javascript" }));
     worker = new Worker(workerUrl);
   } else {
+    log(`terminating worker ${worker.id}`);
     worker.terminate();
     worker = new Worker(workerUrl);
   }
+  worker.id = workerCount;
+  workerCount += 1;
+  const workerId = worker.id;
+  log(`Starting worker with ID ${workerId}`);
   worker.postMessage({graph, additions});
   worker.onmessage = (e) => {
+    log(`Received message from worker ID ${workerId}`);
     displayGraph("graph");
     updateProgress({ start:false });
     const g = dagre.graphlib.json.read(e.data);
@@ -563,8 +578,15 @@ async function main() {
         inner.id = `step-${i}-${j}`;
         inner.innerText = `${u.name ?? u.loc[0].replaceAll("\\", "/").split("/").pop()+':'+u.loc[1]}`+(u.match_count ? ` - ${u.match_count}` : '');
         inner.style.marginLeft = `${8*u.depth}px`;
+        const txt = inner.innerText;
         inner.onclick = (e) => {
+          // note: chrome devtools doesn't show markers unless it's a "range", add a fake start and end
+          // https://stackoverflow.com/questions/46693223/using-performance-mark-with-chrome-dev-tools-performance-tab
+          const eventName = `click_to: ${txt}`;
+          performance.mark(eventName+"_start");
           e.stopPropagation();
+          performance.mark(eventName+"_end");
+          performance.measure(eventName, eventName+"_start", eventName+"_end");
           setState({ currentStep:j, currentCtx:i, currentRewrite:0 });
         }
       }
