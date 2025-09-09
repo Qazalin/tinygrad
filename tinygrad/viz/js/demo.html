@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Simple List</title>
+</head>
+<style>
+li {
+  cursor: pointer;
+}
+body {
+  display: flex;
+}
+div {
+  width: 100%;
+}
+#log {
+  border: 1px solid black;
+}
+</style>
+<body>
+  <div><ul id="list"></ul></div>
+  <div id="root"></div>
+  <div id="logs">Logs:</div>
+</body>
+<script>
+const logs = document.getElementById("logs");
+const root = document.getElementById("root");
+async function start(i) {
+  var p = logs.appendChild(document.createElement("p"));
+  p.innerText = `started async job for ${i}`;
+  await new Promise(r => setTimeout(r, 2000));
+  p = logs.appendChild(document.createElement("p"));
+  p.innerText = `finished ${i}, rendering.`;
+  p = document.createElement("p");
+  p.innerText = `render ${i}`;
+  root.replaceChildren(p);
+}
+
+const ul = document.getElementById("list");
+for (let i=0; i<3; i++) {
+  const li = ul.appendChild(document.createElement("li"));
+  li.textContent = `ITEM ${i}`;
+  li.onclick = (e) => {
+    for (const c of ul.children) c.style = "";
+    e.currentTarget.style = "color: blue;";
+    start(i);
+  }
+}
+</script>
+</html>
