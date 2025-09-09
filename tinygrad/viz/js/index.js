@@ -53,7 +53,7 @@ async function initWorker() {
   workerUrl = URL.createObjectURL(new Blob([(await Promise.all(resp.map((r) => r.text()))).join("\n")], { type: "application/javascript" }));
 }
 
-function renderDag(graph, additions, recenter=false) {
+async function renderDag(graph, additions, recenter=false) {
   // start calculating the new layout (non-blocking)
   updateProgress({ start:true });
   if (worker != null) worker.terminate();
@@ -173,7 +173,7 @@ async function renderProfiler(signal) {
   // layout once!
   if (data != null) return updateProgress({ start:false });
   const profiler = d3.select(".profiler").html("");
-  const buf = await (await fetch("/get_profile", signal)).arrayBuffer();
+  const buf = await (await fetch("/get_profile", { signal })).arrayBuffer();
   if (signal.aborted) return;
   const view = new DataView(buf);
   let offset = 0;
@@ -510,7 +510,8 @@ hljs.registerLanguage("cpp", (hljs) => ({
 var ret = [];
 var cache = {};
 var ctxs = null;
-let controller = null, activeSrc = null;
+let eventSource = null;
+let controller = null;
 // VIZ displays graph rewrites in 3 levels, from bottom-up:
 // rewrite: a single UOp transformation
 // step: collection of rewrites
@@ -589,7 +590,7 @@ async function main() {
   }
   // ** Disassembly view
   if (ckey.startsWith("/disasm")) {
-    if (!(ckey in cache)) cache[ckey] = ret = await (await fetch(ckey, signal)).json();
+    if (!(ckey in cache)) cache[ckey] = ret = await (await fetch(ckey, { signal })).json();
     if (signal.aborted) return;
     displayGraph("disasm");
     const root = document.createElement("div");
@@ -637,12 +638,12 @@ async function main() {
   }
   // ** UOp view (default)
   // if we don't have a complete cache yet we start streaming rewrites in this step
-  if (!(ckey in cache) || (cache[ckey].length !== step.match_count+1 && activeSrc?.readyState !== EventSource.OPEN)) {
+  if (!(ckey in cache) || (cache[ckey].length !== step.match_count+1 && eventSource?.readyState !== EventSource.OPEN)) {
     ret = [];
     cache[ckey] = ret;
-    activeSrc = new EventSource(ckey);
-    activeSrc.onmessage = (e) => {
-      if (e.data === "END") return activeSrc.close();
+    eventSource = new EventSource(ckey);
+    eventSource.onmessage = (e) => {
+      if (e.data === "END") return eventSource.close();
       const chunk = JSON.parse(e.data);
       ret.push(chunk);
       // if it's the first one render this new rgaph
@@ -653,8 +654,8 @@ async function main() {
     };
   }
   signal.addEventListener("abort", (e) => {
-    if (e.currentTarget.reason === ckey) return; // keep the source open if the stream didn't change.
-    activeSrc.close(); activeSrc = null;
+    if (e.currentTarget.reason === ckey) return; // keep open if stream didn't change.
+    eventSource.close(); eventSource = null;
   }, { once:true });
   if (ret.length === 0) return;
   renderDag(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes || [], recenter=currentRewrite === 0);
