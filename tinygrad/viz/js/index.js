@@ -135,14 +135,14 @@ const PathView =  { start: e => e.x[0], end: e => e.x.at(-1) };
 
 const EVENTS_PER_BLOCK = 16;
 class Block {
-  constructor(view) { this.data = []; this.view = view; }
+  constructor(view) { this.data = []; this.view = view; this.et = 0; }
   get isFull() { return this.data.length === EVENTS_PER_BLOCK };
   push(e) {
     if (this.isFull) throw new Error("block is full!");
     this.data.push(e);
+    this.et = Math.max(this.et, this.view.end(e));
   }
   get st() { return this.view.start(this.data[0]); };
-  get et() { return this.view.end(this.data.at(-1)); };
 }
 
 class RangeTree {
