@@ -127,7 +127,11 @@ function renderDag(graph, additions, recenter) {
   };
 }
 
+const name = (e) => e.label != null ? e.label.map(part => part.st).join("") : JSON.stringify(e.arg);
 // ** profiler graph
+
+const RangeView = { start: e => e.x, end: e => e.x + e.width };
+const PathView =  { start: e => e.x[0], end: e => e.x.at(-1) };
 
 class RangeTree {
   constructor() { this.data = []; }
@@ -135,6 +139,10 @@ class RangeTree {
   push(e) { this.data.push(e); }
   *query(st, et, step) {
     for (const e of this.data) {
+      if (this.view.start(e)>et || this.view.end(e)<st) {
+        // console.log("pruning", name(e));
+        continue;
+      }
       yield e;
     }
   }
@@ -219,7 +227,7 @@ async function renderProfiler() {
     const eventType = u8(), eventsLen = u32();
     if (eventType === EventTypes.TIMELINE) {
       const levelHeight = baseHeight-padding;
-      const levels = [];
+      const levels = []; shapes.view = RangeView;
       data.tracks.set(k, { shapes, visible:[], offsetY });
       let colorKey, ref;
       for (let j=0; j<eventsLen; j++) {
@@ -248,7 +256,7 @@ async function renderProfiler() {
       }
       div.style("height", levelHeight*levels.length+padding+"px").style("pointerEvents", "none");
     } else {
-      const peak = u64();
+      const peak = u64(); shapes.view = PathView;
       let x = 0, y = 0;
       const buf_shapes = new Map(), temp = new Map();
       const timestamps = [];
@@ -315,7 +323,7 @@ async function renderProfiler() {
     const timePerPixel = (et-st)/canvas.clientWidth*dpr;
     xscale.domain(visibleX);
     // draw shapes
-    for (const [_, { offsetY, shapes, visible }] of data.tracks) {
+    for (const [k, { offsetY, shapes, visible }] of data.tracks) {
       visible.length = 0;
       for (const e of shapes.query(st, et, timePerPixel)) {
         ctx.fillStyle = e.fillColor;
