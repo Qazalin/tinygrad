@@ -129,6 +129,20 @@ function renderDag(graph, additions, recenter) {
 
 // ** profiler graph
 
+class RangeTree {
+  constructor() { this.data = []; }
+  // core tree structure
+  push(e) { this.data.push(e); }
+  *query(st, et, step) {
+    for (const e of this.data) {
+      yield e;
+    }
+  }
+  // from array
+  get length() { return this.data.length; }
+  [Symbol.iterator]() { return this.data[Symbol.iterator](); }
+}
+
 function formatTime(ts, dur=ts) {
   if (dur<=1e3) return `${ts.toFixed(2)}us`;
   if (dur<=1e6) return `${(ts*1e-3).toFixed(2)}ms`;
@@ -200,7 +214,7 @@ async function renderProfiler() {
     const div = deviceList.append("div").attr("id", k).text(k).style("padding", padding+"px");
     const { y:baseY, height:baseHeight } = rect(div.node());
     const offsetY = baseY-canvasTop+padding/2;
-    const shapes = [];
+    const shapes = new RangeTree();
     const EventTypes = {TIMELINE:0, MEMORY:1};
     const eventType = u8(), eventsLen = u32();
     if (eventType === EventTypes.TIMELINE) {
@@ -297,14 +311,13 @@ async function renderProfiler() {
     // rescale to match current zoom
     const xscale = d3.scaleLinear().domain([0, dur]).range([0, canvas.clientWidth]);
     const visibleX = xscale.range().map(zoomLevel.invertX, zoomLevel).map(xscale.invert, xscale);
+    const st = visibleX[0], et = visibleX[1];
+    const timePerPixel = (et-st)/canvas.clientWidth*dpr;
     xscale.domain(visibleX);
     // draw shapes
     for (const [_, { offsetY, shapes, visible }] of data.tracks) {
       visible.length = 0;
-      for (const e of shapes) {
-        if (e.width == null) { start = e.x[0]; end = end = e.x[e.x.length-1]; }
-        else { start = e.x; end = e.x+e.width; }
-        if (start>visibleX[1] || end<visibleX[0]) continue;
+      for (const e of shapes.query(st, et, timePerPixel)) {
         ctx.fillStyle = e.fillColor;
         // generic polygon
         if (e.width == null) {
@@ -322,8 +335,8 @@ async function renderProfiler() {
           continue;
         }
         // contiguous rect
-        const x = xscale(start);
-        const width = xscale(end)-x;
+        const x = xscale(e.x);
+        const width = xscale(e.x+e.width)-x;
         ctx.fillRect(x, offsetY+e.y, width, e.height);
         visible.push({ y0:offsetY+e.y, y1:offsetY+e.y+e.height, x0:x, x1:x+width, arg:e.arg });
         // add label
@@ -567,7 +580,7 @@ async function main() {
         }
       }
     }
-    return setState({ currentCtx:-1 });
+    return setState({ currentCtx:0 });
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
