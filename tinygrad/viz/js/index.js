@@ -133,22 +133,36 @@ const name = (e) => e.label != null ? e.label.map(part => part.st).join("") : JS
 const RangeView = { start: e => e.x, end: e => e.x + e.width };
 const PathView =  { start: e => e.x[0], end: e => e.x.at(-1) };
 
+const EVENTS_PER_BLOCK = 16;
+class Block {
+  constructor(view) { this.data = []; this.view = view; }
+  get isFull() { return this.data.length === EVENTS_PER_BLOCK };
+  push(e) {
+    if (this.isFull) throw new Error("block is full!");
+    this.data.push(e);
+  }
+  get st() { return this.view.start(this.data[0]); };
+  get et() { return this.view.end(this.data.at(-1)); };
+}
+
 class RangeTree {
-  constructor() { this.data = []; }
+  constructor() { this.blocks = []; }
   // core tree structure
-  push(e) { this.data.push(e); }
+  push(e) {
+    let last = this.blocks.at(-1);
+    if (last == null || last.isFull) { this.blocks.push(last=new Block(this.view)); }
+    last.push(e);
+  }
   *query(st, et, step) {
-    for (const e of this.data) {
-      if (this.view.start(e)>et || this.view.end(e)<st) {
-        // console.log("pruning", name(e));
-        continue;
-      }
-      yield e;
+    for (const b of this.blocks) {
+      if (b.st > et || b.et < st) continue;
+      yield* b.data;
     }
   }
   // from array
-  get length() { return this.data.length; }
-  [Symbol.iterator]() { return this.data[Symbol.iterator](); }
+  get length() { return this.blocks.reduce((n, b) => n + b.data.length, 0); }
+  *[Symbol.iterator]() { for (let b of this.blocks) yield* b.data; }
+
 }
 
 function formatTime(ts, dur=ts) {
@@ -323,7 +337,7 @@ async function renderProfiler() {
     const timePerPixel = (et-st)/canvas.clientWidth*dpr;
     xscale.domain(visibleX);
     // draw shapes
-    for (const [k, { offsetY, shapes, visible }] of data.tracks) {
+    for (const [_, { offsetY, shapes, visible }] of data.tracks) {
       visible.length = 0;
       for (const e of shapes.query(st, et, timePerPixel)) {
         ctx.fillStyle = e.fillColor;
