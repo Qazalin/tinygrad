@@ -323,6 +323,9 @@ async function renderProfiler() {
         const width = xscale(e.x+e.width)-x;
         ctx.fillStyle = e.fillColor; ctx.fillRect(x, offsetY+e.y, width, e.height);
         visible.push({ y0:offsetY+e.y, y1:offsetY+e.y+e.height, x0:x, x1:x+width, arg:e.arg });
+        const [main, temp] = e.arg.tooltipText.split("<br/>");
+        e.arg.tooltipText = main+"<br/>"+`pixelWidth=${width}`
+        updateTooltip();
         // add label
         if (e.label == null) continue;
         ctx.textAlign = "left";
@@ -409,15 +412,20 @@ async function renderProfiler() {
     if (foundRect?.step != null) return setCtxWithHistory(foundRect.ctx, foundRect.step);
   });
 
+  let foundRect = null;
+  function updateTooltip() {
+    if (foundRect == null) return;
+    tooltip.innerHTML = foundRect.tooltipText;
+  }
   canvas.addEventListener("mousemove", e => {
-    const foundRect = findRectAtPosition(e.clientX, e.clientY);
+    foundRect = findRectAtPosition(e.clientX, e.clientY);
     if (foundRect?.tooltipText != null) {
       const tooltip = document.getElementById("tooltip");
       tooltip.style.display = "block";
       tooltip.style.left = (e.pageX+10)+"px";
       tooltip.style.top = (e.pageY)+"px";
       tooltip.innerHTML = foundRect.tooltipText;
-    } else tooltip.style.display = "none";
+    } else { tooltip.style.display = "none"; foundRect = null; }
   });
   canvas.addEventListener("mouseleave", () => document.getElementById("tooltip").style.display = "none");
 }
