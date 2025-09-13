@@ -731,6 +731,7 @@ jobs:
     timeout-minutes: 20
     env:
       REMOTE: 1
+      DEBUG: 2
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
