@@ -290,6 +290,7 @@ async function renderProfiler() {
   // draw events on a timeline
   const dpr = window.devicePixelRatio || 1;
   const ellipsisWidth = ctx.measureText("...").width;
+  const opts = { minWidth:0.5, distanceTol:0.2 };
   function render(transform) {
     zoomLevel = transform;
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
@@ -320,19 +321,17 @@ async function renderProfiler() {
         // contiguous rect
         if (e.x>et || e.x+e.width<st) continue;
         const x = xscale(e.x);
-        let width = xscale(e.x+e.width)-x;
-        let arg = e.arg;
-        if (width < 0.5) {
-          width = 0.5;
+        let width = xscale(e.x+e.width)-x, arg = e.arg;
+        if (width < opts.minWidth) {
           let found = false;
           for (const v of visible) {
-            if (v.x0<=x && Math.abs(v.x1-x+width) <= 1 && v.y0 === offsetY+e.y) {
+            if (v.y0 === offsetY+e.y && v.x0<=x && x+width-v.x1 <= opts.minWidth+opts.distanceTol) {
               found = true;
               break;
             }
           }
           if (found) continue;
-          arg = null;
+          width = opts.minWidth; arg = null;
         }
         ctx.fillStyle = e.fillColor; ctx.fillRect(x, offsetY+e.y, width, e.height);
         visible.push({ y0:offsetY+e.y, y1:offsetY+e.y+e.height, x0:x, x1:x+width, arg });
