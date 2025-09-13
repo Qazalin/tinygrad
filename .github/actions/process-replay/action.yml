@@ -8,6 +8,7 @@ runs:
       run: |
         export PR_TITLE=$(jq -r .pull_request.title "$GITHUB_EVENT_PATH")
         export CURRENT_SHA=${{ github.event.pull_request && github.event.pull_request.head.sha || github.sha }}
+        export ASSERT_PROCESS_REPLAY=1
         git fetch origin $CURRENT_SHA
         export COMMIT_MESSAGE=$(git show -s --format=%B "$CURRENT_SHA")
         export CURRENT_HEAD=$(git rev-parse HEAD)
