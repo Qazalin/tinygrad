@@ -178,7 +178,7 @@ async function renderProfiler() {
   const u64 = () => { const ret = new Number(view.getBigUint64(offset, true)); offset += 8; return ret; }
   const f32 = () => { const ret = view.getFloat32(offset, true); offset += 4; return ret; }
   const optional = (i) => i === 0 ? null : i-1;
-  const dur = u32(), peak = u64(), indexLen = u32(), layoutsLen = u32();
+  const dur = u32(), globalPeak = u64(), indexLen = u32(), layoutsLen = u32();
   const textDecoder = new TextDecoder("utf-8");
   const { strings, dtypeSize, markers }  = JSON.parse(textDecoder.decode(new Uint8Array(buf, offset, indexLen))); offset += indexLen;
   // place devices on the y axis and set vertical positions
@@ -192,7 +192,7 @@ async function renderProfiler() {
   // color by key (name/device)
   const colorMap = new Map();
   data = {tracks:new Map(), axes:{}};
-  const heightScale = d3.scaleLinear().domain([0, peak]).range([4,maxheight=100]);
+  const heightScale = d3.scaleLinear().domain([0, globalPeak]).range([4,maxheight=100]);
   for (let i=0; i<layoutsLen; i++) {
     const nameLen = view.getUint8(offset, true); offset += 1;
     const k = textDecoder.decode(new Uint8Array(buf, offset, nameLen)); offset += nameLen;
@@ -269,9 +269,16 @@ async function renderProfiler() {
       for (const [num, {dtype, sz, nbytes, y, x:steps}] of buf_shapes) {
         const x = steps.map(s => timestamps[s]);
         const arg = {tooltipText:`${dtype} len:${formatUnit(sz)}\n${formatUnit(nbytes, "B")}\nnum:${num}`};
-        shapes.push({ x, y0:y.map(yscale), y1:y.map(y0 => yscale(y0+nbytes)), arg, fillColor:cycleColors(colorScheme.BUFFER, shapes.length) });
+        let fillColor = cycleColors(colorScheme.BUFFER, shapes.length);
+        let scale = d3.interpolateWarm;
+        const lifetime = x.at(-1)-x[0];
+        fillColor = scale(lifetime/dur);
+        fillColor = scale(nbytes/globalPeak);
+        // scale = d3.scaleSequential(d3.interpolateRainbow);
+        // fillColor = scale(Math.random());
+        shapes.push({ x, y0:y.map(yscale), y1:y.map(y0 => yscale(y0+nbytes)), arg, fillColor });
       }
-      data.tracks.set(k, { shapes, visible:[], offsetY, height, peak, scaleFactor:maxheight*4/height });
+      data.tracks.set(k, { shapes, visible:[], offsetY, height, peak, scaleFactor:maxheight*10/height });
       div.style("height", height+padding+"px").style("cursor", "pointer").on("click", (e) => {
         const newFocus = e.currentTarget.id === focusedDevice ? null : e.currentTarget.id;
         let offset = 0;
@@ -564,7 +571,7 @@ async function main() {
         }
       }
     }
-    return setState({ currentCtx:-1 });
+    return setState({ currentCtx:0 });
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
