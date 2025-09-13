@@ -128,6 +128,21 @@ function renderDag(graph, additions, recenter) {
 
 // ** profiler graph
 
+class Range {
+  constructor() {
+    this.data = [];
+  }
+  push(e) {
+    this.data.push(e);
+  }
+  clear() { this.data.length = 0; }
+  query(x0, x1, match) {
+    for (const r of this.data) {
+      if (x0>=r.x0 && x1<=r.x1 && match(r)) return r;
+    }
+  }
+}
+
 function formatTime(ts, dur=ts) {
   if (dur<=1e3) return `${ts.toFixed(2)}us`;
   if (dur<=1e6) return `${(ts*1e-3).toFixed(2)}ms`;
@@ -205,7 +220,7 @@ async function renderProfiler() {
     if (eventType === EventTypes.TIMELINE) {
       const levelHeight = baseHeight-padding;
       const levels = [];
-      data.tracks.set(k, { shapes, visible:[], offsetY });
+      data.tracks.set(k, { shapes, visible:new Range(), offsetY });
       let colorKey, ref;
       for (let j=0; j<eventsLen; j++) {
         const e = {name:strings[u32()], ref:optional(u32()), st:u32(), dur:f32(), info:strings[u32()] || null};
@@ -271,7 +286,7 @@ async function renderProfiler() {
         const arg = {tooltipText:`${dtype} len:${formatUnit(sz)}\n${formatUnit(nbytes, "B")}\nnum:${num}`};
         shapes.push({ x, y0:y.map(yscale), y1:y.map(y0 => yscale(y0+nbytes)), arg, fillColor:cycleColors(colorScheme.BUFFER, shapes.length) });
       }
-      data.tracks.set(k, { shapes, visible:[], offsetY, height, peak, scaleFactor:maxheight*4/height });
+      data.tracks.set(k, { shapes, visible:new Range(), offsetY, height, peak, scaleFactor:maxheight*4/height });
       div.style("height", height+padding+"px").style("cursor", "pointer").on("click", (e) => {
         const newFocus = e.currentTarget.id === focusedDevice ? null : e.currentTarget.id;
         let offset = 0;
@@ -301,7 +316,7 @@ async function renderProfiler() {
     xscale.domain(visibleX);
     // draw shapes
     for (const [_, { offsetY, shapes, visible }] of data.tracks) {
-      visible.length = 0;
+      visible.clear();
       for (const e of shapes) {
         // generic polygon
         if (e.width == null) {
@@ -323,13 +338,7 @@ async function renderProfiler() {
         const x = xscale(e.x);
         let width = xscale(e.x+e.width)-x, arg = e.arg;
         if (width < opts.minWidth) {
-          let found = false;
-          for (const v of visible) {
-            if (v.y0 === offsetY+e.y && v.x0<=x && x+width-v.x1 <= opts.minWidth+opts.distanceTol) {
-              found = true;
-              break;
-            }
-          }
+          const found = visible.query(x, x+width-opts.minWidth+opts.distanceTol, (v) => v.y0 === offsetY+e.y);
           if (found) continue;
           width = opts.minWidth; arg = null;
         }
@@ -410,9 +419,7 @@ async function renderProfiler() {
     const { top, left, width, height } = rect(canvas);
     const X = ((x-left) * (canvas.width/width))/dpr;
     const Y = ((y-top) * (canvas.height/height))/dpr;
-    for (const r of data.tracks.get(tid).visible) {
-      if (Y>=r.y0 && Y<=r.y1 && X>=r.x0 && X<=r.x1) return r.arg;
-    }
+    return data.tracks.get(tid).visible.query(X, X, (v) => Y>=v.y0 && Y<=v.y1);
   }
 
   canvas.addEventListener("click", e => {
