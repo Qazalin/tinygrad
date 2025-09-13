@@ -184,7 +184,23 @@ async function renderProfiler() {
   // place devices on the y axis and set vertical positions
   const [tickSize, padding] = [10, 8];
   const deviceList = profiler.append("div").attr("id", "device-list").style("padding-top", tickSize+padding+"px");
-  const canvas = profiler.append("canvas").attr("id", "timeline").node();
+const container = profiler.append("div")
+  .style("position","relative")
+
+const canvas = container.append("canvas")
+  .attr("id","timeline")
+  .style("position","absolute")
+  .style("top",0).style("left",0)
+  .node()
+
+const overlay = container.append("canvas")
+  .attr("id","overlay")
+  .style("position","absolute")
+  .style("top",0).style("left",0).style("pointer-events", "none")
+  .node();
+
+  const o = overlay.getContext("2d")
+  function drawOverlay(x,y,w,h) { o.clearRect(0,0,overlay.width,overlay.height); o.strokeRect(x,y,w,h) }
   // NOTE: scrolling via mouse can only zoom the graph
   canvas.addEventListener("wheel", e => (e.stopPropagation(), e.preventDefault()), { passive:false });
   const ctx = canvas.getContext("2d");
@@ -374,11 +390,13 @@ async function renderProfiler() {
     const sideRect = rect("#device-list");
     const width = profiler.clientWidth-(sideRect.width+padding), height = Math.round(sideRect.height);
     if (canvas.width === width*dpr && canvas.height === height*dpr) return;
-    canvas.width = width*dpr;
-    canvas.height = height*dpr;
-    canvas.style.height = `${height}px`;
-    canvas.style.width = `${width}px`;
-    ctx.scale(dpr, dpr);
+    for (const c of container.node().children) {
+      c.width = width*dpr;
+      c.height = height*dpr;
+      c.style.height = `${height}px`;
+      c.style.width = `${width}px`;
+      c.getContext("2d").scale(dpr, dpr);
+    }
     d3.select(canvas).call(canvasZoom.transform, zoomLevel);
   }
 
@@ -417,6 +435,7 @@ async function renderProfiler() {
       tooltip.style.left = (e.pageX+10)+"px";
       tooltip.style.top = (e.pageY)+"px";
       tooltip.innerHTML = foundRect.tooltipText;
+      console.log(foundRect);
     } else tooltip.style.display = "none";
   });
   canvas.addEventListener("mouseleave", () => document.getElementById("tooltip").style.display = "none");
@@ -564,7 +583,7 @@ async function main() {
         }
       }
     }
-    return setState({ currentCtx:-1 });
+    return setState({ currentCtx:0 });
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
