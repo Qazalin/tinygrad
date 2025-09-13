@@ -326,7 +326,7 @@ async function renderProfiler() {
           width = 0.5;
           let found = false;
           for (const v of visible) {
-            if (v.x0<=x && Math.abs(v.x1-x+width) <= 1) {
+            if (v.x0<=x && Math.abs(v.x1-x+width) <= 1 && v.y0 === offsetY+e.y) {
               found = true;
               break;
             }
