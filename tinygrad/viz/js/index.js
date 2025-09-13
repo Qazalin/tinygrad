@@ -320,9 +320,22 @@ async function renderProfiler() {
         // contiguous rect
         if (e.x>et || e.x+e.width<st) continue;
         const x = xscale(e.x);
-        const width = xscale(e.x+e.width)-x;
+        let width = xscale(e.x+e.width)-x;
+        let arg = e.arg;
+        if (width < 0.5) {
+          width = 0.5;
+          let found = false;
+          for (const v of visible) {
+            if (v.x0<=x && Math.abs(v.x1-x+width) <= 1) {
+              found = true;
+              break;
+            }
+          }
+          if (found) continue;
+          arg = null;
+        }
         ctx.fillStyle = e.fillColor; ctx.fillRect(x, offsetY+e.y, width, e.height);
-        visible.push({ y0:offsetY+e.y, y1:offsetY+e.y+e.height, x0:x, x1:x+width, arg:e.arg });
+        visible.push({ y0:offsetY+e.y, y1:offsetY+e.y+e.height, x0:x, x1:x+width, arg });
         // add label
         if (e.label == null) continue;
         ctx.textAlign = "left";
