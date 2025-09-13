@@ -198,9 +198,6 @@ const overlay = container.append("canvas")
   .style("position","absolute")
   .style("top",0).style("left",0).style("pointer-events", "none")
   .node();
-
-  const o = overlay.getContext("2d")
-  function drawOverlay(x,y,w,h) { o.clearRect(0,0,overlay.width,overlay.height); o.strokeRect(x,y,w,h) }
   // NOTE: scrolling via mouse can only zoom the graph
   canvas.addEventListener("wheel", e => (e.stopPropagation(), e.preventDefault()), { passive:false });
   const ctx = canvas.getContext("2d");
@@ -385,6 +382,14 @@ const overlay = container.append("canvas")
     }
   }
 
+
+  const o = overlay.getContext("2d")
+  function drawOverlay() {
+    o.fillStyle = "red";
+    o.fillRect(10, 10, 10, 10);
+  }
+  drawOverlay();
+
   function resize() {
     const profiler = document.querySelector(".profiler");
     const sideRect = rect("#device-list");
@@ -398,6 +403,9 @@ const overlay = container.append("canvas")
       c.getContext("2d").scale(dpr, dpr);
     }
     d3.select(canvas).call(canvasZoom.transform, zoomLevel);
+    const ctx = document.querySelector("#overlay").getContext("2d");
+ctx.fillStyle = "red";
+ctx.fillRect(50,50,100,50);
   }
 
   canvasZoom = d3.zoom().filter(vizZoomFilter).scaleExtent([1, Infinity]).translateExtent([[0,0], [Infinity,0]]).on("zoom", e => render(e.transform));
@@ -435,7 +443,6 @@ const overlay = container.append("canvas")
       tooltip.style.left = (e.pageX+10)+"px";
       tooltip.style.top = (e.pageY)+"px";
       tooltip.innerHTML = foundRect.tooltipText;
-      console.log(foundRect);
     } else tooltip.style.display = "none";
   });
   canvas.addEventListener("mouseleave", () => document.getElementById("tooltip").style.display = "none");
