@@ -2180,7 +2180,6 @@ class TestCopyFolding(unittest.TestCase):
     check_schedule(b, 0, filter_sink=False)
     assert b.item() == 1
 
-  @expect_rangeify_fails
   def test_late_const_copy_folding(self):
     a = Tensor.arange(3).realize()
     zeros = Tensor.zeros(3).realize()
