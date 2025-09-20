@@ -79,6 +79,8 @@ do_realize = PatternMatcher([
   (UPat((Ops.COPY, Ops.MSELECT, Ops.MSTACK), name="rb"), realize_parents),
   # realize input to assign (might be optimized out)
   (UPat(Ops.ASSIGN, name="a"), realize_assign),
+  # realize nop
+  (UPat(Ops.NOOP, name="tr"), realize),
 ])
 
 
@@ -381,7 +383,7 @@ def remove_bufferize(src:UOp, buf:UOp, idx:UOp):
   # for now just no REDUCE, COPY, or ASSIGN
   ran = src.toposort(gate=lambda x: x.op not in {Ops.INDEX})
   # we don't want to bufferize threefry, also causes problems because not all platforms support long
-  if any(x.op in {Ops.REDUCE, Ops.COPY, Ops.ASSIGN} for x in ran) and src.op is not Ops.THREEFRY: return None
+  if any(x.op in {Ops.REDUCE, Ops.COPY, Ops.NOOP, Ops.ASSIGN} for x in ran) and src.op is not Ops.THREEFRY: return None
 
   # simple, matching old behavior
   #if src.op is not Ops.INDEX: return None
