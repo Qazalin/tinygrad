@@ -34,6 +34,7 @@ def get_metadata(trace_bufs:list[tuple]) -> list[dict]:
     for k,v in zip(keys, contexts):
       traces[i:=len(traces)] = (k, v, uop_fields)
       steps = [{"name":s.name, "loc":s.loc, "depth":s.depth, "match_count":len(s.matches), "code_line":printable(s.loc),
+                "mlocs":[printable(x[2]) for x in s.matches],
                 "query":f"/ctxs?ctx={i}&idx={j}"} for j,s in enumerate(v)]
       ret.append(r:={"name":k.display_name, "steps":steps})
       # program spec metadata

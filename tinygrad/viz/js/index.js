@@ -664,7 +664,7 @@ async function main() {
     rewriteList.className = "rewrite-list";
     for (let s=0; s<=step.match_count; s++) {
       const ul = rewriteList.appendChild(document.createElement("ul"));
-      ul.innerText = s;
+      ul.innerText = s === 0 ? "input" : step.mlocs[s-1];
       ul.id = `rewrite-${s}`;
       ul.onclick = () => setState({ currentRewrite:s });
       ul.className = s > ret.length-1 ? "disabled" : s === currentRewrite ? "active" : "";
