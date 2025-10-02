@@ -58,7 +58,8 @@ class TestOnnxModel(unittest.TestCase):
     print(cls, _LABELS[cls])
     assert "car" in _LABELS[cls] or _LABELS[cls] == "convertible"
 
-@unittest.skipUnless(Device.DEFAULT == "METAL", "only run on METAL")
+#@unittest.skipUnless(Device.DEFAULT == "METAL", "only run on METAL")
+@unittest.skip("too many open files")
 class TestHuggingFaceOnnxModels(unittest.TestCase):
   @classmethod
   def setUpClass(cls):

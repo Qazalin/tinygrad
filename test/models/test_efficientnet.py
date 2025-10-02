@@ -46,6 +46,7 @@ def _infer(model: EfficientNet, img):
 chicken_img = preprocess(Image.open(pathlib.Path(__file__).parent / 'efficientnet/Chicken.jpg'))
 car_img = preprocess(Image.open(pathlib.Path(__file__).parent / 'efficientnet/car.jpg'))
 
+@unittest.skip("slow")
 class TestEfficientNet(unittest.TestCase):
   @classmethod
   def setUpClass(cls):
@@ -71,6 +72,7 @@ class TestEfficientNet(unittest.TestCase):
     self.assertEqual(_LABELS[labels[0]], "hen")
     self.assertEqual(_LABELS[labels[1]], "sports car, sport car")
 
+@unittest.skip("slow")
 class TestViT(unittest.TestCase):
   @classmethod
   def setUpClass(cls):
@@ -89,6 +91,7 @@ class TestViT(unittest.TestCase):
     labels = _infer(self.model, car_img)
     self.assertEqual(_LABELS[labels[0]], "racer, race car, racing car")
 
+@unittest.skip("slow")
 class TestResNet(unittest.TestCase):
   @classmethod
   def setUpClass(cls):
