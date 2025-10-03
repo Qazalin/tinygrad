@@ -117,8 +117,8 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
 
   @functools.cached_property
   def parents(self:UOp) -> dict[UOp, None]:
-    ret = {s:None for s in self.src}
-    for s in self.src: ret.update(s.parents)
+    ret = self.toposort()
+    ret.pop(self)
     return ret
   @property
   def sparents(self:UOp) -> dict[UOp, None]: return {self:None, **self.parents}
