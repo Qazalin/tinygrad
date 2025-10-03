@@ -33,7 +33,7 @@ def check_schedule(t:Tensor|list[Tensor]|UOp, allowed:int, to_prerealize:list[Te
   # test lowering all the ScheduleItems to ExecItems
   kernel_cnt = len([si for si,ei in lower_schedule(sched.copy()) if isinstance(ei.prg, CompiledRunner) or not filter_sink])
   if kernel_cnt != allowed:
-    if RANGEIFY: return sched # allow different kernel count, TODO: fix the asserts
+    if RANGEIFY and not getenv("STRICT"): return sched # allow different kernel count, TODO: fix the asserts
     print(f"SCHEDULE ISSUE, expecting {allowed} got {len(sched)}")
     if DEBUG >= 3:
       for i,s in enumerate(sched):
@@ -343,8 +343,10 @@ class TestSchedule(unittest.TestCase):
   def test_cache_reduce_parent(self):
     x = Tensor.empty(32)
     r0 = x.mean(axis=0, keepdim=True)
-    r1 = (x - r0).sum(axis=0).div(2)
-    out = r0 + r1
+    r1 = (Tensor.empty(32) - r0).sum(axis=0).div(2)
+    r2 = (Tensor.empty(32) - r0).sum(axis=0).mul(2)
+    r3 = (Tensor.empty(32) - r0).sum(axis=0).add(2)
+    out = r1 + r2 + r3
     schedule = check_schedule(out, 2)
     reduceops = [x for si in schedule for x in si.ast.toposort() if x.op in {Ops.REDUCE_AXIS, Ops.REDUCE}]
     assert len(reduceops) == 2

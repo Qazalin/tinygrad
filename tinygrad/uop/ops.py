@@ -937,6 +937,22 @@ def track_matches(func):
     return ret
   return _track_func
 
+# *** temp stdout capture thing
+import sys
+from io import StringIO
+from contextlib import contextmanager
+@contextmanager
+def tee_stdout():
+  buf = StringIO()
+  old = sys.stdout
+  sys.stdout = type("Tee", (), {
+    "write": lambda self, x: (old.write(x), buf.write(x)),
+    "flush": lambda self: old.flush()
+  })()
+  try: yield buf
+  finally:
+    sys.stdout = old
+
 class TrackedPatternMatcher(PatternMatcher):
   def rewrite(self, uop:UOp, ctx=None) -> UOp|None:
     ret = None
@@ -948,17 +964,19 @@ class TrackedPatternMatcher(PatternMatcher):
         match_stats[p][2] += time.perf_counter()-st
         continue
       match_stats[p][1] += 1
-      try: ret = match(uop, ctx)
+      try:
+        with tee_stdout() as stdout:
+          ret = match(uop, ctx)
       except Exception as e:
         if TRACK_MATCH_STATS >= 2 and active_rewrites and not isinstance(e, RewriteNotReady):
-          active_rewrites[-1].matches.append((track_uop(uop), track_uop(UOp(Ops.REWRITE_ERROR, src=uop.src, arg=str(sys.exc_info()[1]))), p.location))
+          active_rewrites[-1].matches.append((track_uop(uop), track_uop(UOp(Ops.REWRITE_ERROR, src=uop.src, arg=str(sys.exc_info()[1]))), p.location, stdout.getvalue()))
         raise
       if ret is not None and ret is not uop:
         match_stats[p][0] += 1
         match_stats[p][3] += (et:=time.perf_counter()-st)
         if TRACK_MATCH_STATS >= 3: print(f"{et*1e6:7.2f} us -- ", printable(p.location))
         if TRACK_MATCH_STATS >= 2 and isinstance(ret, UOp) and active_rewrites:
-          active_rewrites[-1].matches.append((track_uop(uop), track_uop(ret), p.location))
+          active_rewrites[-1].matches.append((track_uop(uop), track_uop(ret), p.location, stdout.getvalue()))
         return ret
       match_stats[p][2] += time.perf_counter()-st
     return None

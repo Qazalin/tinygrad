@@ -276,11 +276,13 @@ def index_child(ctx:RangeifyContext, c:UOp, x:UOp, idx:UOp):
     if ctx.progress > 10000: raise RuntimeError("children not making progress")
     # NOTE: we mark this here
     ctx.seen_children[c][x.arg[0]] = idx
+    print("not yet")
     raise RewriteNotReady
   ctx.progress = 0
 
   if c not in ctx.seen_child:
     all_rngs = list(zip(*[ch.src[1:] for ch in ctx.seen_children[c].values()]))
+    print("first", all_rng)
     out_rngs = []
     end_ranges = []
     idx_ranges = []
@@ -303,8 +305,10 @@ def index_child(ctx:RangeifyContext, c:UOp, x:UOp, idx:UOp):
         end_ranges.append(out_rngs[-1])
         idx_ranges.append(i)
     ctx.seen_child[c] = (out_rngs, idx_ranges, end_ranges)
+    print("set first seen child", (out_rngs, idx_ranges, end_ranges))
   else:
     out_rngs, idx_ranges, end_ranges = ctx.seen_child[c]
+    print("seen", out_rngs, idx_ranges, end_ranges)
     for i,nr in zip(idx_ranges, end_ranges): out_rngs[i] = nr
   # index based on the shared ranges
   ret = c.index(*out_rngs)

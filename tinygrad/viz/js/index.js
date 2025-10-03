@@ -669,8 +669,9 @@ async function main() {
       ul.onclick = () => setState({ currentRewrite:s });
       ul.className = s > ret.length-1 ? "disabled" : s === currentRewrite ? "active" : "";
       if (s > 0 && s === currentRewrite) {
-        const { upat, diff } = ret[s];
+        const { upat, stdout, diff } = ret[s];
         metadata.appendChild(codeBlock(upat[1], "python", { loc:upat[0], wrap:true }));
+        if (stdout.length) metadata.appendChild(codeBlock(stdout, "txt", { wrap:true }));
         const diffCode = metadata.appendChild(document.createElement("pre")).appendChild(document.createElement("code"));
         for (const line of diff) {
           const span = diffCode.appendChild(document.createElement("span"));
