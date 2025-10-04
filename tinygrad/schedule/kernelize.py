@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from tinygrad.uop.ops import UOp, Ops, GroupOp, PatternMatcher, UPat, graph_rewrite, graph_rewrite_map, identity_element, resolve
-from tinygrad.uop.ops import track_rewrites, _substitute, KernelInfo
+from tinygrad.uop.ops import track_rewrites, _substitute, KernelInfo, snapshot_state
 from tinygrad.uop.spec import type_verify, tensor_uop_spec
 from tinygrad.uop.symbolic import symbolic_simple
 from tinygrad.helpers import Metadata, all_int, all_same, prod, dedup, unwrap, getenv, pluralize, FUSE_ARANGE, DEBUG, SPLIT_REDUCEOP
@@ -339,6 +339,7 @@ def get_kernelize_map(sink:UOp) -> dict[UOp, UOp]:
   Returns:
     Map transforming each UOp in the sink to the Ops.KERNEL graph.
   """
+  if getenv("VIZ") and getenv("SNAPSHOT"): snapshot_state(sink)
 
   # multi + merge_views + simplify
   tensor_map = graph_rewrite_map(sink, multi_pm+do_fuse+merge_views+kernelize_sym+replace_contiguous, ctx={}, name="merge_views")

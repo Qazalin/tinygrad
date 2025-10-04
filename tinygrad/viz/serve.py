@@ -46,6 +46,10 @@ def get_metadata(trace_bufs:list[tuple]) -> list[dict]:
 
 # ** Complete rewrite details for a graph_rewrite call
 
+
+import numpy as np
+np_values:dict[UOp, np.ndarray] = {}
+
 class GraphRewriteDetails(TypedDict):
   graph: dict                            # JSON serialized UOp for this rewrite step
   uop: str                               # strigified UOp for this rewrite step
@@ -89,6 +93,8 @@ def uop_to_json(x:UOp) -> dict[int, dict]:
     except Exception:
       label += "\n<ISSUE GETTING LABEL>"
     if (ref:=ref_map.get(u.arg.ast) if u.op is Ops.KERNEL else None) is not None: label += f"\ncodegen@{ctxs[ref]['name']}"
+    if (v:=np_values.get(u)) is not None:
+      label += "\n"+repr(v)
     # NOTE: kernel already has metadata in arg
     if TRACEMETA >= 2 and u.metadata is not None and u.op is not Ops.KERNEL: label += "\n"+repr(u.metadata)
     graph[id(u)] = {"label":label, "src":[(i,id(x)) for i,x in enumerate(u.src) if x not in excluded], "color":uops_colors.get(u.op, "#ffffff"),
@@ -99,7 +105,10 @@ def uop_to_json(x:UOp) -> dict[int, dict]:
 def _reconstruct(a:int, i:int):
   op, dtype, src, arg, *rest = traces[i][2][a]
   arg = type(arg)(_reconstruct(arg.ast, i), arg.metadata) if op is Ops.KERNEL else arg
-  return UOp(op, dtype, tuple(_reconstruct(s, i) for s in src), arg, *rest)
+  val = rest.pop() if isinstance(rest[-1], np.ndarray) else None
+  ret = UOp(op, dtype, tuple(_reconstruct(s, i) for s in src), arg, *rest)
+  np_values[ret] = val
+  return ret
 
 def get_details(ctx:TrackedGraphRewrite, i:int=0) -> Generator[GraphRewriteDetails, None, None]:
   yield {"graph":uop_to_json(next_sink:=_reconstruct(ctx.sink, i)), "uop":str(next_sink), "changed_nodes":None, "diff":None, "upat":None}

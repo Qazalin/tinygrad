@@ -510,7 +510,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   def realized(self) -> Buffer|MultiBuffer|None:
     # NOTE: this is used by the JIT to determine which inputs we capture
     return self.buffer if self.op in {Ops.BUFFER, Ops.MSTACK} and self.buffer.is_allocated() else None
-  @property
+  @functools.cached_property
   def is_realized(self) -> bool:
     return all(x.base.realized is not None for x in self.base.src) if self.base.op is Ops.MULTI else self.base.realized is not None
 
@@ -866,7 +866,16 @@ def track_uop(u:UOp):
   # KERNEL also has a UOp in the arg
   arg = type(u.arg)(track_uop(u.arg.ast), u.arg.metadata) if u.op is Ops.KERNEL else u.arg
   uop_fields[num] = (u.op, u.dtype, tuple(track_uop(s) for s in u.src), arg, u.tag)+((u.metadata,) if TRACEMETA>=2 else ())
+  if TRACK_MATCH_STATS >= 4 and u is u.base:
+    rr = u.substitute({s:s.rtag(None) for s in u.toposort()})
+    if rr.is_realized and hasattr(rr.buffer.allocator, "_offset"): uop_fields[num] += ((rr.buffer.view(10, rr.dtype, 0).allocate() if rr.size > 10 else rr.buffer).numpy(),)
   return num
+
+snapshot_counter = itertools.count()
+def snapshot_state(tsink):
+  _ = next(snapshot_counter)
+  with Context(TRACK_MATCH_STATS=0): ssink = tsink.substitute({s:s.rtag(str(snapshot_counter)) for s in tsink.toposort()})
+  with Context(TRACK_MATCH_STATS=4): graph_rewrite(ssink, PatternMatcher([]), name="state")
 
 # *** tracking pattern matcher ***
 

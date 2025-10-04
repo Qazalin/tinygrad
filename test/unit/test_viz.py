@@ -290,6 +290,11 @@ class TestVizIntegration(BaseTestViz):
     self.assertEqual(list(next(get_viz_details(1, 0))["graph"]), [id(c)])
     self.assertEqual(list(next(get_viz_details(1, 1))["graph"]), [id(c+2)])
 
+  def test_memory_debugger(self):
+    a = Tensor([1]).realize()
+    b = Tensor([2]).realize()
+    (a + b).schedule()
+
 from tinygrad.device import ProfileDeviceEvent, ProfileGraphEvent, ProfileGraphEntry
 from tinygrad.viz.serve import get_profile
 
