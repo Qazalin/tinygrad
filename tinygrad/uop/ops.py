@@ -868,7 +868,7 @@ def track_uop(u:UOp):
   uop_fields[num] = (u.op, u.dtype, tuple(track_uop(s) for s in u.src), arg, u.tag)+((u.metadata,) if TRACEMETA>=2 else ())
   if TRACK_MATCH_STATS >= 4 and u is u.base:
     rr = u.substitute({s:s.rtag(None) for s in u.toposort()})
-    if rr.is_realized and hasattr(rr.buffer.allocator, "_offset"): uop_fields[num] += ((rr.buffer.view(10, rr.dtype, 0).allocate() if rr.size > 10 else rr.buffer).numpy(),)
+    if rr.is_realized and not rr.device.startswith("DISK"): uop_fields[num] += ((rr.buffer).numpy(),)
   return num
 
 snapshot_counter = itertools.count()
