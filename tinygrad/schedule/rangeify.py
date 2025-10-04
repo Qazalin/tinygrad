@@ -73,7 +73,8 @@ earliest_rewrites = PatternMatcher([
   # assign only to buffer, otherwise make it a CONTIGUOUS
   (UPat(Ops.ASSIGN, src=(UPat(GroupOp.All-{Ops.BUFFER}, name="target"), UPat(name="x")), name="assign"),
    lambda x,target,assign: x.f(Ops.CONTIGUOUS, tag=assign.tag) if (((t:=target.base).op is not Ops.BUFFER) and \
-       not (t.op is Ops.MSTACK and all(s.op is Ops.BUFFER for s in t.src))) or target.tag is not None else None),
+       not (t.op is Ops.MSTACK and all(s.op is Ops.BUFFER for s in t.src))) else None),
+       #not (t.op is Ops.MSTACK and all(s.op is Ops.BUFFER for s in t.src))) or target.tag is not None else None),
 
    # realize before assign if input permutes the target buffer
    (UPat(Ops.ASSIGN, src=(UPat.var("a"), UPat.var("b")), name="assign"), find_permutes),
@@ -82,7 +83,7 @@ earliest_rewrites = PatternMatcher([
   (UPat(Ops.COPY, src=(UPat.var("x"), UPat()), name="copy"), lambda x,copy: x.f(Ops.NOOP, tag=copy.tag) if x.device == copy.device else None),
 
   # contiguous/buffer/copy/assign is already contiguous
-  #(UPat(Ops.CONTIGUOUS, name="root", src=(UPat((Ops.CONTIGUOUS, Ops.BUFFER, Ops.COPY, Ops.ASSIGN)),)), lambda root: root.src[0]),
+  (UPat(Ops.CONTIGUOUS, name="root", src=(UPat((Ops.CONTIGUOUS, Ops.BUFFER, Ops.COPY, Ops.ASSIGN)),)), lambda root: root.src[0]),
 ])
 
 # *****************
@@ -733,8 +734,14 @@ def do_sub_recurse(s:UOp):
   return x.replace(src=tuple([UOp(Ops.SUBSTITUTE, src=(y,uop_keys,uop_values)) for y in x.src]))
 pm_substitute_recurse = PatternMatcher([(UPat(Ops.SUBSTITUTE, src=(UPat(), UPat(Ops.NOOP), UPat(Ops.NOOP)), name="s"), do_sub_recurse)])
 
+import itertools
+
+c = itertools.count(0)
 @track_rewrites(lambda _,ret: f"Schedule {pluralize('Kernel', len([u for u in UOp.sink(*ret.values()).toposort() if u.op is Ops.KERNEL]))}", True)
 def get_rangeify_map(sink:UOp) -> dict[UOp, UOp]:
+  if next(c) == 15:
+    import pickle
+    with open("/tmp/test2.pkl", "wb") as f: pickle.dump(sink, f)
   uop_list: list[UOp] = []
   if getenv("VIZ") and getenv("SNAPSHOT"): snapshot_state(sink)
   tsink = graph_rewrite(sink, add_tags, ctx=uop_list, bottom_up=True, name="number the uops")
