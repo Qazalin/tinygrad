@@ -1,8 +1,9 @@
 from tinygrad import dtypes, getenv, Device
 from tinygrad.helpers import trange, colored, DEBUG, temp
 from tinygrad.nn.datasets import mnist
-import torch
+import torch, warnings
 from torch import nn, optim
+warnings.filterwarnings("ignore")
 
 class Model(nn.Module):
   def __init__(self):
