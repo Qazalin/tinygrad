@@ -135,8 +135,10 @@ function formatTime(ts, dur=ts) {
 }
 const formatUnit = (d, unit="") => d3.format(".3~s")(d)+unit;
 
+const rainbow20=["#7A1E3A","#8E2E2E","#9D3E23","#A65B1A","#8C6A1F","#6E7A21","#2E7A3A","#227C64","#1C6F7E","#1F5E8F","#264CA0","#2E3AAB","#3728B0","#4524A4","#5B2593","#73257F","#8A2B6E","#9A345D","#A03C4E","#A04444"];
 const colorScheme = {TINY:["#1b5745", "#354f52", "#354f52", "#1d2e62", "#63b0cd"],
   DEFAULT:["#2b2e39", "#2c2f3a", "#31343f", "#323544", "#2d303a", "#2e313c", "#343746", "#353847", "#3c4050", "#404459", "#444862", "#4a4e65"],
+  //BUFFER:rainbow20,
   BUFFER:["#342483", "#3E2E94", "#4938A4", "#5442B4", "#5E4CC2", "#674FCA"],
   CATEGORICAL:["#ff8080", "#F4A261", "#C8F9D4", "#8D99AE", "#F4A261", "#ffffa2", "#ffffc0", "#87CEEB"],}
 const cycleColors = (lst, i) => lst[i%lst.length];
@@ -247,11 +249,11 @@ async function renderProfiler() {
           const shape = {x:[x], y:[y], dtype, sz, nbytes, key};
           buf_shapes.set(key, shape); temp.set(key, shape);
           timestamps.push(ts);
-          x += 1; y += nbytes; valueMap.set(ts, y);
+          x += 1; y += nbytes;
         } else {
           const free = buf_shapes.get(key);
           timestamps.push(ts);
-          x += 1; y -= free.nbytes; valueMap.set(ts, y);
+          x += 1; y -= free.nbytes;
           free.x.push(x);
           free.y.push(free.y.at(-1));
           temp.delete(key);
@@ -272,7 +274,7 @@ async function renderProfiler() {
       for (const [num, {dtype, sz, nbytes, y, x:steps}] of buf_shapes) {
         const x = steps.map(s => timestamps[s]);
         const dur = x.at(-1)-x[0];
-        const arg = {tooltipText:`${dtype} len:${formatUnit(sz)}\n${formatUnit(nbytes, "B")}\nnum:${num}\nalive for ${formatTime(dur)}`};
+        const arg = {tooltipText:`${formatTime(x[0])} - ${formatTime(x.at(-1))}\n${dtype} len:${formatUnit(sz)}\n${formatUnit(nbytes, "B")}\nnum:${num}\nalive for ${formatTime(dur)}`};
         shapes.push({ x, y0:y.map(yscale), y1:y.map(y0 => yscale(y0+nbytes)), arg, fillColor:cycleColors(colorScheme.BUFFER, shapes.length) });
       }
       // generic polygon merger
@@ -295,7 +297,8 @@ async function renderProfiler() {
         sum.x.push(allX[i], allX[i+1]);
         const y = maxY.get(allX[i]); sum.y1.push(y, y); sum.y0.push(base0, base0);
       }
-      data.tracks.set(k, { shapes:[sum], visible, offsetY, height, peak, scaleFactor:maxheight*4/height, views:[[sum], shapes], valueMap });
+      const ss = [sum];
+      data.tracks.set(k, { shapes:ss, visible, offsetY, height, peak, scaleFactor:maxheight*4/height, views:[[sum], shapes], valueMap });
       div.style("height", height+padding+"px").style("cursor", "pointer").on("click", (e) => {
         const newFocus = e.currentTarget.id === focusedDevice ? null : e.currentTarget.id;
         let offset = 0;
@@ -335,7 +338,7 @@ async function renderProfiler() {
           for (let i=1; i<x.length; i++) {
             ctx.lineTo(x[i], offsetY+e.y0[i]);
             let arg = e.arg;
-            if (arg == null && valueMap != null) arg = {tooltipText: `${e.x[i-1]}\nTotal: ${formatUnit(valueMap.get(e.x[i-1]), 'B')}`}
+            if (arg == null && valueMap != null) arg = {tooltipText: `${formatTime(e.x[i-1])}\nTotal: ${formatUnit(valueMap.get(e.x[i-1]), 'B')}`}
             visible.push({ x0:x[i-1], x1:x[i], y0:offsetY+e.y1[i-1], y1:offsetY+e.y0[i], arg });
           }
           for (let i=x.length-1; i>=0; i--) ctx.lineTo(x[i], offsetY+e.y1[i]);
@@ -347,7 +350,7 @@ async function renderProfiler() {
         if (e.x>et || e.x+e.width<st) continue;
         const x = xscale(e.x);
         const y = offsetY+e.y;
-        const width = xscale(e.x+e.width)-x;
+        let width = xscale(e.x+e.width)-x;
         ctx.fillStyle = e.fillColor; ctx.fillRect(x, y, width, e.height);
         visible.push({ y0:y, y1:y+e.height, x0:x, x1:x+width, arg:e.arg });
         // add label
