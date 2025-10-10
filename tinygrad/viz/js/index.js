@@ -241,7 +241,10 @@ async function renderProfiler() {
         // offset y by depth
         shapes.push({x:e.st, y:levelHeight*depth, width:e.dur, height:levelHeight, arg, label, fillColor });
       }
-      div.style("height", levelHeight*levels.length+padding+"px").style("pointerEvents", "none");
+      div.style("height", levelHeight*levels.length+padding+"px").style("pointerEvents", "none").on("click", () => {
+        const metadata = document.querySelector(".metadata");
+        metadata.innerText = `you've selected ${k}`;
+      });
     } else {
       const peak = u64();
       let x = 0, y = 0;
