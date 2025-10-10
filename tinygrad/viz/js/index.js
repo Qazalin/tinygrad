@@ -243,7 +243,16 @@ async function renderProfiler() {
       }
       div.style("height", levelHeight*levels.length+padding+"px").style("pointerEvents", "none").on("click", () => {
         const metadata = document.querySelector(".metadata");
-        metadata.innerText = `you've selected ${k}`;
+        metadata.innerHTML = "";
+        for (const s of shapes) {
+          const div = metadata.appendChild(document.createElement("div"));
+          div.style.display = "flex";
+          div.style.justifyContent = "space-between";
+          for (const line of s.arg.tooltipText.split("\n")) {
+            const p = div.appendChild(document.createElement("p"));
+            p.innerHTML = line;
+          }
+        }
       });
     } else {
       const peak = u64();
