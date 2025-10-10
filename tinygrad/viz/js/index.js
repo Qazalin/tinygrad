@@ -244,13 +244,16 @@ async function renderProfiler() {
       div.style("height", levelHeight*levels.length+padding+"px").style("pointerEvents", "none").on("click", () => {
         const metadata = document.querySelector(".metadata");
         metadata.innerHTML = "";
+        const debug2 = metadata.appendChild(document.createElement("table"));
         for (const s of shapes) {
-          const div = metadata.appendChild(document.createElement("div"));
-          div.style.display = "flex";
-          div.style.justifyContent = "space-between";
+          const tr = debug2.appendChild(document.createElement("tr"));
+          tr.className = "main-row";
           for (const line of s.arg.tooltipText.split("\n")) {
-            const p = div.appendChild(document.createElement("p"));
-            p.innerHTML = line;
+            const td = tr.appendChild(document.createElement("td"));
+            const div = td.appendChild(document.createElement("div"));
+            div.className = "line";
+            const cell = div.appendChild(document.createElement("p"));
+            cell.innerHTML = line;
           }
         }
       });
