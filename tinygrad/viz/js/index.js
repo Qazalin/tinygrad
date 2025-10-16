@@ -552,12 +552,10 @@ var ret = [];
 var cache = {};
 var ctxs = null;
 const evtSources = [];
-// VIZ displays graph rewrites in 3 levels, from bottom-up:
-// rewrite: a single UOp transformation
-// step: collection of rewrites
-// context: collection of steps
-const state = {currentCtx:-1, currentStep:0, currentRewrite:0, expandSteps:false};
+// VIZ displays steps in a hierarchy, each view is accessible with a single key.
+const state = { step:-1, currentRewrite:0 };
 function setState(ns) {
+  if (ns.key != null) throw new Error("invalid state");
   const { currentCtx:prevCtx, currentStep:prevStep } = state;
   Object.assign(state, ns);
   // update element styles if needed
@@ -586,39 +584,37 @@ window.addEventListener("popstate", (e) => {
   if (e.state != null) setState(e.state);
 });
 
+let items = null;
 async function main() {
-  // ** left sidebar context list
-  if (ctxs == null) {
-    ctxs = [{ name:"Profiler", steps:[] }];
-    for (const r of (await (await fetch("/ctxs")).json())) ctxs.push(r);
+  // ** left sidebar list
+  if (items == null) {
     const ctxList = document.querySelector(".ctx-list");
-    for (const [i,{name, steps}] of ctxs.entries()) {
-      const ul = ctxList.appendChild(document.createElement("ul"));
-      ul.id = `ctx-${i}`;
-      const p = ul.appendChild(document.createElement("p"));
-      p.appendChild(colored(name));
-      p.onclick = () => {
-        setState(i === state.currentCtx ? { expandSteps:!state.expandSteps } : { expandSteps:true, currentCtx:i, currentStep:0, currentRewrite:0 });
-      }
-      for (const [j,u] of steps.entries()) {
-        const inner = ul.appendChild(document.createElement("ul"));
-        inner.id = `step-${i}-${j}`;
-        inner.innerText = `${u.name ?? u.loc[0].replaceAll("\\", "/").split("/").pop()+':'+u.loc[1]}`+(u.match_count ? ` - ${u.match_count}` : '');
-        inner.style.marginLeft = `${8*u.depth}px`;
-        inner.onclick = (e) => {
-          e.stopPropagation();
-          setState({ currentStep:j, currentCtx:i, currentRewrite:0 });
-        }
-      }
+    const [adj, val] = (await (await fetch("/ctxs")).json());
+    function addItem(root, k) {
+      const ul = root.appendChild(document.createElement("ul")); ul.id = `step-${k}`
+      ul.appendChild(colored(parseColors(val[k].name, "inherit")));
+      ul.onclick = (e) => {
+        const prev = document.getElementById(`step-${state.step}`);
+        if (prev != null) { prev.classList.remove("expanded"); prev.classList.remove("active"); }
+        e.currentTarget.classList.toggle("expanded"); e.currentTarget.classList.toggle("active");
+        setState({ step:k });
+      };
+      if (!adj[k]?.length) return;
+      const li = ul.appendChild(document.createElement("li"));
+      for (const c of adj[k]) addItem(li, c);
     }
-    return setState({ currentCtx:-1 });
+    const allChildren = new Set(Object.values(adj).flat());
+    for (const k of Object.keys(adj)) {
+      if (allChildren.has(parseInt(k))) continue;
+      addItem(ctxList, k);
+    }
+    items = val;
+    return setState({ step:-1 });
   }
   // ** center graph
-  const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
-  if (currentCtx == -1) return;
-  const ctx = ctxs[currentCtx];
-  const step = ctx.steps[currentStep];
-  const ckey = step?.query;
+  if (state.step == -1) return;
+  const step = items[state.step];
+  const ckey = step.query;
   // close any pending event sources
   let activeSrc = null;
   for (const e of evtSources) {
@@ -626,7 +622,7 @@ async function main() {
     if (url.pathname+url.search !== ckey) e.close();
     else if (e.readyState === EventSource.OPEN) activeSrc = e;
   }
-  if (ctx.name === "Profiler") return renderProfiler();
+  if (step.name === "Profiler") return renderProfiler();
   if (workerUrl == null) await initWorker();
   if (ckey in cache) {
     ret = cache[ckey];
@@ -690,6 +686,7 @@ async function main() {
     };
   }
   if (ret.length === 0) return;
+  const { currentRewrite } = state;
   renderDag(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes ?? [], currentRewrite === 0);
   // ** right sidebar code blocks
   const metadata = document.querySelector(".metadata");

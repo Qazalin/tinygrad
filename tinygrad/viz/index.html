@@ -41,17 +41,14 @@
   }
   ul {
     padding: 0;
-    opacity: 0.6;
+    color: #f0f0f599;
     white-space: nowrap;
     cursor: pointer;
   }
   ul.active {
-    opacity: 1;
+    color: #f0f0f5;
   }
-  ul > ul {
-    display: none;
-  }
-  ul.expanded > ul {
+  ul.expanded > li {
     display: block;
   }
   ul.disabled {
@@ -139,6 +136,12 @@
   }
   .ctx-list > ul > * + * {
     margin-top: 4px;
+  }
+  ul > ul > * + * {
+    margin-top: 4px;
+  }
+  ul > li {
+    padding-left: 8px;
   }
   .graph {
     position: absolute;

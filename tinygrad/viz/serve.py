@@ -271,7 +271,7 @@ class Handler(BaseHTTPRequestHandler):
       else:
         try: return self.stream_json(get_full_rewrite(trace.rewrites[i:=int(query["ctx"][0])][int(query["idx"][0])], i))
         except KeyError: status_code = 404
-    elif url.path == "/ctxs": ret, content_type = json.dumps(ctxs).encode(), "application/json"
+    elif url.path == "/ctxs": ret, content_type = json.dumps((adj, ctxs)).encode(), "application/json"
     elif url.path == "/get_profile" and profile_ret: ret, content_type = profile_ret, "application/octet-stream"
     else: status_code = 404
 
