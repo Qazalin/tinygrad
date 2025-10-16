@@ -21,7 +21,7 @@ serve.trace = RewriteTrace(tracked_keys, tracked_ctxs, uop_fields)
 from tinygrad.viz.serve import get_rewrites, get_full_rewrite, uop_to_json
 def get_viz_list(): return get_rewrites(serve.trace)
 def get_viz_details(rewrite_idx:int, step:int) -> Generator[dict, None, None]:
-  lst = get_viz_list()
+  adj, lst = get_viz_list()
   assert len(lst) > rewrite_idx, "only loaded {len(lst)} traces, expecting at least {idx}"
   return get_full_rewrite(tracked_ctxs[rewrite_idx][step])
 
@@ -183,16 +183,15 @@ class TestVizTree(BaseTestViz):
     sink = UOp.sink(a+b, c+d)
     def tree_rewrite(): return graph_rewrite(sink, root, name="root")
     tree_rewrite()
-    lst = get_viz_list()
-    steps = lst[0]["steps"]
-    self.assertEqual(len(steps), 1+2+4)
-    self.assertStepEqual(steps[0], {"name":"root", "depth":0, "match_count":1})
-    self.assertStepEqual(steps[1], {"name":"branch_0", "depth":1, "match_count":1})
-    self.assertStepEqual(steps[2], {"name":"leaf_left", "depth":2, "match_count":1})
-    self.assertStepEqual(steps[3], {"name":"leaf_right", "depth":2, "match_count":1})
-    self.assertStepEqual(steps[4], {"name":"branch_1", "depth":1, "match_count":1})
-    self.assertStepEqual(steps[5], {"name":"leaf_left", "depth":2, "match_count":1})
-    self.assertStepEqual(steps[6], {"name":"leaf_right", "depth":2, "match_count":1})
+    adj, steps = get_viz_list()
+    self.assertEqual(len(steps), 1+1+2+4)
+    self.assertStepEqual(steps[1], {"name":"root", "depth":0, "match_count":1})
+    self.assertStepEqual(steps[branch_0:=adj[1][0]], {"name":"branch_0", "depth":1, "match_count":1})
+    self.assertStepEqual(steps[adj[branch_0][0]], {"name":"leaf_left", "depth":2, "match_count":1})
+    self.assertStepEqual(steps[adj[branch_0][1]], {"name":"leaf_right", "depth":2, "match_count":1})
+    self.assertStepEqual(steps[branch_1:=adj[1][1]], {"name":"branch_1", "depth":1, "match_count":1})
+    self.assertStepEqual(steps[adj[branch_1][0]], {"name":"leaf_left", "depth":2, "match_count":1})
+    self.assertStepEqual(steps[adj[branch_1][1]], {"name":"leaf_right", "depth":2, "match_count":1})
 
 import gc
 
