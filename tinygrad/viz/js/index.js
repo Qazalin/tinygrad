@@ -612,8 +612,8 @@ async function main() {
       li.setAttribute("role","treeitem");
       const span = document.createElement("span");
       span.className = "label";
-      const v = vals[key];
-      span.appendChild(colored(v.name));
+      const u = vals[key];
+      span.appendChild(colored(u.name ?? u.loc[0].replaceAll("\\", "/").split("/").pop()+':'+u.loc[1]));
       const count = adj[key]?.length ?? 0;
       if (count) {
         const c = document.createElement("span")
