@@ -139,7 +139,7 @@ def apply_movement_op(op:Ops, in_shape:tuple[sint,...], arg:tuple, rngs:tuple[UO
     case _: raise RuntimeError(f"{op} is not a MovementOp")
   return rngs
 
-@cpu_profile(TracingKey("run_rangeify"), "TINY")
+@cpu_profile(TracingKey("run_rangeify"), "TINY", new_rewrite=True)
 def run_rangeify(tsink:UOp, debug:bool=False) -> tuple[UOp, IndexingContext]:
   rctx = IndexingContext()
 

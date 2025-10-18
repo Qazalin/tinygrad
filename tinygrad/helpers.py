@@ -242,10 +242,16 @@ class ProfilePointEvent(ProfileEvent):
 
 cpu_events:list[ProfileEvent] = []
 @contextlib.contextmanager
-def cpu_profile(name:str|TracingKey, device="CPU", is_copy=False, display=True) -> Generator[ProfileRangeEvent, None, None]:
+def cpu_profile(name:str|TracingKey, device="CPU", is_copy=False, display=True, new_rewrite=False) -> Generator[ProfileRangeEvent, None, None]:
   res = ProfileRangeEvent(device, name, perf_counter_us(), is_copy=is_copy)
+  if new_rewrite:
+    from tinygrad.uop.ops import add_traced_rewrite
+    add_traced_rewrite(name=name.display_name if isinstance(name, TracingKey) else name)
   try: yield res
   finally:
+    if new_rewrite:
+      from tinygrad.uop.ops import active_rewrites
+      active_rewrites.pop()
     res.en = perf_counter_us()
     if PROFILE and display: cpu_events.append(res)
 

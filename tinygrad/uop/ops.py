@@ -975,14 +975,18 @@ def track_rewrites(name:Callable[..., str|TracingKey]|bool=True, replay:bool=Fal
   return _decorator
 
 active_rewrites:list[TrackedGraphRewrite] = []
+
+def add_traced_rewrite(sink:UOp|None=None, name:str|None=None, bottom_up=False):
+  loc = ((frm:=sys._getframe(2)).f_code.co_filename, frm.f_lineno)
+  depth = len(active_rewrites)
+  tracked_ctxs[-1].append(ctx:=TrackedGraphRewrite(loc, (sink if sink is not None else UOp(Ops.SINK)).trace_num, [], name, depth, bottom_up))
+  active_rewrites.append(ctx)
+
 def track_matches(func):
   def _track_func(*args, **kwargs):
     if tracking:=(TRACK_MATCH_STATS >= 2):
-      loc = ((frm:=sys._getframe(1)).f_code.co_filename, frm.f_lineno)
-      depth = len(active_rewrites)
       if not tracked_ctxs: add_trace_group(TracingKey(f"default {func.__name__}"))
-      tracked_ctxs[-1].append(ctx:=TrackedGraphRewrite(loc, args[0].trace_num, [], kwargs.get("name", None), depth, kwargs.get("bottom_up", False)))
-      active_rewrites.append(ctx)
+      add_traced_rewrite(args[0], kwargs.get("name"), kwargs.get("bottom_up"))
     with cpu_profile(kwargs.get("name", "<unnamed>"), "TINY", display=tracking):
       ret = func(*args, **kwargs)
     if tracking: active_rewrites.pop()
