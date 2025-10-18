@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import multiprocessing, pickle, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, socketserver, functools, codecs, io, struct
-import subprocess, ctypes, pathlib
+import subprocess, ctypes, pathlib, itertools
 from contextlib import redirect_stdout
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler
@@ -28,7 +28,9 @@ uops_colors = {Ops.LOAD: "#ffc0c0", Ops.STORE: "#87CEEB", Ops.CONST: "#e0e0e0", 
 
 ref_map:dict[Any, int] = {}
 def get_rewrites(t:RewriteTrace) -> list[dict]:
-  ret = []
+  adj:dict[int, list[int]] = {}
+  val:dict[int, dict] = {}
+  counter = itertools.count(0)
   for i,(k,v) in enumerate(zip(t.keys, t.rewrites)):
     steps = [{"name":s.name, "loc":s.loc, "match_count":len(s.matches), "code_line":printable(s.loc),
               "query":f"/ctxs?ctx={i}&idx={j}", "depth":s.depth} for j,s in enumerate(v)]
@@ -36,8 +38,17 @@ def get_rewrites(t:RewriteTrace) -> list[dict]:
       steps.append({"name":"View Program", "query":f"/render?ctx={i}&fmt=src"})
       steps.append({"name":"View Disassembly", "query":f"/render?ctx={i}&fmt=asm"})
     for key in k.keys: ref_map[key] = i
-    ret.append({"name":k.display_name, "steps":steps})
-  return ret
+    adj[num:=next(counter)] = []
+    val[num] = {"name":k.display_name}
+    stack = [(-1, num)]
+    for j,s in enumerate(steps):
+      adj[num:=next(counter)] = []
+      val[num] = s
+      depth = s.get("depth",0)
+      while stack and stack[-1][0] >= depth: stack.pop()
+      adj[stack[-1][1] if stack else root].append(num)
+      stack.append((depth, num))
+  return adj, val
 
 # ** get the complete UOp graphs for one rewrite
 
@@ -270,7 +281,7 @@ class Handler(BaseHTTPRequestHandler):
       else:
         try: return self.stream_json(get_full_rewrite(trace.rewrites[i:=int(query["ctx"][0])][int(query["idx"][0])], i))
         except KeyError: status_code = 404
-    elif url.path == "/ctxs": ret, content_type = json.dumps(ctxs).encode(), "application/json"
+    elif url.path == "/ctxs": ret, content_type = json.dumps((adj, ctxs)).encode(), "application/json"
     elif url.path == "/get_profile" and profile_ret: ret, content_type = profile_ret, "application/octet-stream"
     else: status_code = 404
 
@@ -326,7 +337,7 @@ if __name__ == "__main__":
   st = time.perf_counter()
   print("*** viz is starting")
 
-  ctxs = get_rewrites(trace:=load_pickle(args.kernels, default=RewriteTrace([], [], {})))
+  adj, ctxs = get_rewrites(trace:=load_pickle(args.kernels, default=RewriteTrace([], [], {})))
   profile_ret = get_profile(load_pickle(args.profile, default=[]))
 
   server = TCPServerWithReuse(('', PORT), Handler)

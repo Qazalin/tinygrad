@@ -591,7 +591,87 @@ window.addEventListener("popstate", (e) => {
   if (e.state != null) setState(e.state);
 });
 
+var items = null;
+
+function focus(to, from) {
+  if (!to) return
+  from?.setAttribute("tabindex","-1")
+  to.setAttribute("tabindex","0")
+  to.focus()
+}
+function toggle(li) {
+  if (li.classList.contains("has-children")) li.classList.toggle("expanded")
+}
+
 async function main() {
+  if (items == null) {
+    const [adj, vals] = await (await fetch("/ctxs")).json();
+    const root = document.querySelector(".tree");
+    function add(key, parentEl) {
+      const li = document.createElement("li");
+      li.setAttribute("role","treeitem");
+      const span = document.createElement("span");
+      span.className = "label";
+      const v = vals[key];
+      span.appendChild(colored(v.name));
+      const count = adj[key]?.length ?? 0;
+      if (count) {
+        const c = document.createElement("span")
+        c.className = "count"
+        c.textContent = `(${count})`
+        span.appendChild(c)
+        li.classList.add("has-children")
+      }
+      li.appendChild(span);
+      if (count) {
+        const ul = document.createElement("ul")
+        adj[key].forEach(x => add(x, ul))
+        li.appendChild(ul)
+      }
+      parentEl.appendChild(li)
+    }
+    const allChildren = new Set(Object.values(adj).flat());
+    Object.keys(adj).forEach(k => !allChildren.has(+k) && add(k, root));
+    root.addEventListener("click", e => {
+      const li = e.target.closest("[role=treeitem]"); if (!li) return
+      focus(li, document.activeElement.closest("li"))
+      toggle(li)
+    });
+  }
+}
+
+const firstChild = li => li.querySelector(":scope > ul > li")
+const isExpanded = li => li.classList.contains("expanded")
+
+// ** keyboard
+document.addEventListener("keydown", e => {
+  const li = document.activeElement?.closest("li");
+  if (e.key === "Enter") {
+    e.preventDefault();
+    if (li == null) { // we like this behavior
+      const first = document.querySelector(".tree").children[0];
+      focus(first);
+      return toggle(first);
+    }
+    toggle(li)
+  }
+  if (li == null) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault()
+    if (isExpanded(li) && firstChild(li)) return focus(firstChild(li), li)
+    if (li.nextElementSibling != null) return focus(li.nextElementSibling, li)
+  }
+  if (e.key === "ArrowUp") {
+    e.preventDefault()
+    if (li.previousElementSibling != null) return focus(li.previousElementSibling, li)
+    const higherPrev = li.parentElement.closest("li");
+    if (higherPrev != null) return focus(higherPrev, li)
+  }
+});
+
+main();
+
+async function mainOld() {
   // ** left sidebar context list
   if (ctxs == null) {
     ctxs = [{ name:"Profiler", steps:[] }];
@@ -762,6 +842,7 @@ appendResizer(document.querySelector(".metadata-parent"), { minWidth: 20, maxWid
 
 // **** keyboard shortcuts
 
+/*
 document.addEventListener("keydown", (event) => {
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
   // up and down change the step or context from the list
@@ -807,3 +888,4 @@ document.addEventListener("keydown", (event) => {
 });
 
 main()
+*/

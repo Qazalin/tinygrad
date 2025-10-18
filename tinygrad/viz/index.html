@@ -2,6 +2,7 @@
 <html>
 <head>
   <title>tinygrad viz</title>
+  <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" href="data:;base64,iVBORw0KGgo=">
   <script src="assets/d3js.org/d3.v7.min.js" charset="utf-8"></script>
@@ -39,25 +40,27 @@
   a {
     color: #4a90e2;
   }
-  ul {
-    padding: 0;
-    opacity: 0.6;
-    white-space: nowrap;
-    cursor: pointer;
+  ul.tree,.tree ul{list-style:none;padding:0;white-space:nowrap;cursor:pointer}
+  .tree li{padding:2px 6px;outline:none}
+  .tree li:focus{background:#1e2029;border-radius:6px}
+  .tree li>.label{display:inline-flex;align-items:center;gap:6px}
+  .tree li.has-children>.label::before{
+    content:"▸";
+    display:inline-block;
+    width:1.2em;
+    font-size:1.2em;
+    line-height:1;
+    text-align:center;
+    color:#a0a1ad;
+    transform:rotate(0deg);
   }
-  ul.active {
-    opacity: 1;
+  .tree li.expanded>.label::before{
+    transform:rotate(90deg);
+    color:#f0f0f5;
   }
-  ul > ul {
-    display: none;
-  }
-  ul.expanded > ul {
-    display: block;
-  }
-  ul.disabled {
-    opacity: 0.4;
-    pointer-events: none;
-  }
+  .tree li>ul{display:none;margin-top:4px;padding-left:16px;border-left:1px solid #4a4b57}
+  .tree li.expanded>ul{display:block}
+  .count{color:#a0a1ad;font-size:.85em}
   label {
     display: inline-flex;
     align-items: center;
@@ -134,11 +137,8 @@
     position: relative;
     height: 100%;
   }
-  .metadata > * + *, .rewrite-container > * + *, .ctx-list > * + * {
+  .metadata > * + *, .rewrite-container > * + * {
     margin-top: 12px;
-  }
-  .ctx-list > ul > * + * {
-    margin-top: 4px;
   }
   .graph {
     position: absolute;
@@ -333,7 +333,7 @@
       </button>
     </div>
     <div id="progress-message"></div>
-    <div class="container ctx-list-parent"><div class="ctx-list"></div></div>
+    <div class="container ctx-list-parent"><div class="ctx-list"><ul class="tree"></ul></div></div>
     <div class="view profiler"></div>
     <div class="view render"></div>
     <div class="view graph">
