@@ -663,9 +663,9 @@ document.addEventListener("keydown", e => {
   }
   if (e.key === "ArrowUp") {
     e.preventDefault()
-    if (li.previousElementSibling != null) return focus(li.previousElementSibling, li)
+    if (!isExpanded(li) && li.previousElementSibling != null) return focus(li.previousElementSibling, li)
     const higherPrev = li.parentElement.closest("li");
-    if (higherPrev != null) return focus(higherPrev, li)
+    if (!isExpanded(li) && higherPrev != null) return focus(higherPrev, li)
   }
 });
 
