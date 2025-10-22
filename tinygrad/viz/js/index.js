@@ -653,7 +653,12 @@ async function main() {
         if (subrewrites.length > 0) { l.innerText += ` (${subrewrites.length})`; l.parentElement.classList.add("has-children"); }
       }
     }
-    return setState({ currentCtx:-1 });
+    return setState({
+    "currentCtx": 4,
+    "currentStep": 33,
+    "currentRewrite": 0,
+    "expandSteps": true
+});
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
@@ -681,6 +686,7 @@ async function main() {
     root.className = "raw-text";
     const metadata = document.querySelector(".metadata");
     metadata.innerHTML = "";
+    console.log(ret);
     // detailed assembly view
     if (ret.cols != null) {
       const asm = root.appendChild(document.createElement("table"));

@@ -245,11 +245,17 @@ def get_llvm_mca(asm:str, mtriple:str, mcpu:str) -> dict:
   for i,usage in instr_usage.items(): rows[i].append([[k, v, (v/max_usage)*100] for k,v in usage.items()])
   return {"rows":rows, "cols":["Opcode", "Latency", {"title":"HW Resources", "labels":resource_labels}], "summary":summary}
 
+def get_sqtt(profile:list[ProfileEvent]) -> dict:
+  return {"rows":[], "cols":["this", "test"], "summary":[]}
+
 def get_render(ctx:list[str], fmt:list[str]):
   if not isinstance(prg:=trace.keys[int(ctx[0])].ret, ProgramSpec): return
   if fmt[0] == "src": return json.dumps({"src":prg.src, "lang":"cpp"}).encode()
-  lib = (compiler:=Device[prg.device].compiler).compile(prg.src)
-  with redirect_stdout(buf:=io.StringIO()): compiler.disassemble(lib)
+  if prg.device.startswith("AMD") and not getenv("AMD_LLVM"):
+    from tinygrad.runtime.support.compiler_amd import compile_hip as compiler, amdgpu_disassemble as disassembler
+  else: compiler, disassembler = (c:=Device[prg.device].compiler).compile, c.disassemble
+  lib = compiler(prg.src)
+  with redirect_stdout(buf:=io.StringIO()): disassembler(lib)
   disasm_str = buf.getvalue()
   from tinygrad.runtime.support.compiler_cpu import llvm, LLVMCompiler
   if isinstance(compiler, LLVMCompiler):
@@ -335,7 +341,7 @@ if __name__ == "__main__":
   print("*** viz is starting")
 
   ctxs = get_rewrites(trace:=load_pickle(args.kernels, default=RewriteTrace([], [], {})))
-  profile_ret = get_profile(load_pickle(args.profile, default=[]))
+  profile_ret = get_profile(profile:=load_pickle(args.profile, default=[]))
 
   server = TCPServerWithReuse(('', PORT), Handler)
   reloader_thread = threading.Thread(target=reloader)
