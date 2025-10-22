@@ -245,13 +245,13 @@ def get_llvm_mca(asm:str, mtriple:str, mcpu:str) -> dict:
   for i,usage in instr_usage.items(): rows[i].append([[k, v, (v/max_usage)*100] for k,v in usage.items()])
   return {"rows":rows, "cols":["Opcode", "Latency", {"title":"HW Resources", "labels":resource_labels}], "summary":summary}
 
-def get_sqtt(profile:list[ProfileEvent]) -> dict:
+def get_sqtt(prg:ProgramSpec, profile:list[ProfileEvent]) -> dict:
   return {"rows":[], "cols":["this", "test"], "summary":[]}
 
 def get_render(ctx:list[str], fmt:list[str]):
   if not isinstance(prg:=trace.keys[int(ctx[0])].ret, ProgramSpec): return
   if fmt[0] == "src": return json.dumps({"src":prg.src, "lang":"cpp"}).encode()
-  if prg.device.startswith("AMD") and not getenv("AMD_LLVM"):
+  if (use_sqtt:=prg.device.startswith("AMD") and not getenv("AMD_LLVM")):
     from tinygrad.runtime.support.compiler_amd import compile_hip as compiler, amdgpu_disassemble as disassembler
   else: compiler, disassembler = (c:=Device[prg.device].compiler).compile, c.disassemble
   lib = compiler(prg.src)
@@ -262,6 +262,7 @@ def get_render(ctx:list[str], fmt:list[str]):
     mtriple = ctypes.string_at(llvm.LLVMGetTargetMachineTriple(tm:=compiler.target_machine)).decode()
     mcpu = ctypes.string_at(llvm.LLVMGetTargetMachineCPU(tm)).decode()
     ret = get_llvm_mca(disasm_str, mtriple, mcpu)
+  if use_sqtt: ret = get_sqtt(prg, profile)
   else: ret = {"src":disasm_str, "lang":"x86asm"}
   return json.dumps(ret).encode()
 
