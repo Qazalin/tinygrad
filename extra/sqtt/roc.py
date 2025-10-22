@@ -47,14 +47,9 @@ class _ROCParseCtx:
       asm.setdefault(inst_ev.pc.address, InstInfo(typ=inst_typ, inst=self.disasms[inst_ev.pc.address][0]))
       asm[inst_ev.pc.address].on_ev(inst_ev)
 
-    self.wave_events[(self.find_program(ev.instructions_array[0].pc.address).name, ev.wave_id, ev.cu, ev.simd)] = asm
+    self.wave_events[(ev.instructions_array[0].pc.address, ev.wave_id, ev.cu, ev.simd)] = asm
 
-if __name__ == "__main__":
-  parser = argparse.ArgumentParser()
-  parser.add_argument('--profile', type=pathlib.Path, help='Path to profile', default=pathlib.Path(temp("profile.pkl", append_user=True)))
-  args = parser.parse_args()
-
-  with args.profile.open("rb") as f: profile = pickle.load(f)
+def decode_sqtt(profile:list[ProfileEvent]) -> dict[tuple[int, int, int, int], dict[int, InstInfo]]:
   sqtt_events:list[ProfileSQTTEvent] = []
   prog_events:list[ProfileProgramEvent] = []
   for e in profile:
@@ -97,4 +92,14 @@ if __name__ == "__main__":
     return rocprof.ROCPROFILER_THREAD_TRACE_DECODER_STATUS_SUCCESS
 
   rocprof.rocprof_trace_decoder_parse_data(copy_cb, trace_cb, isa_cb, None)
-  print(ROCParseCtx.wave_events.keys())
+  return ROCParseCtx.wave_events
+
+if __name__ == "__main__":
+  parser = argparse.ArgumentParser()
+  parser.add_argument('--profile', type=pathlib.Path, help='Path to profile', default=pathlib.Path(temp("profile.pkl", append_user=True)))
+  args = parser.parse_args()
+
+  with args.profile.open("rb") as f: profile = pickle.load(f)
+  wave_events = decode_sqtt(profile)
+
+  print(wave_events.keys())
