@@ -2,6 +2,7 @@
 import multiprocessing, pickle, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, socketserver, functools, codecs, io, struct
 import subprocess, ctypes, pathlib
 from contextlib import redirect_stdout
+from dataclasses import asdict
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
@@ -245,24 +246,29 @@ def get_llvm_mca(asm:str, mtriple:str, mcpu:str) -> dict:
   for i,usage in instr_usage.items(): rows[i].append([[k, v, (v/max_usage)*100] for k,v in usage.items()])
   return {"rows":rows, "cols":["Opcode", "Latency", {"title":"HW Resources", "labels":resource_labels}], "summary":summary}
 
-def get_sqtt(prg:ProgramSpec, profile:list[ProfileEvent]) -> dict:
-  return {"rows":[], "cols":["this", "test"], "summary":[]}
+def get_sqtt():
+  from extra.sqtt.roc import decode_sqtt
+  ret = decode_sqtt(prof:=load_pickle(args.profile, []))
+  ret_keys, ret_values = [], []
+  KEYS = ["pc_addr", "wave_id", "cu", "simd"]
+  for k,v in ret.items():
+    ret_keys.append({k:v for k,v in zip(KEYS, k)})
+    ret_values.append(vj:={})
+    for k2,v2 in v.items(): vj[k2] = asdict(v2)
+  return ret_keys, ret_values
 
 def get_render(ctx:list[str], fmt:list[str]):
+  if fmt[0] == "sqtt": return json.dumps(get_sqtt()).encode()
   if not isinstance(prg:=trace.keys[int(ctx[0])].ret, ProgramSpec): return
   if fmt[0] == "src": return json.dumps({"src":prg.src, "lang":"cpp"}).encode()
-  if (use_sqtt:=prg.device.startswith("AMD") and not getenv("AMD_LLVM")):
-    from tinygrad.runtime.support.compiler_amd import compile_hip as compiler, amdgpu_disassemble as disassembler
-  else: compiler, disassembler = (c:=Device[prg.device].compiler).compile, c.disassemble
-  lib = compiler(prg.src)
-  with redirect_stdout(buf:=io.StringIO()): disassembler(lib)
+  lib = (compiler:=Device[prg.device].compiler).compile(prg.src)
+  with redirect_stdout(buf:=io.StringIO()): compiler.disassemble(lib)
   disasm_str = buf.getvalue()
   from tinygrad.runtime.support.compiler_cpu import llvm, LLVMCompiler
   if isinstance(compiler, LLVMCompiler):
     mtriple = ctypes.string_at(llvm.LLVMGetTargetMachineTriple(tm:=compiler.target_machine)).decode()
     mcpu = ctypes.string_at(llvm.LLVMGetTargetMachineCPU(tm)).decode()
     ret = get_llvm_mca(disasm_str, mtriple, mcpu)
-  if use_sqtt: ret = get_sqtt(prg, profile)
   else: ret = {"src":disasm_str, "lang":"x86asm"}
   return json.dumps(ret).encode()
 
@@ -342,7 +348,7 @@ if __name__ == "__main__":
   print("*** viz is starting")
 
   ctxs = get_rewrites(trace:=load_pickle(args.kernels, default=RewriteTrace([], [], {})))
-  profile_ret = get_profile(profile:=load_pickle(args.profile, default=[]))
+  profile_ret = get_profile(load_pickle(args.profile, default=[]))
 
   server = TCPServerWithReuse(('', PORT), Handler)
   reloader_thread = threading.Thread(target=reloader)

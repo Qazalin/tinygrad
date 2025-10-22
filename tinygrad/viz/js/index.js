@@ -504,6 +504,12 @@ async function renderProfiler() {
   canvas.addEventListener("mouseleave", () => document.getElementById("tooltip").style.display = "none");
 }
 
+var sqtt;
+async function renderSQTT() {
+  if (sqtt == null) sqtt = await (await fetch("/render?ctx=0&fmt=sqtt")).json();
+  console.log(sqtt);
+}
+
 // ** zoom and recentering
 
 const vizZoomFilter = e => (!e.ctrlKey || e.type === 'wheel' || e.type === 'mousedown') && !e.button && e.type !== 'dblclick';
@@ -621,7 +627,7 @@ window.addEventListener("popstate", (e) => {
 async function main() {
   // ** left sidebar context list
   if (ctxs == null) {
-    ctxs = [{ name:"Profiler", steps:[] }];
+    ctxs = [{ name:"Profiler", steps:[] }, { name:"SQTT", steps:[] }];
     for (const r of (await (await fetch("/ctxs")).json())) ctxs.push(r);
     const ctxList = document.querySelector(".ctx-list");
     for (const [i,{name, steps}] of ctxs.entries()) {
@@ -653,12 +659,7 @@ async function main() {
         if (subrewrites.length > 0) { l.innerText += ` (${subrewrites.length})`; l.parentElement.classList.add("has-children"); }
       }
     }
-    return setState({
-    "currentCtx": 4,
-    "currentStep": 33,
-    "currentRewrite": 0,
-    "expandSteps": true
-});
+    return setState({ currentCtx:1 });
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
@@ -674,6 +675,7 @@ async function main() {
     else if (e.readyState === EventSource.OPEN) activeSrc = e;
   }
   if (ctx.name === "Profiler") return renderProfiler();
+  if (ctx.name === "SQTT") return renderSQTT();
   if (workerUrl == null) await initWorker();
   if (ckey in cache) {
     ret = cache[ckey];
@@ -686,7 +688,6 @@ async function main() {
     root.className = "raw-text";
     const metadata = document.querySelector(".metadata");
     metadata.innerHTML = "";
-    console.log(ret);
     // detailed assembly view
     if (ret.cols != null) {
       const asm = root.appendChild(document.createElement("table"));
