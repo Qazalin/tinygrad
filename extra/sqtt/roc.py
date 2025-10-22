@@ -17,6 +17,7 @@ class InstInfo:
   def on_ev(self, ev):
     self.hit, self.lat, self.stall = self.hit + 1, self.lat + ev.duration, self.stall + ev.stall
 
+def clone(ev): return type(ev).from_buffer_copy(bytes(ev))
 @dataclasses.dataclass
 class SQTTOutput:
   occ:list
@@ -44,23 +45,23 @@ class _ROCParseCtx:
 
   def on_occupancy_ev(self, ev):
     if DEBUG >= 4: print("OCC", ev.time, self.active_se, ev.cu, ev.simd, ev.wave_id, ev.start)
-    self.output.occ.append(ev)
+    self.output.occ.append(clone(ev))
 
   def on_wave_ev(self, ev):
     if DEBUG >= 4: print("WAVE", ev.wave_id, self.active_se, ev.cu, ev.simd, ev.contexts, ev.begin_time, ev.end_time)
-    self.output.wav.append(ev)
+    self.output.wav.append(clone(ev))
 
     asm = {}
     self.output.ins.append([])
     for j in range(ev.instructions_size):
       inst_ev = ev.instructions_array[j]
-      self.output.ins[-1].append(inst_ev)
+      self.output.ins[-1].append(clone(inst_ev))
       inst_typ = rocprof.rocprofiler_thread_trace_decoder_inst_category_t__enumvalues[inst_ev.category]
       asm.setdefault(inst_ev.pc.address, InstInfo(typ=inst_typ, inst=self.disasms[inst_ev.pc.address][0]))
       asm[inst_ev.pc.address].on_ev(inst_ev)
 
     self.output.tml.append([])
-    for j in range(ev.timeline_size): self.output.tml[-1].append(ev.timeline_array[j])
+    for j in range(ev.timeline_size): self.output.tml[-1].append(clone(ev.timeline_array[j]))
 
     self.wave_events[(ev.instructions_array[0].pc.address, ev.wave_id, ev.cu, ev.simd)] = asm
 
