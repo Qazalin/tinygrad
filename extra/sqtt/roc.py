@@ -17,7 +17,13 @@ class InstInfo:
   def on_ev(self, ev):
     self.hit, self.lat, self.stall = self.hit + 1, self.lat + ev.duration, self.stall + ev.stall
 
-def clone(ev): return type(ev).from_buffer_copy(bytes(ev))
+class CWrap:
+  def __init__(self, c, extra): self.c, self.extra = c, extra
+  def __getattr__(self, name):
+    try: return getattr(self.c, name)
+    except AttributeError: return self.extra[name]
+def clone(ev, **kwargs): return CWrap(type(ev).from_buffer_copy(bytes(ev)), kwargs)
+
 @dataclasses.dataclass
 class SQTTOutput:
   occ:list
@@ -45,7 +51,7 @@ class _ROCParseCtx:
 
   def on_occupancy_ev(self, ev):
     if DEBUG >= 4: print("OCC", ev.time, self.active_se, ev.cu, ev.simd, ev.wave_id, ev.start)
-    self.output.occ.append(clone(ev))
+    self.output.occ.append(clone(ev, se=self.active_se))
 
   def on_wave_ev(self, ev):
     if DEBUG >= 4: print("WAVE", ev.wave_id, self.active_se, ev.cu, ev.simd, ev.contexts, ev.begin_time, ev.end_time)
@@ -119,3 +125,6 @@ if __name__ == "__main__":
   wave_events = decode_sqtt(profile)
 
   print(wave_events.wave_events.keys())
+  ret = decode_sqtt(profile).output
+  for o in ret.occ:
+    print(o.time, o.se)
