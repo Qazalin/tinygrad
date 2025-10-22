@@ -17,10 +17,18 @@ class InstInfo:
   def on_ev(self, ev):
     self.hit, self.lat, self.stall = self.hit + 1, self.lat + ev.duration, self.stall + ev.stall
 
+@dataclasses.dataclass
+class SQTTOutput:
+  occ:list
+  wav:list
+  ins:list
+  tml:list
+
 class _ROCParseCtx:
   def __init__(self, sqtt_evs:list[ProfileSQTTEvent], prog_evs:list[ProfileProgramEvent]):
     self.sqtt_evs, self.prog_evs = iter(sqtt_evs), prog_evs
     self.wave_events, self.disasms, self.addr2prg = {}, {}, {}
+    self.output = SQTTOutput([], [], [], [])
 
     for prog in prog_evs:
       for addr, info in comgr_get_address_table(prog.lib).items():
@@ -36,20 +44,27 @@ class _ROCParseCtx:
 
   def on_occupancy_ev(self, ev):
     if DEBUG >= 4: print("OCC", ev.time, self.active_se, ev.cu, ev.simd, ev.wave_id, ev.start)
+    self.output.occ.append(ev)
 
   def on_wave_ev(self, ev):
     if DEBUG >= 4: print("WAVE", ev.wave_id, self.active_se, ev.cu, ev.simd, ev.contexts, ev.begin_time, ev.end_time)
+    self.output.wav.append(ev)
 
     asm = {}
+    self.output.ins.append([])
     for j in range(ev.instructions_size):
       inst_ev = ev.instructions_array[j]
+      self.output.ins[-1].append(inst_ev)
       inst_typ = rocprof.rocprofiler_thread_trace_decoder_inst_category_t__enumvalues[inst_ev.category]
       asm.setdefault(inst_ev.pc.address, InstInfo(typ=inst_typ, inst=self.disasms[inst_ev.pc.address][0]))
       asm[inst_ev.pc.address].on_ev(inst_ev)
 
+    self.output.tml.append([])
+    for j in range(ev.timeline_size): self.output.tml[-1].append(ev.timeline_array[j])
+
     self.wave_events[(ev.instructions_array[0].pc.address, ev.wave_id, ev.cu, ev.simd)] = asm
 
-def decode_sqtt(profile:list[ProfileEvent]) -> dict[tuple[int, int, int, int], dict[int, InstInfo]]:
+def decode_sqtt(profile:list[ProfileEvent]) -> SQTTOutput:
   sqtt_events:list[ProfileSQTTEvent] = []
   prog_events:list[ProfileProgramEvent] = []
   for e in profile:
@@ -92,7 +107,7 @@ def decode_sqtt(profile:list[ProfileEvent]) -> dict[tuple[int, int, int, int], d
     return rocprof.ROCPROFILER_THREAD_TRACE_DECODER_STATUS_SUCCESS
 
   rocprof.rocprof_trace_decoder_parse_data(copy_cb, trace_cb, isa_cb, None)
-  return ROCParseCtx.wave_events
+  return ROCParseCtx
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
@@ -102,4 +117,4 @@ if __name__ == "__main__":
   with args.profile.open("rb") as f: profile = pickle.load(f)
   wave_events = decode_sqtt(profile)
 
-  print(wave_events.keys())
+  print(wave_events.wave_events.keys())
