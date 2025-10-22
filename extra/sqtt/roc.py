@@ -127,4 +127,4 @@ if __name__ == "__main__":
   print(wave_events.wave_events.keys())
   ret = decode_sqtt(profile).output
   for o in ret.occ:
-    print(o.time, o.se)
+    print("START" if o.start else "DONE", o.time, o.se, o.cu, o.simd, o.wave_id)
