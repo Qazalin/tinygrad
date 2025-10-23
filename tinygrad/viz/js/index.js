@@ -57,7 +57,7 @@ async function initWorker() {
   workerUrl = URL.createObjectURL(new Blob([(await Promise.all(resp.map((r) => r.text()))).join("\n")], { type: "application/javascript" }));
 }
 
-function renderDag(graph, additions, recenter) {
+function renderDag(graph, additions, recenter, opts) {
   // start calculating the new layout (non-blocking)
   updateProgress({ start:true });
   if (worker != null) worker.terminate();
@@ -71,8 +71,8 @@ function renderDag(graph, additions, recenter) {
     const STROKE_WIDTH = 1.4;
     d3.select("#graph-svg").on("click", () => d3.selectAll(".highlight").classed("highlight", false));
     const nodes = d3.select("#nodes").selectAll("g").data(g.nodes().map(id => g.node(id)), d => d).join("g").attr("class", d => d.className ?? "node")
-      .attr("transform", d => `translate(${d.x},${d.y})`).classed("clickable", d => d.ref != null).on("click", (e,d) => {
-        if (d.ref != null) return switchCtx(d.ref);
+      .attr("transform", d => `translate(${d.x},${d.y})`).classed("clickable", d => d.ref != null && typeof d.ref !== "string").on("click", (e,d) => {
+        if (d.ref != null && typeof d.ref !== "string") return switchCtx(d.ref);
         const parents = g.predecessors(d.id);
         const children = g.successors(d.id);
         if (parents == null && children == null) return;
@@ -81,6 +81,11 @@ function renderDag(graph, additions, recenter) {
         const matchEdge = (v, w) => (v===d.id && children.includes(w)) ? "highlight child " : (parents.includes(v) && w===d.id) ? "highlight " : "";
         d3.select("#edges").selectAll("path.edgePath").attr("class", e => matchEdge(e.v, e.w)+"edgePath");
         d3.select("#edge-labels").selectAll("g.port").attr("class",  (_, i, n) => matchEdge(...n[i].id.split("-"))+"port");
+        if (d.ref != null) {
+          const metadata = d3.select(".metadata");
+          metadata.html("")
+          metadata.append("text").text(d.ref)
+        }
         e.stopPropagation();
       });
     nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
@@ -102,7 +107,8 @@ function renderDag(graph, additions, recenter) {
     addTags(nodes.selectAll("g.tag").data(d => d.tag != null ? [d] : []).join("g").attr("class", "tag")
       .attr("transform", d => `translate(${-d.width/2+8}, ${-d.height/2+8})`).datum(e => e.tag));
     // draw edges
-    const line = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis), edges = g.edges();
+    let line = d3.line().x(d => d.x).y(d => d.y), edges = g.edges();
+    if (opts.curved) line = line.curve(d3.curveBasis);
     d3.select("#edges").selectAll("path.edgePath").data(edges).join("path").attr("class", "edgePath").attr("d", (e) => {
       const edge = g.edge(e);
       const points = edge.points.slice(1, edge.points.length-1);
@@ -648,7 +654,12 @@ async function main() {
         if (subrewrites.length > 0) { l.innerText += ` (${subrewrites.length})`; l.parentElement.classList.add("has-children"); }
       }
     }
-    return setState({ "currentCtx": 2, "currentStep": 24, "currentRewrite": 0, "expandSteps": true });
+    return setState({
+    "currentCtx": 2,
+    "currentStep": 24,
+    "currentRewrite": 0,
+    "expandSteps": true
+});
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
@@ -665,12 +676,13 @@ async function main() {
   }
   if (ctx.name === "Profiler") return renderProfiler();
   if (workerUrl == null) await initWorker();
-  if (ckey.startsWith("/render")) {
-    if (!(ckey in cache)) cache[ckey] = await (await fetch(ckey)).json();
+  if (ckey in cache) {
+    ret = cache[ckey];
   }
-  ret = cache[ckey];
-  // ** Custom view
-  if (ret?.graph == null) {
+  // ** Disassembly view
+  if (ckey.startsWith("/render")) {
+    if (!(ckey in cache)) cache[ckey] = ret = await (await fetch(ckey)).json();
+    if (ret.graph != null) return renderDag(ret.graph, [], true, ret.opts);
     displayGraph("render");
     const root = document.createElement("div");
     root.className = "raw-text";
@@ -727,7 +739,7 @@ async function main() {
     };
   }
   if (ret.length === 0) return;
-  renderDag(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes ?? [], currentRewrite === 0);
+  renderDag(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes ?? [], currentRewrite === 0, { curved:true });
   // ** right sidebar code blocks
   const metadata = document.querySelector(".metadata");
   metadata.replaceChildren(codeBlock(step.code_line, "python", { loc:step.loc, wrap:true }),

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import multiprocessing, pickle, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, socketserver, functools, codecs, io, struct
+from dataclasses import dataclass
 import subprocess, ctypes, pathlib
 from contextlib import redirect_stdout
 from decimal import Decimal
@@ -59,6 +60,12 @@ def pystr(u:UOp, i:int) -> str:
     except Exception: pass
   return str(u)
 
+@dataclass(frozen=True)
+class VizCustomNode:
+  label:str
+  color:str
+  ref:str
+
 def uop_to_json(x:UOp, ignore_indexing=False) -> dict[int, dict]:
   assert isinstance(x, UOp)
   graph: dict[int, dict] = {}
@@ -92,7 +99,9 @@ def uop_to_json(x:UOp, ignore_indexing=False) -> dict[int, dict]:
     if (ref:=ref_map.get(u.arg.ast) if u.op is Ops.KERNEL else None) is not None: label += f"\ncodegen@{ctxs[ref]['name']}"
     # NOTE: kernel already has metadata in arg
     if TRACEMETA >= 2 and u.metadata is not None and u.op is not Ops.KERNEL: label += "\n"+repr(u.metadata)
-    graph[id(u)] = {"label":label, "src":[(i,id(x)) for i,x in enumerate(u.src) if x not in excluded], "color":uops_colors.get(u.op, "#ffffff"),
+    color = uops_colors.get(u.op, "#ffffff")
+    if u.op is Ops.CUSTOM and isinstance(u.arg, VizCustomNode): label, color, ref = u.arg.label, u.arg.color, u.arg.ref
+    graph[id(u)] = {"label":label, "src":[(i,id(x)) for i,x in enumerate(u.src) if x not in excluded], "color":color,
                     "ref":ref, "tag":repr(u.tag) if u.tag is not None else None}
   return graph
 
@@ -255,8 +264,11 @@ def get_stdout(f:Callable) -> str:
 def get_render(ctx:list[str], fmt:list[str]):
   if not isinstance(prg:=trace.keys[int(ctx[0])].ret, ProgramSpec): return
   if fmt[0] == "mem":
-    sink = UOp(Ops.SINK, arg="normal's a blessing")
-    return json.dumps({"graph":uop_to_json(sink)}).encode()
+    x = UOp(Ops.CUSTOM, arg=VizCustomNode("device memory", "#013367", "On-chip device (GPU) memory of the CUDA device that executes the kernel"))
+    y = UOp(Ops.CUSTOM, arg=VizCustomNode("system memory", "#7e7f7e", "Off-chip system (CPU) memory"))
+    z = UOp(Ops.CUSTOM, arg=VizCustomNode("peer memory", "#7e7f7e", "On-chip device (GPU) memory of other CUDA devices"))
+    sink = UOp.sink(x, y, z)
+    return json.dumps({"graph":uop_to_json(sink), "opts":{"curve":False}}).encode()
   if fmt[0] == "uops": return json.dumps({"src":get_stdout(lambda: print_uops(prg.uops or [])), "lang":"python"}).encode()
   if fmt[0] == "src": return json.dumps({"src":prg.src, "lang":"cpp"}).encode()
   lib = (compiler:=Device[prg.device].compiler).compile(prg.src)
