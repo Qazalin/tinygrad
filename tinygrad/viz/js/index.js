@@ -665,12 +665,12 @@ async function main() {
   }
   if (ctx.name === "Profiler") return renderProfiler();
   if (workerUrl == null) await initWorker();
-  if (ckey in cache) {
-    ret = cache[ckey];
-  }
-  // ** Disassembly view
   if (ckey.startsWith("/render")) {
-    if (!(ckey in cache)) cache[ckey] = ret = await (await fetch(ckey)).json();
+    if (!(ckey in cache)) cache[ckey] = await (await fetch(ckey)).json();
+  }
+  ret = cache[ckey];
+  // ** Custom view
+  if (ret?.graph == null) {
     displayGraph("render");
     const root = document.createElement("div");
     root.className = "raw-text";
