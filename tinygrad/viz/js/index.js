@@ -648,7 +648,7 @@ async function main() {
         if (subrewrites.length > 0) { l.innerText += ` (${subrewrites.length})`; l.parentElement.classList.add("has-children"); }
       }
     }
-    return setState({ currentCtx:-1 });
+    return setState({ "currentCtx": 2, "currentStep": 24, "currentRewrite": 0, "expandSteps": true });
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;

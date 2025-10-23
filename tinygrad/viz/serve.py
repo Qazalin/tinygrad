@@ -37,6 +37,7 @@ def get_rewrites(t:RewriteTrace) -> list[dict]:
       steps.append({"name":"View UOp List", "query":f"/render?ctx={i}&fmt=uops", "depth":0})
       steps.append({"name":"View Program", "query":f"/render?ctx={i}&fmt=src", "depth":0})
       steps.append({"name":"View Disassembly", "query":f"/render?ctx={i}&fmt=asm", "depth":0})
+      steps.append({"name":"View Memory Chart", "query":f"/render?ctx={i}&fmt=mem", "depth":0})
     for key in k.keys: ref_map[key] = i
     ret.append({"name":k.display_name, "steps":steps})
   return ret
@@ -253,6 +254,7 @@ def get_stdout(f:Callable) -> str:
 
 def get_render(ctx:list[str], fmt:list[str]):
   if not isinstance(prg:=trace.keys[int(ctx[0])].ret, ProgramSpec): return
+  if fmt[0] == "mem": return json.dumps({"src":"", "lang":"plaintext"}).encode()
   if fmt[0] == "uops": return json.dumps({"src":get_stdout(lambda: print_uops(prg.uops or [])), "lang":"python"}).encode()
   if fmt[0] == "src": return json.dumps({"src":prg.src, "lang":"cpp"}).encode()
   lib = (compiler:=Device[prg.device].compiler).compile(prg.src)
