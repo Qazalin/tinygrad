@@ -5,129 +5,57 @@ function renderMemoryChart() {
   const g = new dagre.graphlib.Graph({ compound: true });
   g.setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
 
-const NODE_PADDING = 10;
-const LINE_HEIGHT = 14;
+  const NODE_PADDING = 10;
+  const LINE_HEIGHT = 14;
+  const pad = (d) => d+NODE_PADDING*2
   const canvas = new OffscreenCanvas(0, 0);
   const ctx = canvas.getContext("2d");
   ctx.font = `350 ${LINE_HEIGHT}px sans-serif`;
-  const nodesData = [
-    {
-        "k": "kernel",
-        "label": "Kernel",
-        "color": "#7fa55c",
-        "ref": "The CUDA kernel executing on the GPU's Streaming Multiprocessors",
-        "tag": null
-    },
-    {
-        "k": "global_memory",
-        "label": "Global",
-        "color": "#7fa55c",
-        "ref": "global memory",
-        "tag": null
-    },
-    {
-        "k": "local_memory",
-        "label": "Local",
-        "color": "#7e7f7e",
-        "ref": "local memory",
-        "tag": null
-    },
-    {
-        "k": "l1",
-        "label": "L1/TEX Cache\nHit Rate:\n58.98%",
-        "color": "#013367",
-        "ref": "# of sector hits per sector (This ratio metric represents the value expressed as a percentage across all sub-unit instances)",
-        "tag": null
-    },
-    {
-        "k": "l2",
-        "label": "L2 Cache\nHit Rate:\n80.19%",
-        "color": "#013367",
-        "ref": "proportion of L2 sector lookups that hit (This ratio metric represents the value expressed as a percentage across all sub-unit instances)",
-        "tag": null
-    },
-    {
-        "k": "dram",
-        "label": "device memory",
-        "color": "#013367",
-        "ref": "On-chip device (GPU) memory of the CUDA device that executes the kernel",
-        "tag": null
-    }
-]
-  for (const n of nodesData) {
-    let { k, label, src, ref, ...rest } = n;
-    // adjust node dims by label size (excluding escape codes) + add padding
+  function measureLabel(label) {
     let [width, height] = [0, 0];
     for (const line of label.replace(/\u001B\[(?:K|.*?m)/g, "").split("\n")) {
       width = Math.max(width, ctx.measureText(line).width);
       height += LINE_HEIGHT;
     }
-    g.setNode(k, {width:width+NODE_PADDING*2, height:height+NODE_PADDING*2, padding:NODE_PADDING, label, ref, id:k, ...rest});
+    return { width: pad(width), height: pad(height) };
   }
+  g.setNode("kernel", {label:"Kernel", color:"#7fa55c", width:measureLabel("Kernel").width, height:pad(200)});
+  g.setNode("global_instr", {label:"Global", color:"#7fa55c", ...measureLabel("Global")});
+  g.setNode("local_instr", {label:"Local", color:"#7e7f7e", ...measureLabel("Local")});
+  g.setEdge("kernel", "global_instr", { dir:"both" });
+  g.setEdge("kernel", "local_instr", { dir:"both" });
   dagre.layout(g);
   // draw nodes
   const STROKE_WIDTH = 1.4;
   d3.select("#graph-svg").on("click", () => d3.selectAll(".highlight").classed("highlight", false));
   const nodes = d3.select("#nodes").selectAll("g").data(g.nodes().map(id => g.node(id)), d => d).join("g").attr("class", d => d.className ?? "node")
-    .attr("transform", d => `translate(${d.x},${d.y})`).classed("clickable", d => d.ref != null && typeof d.ref !== "string").on("click", (e,d) => {
-      if (d.ref != null && typeof d.ref !== "string") return switchCtx(d.ref);
-      const parents = g.predecessors(d.id);
-      const children = g.successors(d.id);
-      if (parents == null && children == null) return;
-      const src = [...parents, ...children, d.id];
-      nodes.classed("highlight", n => src.includes(n.id)).classed("child", n => children.includes(n.id));
-      const matchEdge = (v, w) => (v===d.id && children.includes(w)) ? "highlight child " : (parents.includes(v) && w===d.id) ? "highlight " : "";
-      d3.select("#edges").selectAll("path.edgePath").attr("class", e => matchEdge(e.v, e.w)+"edgePath");
-      d3.select("#edge-labels").selectAll("g.port").attr("class",  (_, i, n) => matchEdge(...n[i].id.split("-"))+"port");
-      if (d.ref != null) {
-        const metadata = d3.select(".metadata");
-        metadata.html("")
-        metadata.append("text").text(d.ref)
-      }
-      e.stopPropagation();
-    });
+    .attr("transform", d => `translate(${d.x},${d.y})`).classed("clickable", d => d.ref != null && typeof d.ref !== "string");
   nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
     .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
   nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
-    const x = (d.width-d.padding*2)/2;
-    const y = (d.height-d.padding*2)/2+STROKE_WIDTH;
+    const x = (d.width-NODE_PADDING*2)/2;
+    const y = (d.height-NODE_PADDING*2)/2+STROKE_WIDTH;
     return `translate(-${x}, -${y})`;
   }).selectAll("text").data(d => {
-    const ret = [[]];
-    for (const { st, color } of parseColors(d.label, defaultColor="initial")) {
-      const lines = st.split("\n");
-      ret.at(-1).push({ st:lines[0], color });
-      for (let i=1; i<lines.length; i++) ret.push([{ st:lines[i], color }]);
-    }
+    const ret = [];
+    for (const st of d.label.split("\n")) ret.push([{ st }])
     return [ret];
-  }).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0").attr("dy", 14).selectAll("tspan").data(d => d).join("tspan")
-    .attr("fill", d => darkenHex(d.color, 25)).text(d => d.st).attr("xml:space", "preserve");
-  addTags(nodes.selectAll("g.tag").data(d => d.tag != null ? [d] : []).join("g").attr("class", "tag")
-    .attr("transform", d => `translate(${-d.width/2+8}, ${-d.height/2+8})`).datum(e => e.tag));
+  }).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0").attr("dy", 14).selectAll("tspan").data(d => d).join("tspan").text(d => d.st).attr("xml:space", "preserve");
   // draw edges
-  let line = d3.line().x(d => d.x).y(d => d.y), edges = g.edges();
+  const line = d3.line().x(d => d.x).y(d => d.y), edges = g.edges();
   d3.select("#edges").selectAll("path.edgePath").data(edges).join("path").attr("class", "edgePath").attr("d", (e) => {
     const edge = g.edge(e);
-    const points = edge.points.slice(1, edge.points.length-1);
-    points.unshift(intersectRect(g.node(e.v), points[0]));
-    points.push(intersectRect(g.node(e.w), points[points.length-1]));
-    return line(points);
-  }).attr("marker-end", "url(#arrowhead)");
-  addTags(d3.select("#edge-labels").selectAll("g").data(edges).join("g").attr("transform", (e) => {
-    // get a point near the end
-    const [p1, p2] = g.edge(e).points.slice(-2);
-    const dx = p2.x-p1.x;
-    const dy = p2.y-p1.y;
-    // normalize to the unit vector
-    const len = Math.sqrt(dx*dx + dy*dy);
-    const ux = dx / len;
-    const uy = dy / len;
-    // avoid overlap with the arrowhead
-    const offset = 17;
-    const x = p2.x - ux * offset;
-    const y = p2.y - uy * offset;
-    return `translate(${x}, ${y})`
-  }).attr("class", e => g.edge(e).label.type).attr("id", e => `${e.v}-${e.w}`).datum(e => g.edge(e).label.text));
+    const end = edge.points.at(-1);
+    const start = {x:edge.points[0].x, y:end.y};
+    return line([start, end]); // straight line
+  }).attr("marker-end", e => {
+    const { dir } = g.edge(e);
+    return dir === "both" || dir === "forward" ? "url(#arrowhead)" : null;
+  })
+  .attr("marker-start", e => {
+    const { dir } = g.edge(e);
+    return dir === "both" || dir === "back" ? "url(#arrowhead-left)" : null;
+  });
   document.getElementById("zoom-to-fit-btn").click();
 }
 
