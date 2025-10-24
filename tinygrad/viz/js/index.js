@@ -16,45 +16,34 @@ function renderMemoryChart() {
   displayGraph("graph");
   // https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#memory-chart-overview
   const colors = {LOGICAL:"#7fa55c", PHYSICAL:"#013367"};
-  const NODE_PADDING = 10, STROKE_WIDTH = 1.4;
-  const nodesList = [];
-  const pad = (x) => x+NODE_PADDING*2;
-  const unpad = (x) => x-NODE_PADDING*2;
-  const add = (n) => {
-    if (n.width == null) n.width = measureText(n.label).width;
-    if (n.height == null) n.height = measureText(n.label).height;
-    n.width = pad(n.width); n.height = pad(n.height);
-    nodesList.push(n);
+  const data = {
+    units:[[{id:"kernel", n:"Kernel", h:100, color:colors.LOGICAL}],
+           [{id:"instr_global", n:"Global", h:10, color:colors.LOGICAL}, {id:"instr_local", n:"Local", h:10, color:colors.LOGICAL},
+            {id:"instr_shared", n:"Shared", h:10, color:colors.LOGICAL}],
+           [{id:"l1", n:"L1/TEX Cache", h:80, color:colors.PHYSICAL}, {id:"shared", n:"Shared Memory", h:20, color:colors.PHYSICAL}]],
+    ports:[{unit:"l1", loc:"r"}, {unit:"shared", loc:"l"}],
+    links:[{v:"kernel", w:"instr_global", both:true}, {v:"kernel", w:"instr_local", both:true}, {v:"kernel", w:"instr_shared", both:true},
+           {v:"instr_global", w:"l1"}, {v:"l1", w:"instr_global"}, {v:"instr_local", w:"l1"}, {v:"l1", w:"instr_local"},
+           {v:"instr_shared", w:"shared"}, {v:"shared", w:"instr_shared"}],
+    metrics:[],
+  };
+  // level layout
+  const g = new dagre.graphlib.Graph({ compound: true });
+  g.setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
+  const height = rect(".graph").height/2;
+  for (let i=0; i<data.units.length; i++) {
+    const width = Math.max(...data.units[i].map(x => measureText(x.n).width));
+    g.setNode(i, {width, height, color:colors.PHYSICAL });
+    if (i>0) g.setEdge(i-1, i);
   }
-  // kernel in the far left
-  add({ x:0, y:0, label:"Kernel", color:colors.LOGICAL });
-  add({ x:nodesList.at(-1).x+nodesList.at(-1).width+10, y:0, label:"Global", color:colors.LOGICAL });
-  add({ x:nodesList.at(-1).x, width:unpad(nodesList.at(-1).width), height:unpad(nodesList.at(-1).height),
-        y:nodesList.at(-1).height+10, label:"Local", color:colors.LOGICAL });
-  add({ x:nodesList.at(-1).x, width:unpad(nodesList.at(-1).width), height:unpad(nodesList.at(-1).height),
-        y:nodesList.at(-1).y+nodesList.at(-1).height+10, label:"Shared", color:colors.LOGICAL });
-  console.log(nodesList);
-  // {x, y, width:base, height, color:Colors.LOGICAL, label:"Kernel"},
-  // {x:x+base+20, y:0, width:base, height:height/10, color:Colors.LOGICAL, label:"Global"},
-  // {x:x+base+20, y:y-height, width:base, height:height/10, color:Colors.LOGICAL, label:"Local"},
-  //k{x:x+((base+20)*2), y:(height*0.7)/2, width:base*0.9, height:height*0.7, color:Colors.LOGICAL, label:"Local"},
-  /*
-  {x, y, width:60, height:34, color:Colors.LOGICAL, label:"Global"},
-  {x, y, width:53, height:34, color:Colors.LOGICAL, label:"Local"},
-  {x, y, width:111, height:180, color:Colors.PHYSICAL, label:"L1/TEX Cache\nHit Rate:\n58.98%"},
-  {x, y, width:111, height:40, color:Colors.PHYSICAL, label:"Shared"},
-  {x, y, width:80, height:180, color:Colors.PHYSICAL, label:"L2 Cache\nHit Rate:\n80.19%"},
-  {x, y, width:117, height:80, color:Colors.PHYSICAL, label:"Device Memory"}
-  */
-  const nodes = d3.select("#nodes").selectAll("g").data(nodesList, d => d).join("g").attr("transform", d => `translate(${d.x},${d.y})`).attr("class", "node");
+  dagre.layout(g);
+  // draw nodes in each level
+  const NODE_PADDING = 10;
+  const STROKE_WIDTH = 1.4;
+  const nodes = d3.select("#nodes").selectAll("g").data(g.nodes().map(id => g.node(id)), d => d).join("g")
+    .attr("transform", d => `translate(${d.x},${d.y})`).attr("class", "node");
   nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
     .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
-  nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
-      const x = (d.width-NODE_PADDING*2)/2;
-      const y = (d.height-NODE_PADDING*2)/2+STROKE_WIDTH;
-      return `translate(-${x}, -${y})`;
-    }).selectAll("text").data(d => [d.label.split("\n").map(x => [x])]).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0")
-      .attr("dy", 14).selectAll("tspan").data(d => d).join("tspan").text(d => d).attr("xml:space", "preserve");
   document.getElementById("zoom-to-fit-btn").click();
 }
 
