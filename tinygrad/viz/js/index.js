@@ -4,6 +4,16 @@ const displayGraph = (cls) => {
   for (const e of document.getElementsByClassName("view")) e.style.display = e.classList.contains(cls) ? "flex" : "none";
 }
 
+function renderMemoryChart() {
+  const g = new dagre.graphlib.Graph({ compound: true });
+  g.setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
+  g.setNode("device", { label: "Device Memory", width: 120, height: 100, style:"fill: #013367; stroke: #202020", labelStyle:"fill: #ffffff"  });
+  const render = new dagreD3.render();
+  const svg = d3.select("#graph-svg"), root = d3.select("#render");
+  render(root, g);
+  document.getElementById("zoom-to-fit-btn").click();
+}
+
 const darkenHex = (h, p = 0) =>
   `#${(
     c = parseInt(h.slice(1), 16),
@@ -682,7 +692,7 @@ async function main() {
   // ** Disassembly view
   if (ckey.startsWith("/render")) {
     if (!(ckey in cache)) cache[ckey] = ret = await (await fetch(ckey)).json();
-    if (ret.graph != null) return renderDag(ret.graph, [], true, ret.opts);
+    if (ret.graph != null) return renderMemoryChart();
     displayGraph("render");
     const root = document.createElement("div");
     root.className = "raw-text";
