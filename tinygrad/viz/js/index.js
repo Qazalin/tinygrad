@@ -4,7 +4,6 @@ function renderMemoryChart() {
   displayGraph("graph");
   const g = new dagre.graphlib.Graph({ compound: true, });
   g.setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
-
   const NODE_PADDING = 10;
   const LINE_HEIGHT = 14;
   const pad = (d) => d+NODE_PADDING*2
@@ -35,6 +34,10 @@ function renderMemoryChart() {
   label = "Device Memory";
   g.setNode("dram", {label, color:"#013367", width:measureLabel(label).width, height:pad(60)})
   g.setEdge("l2", "dram", { dir:"parrelel" });
+  label = "Shared Memory";
+  g.setNode("shared", {label, color:"#013367", ...measureLabel(label)});
+  g.setEdge("l1", "shared");
+  g.setEdge("l1", "shared");
   dagre.layout(g);
   // draw nodes
   const STROKE_WIDTH = 1.4;
