@@ -2,7 +2,7 @@
 
 function renderMemoryChart() {
   displayGraph("graph");
-  const g = new dagre.graphlib.Graph({ compound: true });
+  const g = new dagre.graphlib.Graph({ compound: true, });
   g.setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
 
   const NODE_PADDING = 10;
@@ -26,11 +26,15 @@ function renderMemoryChart() {
   g.setEdge("kernel", "local_instr", { dir:"both" });
   let label;
   label = "L1/TEX Cache\nHit Rate:\n58.98%"
-  g.setNode("l1", {label, color:"#013367", width:measureLabel(label).width, height:pad(500)})
-  g.setEdge("global_instr", "l1");
-  g.setEdge("l1", "global_instr");
-  g.setEdge("local_instr", "l1");
-  g.setEdge("l1", "local_instr");
+  g.setNode("l1", {label, color:"#013367", width:measureLabel(label).width, height:pad(160)})
+  g.setEdge("global_instr", "l1", { dir:"parrelel" });
+  g.setEdge("local_instr", "l1", { dir:"parrelel" });
+  label = "L2 Cache\nHit Rate:\n80.19%";
+  g.setNode("l2", {label, color:"#013367", width:measureLabel(label).width, height:pad(160)})
+  g.setEdge("l1", "l2", { dir:"parrelel" });
+  label = "Device Memory";
+  g.setNode("dram", {label, color:"#013367", width:measureLabel(label).width, height:pad(60)})
+  g.setEdge("l2", "dram", { dir:"parrelel" });
   dagre.layout(g);
   // draw nodes
   const STROKE_WIDTH = 1.4;
@@ -49,18 +53,29 @@ function renderMemoryChart() {
     return [ret];
   }).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0").attr("dy", 14).selectAll("tspan").data(d => d).join("tspan").text(d => d.st).attr("xml:space", "preserve");
   // draw edges
-  const line = d3.line().x(d => d.x).y(d => d.y), edges = g.edges();
-  d3.select("#edges").selectAll("path.edgePath").data(edges).join("path").attr("class", "edgePath").attr("d", (e) => {
-    const edge = g.edge(e);
-    let points = edge.points;
-    const end = edge.points.at(-1);
-    const start = {x:edge.points[0].x, y:end.y};
-    points = [start, end];
-    return line([start, end]); // straight line
-  }).attr("marker-end", "url(#arrowhead)").attr("marker-start", e => {
-    const { dir } = g.edge(e);
-    return dir === "both" ? "url(#arrowhead-left)" : null;
-  });
+  const EDGE_OFFSET = 4;
+  const line = d3.line().x(d => d.x).y(d => d.y);
+  function straight([p0, ...rest]) {
+    const p1 = rest.at(-1);
+    const start = { x: p0.x, y: p1.y };
+    return [start, p1];
+  }
+  function offsetSeg([p0, p1], d) {
+    const dx = p1.x - p0.x, dy = p1.y - p0.y;
+    const L = Math.hypot(dx, dy) || 1;
+    const nx = -dy / L, ny = dx / L; // left-hand normal
+    return [{ x: p0.x + nx * d, y: p0.y + ny * d }, { x: p1.x + nx * d, y: p1.y + ny * d }];
+  }
+  const edgeGroups = d3.select("#edges").selectAll("g.edge").data(g.edges(), e => e.v + "->" + e.w).join("g").attr("class", "edge");
+  edgeGroups.selectAll("path.edgePath").data(e => {
+    const meta = g.edge(e); const base = straight(meta.points);
+    if (meta.dir === "parrelel") {
+      return [{ points: offsetSeg(base, +EDGE_OFFSET), ms: null, me: "url(#arrowhead)" },
+              { points: offsetSeg(base, -EDGE_OFFSET), ms: "url(#arrowhead-left)", me: null }];
+    }
+    if (meta.dir === "both") return [{ points: base, ms: "url(#arrowhead-left)", me: "url(#arrowhead)" }];          // <->
+    return [{ points: base, ms: null, me: "url(#arrowhead)" }];                               // default ->
+    }).join("path").attr("class", "edgePath").attr("d", d => line(d.points)).attr("marker-start", d => d.ms).attr("marker-end", d => d.me);
   document.getElementById("zoom-to-fit-btn").click();
 }
 
