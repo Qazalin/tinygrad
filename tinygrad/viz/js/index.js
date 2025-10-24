@@ -2,82 +2,22 @@
 
 function renderMemoryChart() {
   displayGraph("graph");
-  const g = new dagre.graphlib.Graph({ compound: true, });
-  g.setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
   const NODE_PADDING = 10;
-  const LINE_HEIGHT = 14;
-  const pad = (d) => d+NODE_PADDING*2
-  const canvas = new OffscreenCanvas(0, 0);
-  const ctx = canvas.getContext("2d");
-  ctx.font = `350 ${LINE_HEIGHT}px sans-serif`;
-  function measureLabel(label) {
-    let [width, height] = [0, 0];
-    for (const line of label.replace(/\u001B\[(?:K|.*?m)/g, "").split("\n")) {
-      width = Math.max(width, ctx.measureText(line).width);
-      height += LINE_HEIGHT;
-    }
-    return { width: pad(width), height: pad(height) };
-  }
-  g.setNode("kernel", {label:"Kernel", color:"#7fa55c", width:measureLabel("Kernel").width, height:pad(200)});
-  g.setNode("global_instr", {label:"Global", color:"#7fa55c", ...measureLabel("Global")});
-  g.setNode("local_instr", {label:"Local", color:"#7e7f7e", ...measureLabel("Local")});
-  g.setEdge("kernel", "global_instr", { dir:"both" });
-  g.setEdge("kernel", "local_instr", { dir:"both" });
-  let label;
-  label = "L1/TEX Cache\nHit Rate:\n58.98%"
-  g.setNode("l1", {label, color:"#013367", width:measureLabel(label).width, height:pad(160)})
-  g.setEdge("global_instr", "l1", { dir:"parrelel" });
-  g.setEdge("local_instr", "l1", { dir:"parrelel" });
-  label = "L2 Cache\nHit Rate:\n80.19%";
-  g.setNode("l2", {label, color:"#013367", width:measureLabel(label).width, height:pad(160)})
-  g.setEdge("l1", "l2", { dir:"parrelel" });
-  label = "Device Memory";
-  g.setNode("dram", {label, color:"#013367", width:measureLabel(label).width, height:pad(60)})
-  g.setEdge("l2", "dram", { dir:"parrelel" });
-  label = "Shared Memory";
-  g.setNode("shared", {label, color:"#013367", ...measureLabel(label)});
-  g.setEdge("l1", "shared");
-  g.setEdge("l1", "shared");
-  dagre.layout(g);
-  // draw nodes
-  const STROKE_WIDTH = 1.4;
-  d3.select("#graph-svg").on("click", () => d3.selectAll(".highlight").classed("highlight", false));
-  const nodes = d3.select("#nodes").selectAll("g").data(g.nodes().map(id => g.node(id)), d => d).join("g").attr("class", d => d.className ?? "node")
-    .attr("transform", d => `translate(${d.x},${d.y})`).classed("clickable", d => d.ref != null && typeof d.ref !== "string");
+  const STROKE_WIDTH = 1.5;
+  const data = { nodes:[], edges:[] };
+  data.nodes.push({x:1, y:1, width:4, height:4, color:"red", label:"test"});
+  data.nodes.push({x:1, y:4, width:4, height:4, color:"green", label:"test"});
+  const nodes = d3.select("#nodes").selectAll("g").data(data.nodes, d => d).join("g").attr("transform", d => `translate(${d.x},${d.y})`);
   nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
     .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
+  /*
   nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
-    const x = (d.width-NODE_PADDING*2)/2;
-    const y = (d.height-NODE_PADDING*2)/2+STROKE_WIDTH;
-    return `translate(-${x}, -${y})`;
-  }).selectAll("text").data(d => {
-    const ret = [];
-    for (const st of d.label.split("\n")) ret.push([{ st }])
-    return [ret];
-  }).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0").attr("dy", 14).selectAll("tspan").data(d => d).join("tspan").text(d => d.st).attr("xml:space", "preserve");
-  // draw edges
-  const EDGE_OFFSET = 4;
-  const line = d3.line().x(d => d.x).y(d => d.y);
-  function straight(points) {
-    const start = points[0];
-    const end = {x:points.at(-1).x, y:start.y}
-    return [start, end];
-  }
-  function offsetSeg([p0, p1], d) {
-    const dx = p1.x - p0.x, dy = p1.y - p0.y;
-    const L = Math.hypot(dx, dy) || 1;
-    const nx = -dy / L, ny = dx / L; // left-hand normal
-    return [{ x: p0.x + nx * d, y: p0.y + ny * d }, { x: p1.x + nx * d, y: p1.y + ny * d }];
-  }
-  const edgeGroups = d3.select("#edges").selectAll("g.edge").data(g.edges(), e => e.v + "->" + e.w).join("g").attr("class", "edge");
-  edgeGroups.selectAll("path.edgePath").data(e => {
-    e = g.edge(e);
-    const base = straight(e.points);
-    if (e.dir === "parrelel") return [{points:offsetSeg(base, +EDGE_OFFSET), arrow:[0,1]}, {points:offsetSeg(base, -EDGE_OFFSET), arrow:[1,0]}];
-    if (e.dir === "both") return [{points:base, arrow:[1,1]}];
-    return [{points:base, arrow:[0,1]}]; // ->
-  }).join("path").attr("class", "edgePath").attr("d", d => line(d.points))
-    .attr("marker-start", d => d.arrow[0] && "url(#arrowhead-left)").attr("marker-end", d => d.arrow[1] && "url(#arrowhead-right)");
+      const x = (d.width-NODE_PADDING*2)/2;
+      const y = (d.height-NODE_PADDING*2)/2+STROKE_WIDTH;
+      return `translate(-${x}, -${y})`;
+    }).selectAll("text").data(d => d.label.split("\n").map(x => [x])).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0")
+      .attr("dy", 14).selectAll("tspan").data(d => d).join("tspan").text(d => d).attr("xml:space", "preserve");
+  */
   document.getElementById("zoom-to-fit-btn").click();
 }
 
