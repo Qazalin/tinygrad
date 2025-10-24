@@ -4,40 +4,6 @@ const displayGraph = (cls) => {
   for (const e of document.getElementsByClassName("view")) e.style.display = e.classList.contains(cls) ? "flex" : "none";
 }
 
-const STROKE_WIDTH = 1.4;
-const NODE_PADDING = 10;
-function renderMemoryChart() {
-  const g = new dagre.graphlib.Graph({ compound: true });
-  // layout
-  g.setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
-  g.setNode("dr", { label: "Device Memory", width: 120+NODE_PADDING*2, height: 100+NODE_PADDING*2, style:"fill: #013367;", });
-  g.setNode("l2", { label: "L2 Cache", width: 200+NODE_PADDING*2, height: 100+NODE_PADDING*2, style:"fill: #013367;", });
-  g.setEdge("l2", "dr");
-  g.setEdge("dr", "l2");
-  dagre.layout(g);
-  // drawing
-  const graph = d3.select("#graph-svg");
-  const nodes = d3.select("#nodes").selectAll("g").data(g.nodes().map(id => g.node(id)), d => d).join("g").attr("class", "node").attr("style", d => d.style)
-    .attr("transform", d => `translate(${d.x},${d.y})`);
-  nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
-    .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
-  nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
-    const x = (d.width-NODE_PADDING*2)/2;
-    const y = (d.height-NODE_PADDING*2)/2+STROKE_WIDTH;
-    return `translate(-${x}, -${y})`;
-  }).selectAll("text").data(d => {
-      const ret = [[]];
-      for (const { st, color } of parseColors(d.label, defaultColor="initial")) {
-        const lines = st.split("\n");
-        ret.at(-1).push({ st:lines[0], color });
-        for (let i=1; i<lines.length; i++) ret.push([{ st:lines[i], color }]);
-      }
-      return [ret];
-    }).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0").attr("dy", 14).selectAll("tspan").data(d => d).join("tspan")
-      .attr("fill", d => darkenHex(d.color, 25)).text(d => d.st).attr("xml:space", "preserve");
-  document.getElementById("zoom-to-fit-btn").click();
-}
-
 const darkenHex = (h, p = 0) =>
   `#${(
     c = parseInt(h.slice(1), 16),
@@ -716,7 +682,7 @@ async function main() {
   // ** Disassembly view
   if (ckey.startsWith("/render")) {
     if (!(ckey in cache)) cache[ckey] = ret = await (await fetch(ckey)).json();
-    if (ret.graph != null) return renderMemoryChart();
+    if (ret.graph != null) return renderDag(ret.graph, [], true, ret.opts);
     displayGraph("render");
     const root = document.createElement("div");
     root.className = "raw-text";
