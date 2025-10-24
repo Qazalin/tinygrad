@@ -4,20 +4,24 @@ function renderMemoryChart() {
   displayGraph("graph");
   const NODE_PADDING = 10;
   const STROKE_WIDTH = 1.5;
-  const data = { nodes:[], edges:[] };
-  data.nodes.push({x:1, y:1, width:4, height:4, color:"red", label:"test"});
-  data.nodes.push({x:1, y:4, width:4, height:4, color:"green", label:"test"});
+  const nodesList = [
+    {x:30, y:169, width:60, height:220, color:"#7fa55c", label:"Kernel"},
+    {x:141, y:127, width:60, height:34, color:"#7fa55c", label:"Global"},
+    {x:141, y:211, width:53, height:34, color:"#7e7f7e", label:"Local"},
+    {x:276, y:169, width:111, height:180, color:"#013367", label:"L1/TEX Cache\nHit Rate:\n58.98%"},
+    {x:276, y:169+120, width:111, height:40, color:"red", label:"Shared"},
+    {x:442, y:169, width:80, height:180, color:"#013367", label:"L2 Cache\nHit Rate:\n80.19%"},
+    {x:610, y:90, width:117, height:80, color:"#013367", label:"Device Memory"}];
+  const data = { nodes:nodesList, edges:[] };
   const nodes = d3.select("#nodes").selectAll("g").data(data.nodes, d => d).join("g").attr("transform", d => `translate(${d.x},${d.y})`);
   nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
     .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
-  /*
   nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
       const x = (d.width-NODE_PADDING*2)/2;
       const y = (d.height-NODE_PADDING*2)/2+STROKE_WIDTH;
       return `translate(-${x}, -${y})`;
-    }).selectAll("text").data(d => d.label.split("\n").map(x => [x])).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0")
+    }).selectAll("text").data(d => [d.label.split("\n").map(x => [x])]).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0")
       .attr("dy", 14).selectAll("tspan").data(d => d).join("tspan").text(d => d).attr("xml:space", "preserve");
-  */
   document.getElementById("zoom-to-fit-btn").click();
 }
 
