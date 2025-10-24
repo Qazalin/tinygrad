@@ -24,6 +24,13 @@ function renderMemoryChart() {
   g.setNode("local_instr", {label:"Local", color:"#7e7f7e", ...measureLabel("Local")});
   g.setEdge("kernel", "global_instr", { dir:"both" });
   g.setEdge("kernel", "local_instr", { dir:"both" });
+  let label;
+  label = "L1/TEX Cache\nHit Rate:\n58.98%"
+  g.setNode("l1", {label, color:"#013367", width:measureLabel(label).width, height:pad(500)})
+  g.setEdge("global_instr", "l1");
+  g.setEdge("l1", "global_instr");
+  g.setEdge("local_instr", "l1");
+  g.setEdge("l1", "local_instr");
   dagre.layout(g);
   // draw nodes
   const STROKE_WIDTH = 1.4;
@@ -45,16 +52,14 @@ function renderMemoryChart() {
   const line = d3.line().x(d => d.x).y(d => d.y), edges = g.edges();
   d3.select("#edges").selectAll("path.edgePath").data(edges).join("path").attr("class", "edgePath").attr("d", (e) => {
     const edge = g.edge(e);
+    let points = edge.points;
     const end = edge.points.at(-1);
     const start = {x:edge.points[0].x, y:end.y};
+    points = [start, end];
     return line([start, end]); // straight line
-  }).attr("marker-end", e => {
+  }).attr("marker-end", "url(#arrowhead)").attr("marker-start", e => {
     const { dir } = g.edge(e);
-    return dir === "both" || dir === "forward" ? "url(#arrowhead)" : null;
-  })
-  .attr("marker-start", e => {
-    const { dir } = g.edge(e);
-    return dir === "both" || dir === "back" ? "url(#arrowhead-left)" : null;
+    return dir === "both" ? "url(#arrowhead-left)" : null;
   });
   document.getElementById("zoom-to-fit-btn").click();
 }
