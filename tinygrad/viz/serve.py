@@ -261,13 +261,17 @@ def get_stdout(f:Callable) -> str:
   with redirect_stdout(buf:=io.StringIO()): f()
   return buf.getvalue()
 
+def node(*args, **kwargs): return UOp(Ops.CUSTOM, src=kwargs.pop("src", ()), arg=VizCustomNode(*args, **kwargs))
 def get_render(ctx:list[str], fmt:list[str]):
   if not isinstance(prg:=trace.keys[int(ctx[0])].ret, ProgramSpec): return
   if fmt[0] == "mem":
-    x = UOp(Ops.CUSTOM, arg=VizCustomNode("device memory", "#013367", "On-chip device (GPU) memory of the CUDA device that executes the kernel"))
-    y = UOp(Ops.CUSTOM, arg=VizCustomNode("system memory", "#7e7f7e", "Off-chip system (CPU) memory"))
-    z = UOp(Ops.CUSTOM, arg=VizCustomNode("peer memory", "#7e7f7e", "On-chip device (GPU) memory of other CUDA devices"))
-    return json.dumps({"graph":[uop_to_json(t) for t in [x, y, z]], "opts":{"curve":False}}).encode()
+    k = node("Kernel", "#7fa55c", "The CUDA kernel executing on the GPU's Streaming Multiprocessors")
+    g = node("Global", "#7fa55c", "global memory", src=(k,))
+    l = node("Local", "#7e7f7e", "local memory", src=(k,))
+    l1 = node("L1/TEX Cache", "#013367", "# of sector hits per sector (This ratio metric represents the value expressed as a percentage across all sub-unit instances)", src=(g, l))
+    l2 = node("L2 Cache", "#013367", "proportion of L2 sector lookups that hit (This ratio metric represents the value expressed as a percentage across all sub-unit instances)", src=(l1,))
+    x = node("device memory", "#013367", "On-chip device (GPU) memory of the CUDA device that executes the kernel", src=(l2,))
+    return json.dumps({"graph":[uop_to_json(t) for t in [x]], "opts":{"curve":False}}).encode()
   if fmt[0] == "uops": return json.dumps({"src":get_stdout(lambda: print_uops(prg.uops or [])), "lang":"python"}).encode()
   if fmt[0] == "src": return json.dumps({"src":prg.src, "lang":"cpp"}).encode()
   lib = (compiler:=Device[prg.device].compiler).compile(prg.src)
