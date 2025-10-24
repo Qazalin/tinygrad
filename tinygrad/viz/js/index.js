@@ -55,10 +55,10 @@ function renderMemoryChart() {
   // draw edges
   const EDGE_OFFSET = 4;
   const line = d3.line().x(d => d.x).y(d => d.y);
-  function straight([p0, ...rest]) {
-    const p1 = rest.at(-1);
-    const start = { x: p0.x, y: p1.y };
-    return [start, p1];
+  function straight(points) {
+    const start = points[0];
+    const end = {x:points.at(-1).x, y:start.y}
+    return [start, end];
   }
   function offsetSeg([p0, p1], d) {
     const dx = p1.x - p0.x, dy = p1.y - p0.y;
@@ -68,14 +68,13 @@ function renderMemoryChart() {
   }
   const edgeGroups = d3.select("#edges").selectAll("g.edge").data(g.edges(), e => e.v + "->" + e.w).join("g").attr("class", "edge");
   edgeGroups.selectAll("path.edgePath").data(e => {
-    const meta = g.edge(e); const base = straight(meta.points);
-    if (meta.dir === "parrelel") {
-      return [{ points: offsetSeg(base, +EDGE_OFFSET), ms: null, me: "url(#arrowhead)" },
-              { points: offsetSeg(base, -EDGE_OFFSET), ms: "url(#arrowhead-left)", me: null }];
-    }
-    if (meta.dir === "both") return [{ points: base, ms: "url(#arrowhead-left)", me: "url(#arrowhead)" }];          // <->
-    return [{ points: base, ms: null, me: "url(#arrowhead)" }];                               // default ->
-    }).join("path").attr("class", "edgePath").attr("d", d => line(d.points)).attr("marker-start", d => d.ms).attr("marker-end", d => d.me);
+    e = g.edge(e);
+    const base = straight(e.points);
+    if (e.dir === "parrelel") return [{points:offsetSeg(base, +EDGE_OFFSET), arrow:[0,1]}, {points:offsetSeg(base, -EDGE_OFFSET), arrow:[1,0]}];
+    if (e.dir === "both") return [{points:base, arrow:[1,1]}];
+    return [{points:base, arrow:[0,1]}]; // ->
+  }).join("path").attr("class", "edgePath").attr("d", d => line(d.points))
+    .attr("marker-start", d => d.arrow[0] && "url(#arrowhead-left)").attr("marker-end", d => d.arrow[1] && "url(#arrowhead-right)");
   document.getElementById("zoom-to-fit-btn").click();
 }
 
