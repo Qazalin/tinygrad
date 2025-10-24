@@ -1,19 +1,52 @@
 // ** graph helpers
 
+const oc = new OffscreenCanvas(0, 0).getContext("2d");
+const LINE_HEIGHT = 14;
+oc.font = `350 ${LINE_HEIGHT}px sans-serif`;
+function measureText(t) {
+  let width = 0, height = 0;
+  for (line of t.replace(/\u001B\[(?:K|.*?m)/g, "").split("\n")) {
+    width = Math.max(width, oc.measureText(line).width);
+    height += LINE_HEIGHT;
+  }
+  return { width, height };
+}
+
 function renderMemoryChart() {
   displayGraph("graph");
-  const NODE_PADDING = 10;
-  const STROKE_WIDTH = 1.5;
-  const nodesList = [
-    {x:30, y:169, width:60, height:220, color:"#7fa55c", label:"Kernel"},
-    {x:141, y:127, width:60, height:34, color:"#7fa55c", label:"Global"},
-    {x:141, y:211, width:53, height:34, color:"#7e7f7e", label:"Local"},
-    {x:276, y:169, width:111, height:180, color:"#013367", label:"L1/TEX Cache\nHit Rate:\n58.98%"},
-    {x:276, y:169+120, width:111, height:40, color:"red", label:"Shared"},
-    {x:442, y:169, width:80, height:180, color:"#013367", label:"L2 Cache\nHit Rate:\n80.19%"},
-    {x:610, y:90, width:117, height:80, color:"#013367", label:"Device Memory"}];
-  const data = { nodes:nodesList, edges:[] };
-  const nodes = d3.select("#nodes").selectAll("g").data(data.nodes, d => d).join("g").attr("transform", d => `translate(${d.x},${d.y})`);
+  // https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#memory-chart-overview
+  const colors = {LOGICAL:"#7fa55c", PHYSICAL:"#013367"};
+  const NODE_PADDING = 10, STROKE_WIDTH = 1.4;
+  const nodesList = [];
+  const pad = (x) => x+NODE_PADDING*2;
+  const unpad = (x) => x-NODE_PADDING*2;
+  const add = (n) => {
+    if (n.width == null) n.width = measureText(n.label).width;
+    if (n.height == null) n.height = measureText(n.label).height;
+    n.width = pad(n.width); n.height = pad(n.height);
+    nodesList.push(n);
+  }
+  // kernel in the far left
+  add({ x:0, y:0, label:"Kernel", color:colors.LOGICAL });
+  add({ x:nodesList.at(-1).x+nodesList.at(-1).width+10, y:0, label:"Global", color:colors.LOGICAL });
+  add({ x:nodesList.at(-1).x, width:unpad(nodesList.at(-1).width), height:unpad(nodesList.at(-1).height),
+        y:nodesList.at(-1).height+10, label:"Local", color:colors.LOGICAL });
+  add({ x:nodesList.at(-1).x, width:unpad(nodesList.at(-1).width), height:unpad(nodesList.at(-1).height),
+        y:nodesList.at(-1).y+nodesList.at(-1).height+10, label:"Shared", color:colors.LOGICAL });
+  console.log(nodesList);
+  // {x, y, width:base, height, color:Colors.LOGICAL, label:"Kernel"},
+  // {x:x+base+20, y:0, width:base, height:height/10, color:Colors.LOGICAL, label:"Global"},
+  // {x:x+base+20, y:y-height, width:base, height:height/10, color:Colors.LOGICAL, label:"Local"},
+  //k{x:x+((base+20)*2), y:(height*0.7)/2, width:base*0.9, height:height*0.7, color:Colors.LOGICAL, label:"Local"},
+  /*
+  {x, y, width:60, height:34, color:Colors.LOGICAL, label:"Global"},
+  {x, y, width:53, height:34, color:Colors.LOGICAL, label:"Local"},
+  {x, y, width:111, height:180, color:Colors.PHYSICAL, label:"L1/TEX Cache\nHit Rate:\n58.98%"},
+  {x, y, width:111, height:40, color:Colors.PHYSICAL, label:"Shared"},
+  {x, y, width:80, height:180, color:Colors.PHYSICAL, label:"L2 Cache\nHit Rate:\n80.19%"},
+  {x, y, width:117, height:80, color:Colors.PHYSICAL, label:"Device Memory"}
+  */
+  const nodes = d3.select("#nodes").selectAll("g").data(nodesList, d => d).join("g").attr("transform", d => `translate(${d.x},${d.y})`).attr("class", "node");
   nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
     .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
   nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
@@ -166,7 +199,8 @@ const formatUnit = (d, unit="") => d3.format(".3~s")(d)+unit;
 const colorScheme = {TINY:["#1b5745", "#354f52", "#354f52", "#1d2e62", "#63b0cd"],
   DEFAULT:["#2b2e39", "#2c2f3a", "#31343f", "#323544", "#2d303a", "#2e313c", "#343746", "#353847", "#3c4050", "#404459", "#444862", "#4a4e65"],
   BUFFER:["#342483", "#3E2E94", "#4938A4", "#5442B4", "#5E4CC2", "#674FCA"],
-  CATEGORICAL:["#ff8080", "#F4A261", "#C8F9D4", "#8D99AE", "#F4A261", "#ffffa2", "#ffffc0", "#87CEEB"],}
+  CATEGORICAL:["#ff8080", "#F4A261", "#C8F9D4", "#8D99AE", "#F4A261", "#ffffa2", "#ffffc0", "#87CEEB"],
+}
 const cycleColors = (lst, i) => lst[i%lst.length];
 
 const rescaleTrack = (source, tid, k) => {
