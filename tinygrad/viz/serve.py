@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import multiprocessing, pickle, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, socketserver, functools, codecs, io, struct
-from dataclasses import dataclass
 import subprocess, ctypes, pathlib
 from contextlib import redirect_stdout
 from decimal import Decimal
@@ -60,12 +59,6 @@ def pystr(u:UOp, i:int) -> str:
     except Exception: pass
   return str(u)
 
-@dataclass(frozen=True)
-class VizCustomNode:
-  label:str
-  color:str
-  ref:str
-
 def uop_to_json(x:UOp, ignore_indexing=False) -> dict[int, dict]:
   assert isinstance(x, UOp)
   graph: dict[int, dict] = {}
@@ -99,9 +92,7 @@ def uop_to_json(x:UOp, ignore_indexing=False) -> dict[int, dict]:
     if (ref:=ref_map.get(u.arg.ast) if u.op is Ops.KERNEL else None) is not None: label += f"\ncodegen@{ctxs[ref]['name']}"
     # NOTE: kernel already has metadata in arg
     if TRACEMETA >= 2 and u.metadata is not None and u.op is not Ops.KERNEL: label += "\n"+repr(u.metadata)
-    color = uops_colors.get(u.op, "#ffffff")
-    if u.op is Ops.CUSTOM and isinstance(u.arg, VizCustomNode): label, color, ref = u.arg.label, u.arg.color, u.arg.ref
-    graph[id(u)] = {"label":label, "src":[(i,id(x)) for i,x in enumerate(u.src) if x not in excluded], "color":color,
+    graph[id(u)] = {"label":label, "src":[(i,id(x)) for i,x in enumerate(u.src) if x not in excluded], "color":uops_colors.get(u.op, "#ffffff"),
                     "ref":ref, "tag":repr(u.tag) if u.tag is not None else None}
   return graph
 
@@ -261,17 +252,9 @@ def get_stdout(f:Callable) -> str:
   with redirect_stdout(buf:=io.StringIO()): f()
   return buf.getvalue()
 
-def node(*args, **kwargs): return UOp(Ops.CUSTOM, src=kwargs.pop("src", ()), arg=VizCustomNode(*args, **kwargs))
 def get_render(ctx:list[str], fmt:list[str]):
   if not isinstance(prg:=trace.keys[int(ctx[0])].ret, ProgramSpec): return
-  if fmt[0] == "mem":
-    k = node("Kernel", "#7fa55c", "The CUDA kernel executing on the GPU's Streaming Multiprocessors")
-    g = node("Global", "#7fa55c", "global memory", src=(k,))
-    l = node("Local", "#7e7f7e", "local memory", src=(k,))
-    l1 = node("L1/TEX Cache\nHit Rate:\n58.98%", "#013367", "# of sector hits per sector (This ratio metric represents the value expressed as a percentage across all sub-unit instances)", src=(g, l))
-    l2 = node("L2 Cache\nHit Rate:\n80.19%", "#013367", "proportion of L2 sector lookups that hit (This ratio metric represents the value expressed as a percentage across all sub-unit instances)", src=(l1,))
-    x = node("device memory", "#013367", "On-chip device (GPU) memory of the CUDA device that executes the kernel", src=(l2,))
-    return json.dumps({"graph":[uop_to_json(t) for t in [x]], "opts":{"curve":False}}).encode()
+  if fmt[0] == "mem": return json.dumps({"graph":[]}).encode()
   if fmt[0] == "uops": return json.dumps({"src":get_stdout(lambda: print_uops(prg.uops or [])), "lang":"python"}).encode()
   if fmt[0] == "src": return json.dumps({"src":prg.src, "lang":"cpp"}).encode()
   lib = (compiler:=Device[prg.device].compiler).compile(prg.src)

@@ -9,16 +9,7 @@ onmessage = (e) => {
   const g = new dagre.graphlib.Graph({ compound: true });
   g.setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
   if (additions.length !== 0) g.setNode("addition", {label:"", className:"overlay", padding:0});
-
-  let nodes = [];
-  if (graph.length != null) {
-    for (const g of graph) {
-       for (const [k, v] of Object.entries(g)) nodes.push({ k, ...v }); 
-    }
-  }
-  else { for (const [k, v] of Object.entries(graph)) nodes.push({ k, ...v }); }
-  for (const n of nodes) {
-    let { k, label, src, ref, ...rest } = n;
+  for (let [k, {label, src, ref, ...rest }] of Object.entries(graph)) {
     // adjust node dims by label size (excluding escape codes) + add padding
     let [width, height] = [0, 0];
     for (line of label.replace(/\u001B\[(?:K|.*?m)/g, "").split("\n")) {
