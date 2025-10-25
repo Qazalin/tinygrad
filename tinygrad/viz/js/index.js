@@ -1,84 +1,32 @@
 // ** graph helpers
 
-const oc = new OffscreenCanvas(0, 0).getContext("2d");
-const LINE_HEIGHT = 14;
-oc.font = `350 ${LINE_HEIGHT}px sans-serif`;
-function measureText(t) {
-  let width = 0, height = 0;
-  for (line of t.replace(/\u001B\[(?:K|.*?m)/g, "").split("\n")) {
-    width = Math.max(width, oc.measureText(line).width);
-    height += LINE_HEIGHT;
-  }
-  return { width, height };
-}
-
 function renderMemoryChart() {
   displayGraph("graph");
-  // https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#memory-chart-overview
-  const colors = {LOGICAL:"#7fa55c", PHYSICAL:"#013367"};
-  const data = {
-    units:[[{id:"kernel", n:"Kernel", h:100, color:colors.LOGICAL}],
-           [{id:"instr_global", n:"Global", h:10, color:colors.LOGICAL}, {id:"instr_local", n:"Local", h:10, color:colors.LOGICAL},
-            {id:"instr_shared", n:"Shared", h:10, color:colors.LOGICAL}],
-           [{id:"l1", n:"L1/TEX Cache", h:30, color:colors.PHYSICAL}, {id:"shared", n:"Shared Memory", h:20, color:colors.PHYSICAL}],
-           [{id:"l2", n:"L2 Cache", h:40, color:colors.PHYSICAL}, {id:"l2-compression", n:"L2 Compression Ratio", h:30, color:colors.PHYSICAL}],
-           [{id:"sys", n:"Device Memory", h:20, color:colors.PHYSICAL}, {id:"sys", n:"Peer Memory", h:20, color:colors.PHYSICAL}]],
-    ports:[{unit:"l1", loc:"r"}, {unit:"shared", loc:"l"}],
-    links:[{v:"kernel", w:"instr_global", both:true}, {v:"kernel", w:"instr_local", both:true}, {v:"kernel", w:"instr_shared", both:true},
-           {v:"instr_global", w:"l1"}, {v:"l1", w:"instr_global"}, {v:"instr_local", w:"l1"}, {v:"l1", w:"instr_local"},
-           {v:"instr_shared", w:"shared"}, {v:"shared", w:"instr_shared"}],
-    metrics:[],
-  };
-  // level layout
-  const g = new dagre.graphlib.Graph({ compound: true });
-  g.setGraph({ rankdir:"LR" }).setDefaultEdgeLabel(function() { return {}; });
-  const height = rect("#graph-svg").height;
-  for (let i=0; i<data.units.length; i++) {
-    g.setNode(i, {width:Math.max(...data.units[i].map(x => measureText(x.n).width)), height });
-    if (i>0) g.setEdge(i-1, i);
-  }
-  const levels = d3.select("#nodes").selectAll("g").data(g.nodes().map(id => g.node(id)), d => d).join("g")
-    .attr("transform", d => `translate(${d.x},${d.y})`).attr("class", "level");
-  // draw each unit as a rect within levels
-  levels.selectAll("rect").data().join("rect").attr("width", d => {});
-  /*
-  // draw each unit
-  const units = [];
-  for (let i=0; i<data.units.length; i++) {
-    const level = g.node(i);
-    let offset = 0;
-    for (let j=0; j<data.units[i].length; j++) {
-      const { id, n, h, color } = data.units[i][j];
-      const height = level.height*(h/100);
-      const y = (offset+level.y); //-(height-level.height);
-      const node = { id, label:n, height, width:level.width, color, x:level.x, y };
-      units.push(node);
-      offset += node.height+10;
-    }
-  }
+  const colors = [
+    { x: 0,   y: 0,  width: 100, height: 50, color: "tomato" },
+    { x: 110, y: 0,  width: 100, height: 50, color: "blue" },
+    { x: 0,   y: 60, width: 210, height: 50, color: "pink" }
+  ];
+  const nodes = d3.select("#nodes").selectAll("g.node").data(colors).join("g").attr("class", "node").attr("transform", d => `translate(${d.x},${d.y})`);
+  nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
+  // append centered text
+  const STROKE_WIDTH = 1.5;
   const NODE_PADDING = 10;
-  const STROKE_WIDTH = 1.4;
-  const nodes = d3.select("#nodes").selectAll("g").data(units, d => d).join("g")
-    .attr("transform", d => `translate(${d.x},${d.y})`).attr("class", "node");
+  /*
+  const NODE_PADDING = 10;
+  const STROKE_WIDTH = 1.5;
+  const nodesList = [
+    {x:0, y:80, width:10, height:10, color:"#013367", label:"Device Memory"}];
+  const data = { nodes:nodesList, edges:[] };
+  const nodes = d3.select("#nodes").selectAll("g").data(data.nodes, d => d).join("g").attr("transform", d => `translate(${d.x},${d.y})`);
   nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
     .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
-  */
-  /*
   nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
       const x = (d.width-NODE_PADDING*2)/2;
       const y = (d.height-NODE_PADDING*2)/2+STROKE_WIDTH;
       return `translate(-${x}, -${y})`;
     }).selectAll("text").data(d => [d.label.split("\n").map(x => [x])]).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0")
       .attr("dy", 14).selectAll("tspan").data(d => d).join("tspan").text(d => d).attr("xml:space", "preserve");
-  */
-  /* per-lane debug
-  const NODE_PADDING = 10;
-  const STROKE_WIDTH = 1.4;
-  const nodes = d3.select("#nodes").selectAll("g").data(g.nodes().map(id => g.node(id)), d => d).join("g")
-    .attr("transform", d => `translate(${d.x},${d.y})`).attr("class", "node");
-  nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
-    .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
-  document.getElementById("zoom-to-fit-btn").click();
   */
   document.getElementById("zoom-to-fit-btn").click();
 }
@@ -224,8 +172,7 @@ const formatUnit = (d, unit="") => d3.format(".3~s")(d)+unit;
 const colorScheme = {TINY:["#1b5745", "#354f52", "#354f52", "#1d2e62", "#63b0cd"],
   DEFAULT:["#2b2e39", "#2c2f3a", "#31343f", "#323544", "#2d303a", "#2e313c", "#343746", "#353847", "#3c4050", "#404459", "#444862", "#4a4e65"],
   BUFFER:["#342483", "#3E2E94", "#4938A4", "#5442B4", "#5E4CC2", "#674FCA"],
-  CATEGORICAL:["#ff8080", "#F4A261", "#C8F9D4", "#8D99AE", "#F4A261", "#ffffa2", "#ffffc0", "#87CEEB"],
-}
+  CATEGORICAL:["#ff8080", "#F4A261", "#C8F9D4", "#8D99AE", "#F4A261", "#ffffa2", "#ffffc0", "#87CEEB"],}
 const cycleColors = (lst, i) => lst[i%lst.length];
 
 const rescaleTrack = (source, tid, k) => {
