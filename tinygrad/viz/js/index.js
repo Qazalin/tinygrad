@@ -1,19 +1,75 @@
 // ** graph helpers
+/*
+ *
+  const colors = {LOGICAL:"#7fa55c", PHYSICAL:"#013367"};
+  const data = {
+    units:[[{id:"kernel", n:"Kernel", h:100, color:colors.LOGICAL}],
+           [{id:"instr_global", n:"Global", h:10, color:colors.LOGICAL}, {id:"instr_local", n:"Local", h:10, color:colors.LOGICAL},
+            {id:"instr_shared", n:"Shared", h:10, color:colors.LOGICAL}],
+           [{id:"l1", n:"L1/TEX Cache", h:30, color:colors.PHYSICAL}, {id:"shared", n:"Shared Memory", h:20, color:colors.PHYSICAL}],
+           [{id:"l2", n:"L2 Cache", h:40, color:colors.PHYSICAL}, {id:"l2-compression", n:"L2 Compression Ratio", h:30, color:colors.PHYSICAL}],
+           [{id:"sys", n:"Device Memory", h:20, color:colors.PHYSICAL}, {id:"sys", n:"Peer Memory", h:20, color:colors.PHYSICAL}]],
+    ports:[{unit:"l1", loc:"r"}, {unit:"shared", loc:"l"}],
+    links:[{v:"kernel", w:"instr_global", both:true}, {v:"kernel", w:"instr_local", both:true}, {v:"kernel", w:"instr_shared", both:true},
+           {v:"instr_global", w:"l1"}, {v:"l1", w:"instr_global"}, {v:"instr_local", w:"l1"}, {v:"l1", w:"instr_local"},
+           {v:"instr_shared", w:"shared"}, {v:"shared", w:"instr_shared"}],
+    metrics:[],
+  };
+*/
+
+const oc = new OffscreenCanvas(0, 0).getContext("2d");
+const LINE_HEIGHT = 14;
+oc.font = `350 ${LINE_HEIGHT}px sans-serif`;
+function measureText(t) {
+  let width = 0, height = 0;
+  for (line of t.replace(/\u001B\[(?:K|.*?m)/g, "").split("\n")) {
+    width = Math.max(width, oc.measureText(line).width);
+    height += LINE_HEIGHT;
+  }
+  return { width, height };
+}
 
 function renderMemoryChart() {
   displayGraph("graph");
-  const colors = [
-    { x: 0,   y: 0,  width: 100, height: 50, color: "tomato" },
-    { x: 110, y: 0,  width: 100, height: 50, color: "blue" },
-    { x: 0,   y: 60, width: 210, height: 50, color: "pink" }
+  const colors = {LOGICAL:"#7fa55c", PHYSICAL:"#013367"};
+  const SPACE = 10;
+  const W = 90;
+  const H = 100;
+  const units = [
+    { x:0, y:0, width:W, height:H, color:colors.LOGICAL, label:"Kernel" },
+    { x:W+SPACE, y:0, width:W*2, height:H/10, color:colors.LOGICAL, label:"Global" },
+    { x:W+SPACE, y:(H/10)+SPACE, width:W*2, height:H/10, color:colors.LOGICAL, label:"Local" },
+    { x:W+SPACE, y:((H/10)+SPACE)*2, width:W*2, height:H/10, color:colors.LOGICAL, label:"Shared" },
   ];
-  const nodes = d3.select("#nodes").selectAll("g.node").data(colors).join("g").attr("class", "node").attr("transform", d => `translate(${d.x},${d.y})`);
+  const NODE_PADDING = 10;
+  for (let i=0; i<units.length; i++) {
+    units[i].x += units[i].width/2;
+    units[i].y += units[i].height/2;
+    units[i].padding = NODE_PADDING;
+    units[i].width += NODE_PADDING*2;
+    units[i].height += NODE_PADDING*2;
+  }
+  const nodes = d3.select("#nodes").selectAll("g.node").data(units).join("g").attr("class", "node").attr("transform", d => `translate(${d.x},${d.y})`);
   nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
-  // append centered text
+    .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
   const STROKE_WIDTH = 1.5;
-  const NODE_PADDING = 10;
+  nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
+    const x = (d.width-d.padding*2)/2;
+    const y = (d.height-d.padding*2)/2+STROKE_WIDTH;
+    return `translate(-${x}, -${y})`;
+  }).selectAll("text").data(d => {
+    const ret = [[]];
+    for (const { st, color } of parseColors(d.label, defaultColor="initial")) {
+      const lines = st.split("\n");
+      ret.at(-1).push({ st:lines[0], color });
+      for (let i=1; i<lines.length; i++) ret.push([{ st:lines[i], color }]);
+    }
+    return [ret];
+  }).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0").attr("dy", 14).selectAll("tspan").data(d => d).join("tspan")
+    .attr("fill", d => darkenHex(d.color, 25)).text(d => d.st).attr("xml:space", "preserve");
+  d3.select("#edges").selectAll("path.edgePath").data([]).join("path").attr("class", "edgePath");
+  // append centered text
   /*
-  const NODE_PADDING = 10;
   const STROKE_WIDTH = 1.5;
   const nodesList = [
     {x:0, y:80, width:10, height:10, color:"#013367", label:"Device Memory"}];
