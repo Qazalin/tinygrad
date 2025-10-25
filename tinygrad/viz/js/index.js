@@ -32,58 +32,7 @@ function measureText(t) {
 function renderMemoryChart() {
   displayGraph("graph");
   const colors = {LOGICAL:"#7fa55c", PHYSICAL:"#013367"};
-  const SPACE = 10;
-  const W = 90;
-  const H = 100;
-  const units = [
-    { x:0, y:0, width:W, height:H, color:colors.LOGICAL, label:"Kernel" },
-    { x:W+SPACE, y:0, width:W*2, height:H/10, color:colors.LOGICAL, label:"Global" },
-    { x:W+SPACE, y:(H/10)+SPACE, width:W*2, height:H/10, color:colors.LOGICAL, label:"Local" },
-    { x:W+SPACE, y:((H/10)+SPACE)*2, width:W*2, height:H/10, color:colors.LOGICAL, label:"Shared" },
-  ];
-  const NODE_PADDING = 10;
-  for (let i=0; i<units.length; i++) {
-    units[i].x += units[i].width/2;
-    units[i].y += units[i].height/2;
-    units[i].padding = NODE_PADDING;
-    units[i].width += NODE_PADDING*2;
-    units[i].height += NODE_PADDING*2;
-  }
-  const nodes = d3.select("#nodes").selectAll("g.node").data(units).join("g").attr("class", "node").attr("transform", d => `translate(${d.x},${d.y})`);
-  nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
-    .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
-  const STROKE_WIDTH = 1.5;
-  nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
-    const x = (d.width-d.padding*2)/2;
-    const y = (d.height-d.padding*2)/2+STROKE_WIDTH;
-    return `translate(-${x}, -${y})`;
-  }).selectAll("text").data(d => {
-    const ret = [[]];
-    for (const { st, color } of parseColors(d.label, defaultColor="initial")) {
-      const lines = st.split("\n");
-      ret.at(-1).push({ st:lines[0], color });
-      for (let i=1; i<lines.length; i++) ret.push([{ st:lines[i], color }]);
-    }
-    return [ret];
-  }).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0").attr("dy", 14).selectAll("tspan").data(d => d).join("tspan")
-    .attr("fill", d => darkenHex(d.color, 25)).text(d => d.st).attr("xml:space", "preserve");
-  d3.select("#edges").selectAll("path.edgePath").data([]).join("path").attr("class", "edgePath");
-  // append centered text
-  /*
-  const STROKE_WIDTH = 1.5;
-  const nodesList = [
-    {x:0, y:80, width:10, height:10, color:"#013367", label:"Device Memory"}];
-  const data = { nodes:nodesList, edges:[] };
-  const nodes = d3.select("#nodes").selectAll("g").data(data.nodes, d => d).join("g").attr("transform", d => `translate(${d.x},${d.y})`);
-  nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
-    .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
-  nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
-      const x = (d.width-NODE_PADDING*2)/2;
-      const y = (d.height-NODE_PADDING*2)/2+STROKE_WIDTH;
-      return `translate(-${x}, -${y})`;
-    }).selectAll("text").data(d => [d.label.split("\n").map(x => [x])]).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0")
-      .attr("dy", 14).selectAll("tspan").data(d => d).join("tspan").text(d => d).attr("xml:space", "preserve");
-  */
+  const nodes = d3.select("#nodes");
   document.getElementById("zoom-to-fit-btn").click();
 }
 
@@ -144,6 +93,68 @@ async function initWorker() {
   workerUrl = URL.createObjectURL(new Blob([(await Promise.all(resp.map((r) => r.text()))).join("\n")], { type: "application/javascript" }));
 }
 
+const drawGraph = (data) => {
+  const g = dagre.graphlib.json.read(data);
+  // draw nodes
+  const STROKE_WIDTH = 1.4;
+  d3.select("#graph-svg").on("click", () => d3.selectAll(".highlight").classed("highlight", false));
+  const nodes = d3.select("#nodes").selectAll("g").data(g.nodes().map(id => g.node(id)), d => d).join("g").attr("class", d => d.className ?? "node")
+    .attr("transform", d => `translate(${d.x},${d.y})`).classed("clickable", d => d.ref != null).on("click", (e,d) => {
+      if (d.ref != null) return switchCtx(d.ref);
+      const parents = g.predecessors(d.id);
+      const children = g.successors(d.id);
+      if (parents == null && children == null) return;
+      const src = [...parents, ...children, d.id];
+      nodes.classed("highlight", n => src.includes(n.id)).classed("child", n => children.includes(n.id));
+      const matchEdge = (v, w) => (v===d.id && children.includes(w)) ? "highlight child " : (parents.includes(v) && w===d.id) ? "highlight " : "";
+      d3.select("#edges").selectAll("path.edgePath").attr("class", e => matchEdge(e.v, e.w)+"edgePath");
+      d3.select("#edge-labels").selectAll("g.port").attr("class",  (_, i, n) => matchEdge(...n[i].id.split("-"))+"port");
+      e.stopPropagation();
+    });
+  nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
+    .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
+  nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
+    const x = (d.width-d.padding*2)/2;
+    const y = (d.height-d.padding*2)/2+STROKE_WIDTH;
+    return `translate(-${x}, -${y})`;
+  }).selectAll("text").data(d => {
+    const ret = [[]];
+    for (const { st, color } of parseColors(d.label, defaultColor="initial")) {
+      const lines = st.split("\n");
+      ret.at(-1).push({ st:lines[0], color });
+      for (let i=1; i<lines.length; i++) ret.push([{ st:lines[i], color }]);
+    }
+    return [ret];
+  }).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0").attr("dy", 14).selectAll("tspan").data(d => d).join("tspan")
+    .attr("fill", d => darkenHex(d.color, 25)).text(d => d.st).attr("xml:space", "preserve");
+  addTags(nodes.selectAll("g.tag").data(d => d.tag != null ? [d] : []).join("g").attr("class", "tag")
+    .attr("transform", d => `translate(${-d.width/2+8}, ${-d.height/2+8})`).datum(e => e.tag));
+  // draw edges
+  const line = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis), edges = g.edges();
+  d3.select("#edges").selectAll("path.edgePath").data(edges).join("path").attr("class", "edgePath").attr("d", (e) => {
+    const edge = g.edge(e);
+    const points = edge.points.slice(1, edge.points.length-1);
+    points.unshift(intersectRect(g.node(e.v), points[0]));
+    points.push(intersectRect(g.node(e.w), points[points.length-1]));
+    return line(points);
+  }).attr("marker-end", "url(#arrowhead)");
+  addTags(d3.select("#edge-labels").selectAll("g").data(edges).join("g").attr("transform", (e) => {
+    // get a point near the end
+    const [p1, p2] = g.edge(e).points.slice(-2);
+    const dx = p2.x-p1.x;
+    const dy = p2.y-p1.y;
+    // normalize to the unit vector
+    const len = Math.sqrt(dx*dx + dy*dy);
+    const ux = dx / len;
+    const uy = dy / len;
+    // avoid overlap with the arrowhead
+    const offset = 17;
+    const x = p2.x - ux * offset;
+    const y = p2.y - uy * offset;
+    return `translate(${x}, ${y})`
+  }).attr("class", e => g.edge(e).label.type).attr("id", e => `${e.v}-${e.w}`).datum(e => g.edge(e).label.text));
+}
+
 function renderDag(graph, additions, recenter) {
   // start calculating the new layout (non-blocking)
   updateProgress({ start:true });
@@ -153,65 +164,7 @@ function renderDag(graph, additions, recenter) {
   worker.onmessage = (e) => {
     displayGraph("graph");
     updateProgress({ start:false });
-    const g = dagre.graphlib.json.read(e.data);
-    // draw nodes
-    const STROKE_WIDTH = 1.4;
-    d3.select("#graph-svg").on("click", () => d3.selectAll(".highlight").classed("highlight", false));
-    const nodes = d3.select("#nodes").selectAll("g").data(g.nodes().map(id => g.node(id)), d => d).join("g").attr("class", d => d.className ?? "node")
-      .attr("transform", d => `translate(${d.x},${d.y})`).classed("clickable", d => d.ref != null).on("click", (e,d) => {
-        if (d.ref != null) return switchCtx(d.ref);
-        const parents = g.predecessors(d.id);
-        const children = g.successors(d.id);
-        if (parents == null && children == null) return;
-        const src = [...parents, ...children, d.id];
-        nodes.classed("highlight", n => src.includes(n.id)).classed("child", n => children.includes(n.id));
-        const matchEdge = (v, w) => (v===d.id && children.includes(w)) ? "highlight child " : (parents.includes(v) && w===d.id) ? "highlight " : "";
-        d3.select("#edges").selectAll("path.edgePath").attr("class", e => matchEdge(e.v, e.w)+"edgePath");
-        d3.select("#edge-labels").selectAll("g.port").attr("class",  (_, i, n) => matchEdge(...n[i].id.split("-"))+"port");
-        e.stopPropagation();
-      });
-    nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
-      .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
-    nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
-      const x = (d.width-d.padding*2)/2;
-      const y = (d.height-d.padding*2)/2+STROKE_WIDTH;
-      return `translate(-${x}, -${y})`;
-    }).selectAll("text").data(d => {
-      const ret = [[]];
-      for (const { st, color } of parseColors(d.label, defaultColor="initial")) {
-        const lines = st.split("\n");
-        ret.at(-1).push({ st:lines[0], color });
-        for (let i=1; i<lines.length; i++) ret.push([{ st:lines[i], color }]);
-      }
-      return [ret];
-    }).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0").attr("dy", 14).selectAll("tspan").data(d => d).join("tspan")
-      .attr("fill", d => darkenHex(d.color, 25)).text(d => d.st).attr("xml:space", "preserve");
-    addTags(nodes.selectAll("g.tag").data(d => d.tag != null ? [d] : []).join("g").attr("class", "tag")
-      .attr("transform", d => `translate(${-d.width/2+8}, ${-d.height/2+8})`).datum(e => e.tag));
-    // draw edges
-    const line = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis), edges = g.edges();
-    d3.select("#edges").selectAll("path.edgePath").data(edges).join("path").attr("class", "edgePath").attr("d", (e) => {
-      const edge = g.edge(e);
-      const points = edge.points.slice(1, edge.points.length-1);
-      points.unshift(intersectRect(g.node(e.v), points[0]));
-      points.push(intersectRect(g.node(e.w), points[points.length-1]));
-      return line(points);
-    }).attr("marker-end", "url(#arrowhead)");
-    addTags(d3.select("#edge-labels").selectAll("g").data(edges).join("g").attr("transform", (e) => {
-      // get a point near the end
-      const [p1, p2] = g.edge(e).points.slice(-2);
-      const dx = p2.x-p1.x;
-      const dy = p2.y-p1.y;
-      // normalize to the unit vector
-      const len = Math.sqrt(dx*dx + dy*dy);
-      const ux = dx / len;
-      const uy = dy / len;
-      // avoid overlap with the arrowhead
-      const offset = 17;
-      const x = p2.x - ux * offset;
-      const y = p2.y - uy * offset;
-      return `translate(${x}, ${y})`
-    }).attr("class", e => g.edge(e).label.type).attr("id", e => `${e.v}-${e.w}`).datum(e => g.edge(e).label.text));
+    drawGraph(e.data);
     if (recenter) document.getElementById("zoom-to-fit-btn").click();
   };
 }
