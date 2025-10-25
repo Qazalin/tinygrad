@@ -6,7 +6,7 @@ from tinygrad.uop.ops import track_rewrites, graph_rewrite, identity_element, si
 from tinygrad.uop.symbolic import symbolic_flat
 from tinygrad.helpers import argsort, prod, all_same, pluralize, getenv, flatten, dedup, all_int, DEBUG, SPLIT_REDUCEOP, Metadata, DEBUG_RANGEIFY
 from tinygrad.helpers import PCONTIG, partition
-from tinygrad.codegen.simplify import pm_flatten_range, pm_reduce_unparented
+from tinygrad.codegen.simplify import pm_flatten_range, pm_reduce_simplify
 from tinygrad.codegen.opt import Opt
 from tinygrad.schedule.indexing import run_rangeify, BufferizeOpts, ALWAYS_CONTIGUOUS, IndexingContext, apply_movement_op
 
@@ -218,6 +218,9 @@ pm_const_buffer_folding = pm_mops+PatternMatcher([
     and (resolve(prod(x.dtype.shape)!=prod(x.shape)) or x.shape[-1]%4!=0) else None),
   # remove noop buffers. if we look at the next index we can remove even more of these
   (UPat(Ops.INDEX, name="idx").f(Ops.BUFFERIZE, allow_any_len=True, name="b2"), remove_noop_bufferize),
+  # dont bufferize an arange
+  (UPat.any((r:=UPat(dtype=dtypes.index).cast()).named("src"), r.eq(UPat()).named("src")).f(Ops.BUFFERIZE,
+    allow_any_len=True, name="buf").f(Ops.INDEX, allow_any_len=True, name="idx"), remove_bufferize),
   # no buffers for const
   (UPat(Ops.CONST, name='c').f(Ops.BUFFERIZE, allow_any_len=True, name="b"), lambda c,b: b.const_like(c.arg).rtag(b.tag)),
   # indexing a const is a const
@@ -244,8 +247,8 @@ pm_remove_bufferize = PatternMatcher([
 
 def late_buffer_view(t:UOp, b:UOp):
   if isinstance(b.device, str) and (b.device.startswith("DISK") or b.device.startswith("TINYFS")):
-    rngs = b.src[1:]
-    size = prod(shape := [int(r.vmax+1) for r in rngs])
+    shape = b.shape
+    size = prod(shape)
 
     # walk up for the INDEX
     x = t
@@ -298,9 +301,9 @@ pm_limit_bufs = PatternMatcher([(UPat(set.union(GroupOp.Binary, GroupOp.Ternary)
 
 def bufferize_to_store(x:UOp, allow_locals=True):
   rngs = x.src[1:]
-  shape = tuple([int(r.vmax+1) for r in rngs])
+  shape = x.shape
   size = prod(shape)
-  assert size > 0, f"no zero sized buffers {shape}"
+  assert size > 0 and isinstance(size, int), f"no zero sized or symbolic sized buffers {shape}"
 
   sdtype = x.dtype.ptr(size=size, addrspace=x.arg.addrspace)
   if x.src[0].op is Ops.ASSIGN:
@@ -308,7 +311,7 @@ def bufferize_to_store(x:UOp, allow_locals=True):
     assert assign_target.op is Ops.INDEX, f"{assign_target.op} is not index"
     # in assign, this is the buffer size, not the bufferize size
     # TODO: assign_mops here
-    do_store = assign_target.replace(dtype=sdtype).store(assign_src, *rngs).replace(tag=x.tag)
+    do_store = assign_target.replace(dtype=sdtype).store(assign_src, tag=x.tag).end(*[x for x in rngs if x.op is Ops.RANGE])
     ret = assign_target.src[0].after(do_store)
     mops = []
     walk = assign_mops
@@ -321,7 +324,7 @@ def bufferize_to_store(x:UOp, allow_locals=True):
   # NOTE: the DEFINE_LOCAL needs to be disambiguated here
   if sdtype.addrspace == AddrSpace.GLOBAL:
     buf = UOp.new_buffer(x.arg.device, size, x.dtype)
-    do_store = buf.reshape(shape).index(*rngs, dtype=sdtype).store(x.src[0], *rngs).replace(tag=x.tag)
+    do_store = buf.reshape(shape).index(*rngs, dtype=sdtype).store(x.src[0], tag=x.tag).end(*[x for x in rngs if x.op is Ops.RANGE])
     ret = buf.after(do_store).forced_reshape(shape)
     # TODO: is this right? what if it's offset
     if any(r.op is Ops.RANGE and r.src[0].op is not Ops.CONST for r in rngs):
@@ -334,7 +337,7 @@ def bufferize_to_store(x:UOp, allow_locals=True):
     tag = x.arg.device
     if tag is None: tag = UOp.unique().arg # TODO: hack
     buf = UOp(Ops.DEFINE_LOCAL, sdtype, arg=tag)
-    do_store = buf.reshape(shape).index(*rngs, dtype=sdtype).store(x.src[0], *rngs)
+    do_store = buf.reshape(shape).index(*rngs, dtype=sdtype).store(x.src[0]).end(*[x for x in rngs if x.op is Ops.RANGE])
     return buf.after(do_store.barrier()).reshape(shape)
 
 pm_add_buffers = pm_mops+to_bufferview+PatternMatcher([
@@ -474,7 +477,7 @@ def split_store(ctx:list[UOp], x:UOp) -> UOp|None:
   return kernel
 
 split_kernels = PatternMatcher([
-  (UPat(Ops.STORE, name="x"), split_store),
+  (UPat((Ops.STORE, Ops.END), name="x"), split_store),
 ])
 
 def tag_uop(ctx:list[UOp], x:UOp):
@@ -516,7 +519,7 @@ def get_rangeify_map(sink:UOp) -> dict[UOp, UOp]:
   # convert movement ops to ranges
   tsink, rctx = run_rangeify(tsink, DEBUG_RANGEIFY)
 
-  tsink = graph_rewrite(tsink, symbolic_flat+pm_reduce_unparented+pm_const_buffer_folding, name="symbolic")  # this supports const folding
+  tsink = graph_rewrite(tsink, symbolic_flat+pm_reduce_simplify+pm_const_buffer_folding, name="symbolic+reduce_collapse")  # this does const folding
   tsink = graph_rewrite(tsink, pm_remove_bufferize, bottom_up=True, name="remove bufferize with cost function")
   tsink = graph_rewrite(tsink, pm_limit_bufs, ctx=rctx, name="limit buffers")
 
