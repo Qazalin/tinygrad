@@ -31,13 +31,17 @@ function renderMemoryChart() {
   };
   // level layout
   const g = new dagre.graphlib.Graph({ compound: true });
-  g.setGraph({ rankdir: "LR" }).setDefaultEdgeLabel(function() { return {}; });
+  g.setGraph({ rankdir:"LR" }).setDefaultEdgeLabel(function() { return {}; });
   const height = rect("#graph-svg").height;
   for (let i=0; i<data.units.length; i++) {
     g.setNode(i, {width:Math.max(...data.units[i].map(x => measureText(x.n).width)), height });
     if (i>0) g.setEdge(i-1, i);
   }
-  dagre.layout(g);
+  const levels = d3.select("#nodes").selectAll("g").data(g.nodes().map(id => g.node(id)), d => d).join("g")
+    .attr("transform", d => `translate(${d.x},${d.y})`).attr("class", "level");
+  // draw each unit as a rect within levels
+  levels.selectAll("rect").data().join("rect").attr("width", d => {});
+  /*
   // draw each unit
   const units = [];
   for (let i=0; i<data.units.length; i++) {
@@ -52,16 +56,13 @@ function renderMemoryChart() {
       offset += node.height+10;
     }
   }
-  for (let i=0; i<data.links.length; i++) {
-    const link = data.links[i];
-    console.log(link);
-  }
   const NODE_PADDING = 10;
   const STROKE_WIDTH = 1.4;
   const nodes = d3.select("#nodes").selectAll("g").data(units, d => d).join("g")
     .attr("transform", d => `translate(${d.x},${d.y})`).attr("class", "node");
   nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
     .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
+  */
   /*
   nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label").attr("transform", d => {
       const x = (d.width-NODE_PADDING*2)/2;
