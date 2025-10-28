@@ -271,6 +271,7 @@ def get_stdout(f:Callable) -> str:
 def get_render(ctx:list[str], fmt:list[str], i:list[str]|None=None):
   if fmt[0] == "mem_counters":
     cnt = counters[int(i[0])]
+    prg = None
     if (r:=ref_map.get(cnt["Function Name"])) is not None:
       prg = trace.keys[r].ret.src
     return json.dumps({"src":cnt, "prg":prg, "device":"CUDA"}).encode()
