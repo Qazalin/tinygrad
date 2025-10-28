@@ -28,6 +28,7 @@ uops_colors = {Ops.LOAD: "#ffc0c0", Ops.STORE: "#87CEEB", Ops.CONST: "#e0e0e0", 
 # ** list all saved rewrites
 
 def try_number(x:str) -> int|float|str:
+  x = x.replace(",", "")
   try: return int(x)
   except ValueError:
     try: return int(f) if (f:=float(x)).is_integer() else f
