@@ -311,6 +311,11 @@ function renderCacheGraph(data) {
     const y = (p1.y + p2.y) / 2 + (e.value.offsetY || 0);
     return `translate(${x},${y})`;
   }).append("text").attr("text-anchor", "middle").attr("dominant-baseline", "middle").style("fill", "#4a4b57").text(e => e.value.name);
+  if (data.prg != null) {
+    const cb = codeBlock(data.prg, "cpp", { wrap:false });
+    cb.classList.add("full-height");
+    metadata.replaceChildren(cb);
+  }
   document.getElementById("zoom-to-fit-btn").click();
 }
 

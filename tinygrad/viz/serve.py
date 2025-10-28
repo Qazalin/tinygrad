@@ -269,7 +269,11 @@ def get_stdout(f:Callable) -> str:
   return buf.getvalue()
 
 def get_render(ctx:list[str], fmt:list[str], i:list[str]|None=None):
-  if fmt[0] == "mem_counters": return json.dumps({"src":counters[int(i[0])], "device":"CUDA"}).encode()
+  if fmt[0] == "mem_counters":
+    cnt = counters[int(i[0])]
+    if (r:=ref_map.get(cnt["Function Name"])) is not None:
+      prg = trace.keys[r].ret.src
+    return json.dumps({"src":cnt, "prg":prg, "device":"CUDA"}).encode()
   if not isinstance(prg:=trace.keys[int(ctx[0])].ret, ProgramSpec): return
   if fmt[0] == "uops": return json.dumps({"src":get_stdout(lambda: print_uops(prg.uops or [])), "lang":"python"}).encode()
   if fmt[0] == "src": return json.dumps({"src":prg.src, "lang":"cpp"}).encode()
