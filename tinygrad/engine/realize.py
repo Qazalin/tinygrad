@@ -77,6 +77,19 @@ def optimize_local_size(_prg:Callable, global_size:list[int], rawbufs:list[Buffe
   assert not math.isinf(ret[0]), "all optimize_local_size exec failed"
   return ret[1]
 
+#@diskcache
+def assemble(code:str) -> bytes:
+  import subprocess
+  from tinygrad.helpers import OSX
+  try:
+    LLVM_MC = "llvm-mc" if OSX else "/opt/rocm/llvm/bin/llvm-mc"
+    return subprocess.run([LLVM_MC, "--arch=amdgcn", "--mcpu=gfx1100", "--triple=amdgcn-amd-amdhsa", "-filetype=obj", "-o", "-"],
+                           input=code.encode("utf-8"), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout
+  except subprocess.CalledProcessError as e:
+    print("stderr:")
+    print(e.stderr.decode())
+    raise
+
 class CompiledRunner(Runner):
   def __init__(self, p:ProgramSpec, precompiled:bytes|None=None, prg=None):
     if DEBUG >= 3: print(p.applied_opts)
@@ -86,6 +99,9 @@ class CompiledRunner(Runner):
     else:
       with cpu_profile(TracingKey(f"compile {p.name}", (p.function_name,)), "TINY"):
         self.lib = Device[p.device].compiler.compile_cached(p.src)
+    with open("/tmp/test2.s", "r") as f:
+      asm = f.read()
+      self.lib = assemble(asm)
     if DEBUG >= 7: Device[p.device].compiler.disassemble(self.lib)
     self._prg = Device[p.device].runtime(p.function_name, self.lib) if prg is None else prg
     super().__init__(p.name, p.device, p.estimates)
