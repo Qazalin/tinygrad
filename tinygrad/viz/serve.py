@@ -140,8 +140,12 @@ def get_sqtt_timeline(profile:list[ProfileEvent]):
   from extra.sqtt.roc import decode
   data = decode(profile)
   for k,waves in data.inst_execs.items():
+    prg = trace.keys[r].ret if (r:=ref_map.get(k)) else None
     for w in waves:
-      ret.append(ProfileRangeEvent(k, f"wave_{w.wave_id}_{w.simd}_{w.cu}", w.begin_time, w.end_time))
+      row = f"SIMD {w.simd} CU {w.cu}"
+      ret.append(ProfileRangeEvent(row, f"{prg.name if prg is not None else k} wave {w.wave_id}", w.begin_time, w.end_time))
+      for i in w.insts:
+        ret.append(ProfileRangeEvent(row, i.inst, i.time, i.time+i.dur+i.stall))
   return ret
 
 DevEvent = ProfileRangeEvent|ProfileGraphEntry|ProfilePointEvent|ProfileSQTTEvent

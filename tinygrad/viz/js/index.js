@@ -150,6 +150,7 @@ function renderDag(graph, additions, recenter, layoutOpts) {
 // ** profiler graph
 
 function formatTime(ts, dur=ts) {
+  return `${ts} clk`;
   if (dur<=1e3) return `${ts.toFixed(2)}us`;
   if (dur<=1e6) return `${(ts*1e-3).toFixed(2)}ms`;
   return `${(ts*1e-6).toFixed(2)}s`;
