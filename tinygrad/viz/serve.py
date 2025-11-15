@@ -134,8 +134,22 @@ def option(s:int|None) -> int: return 0 if s is None else s+1
 device_ts_diffs:dict[str, tuple[Decimal, Decimal]] = {}
 def cpu_ts_diff(device:str, thread=0) -> Decimal: return device_ts_diffs.get(device, (Decimal(0),))[thread]
 
-DevEvent = ProfileRangeEvent|ProfileGraphEntry|ProfilePointEvent
+from tinygrad.runtime.ops_amd import ProfileSQTTEvent
+def get_sqtt_timeline(profile:list[ProfileEvent]):
+  ret = []
+  from extra.sqtt.roc import decode
+  data = decode(profile)
+  for k,waves in data.inst_execs.items():
+    for w in waves:
+      ret.append(ProfileRangeEvent(k, f"wave_{w.wave_id}_{w.simd}_{w.cu}", w.begin_time, w.end_time))
+  return ret
+
+DevEvent = ProfileRangeEvent|ProfileGraphEntry|ProfilePointEvent|ProfileSQTTEvent
 def flatten_events(profile:list[ProfileEvent]) -> Generator[tuple[Decimal, Decimal, DevEvent], None, None]:
+  sqtt_events = [e for e in profile if isinstance(e, ProfileSQTTEvent)]
+  if sqtt_events:
+    for e in get_sqtt_timeline(profile): yield (e.st+(diff:=cpu_ts_diff(e.device, e.is_copy)), (e.en if e.en is not None else e.st)+diff, e)
+    return
   for e in profile:
     if isinstance(e, ProfileRangeEvent): yield (e.st+(diff:=cpu_ts_diff(e.device, e.is_copy)), (e.en if e.en is not None else e.st)+diff, e)
     elif isinstance(e, ProfilePointEvent): yield (e.ts, e.ts, e)
