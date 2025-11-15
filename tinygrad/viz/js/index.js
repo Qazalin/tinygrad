@@ -637,9 +637,12 @@ window.addEventListener("popstate", (e) => {
   if (e.state != null) setState(e.state);
 });
 
-const toggleLabel = d3.create("label").text("Show indexing (r)").node();
-const toggle = d3.create("input").attr("type", "checkbox").attr("id", "show-indexing").property("checked", true).node();
-toggleLabel.prepend(toggle);
+const toggleGroup = d3.create("div");
+["Show indexing (r)", "Show all nodes"].forEach((text, i) => {
+  const label = toggleGroup.append("label");
+  const input = label.append("input").attr("type", "checkbox").attr("id", "opt-"+i).attr("value", text).property("checked", true);
+  label.append("span").text(text);
+});
 
 async function main() {
   // ** left sidebar context list
@@ -755,11 +758,11 @@ async function main() {
   if (ret.length === 0) return;
   // ** center UOp graph
   const render = (opts) => renderDag(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes ?? [], currentRewrite === 0, opts);
-  render({ showIndexing:toggle.checked });
-  toggle.onchange = (e) => render({ showIndexing:e.target.checked });
+  render({});
+  //toggle.onchange = (e) => render({ showIndexing:e.target.checked });
   // ** right sidebar code blocks
   const codeElement = codeBlock(ret[currentRewrite].uop, "python", { wrap:false });
-  metadata.replaceChildren(toggleLabel, codeBlock(step.code_line, "python", { loc:step.loc, wrap:true }), codeElement);
+  metadata.replaceChildren(toggleGroup.node(), codeBlock(step.code_line, "python", { loc:step.loc, wrap:true }), codeElement);
   if (step.trace) {
     const trace = d3.create("pre").append("code").classed("hljs", true);
     for (let i=step.trace.length-1; i>=0; i--) {
