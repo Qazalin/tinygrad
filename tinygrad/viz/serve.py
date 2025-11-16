@@ -66,7 +66,6 @@ def uop_to_json(x:UOp) -> dict[int, dict]:
     if u.op is Ops.VCONST and u.dtype.scalar() == dtypes.index and u is not x: excluded.add(u)
     if u.op is Ops.VECTORIZE and len(u.src) == 0: excluded.add(u)
   for u in toposort:
-    if u in excluded: continue
     argst = codecs.decode(str(u.arg), "unicode_escape")
     if u.op in GroupOp.Movement: argst = (mask_to_str if u.op in {Ops.SHRINK, Ops.PAD} else shape_to_str)(u.marg)
     if u.op is Ops.KERNEL:
@@ -95,8 +94,8 @@ def uop_to_json(x:UOp) -> dict[int, dict]:
     if (ref:=ref_map.get(u.arg.ast) if u.op is Ops.KERNEL else None) is not None: label += f"\ncodegen@{ctxs[ref]['name']}"
     # NOTE: kernel already has metadata in arg
     if TRACEMETA >= 2 and u.metadata is not None and u.op is not Ops.KERNEL: label += "\n"+str(u.metadata)
-    graph[id(u)] = {"label":label, "src":[(i,id(x)) for i,x in enumerate(u.src) if x not in excluded], "color":uops_colors.get(u.op, "#ffffff"),
-                    "ref":ref, "tag":repr(u.tag) if u.tag is not None else None}
+    graph[id(u)] = {"label":label, "src":[(i,id(x)) for i,x in enumerate(u.src)], "color":uops_colors.get(u.op, "#ffffff"),
+                    "ref":ref, "tag":repr(u.tag) if u.tag is not None else None, "visible":u not in excluded}
   return graph
 
 @functools.cache

@@ -24,11 +24,9 @@ onmessage = (e) => {
     if (additions.includes(parseInt(k))) g.setParent(k, "addition");
   }
   // optionally hide nodes from the layuot
-  if (!opts.showIndexing) {
-    for (const n of g.nodes()) {
-      const node = g.node(n);
-      if (node.label.includes("dtypes.index")) g.removeNode(n);
-    }
+  const filterFxn = n => (opts.showFolded || n.visible) && (opts.showIndexing || !n.label.includes("dtypes.index"));
+  for (const n of g.nodes()) {
+    if (!filterFxn(g.node(n))) g.removeNode(n);
   }
   dagre.layout(g);
   // remove additions overlay if it's empty

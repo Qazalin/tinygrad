@@ -637,9 +637,13 @@ window.addEventListener("popstate", (e) => {
   if (e.state != null) setState(e.state);
 });
 
-const toggleLabel = d3.create("label").text("Show indexing (r)").node();
-const toggle = d3.create("input").attr("type", "checkbox").attr("id", "show-indexing").property("checked", true).node();
-toggleLabel.prepend(toggle);
+const toggles = d3.create("div");
+[["Show indexing (r)", "showIndexing", true], ["Show folded nodes", "showFolded", false]].forEach(([text, id, defaultValue], i) => {
+  const label = toggles.append("label");
+  const input = label.append("input").attr("type", "checkbox").attr("name", "toggleGroup").attr("id", id).property("checked", defaultValue);
+  label.append("span").text(text);
+});
+const getLayoutOpts = () => Object.fromEntries(toggles.selectAll("input[type=checkbox]").nodes().map(k => [k.id, k.checked]));
 
 async function main() {
   // ** left sidebar context list
@@ -755,11 +759,11 @@ async function main() {
   if (ret.length === 0) return;
   // ** center UOp graph
   const render = (opts) => renderDag(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes ?? [], currentRewrite === 0, opts);
-  render({ showIndexing:toggle.checked });
-  toggle.onchange = (e) => render({ showIndexing:e.target.checked });
+  render(getLayoutOpts());
+  toggles.on("change", (e) => render(getLayoutOpts()));
   // ** right sidebar code blocks
   const codeElement = codeBlock(ret[currentRewrite].uop, "python", { wrap:false });
-  metadata.replaceChildren(toggleLabel, codeBlock(step.code_line, "python", { loc:step.loc, wrap:true }), codeElement);
+  metadata.replaceChildren(toggles.node(), codeBlock(step.code_line, "python", { loc:step.loc, wrap:true }), codeElement);
   if (step.trace) {
     const trace = d3.create("pre").append("code").classed("hljs", true);
     for (let i=step.trace.length-1; i>=0; i--) {
@@ -887,7 +891,7 @@ document.addEventListener("keydown", (event) => {
   }
   // r key toggles indexing
   if (event.key === "r") {
-    toggle.click();
+    document.getElementById("showIndexing").click();
   }
 });
 
