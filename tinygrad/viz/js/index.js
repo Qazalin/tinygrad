@@ -25,13 +25,18 @@ const colored = n => d3.create("span").call(s => s.selectAll("span").data(typeof
 const rect = (s) => (typeof s === "string" ? document.querySelector(s) : s).getBoundingClientRect();
 
 let timeout = null;
-const updateProgress = ({ start }) => {
+const updateProgress = ({ start, err }) => {
   clearTimeout(timeout);
   const msg = document.getElementById("progress-message");
   msg.style.display = "none";
   if (start) {
     msg.innerText = "Rendering new graph...";
     timeout = setTimeout(() => { msg.style.display = "block"; }, 2000);
+  }
+  d3.select("#custom").html("");
+  if (err) {
+    displaySelection("#custom");
+    d3.select("#custom").append(() => d3.create("div").classed("raw-text", true).call(s => s.append(() => codeBlock(err, "txt"))).node());
   }
 }
 
@@ -136,11 +141,15 @@ function renderDag(graph, additions, recenter, layoutOpts) {
     }).attr("class", e => e.value.label.type).attr("id", e => `${e.v}-${e.w}`).datum(e => e.value.label.text));
     if (recenter) document.getElementById("zoom-to-fit-btn").click();
   };
+  worker.onerror = (e) => {
+    e.preventDefault();
+    updateProgress({ err:"Error in graph layout:\n"+e.message });
+  }
 }
 
 // ** profiler graph
 
-function formatTime(ts, dur=ts) {
+function formatMicroseconds(ts, dur=ts) {
   if (dur<=1e3) return `${ts.toFixed(2)}us`;
   if (dur<=1e6) return `${(ts*1e-3).toFixed(2)}ms`;
   return `${(ts*1e-6).toFixed(2)}s`;
@@ -149,7 +158,7 @@ const formatUnit = (d, unit="") => d3.format(".3~s")(d)+unit;
 
 const colorScheme = {TINY:["#1b5745", "#354f52", "#354f52", "#1d2e62", "#63b0cd"],
   DEFAULT:["#2b2e39", "#2c2f3a", "#31343f", "#323544", "#2d303a", "#2e313c", "#343746", "#353847", "#3c4050", "#404459", "#444862", "#4a4e65"],
-  BUFFER:["#342483", "#3E2E94", "#4938A4", "#5442B4", "#5E4CC2", "#674FCA"],
+  BUFFER:["#342483", "#3E2E94", "#4938A4", "#5442B4", "#5E4CC2", "#674FCA"], SIMD:["#3600f0"],
   CATEGORICAL:["#ff8080", "#F4A261", "#C8F9D4", "#8D99AE", "#F4A261", "#ffffa2", "#ffffc0", "#87CEEB"],}
 const cycleColors = (lst, i) => lst[i%lst.length];
 
@@ -189,13 +198,15 @@ function focusShape(shape) {
   return metadata.replaceChildren(shapeMetadata.get(focusedShape) ?? "");
 }
 
-async function renderProfiler() {
+async function renderProfiler(path, unit) {
   displaySelection("#profiler");
   metadata.replaceChildren(shapeMetadata.get(focusedShape) ?? "");
   // layout once!
-  if (data != null) return updateProgress({ start:false });
+  if (data != null && data.path === path) return updateProgress({ start:false });
+  // support non realtime x axis units
+  const formatTime = unit === "realtime" ? formatMicroseconds : (s) => `${s} ${unit}`;
   const profiler = d3.select("#profiler").html("");
-  const buf = await (await fetch("/get_profile")).arrayBuffer();
+  const buf = await (await fetch(path)).arrayBuffer();
   const view = new DataView(buf);
   let offset = 0;
   const u8 = () => { const ret = view.getUint8(offset); offset += 1; return ret; }
@@ -218,7 +229,7 @@ async function renderProfiler() {
   const colorMap = new Map();
   // map shapes by event key
   const shapeMap = new Map();
-  data = {tracks:new Map(), axes:{}};
+  data = {tracks:new Map(), axes:{}, path};
   const heightScale = d3.scaleLinear().domain([0, tracePeak]).range([4,maxheight=100]);
   for (let i=0; i<layoutsLen; i++) {
     const nameLen = view.getUint8(offset, true); offset += 1;
@@ -259,7 +270,10 @@ async function renderProfiler() {
         html.append(() => tabulate([["Name", colored(e.name)], ["Duration", formatTime(e.dur)], ["Start Time", formatTime(e.st)]]).node());
         html.append("div").classed("args", true);
         if (e.info != null) html.append("p").style("white-space", "pre-wrap").text(e.info);
-        if (shapeRef != null) html.append("a").text("View codegen rewrite").on("click", () => switchCtx(shapeRef.ctx, shapeRef.step));
+        if (shapeRef != null) {
+          html.append("a").text("View codegen rewrite").on("click", () => switchCtx(shapeRef.ctx, shapeRef.step));
+          html.append("a").text("View program").on("click", () => switchCtx(shapeRef.ctx, ctxs[shapeRef.ctx+1].steps.findIndex(s => s.name==="View Program")));
+        }
         // tiny device events go straight to the rewrite rule
         const key = k.startsWith("TINY") ? null : `${k}-${j}`;
         if (key != null) shapeMetadata.set(key, html.node());
@@ -467,6 +481,7 @@ async function renderProfiler() {
     d3.select(canvas).call(canvasZoom.transform, zoomLevel);
   }
 
+  zoomLevel = d3.zoomIdentity;
   canvasZoom = d3.zoom().filter(vizZoomFilter).scaleExtent([1, Infinity]).translateExtent([[0,0], [Infinity,0]]).on("zoom", e => render(e.transform));
   d3.select(canvas).call(canvasZoom);
   document.addEventListener("contextmenu", e => e.ctrlKey && e.preventDefault());
@@ -488,12 +503,15 @@ async function renderProfiler() {
     }
   }
 
-  canvas.addEventListener("click", e => {
+  const clickShape = (e) => {
     e.preventDefault();
     const foundRect = findRectAtPosition(e.clientX, e.clientY);
-    if (foundRect?.step != null && foundRect?.key == null) { return switchCtx(foundRect.ctx, foundRect.step); }
+    if (foundRect?.step != null && (foundRect?.key == null || e.type == "dblclick")) { return switchCtx(foundRect.ctx, foundRect.step); }
     if (foundRect?.key != focusedShape) { focusShape(foundRect); }
-  });
+  }
+  canvas.addEventListener("click", clickShape);
+
+  canvas.addEventListener("dblclick", clickShape);
 
   canvas.addEventListener("mousemove", e => {
     const foundRect = findRectAtPosition(e.clientX, e.clientY);
@@ -536,6 +554,7 @@ document.getElementById("zoom-to-fit-btn").addEventListener("click", () => {
 
 // **** main VIZ interfacae
 
+const pathLink = (fp, lineno) => d3.create("a").attr("href", "vscode://file/"+fp+":"+lineno).text(`${fp.split("/").at(-1)}:${lineno}`);
 function codeBlock(st, language, { loc, wrap }={}) {
   const code = document.createElement("code");
   // plaintext renders like a terminal print, otherwise render with syntax highlighting
@@ -544,11 +563,7 @@ function codeBlock(st, language, { loc, wrap }={}) {
   code.className = "hljs";
   const ret = document.createElement("pre");
   if (wrap) ret.className = "wrap";
-  if (loc != null) {
-    const link = ret.appendChild(document.createElement("a"));
-    link.href = "vscode://file/"+loc.join(":");
-    link.textContent = `${loc[0].split("/").at(-1)}:${loc[1]}`+"\n\n";
-  }
+  if (loc != null) ret.appendChild(pathLink(loc[0], loc[1]).style("margin-bottom", "4px").node());
   ret.appendChild(code);
   return ret;
 }
@@ -650,7 +665,7 @@ async function main() {
         u.li = list.appendChild(document.createElement("ul"));
         u.li.id = `step-${i}-${j}`;
         const p = u.li.appendChild(document.createElement("p"));
-        p.innerText = `${u.name}`+(u.match_count ? ` - ${u.match_count}` : '');
+        p.appendChild(colored(`${u.name}`+(u.match_count ? ` - ${u.match_count}` : '')));
         p.onclick = (e) => {
           e.stopPropagation();
           const subrewrites = getSubrewrites(e.currentTarget.parentElement);
@@ -661,7 +676,7 @@ async function main() {
       }
       for (const l of ul.querySelectorAll("ul > ul > p")) {
         const subrewrites = getSubrewrites(l.parentElement);
-        if (subrewrites.length > 0) { l.innerText += ` (${subrewrites.length})`; l.parentElement.classList.add("has-children"); }
+        if (subrewrites.length > 0) { l.appendChild(d3.create("span").text(` (${subrewrites.length})`).node()); l.parentElement.classList.add("has-children"); }
       }
     }
     return setState({ currentCtx:-1 });
@@ -679,13 +694,14 @@ async function main() {
     if (url.pathname+url.search !== ckey) e.close();
     else if (e.readyState === EventSource.OPEN) activeSrc = e;
   }
-  if (ctx.name === "Profiler") return renderProfiler();
+  if (ctx.name === "Profiler") return renderProfiler("/get_profile", "realtime");
   if (workerUrl == null) await initWorker();
   if (ckey in cache) {
     ret = cache[ckey];
   }
   // ** Disassembly view
   if (ckey.startsWith("/render")) {
+    if (step.fmt === "timeline") return renderProfiler(ckey, "clk"); // cycles on the x axis
     if (!(ckey in cache)) cache[ckey] = ret = await (await fetch(ckey)).json();
     displaySelection("#custom");
     metadata.innerHTML = "";
@@ -748,6 +764,15 @@ async function main() {
   // ** right sidebar code blocks
   const codeElement = codeBlock(ret[currentRewrite].uop, "python", { wrap:false });
   metadata.replaceChildren(toggleLabel, codeBlock(step.code_line, "python", { loc:step.loc, wrap:true }), codeElement);
+  if (step.trace) {
+    const trace = d3.create("pre").append("code").classed("hljs", true);
+    for (let i=step.trace.length-1; i>=0; i--) {
+      const [fp, lineno, fn, code] = step.trace[i];
+      trace.append("div").style("margin-bottom", "2px").style("display","flex").text(fn+" ").append(() => pathLink(fp, lineno).node());
+      trace.append("div").html(hljs.highlight(code, { language: "python" }).value).style("margin-bottom", "1ex");
+    }
+    metadata.insertBefore(trace.node().parentNode, codeElement);
+  }
   // ** rewrite steps
   if (step.match_count >= 1) {
     const rewriteList = metadata.appendChild(document.createElement("div"));
