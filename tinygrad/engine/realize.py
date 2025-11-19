@@ -87,7 +87,6 @@ class CompiledRunner(Runner):
     else:
       with cpu_profile(TracingKey(f"compile {p.name}", (p.function_name,)), "TINY"):
         self.lib = Device[p.device].compiler.compile_cached(p.src)
-    with open("/tmp/test", "wb") as f: f.write(self.lib)
     if DEBUG >= 7: Device[p.device].compiler.disassemble(self.lib)
     self._prg = Device[p.device].runtime(p.function_name, self.lib) if prg is None else prg
     super().__init__(p.name, p.device, p.estimates)

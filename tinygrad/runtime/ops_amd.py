@@ -550,6 +550,7 @@ class AMDProgram(HCQProgram):
     self.kernargs_segment_size = image[rodata_entry+8:rodata_entry+12].cast("I")[0]
     lds_size = ((self.group_segment_size + 511) // 512) & 0x1FF
     if lds_size > (self.dev.iface.props['lds_size_in_kb'] * 1024) // 512: raise RuntimeError("Too many resources requested: group_segment_size")
+    print(self.group_segment_size )
 
     # Ensure scratch size
     self.dev._ensure_has_local_memory(self.private_segment_size)
