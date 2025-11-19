@@ -234,6 +234,7 @@ def load_sqtt(profile:list[ProfileEvent]) -> None:
       events.append(ProfileRangeEvent(row, wave_name:=f"wave {w.wave_id}", Decimal(w.begin_time), Decimal(w.end_time)))
       rows, prev_instr = [], w.begin_time
       for i,e in enumerate(w.insts):
+        events.append(ProfileRangeEvent(row, e.inst, Decimal(e.time), Decimal(e.time+e.dur)))
         rows.append((e.inst, e.time, max(0, e.time-prev_instr), e.dur, e.stall, str(e.typ).split("_")[-1]))
         prev_instr = max(prev_instr, e.time + e.dur)
       summary = [{"label":"Total Cycles", "value":w.end_time-w.begin_time}, {"label":"SIMD", "value":w.simd}, {"label":"CU", "value":w.cu},

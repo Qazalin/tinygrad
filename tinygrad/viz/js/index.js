@@ -400,44 +400,15 @@ async function renderProfiler(path, unit) {
     const paths = [];
     for (const [_, { shapes, eventType, visible, offsetY, valueMap, pcolor }] of data.tracks) {
       visible.length = 0;
+      ctx.fillStyle = shapes[0].fillColor; 
       for (const e of shapes) {
-        const p = new Path2D();
-        if (eventType === EventTypes.BUF) { // generic polygon
-          if (e.x[0]>et || e.x.at(-1)<st) continue;
-          const x = e.x.map(xscale);
-          p.moveTo(x[0], offsetY+e.y0[0]);
-          for (let i=1; i<x.length; i++) {
-            p.lineTo(x[i], offsetY+e.y0[i]);
-            let arg = e.arg;
-            if (arg == null && valueMap != null) arg = {tooltipText: `Total: ${formatUnit(valueMap.get(e.x[i-1]), 'B')}`}
-            visible.push({ x0:x[i-1], x1:x[i], y0:offsetY+e.y1[i-1], y1:offsetY+e.y0[i], arg });
-          }
-          for (let i=x.length-1; i>=0; i--) p.lineTo(x[i], offsetY+e.y1[i]);
-          p.closePath();
-          ctx.fillStyle = e.fillColor; ctx.fill(p);
-        } else { // contiguous rect
-          if (e.x>et || e.x+e.width<st) continue;
-          const x = xscale(e.x);
-          const y = offsetY+e.y;
-          const width = xscale(e.x+e.width)-x;
-          p.rect(x, y, width, e.height);
-          visible.push({ y0:y, y1:y+e.height, x0:x, x1:x+width, arg:e.arg });
-          ctx.fillStyle = e.fillColor; ctx.fill(p);
-          // add label
-          let lw = 0;
-          const lx = x+2, ly = y+e.height/2;
-          for (let li=0; li<e.label?.length; li++) {
-            if (lw+e.label[li].width+(li===e.label.length-1 ? 0 : ellipsisWidth)+2 > width) {
-              if (lw>0) ctx.fillText("...", lx+lw, ly);
-              break;
-            }
-            ctx.textBaseline = "middle";
-            ctx.fillStyle = e.label[li].color;
-            ctx.fillText(e.label[li].st, lx+lw, ly);
-            lw += e.label[li].width;
-          }
-        }
-        if (focusedShape != null && e.arg?.key === focusedShape) { paths.push([p, pcolor]); }
+        if (e.x>et) break;
+        const x1 = e.x+e.width;
+        if (x1<st) continue;
+        const x = xscale(e.x);
+        const y = offsetY+e.y;
+        const width = xscale(x1)-x;
+        ctx.fillRect(x, y, width, e.height);
       }
     }
     // draw axes
