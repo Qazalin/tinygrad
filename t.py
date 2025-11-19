@@ -2,7 +2,7 @@ import os
 os.environ["TUPLE_ORDER"] = "0"
 
 import numpy as np
-from tinygrad.helpers import getenv
+from tinygrad.helpers import getenv, system2, system
 from tinygrad import Device, Tensor, Device, dtypes, Context
 from tinygrad.device import Buffer
 from tinygrad.engine.realize import get_program, lower_schedule, CompiledRunner
@@ -38,3 +38,4 @@ def run(fn):
 
 fn = get_fn()
 run(fn)
+#system2(f"llvm-readelf -d -", input=fn.lib)

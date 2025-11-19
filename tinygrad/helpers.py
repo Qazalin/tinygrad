@@ -383,6 +383,7 @@ def fetch(url:str, name:pathlib.Path|str|None=None, subdir:str|None=None, gunzip
 # *** Exec helpers
 
 def system(cmd, **kwargs): return subprocess.check_output(cmd.split(), **kwargs).decode().strip()
+def system2(cmd, **kwargs): return subprocess.run(cmd.split(), **kwargs, check=True)
 
 def cpu_objdump(lib, objdump_tool='objdump'):
   with tempfile.NamedTemporaryFile(delete=True) as f:

@@ -550,7 +550,6 @@ class AMDProgram(HCQProgram):
     self.kernargs_segment_size = image[rodata_entry+8:rodata_entry+12].cast("I")[0]
     lds_size = ((self.group_segment_size + 511) // 512) & 0x1FF
     if lds_size > (self.dev.iface.props['lds_size_in_kb'] * 1024) // 512: raise RuntimeError("Too many resources requested: group_segment_size")
-    print(self.group_segment_size )
 
     # Ensure scratch size
     self.dev._ensure_has_local_memory(self.private_segment_size)
@@ -576,6 +575,8 @@ class AMDProgram(HCQProgram):
     super().__init__(CLikeArgsState, self.dev, self.name, kernargs_alloc_size=self.kernargs_segment_size+additional_alloc_sz, lib=self.lib,
                      base=self.lib_gpu.va_addr)
     weakref.finalize(self, self._fini, self.dev, self.lib_gpu, buf_spec)
+
+    del self.lib
 
   def __call__(self, *bufs, global_size:tuple[int,int,int]=(1,1,1), local_size:tuple[int,int,int]=(1,1,1), vals:tuple[int, ...]=(), wait=False):
     if self.dev.sqtt_enabled: cast(AMDComputeQueue, self.dev.hw_compute_queue_t()).sqtt_start(self.dev.sqtt_buffers).submit(self.dev)
