@@ -154,6 +154,7 @@ function formatMicroseconds(ts, dur=ts) {
   if (dur<=1e6) return `${(ts*1e-3).toFixed(2)}ms`;
   return `${(ts*1e-6).toFixed(2)}s`;
 }
+let formatTime = formatMicroseconds;
 const formatUnit = (d, unit="") => d3.format(".3~s")(d)+unit;
 
 const colorScheme = {TINY:new Map([["Schedule","#1b5745"],["get_program","#1d2e62"],["compile","#63b0cd"],["DEFAULT","#354f52"]]),
@@ -191,7 +192,7 @@ function tabulate(rows) {
   return root;
 }
 
-var data, focusedDevice, focusedShape, canvasZoom, zoomLevel = d3.zoomIdentity, shapeMetadata = new Map();
+var data, focusedDevice, focusedShape, canvasZoom, zoomLevel = d3.zoomIdentity;
 
 function getShape(id) {
   const [t,i] = id.split("-");
@@ -199,23 +200,39 @@ function getShape(id) {
   return { track, shape:track.shapes[i] };
 }
 
+function getMetadata(id) {
+  if (id == null) return "";
+  const { track, shape:s } = getShape(id);
+  const div = d3.create("div").classed("info", true);
+  if (track.eventType === EventTypes.EXEC) {
+    div.append(() => tabulate([["Name", colored(s.label)], ["Duration", formatTime(s.width)], ["Start Time", formatTime(s.x)]]).node());
+    if (s.info != null) div.append("p").style("white-space", "pre-wrap").text(s.info);
+    if (s.ctx != null) {
+      div.append("a").text("View codegen rewrite").on("click", () => switchCtx(s.ctx, s.step));
+      div.append("a").text("View program").on("click", () => switchCtx(s.ctx, ctxs[s.ctx+1].steps.findIndex(step => step.name === "View Program")));
+    }
+  } else {
+    div.append("p").text("todo!");
+  }
+  return div.node();
+}
+
+
 function focusShape(shape) {
   saveToHistory({ shape:focusedShape });
   focusedShape = shape?.id; d3.select("#timeline").call(canvasZoom.transform, zoomLevel);
-  if (focusedShape == null) return metadata.innerHTML = "";
-  const div = d3.create("div");
-  return metadata.replaceChildren(div.node());
+  return metadata.replaceChildren(getMetadata(focusedShape));
 }
 
 const EventTypes = { EXEC:0, BUF:1 };
 
 async function renderProfiler(path, unit, opts) {
   displaySelection("#profiler");
-  metadata.replaceChildren(shapeMetadata.get(focusedShape) ?? "");
+  metadata.replaceChildren(getMetadata(focusedShape));
   // layout once!
   if (data != null && data.path === path) return updateProgress({ start:false });
   // support non realtime x axis units
-  const formatTime = unit === "realtime" ? formatMicroseconds : (s) => `${s} ${unit}`;
+  formatTime = unit === "realtime" ? formatMicroseconds : (s) => `${s} ${unit}`;
   const profiler = d3.select("#profiler").html("");
   const buf = cache[path] ?? await fetchValue(path);
   const view = new DataView(buf);
