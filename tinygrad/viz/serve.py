@@ -85,8 +85,7 @@ def uop_to_json(x:UOp) -> dict[int, dict]:
         arg = f"{x.arg:g}" if x.op is Ops.CONST and dtypes.is_float(x.dtype) else f"{x.arg}"
         label += f"\n{x.op.name}{idx} {arg}" + (f" {x.src[0].op}" if len(x.src) else "")
     try:
-      if len(rngs:=u.ranges):
-        label += f"\n({multirange_str(rngs, color=True)})"
+      if len(rngs:=u.ranges): label += f"\n({multirange_str(rngs, color=True)})"
       if u._shape is not None:
         label += f"\n{shape_to_str(u.shape)}"
       if u.op in {Ops.INDEX, Ops.BUFFERIZE}:
