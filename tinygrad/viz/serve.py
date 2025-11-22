@@ -229,6 +229,26 @@ def load_sqtt(profile:list[ProfileEvent]) -> None:
     units:dict[str, int] = {}
     events:list[ProfileEvent] = []
     wave_execs:dict[str, dict] = {}
+    hw:dict = {}
+    for w in waves:
+      if (row:=f"SE:{w.se} CU:{w.cu} SIMD:{w.simd} WAVE:{w.wave_id}") not in units: units[row] = 0
+      hw.setdefault(w.se, {}).setdefault(w.cu, {}).setdefault(w.simd, {}).setdefault(w.wave_id)
+      units[row] += 1
+      events.append(ProfileRangeEvent(row, f"N:{units[row]}", Decimal(w.begin_time), Decimal(w.end_time)))
+    events = [ProfilePointEvent(unit, "start", unit, ts=Decimal(0)) for unit in units]+events
+    kernel = trace.keys[r].ret if (r:=ref_map.get(name)) else None
+    steps.append(create_step(kernel.name if kernel is not None else name, ("/counters", len(ctxs), len(steps)),
+                             {"value":get_profile(events, sort_fn=row_tuple), "content_type":"application/octet-stream"}, depth=1))
+    query = ("/counters", len(ctxs), len(steps))
+    for se,cu_lst in hw.items():
+      steps.append(create_step(f"SE:{se}", query, query, depth=2))
+      for cu,simd_lst in cu_lst.items():
+        steps.append(create_step(f"CU:{cu}", query, depth=3))
+        for simd,wave_lst in simd_lst.items():
+          steps.append(create_step(f"SIMD:{simd}", query, depth=4))
+          for wave in wave_lst:
+            steps.append(create_step(f"WAVE:{wave}", query, depth=5))
+    """
     for w in waves:
       if (row:=f"SE:{w.se} CU:{w.cu} SIMD:{w.simd} WAVE:{w.wave_id}") not in units: units[row] = 0
       units[row] += 1
@@ -240,6 +260,7 @@ def load_sqtt(profile:list[ProfileEvent]) -> None:
     steps.append(create_step(kernel.name if kernel is not None else name, ("/counters", len(ctxs), len(steps)),
                              {"value":get_profile(events, sort_fn=row_tuple), "content_type":"application/octet-stream"}, depth=1))
     for k in sorted(wave_execs, key=row_tuple): steps.append(create_step(k, ("/sqtt-insts", len(ctxs), len(steps)), wave_execs[k], depth=2))
+    """
   ctxs.append({"name":"Counters", "steps":steps})
 
 def get_profile(profile:list[ProfileEvent], sort_fn:Callable[[str], Any]|None=None) -> bytes|None:
