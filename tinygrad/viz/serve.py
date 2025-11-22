@@ -242,8 +242,8 @@ def load_sqtt(profile:list[ProfileEvent]) -> None:
     simds:set[str] = set()
     for k in sorted(wave_execs, key=row_tuple):
       w = wave_execs[k]["wave"]
-      if (simd:=f"SE:{w.se} CU:{w.cu} SIMD:{w.simd}") not in simds:
-        steps.append(create_step(simd, ("/simd", len(ctxs), len(steps)), {"src":"todo: remove this"}, depth=2))
+      if (simd:=f"[{w.se}, {w.cu}, {w.simd}]") not in simds:
+        steps.append(create_step(simd, ("/simd", len(ctxs), len(steps)), [], depth=2))
         simds.add(simd)
       steps.append(create_step(f"WAVE:{w.wave_id} N:{wave_execs[k]['run_number']}", ("/sqtt-insts", len(ctxs), len(steps)), wave_execs[k], depth=3))
   ctxs.append({"name":"Counters", "steps":steps})
