@@ -1,7 +1,6 @@
 import os
 os.environ["PYTHONPATH"] = "."
 os.environ["PMC"] = "1"
-os.environ["SQTT"] = "1"
 if "DEV" not in os.environ: os.environ["DEV"] = "AMD"
 os.environ["PROFILE"] = "1"
 os.environ["AMD_LLVM"] = "0"
