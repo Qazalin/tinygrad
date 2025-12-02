@@ -22,7 +22,7 @@ def custom_c_kernel(*args:tuple[UOp, ...], fp:str="", global_size:tuple[int,int,
   with open(os.path.dirname(__file__)+f"/examples/{fp}.c", "r") as f: lines = f.readlines()
   c = UOp(Ops.CUSTOM, arg=escape_format("".join(lines[1:-1])))
   launch_args = [*[UOp.special(v, f"gidx{i}") for i,v in enumerate(global_size)], *[UOp.special(v, f"lidx{i}") for i,v in enumerate(local_size)]]
-  return UOp.sink(c, *args, *launch_args, arg=KernelInfo("kernel", opts_to_apply=()))
+  return UOp.sink(c, *args, *launch_args, arg=KernelInfo(fp, opts_to_apply=()))
 
 dev = Device[Device.DEFAULT]
 
