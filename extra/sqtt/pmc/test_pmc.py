@@ -1,6 +1,7 @@
 import os
 os.environ["PYTHONPATH"] = "."
 os.environ["PMC"] = "1"
+os.environ["SQTT"] = "1"
 if "DEV" not in os.environ: os.environ["DEV"] = "AMD"
 os.environ["PROFILE"] = "1"
 os.environ["AMD_LLVM"] = "0"
@@ -14,9 +15,12 @@ from tinygrad.runtime.ops_amd import ProfilePMCEvent
 from extra.sqtt.roc import print_pmc
 
 # use Tensor.custom_kernel to get DEBUG features for free
+def escape_format(s):
+  return s.replace("{", "{{").replace("}", "}}")
+
 def custom_c_kernel(*args:tuple[UOp, ...], fp:str="", global_size:tuple[int,int,int]=(1,1,1), local_size:tuple[int,int,int]=(1,1,1)):
   with open(os.path.dirname(__file__)+f"/examples/{fp}.c", "r") as f: lines = f.readlines()
-  c = UOp(Ops.CUSTOM, arg="\n".join(lines[1:-1]))
+  c = UOp(Ops.CUSTOM, arg=escape_format("\n".join(lines[1:-1])))
   launch_args = [*[UOp.special(v, f"gidx{i}") for i,v in enumerate(global_size)], *[UOp.special(v, f"lidx{i}") for i,v in enumerate(local_size)]]
   return UOp.sink(c, *args, *launch_args, arg=KernelInfo("kernel", opts_to_apply=()))
 
@@ -39,6 +43,11 @@ class TestPMC(unittest.TestCase):
     with save_pmc() as pmc:
       a.realize()
     for p in pmc: print_pmc(p)
+
+  def test_k0_empty(self):
+    a = Tensor.empty(1)
+    a = Tensor.custom_kernel(a, fxn=partial(custom_c_kernel, fp="k0_empty", global_size=(4, 1, 1), local_size=(4, 1, 1)))[0]
+    a.realize()
 
 if __name__ == "__main__":
   unittest.main()
