@@ -10,6 +10,7 @@ import contextlib
 from functools import partial
 from tinygrad import Tensor, dtypes, Device
 from tinygrad.uop.ops import UOp, Ops, KernelInfo
+from tinygrad.helpers import getenv
 from tinygrad.runtime.ops_amd import ProfilePMCEvent
 from extra.sqtt.roc import print_pmc
 
@@ -39,10 +40,11 @@ class TestPMC(unittest.TestCase):
   def test_matrix_add_2d(self):
     size_h = 1024
     size_w = 1024
+    V = getenv("V", 1)
     A = Tensor(Tensor.full((size_h, size_w), 1, dtype=dtypes.uint32, device="CPU").numpy(), device=Device.DEFAULT).realize()
     B = Tensor(Tensor.full((size_h, size_w), 2, dtype=dtypes.uint32, device="CPU").numpy(), device=Device.DEFAULT).realize()
     C = Tensor(Tensor.full((size_h, size_w), 0, dtype=dtypes.uint32, device="CPU").numpy(), device=Device.DEFAULT).realize()
-    fxn = partial(custom_c_kernel, fp="k0_matrix_add_2d", local_size=(32, 32, 1), global_size=(1024, 1024))
+    fxn = partial(custom_c_kernel, fp=f"k0_matrix_add_2d_v{V}", local_size=(32, 32, 1), global_size=(1024, 1024))
     C = Tensor.custom_kernel(C, A, B, fxn=fxn)[0]
     with save_pmc() as pmc:
       C.realize()
