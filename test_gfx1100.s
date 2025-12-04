@@ -16,6 +16,13 @@ kernel:
 	v_dual_mov_b32 v24, 0 :: v_dual_mov_b32 v1, 0              // 000000001640: CA100080 18000080
 	v_dual_mov_b32 v2, 0 :: v_dual_mov_b32 v5, 0               // 000000001648: CA100080 02040080
 	v_dual_mov_b32 v12, 0 :: v_dual_mov_b32 v13, 0             // 000000001650: CA100080 0C0C0080
+  // *** new
+  v_mov_b32_e32 v12 1.0
+  v_mov_b32_e32 v35 0
+	s_waitcnt lgkmcnt(0)                                       // 000000001658: BF89FC07
+  global_store_b32 v35, v12, s[0:1] offset:0
+  s_endpgm
+  // *** EOF new
 	s_waitcnt lgkmcnt(0)                                       // 000000001658: BF89FC07
 	s_add_u32 s4, s2, 0xfffffd00                               // 00000000165C: 8004FF02 FFFFFD00
 	s_delay_alu instid0(SALU_CYCLE_1) | instskip(SKIP_1) | instid1(SALU_CYCLE_1)// 000000001664: BF8704A9

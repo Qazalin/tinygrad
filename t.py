@@ -27,6 +27,7 @@ if lib is not None:
 else:
   ei = lower_schedule_item(si)
   #dev.compiler.disassemble(ei.prg.lib)
+si.bufs[0].allocate().copyin(memoryview(bytearray(si.bufs[0].nbytes)))
 it.append((si, ei))
 
 with Context(VALIDATE_WITH_CPU=1):
