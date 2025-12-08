@@ -64,7 +64,7 @@ def consumer_map_from_toposort(lst:Iterable[UOp]):
     for s in u.src: ret[s][u] = None
   return ret
 
-# used for UOp and UPat
+# used for UOp
 def pretty_print(x:Any, rep:Callable, srcfn=lambda x: x.src, cache=None, d=0)->str:
   def dfs(x:Any, cache:dict):
     for s in srcfn(x) or []:
