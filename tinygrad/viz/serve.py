@@ -374,8 +374,10 @@ def get_render(i:int, j:int, fmt:str) -> dict:
   data = ctxs[i]["steps"][j]["data"]
   if fmt == "uops": return {"src":get_stdout(lambda: print_uops(data.uops or [])), "lang":"txt"}
   if fmt == "code":
-    with open("tiny.cpp", "r") as f: src = f.read()
-    return {"src":src if isinstance(data.src, bytes) else data.src, "lang":"cpp"}
+    src = data.src 
+    if isinstance(src, bytes):
+      with open(data.name+".cpp", "r") as f: src = f.read()
+    return {"src":src, "lang":"cpp"}
   if fmt == "asm":
     compiler = Device[data.device].compiler
     if isinstance(data.src, bytes): lib = data.src
