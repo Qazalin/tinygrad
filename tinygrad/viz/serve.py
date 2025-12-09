@@ -41,7 +41,7 @@ def get_rewrites(t:RewriteTrace) -> list[dict]:
     steps = [create_step(s.name, ("/rewrites", i, j), loc=s.loc, match_count=len(s.matches), code_line=printable(s.loc), trace=k.tb if j==0 else None,
                          depth=s.depth) for j,s in enumerate(v)]
     if isinstance(k.ret, ProgramSpec):
-      steps.append(create_step("View UOp List", ("/uops", i, len(steps)), k.ret))
+      if k.ret.uops: steps.append(create_step("View UOp List", ("/uops", i, len(steps)), k.ret))
       steps.append(create_step("View Program", ("/code", i, len(steps)), k.ret))
       steps.append(create_step("View Disassembly", ("/asm", i, len(steps)), k.ret))
     for key in k.keys: ref_map[key] = i
@@ -373,7 +373,9 @@ def amd_readelf(lib:bytes) -> list[dict]:
 def get_render(i:int, j:int, fmt:str) -> dict:
   data = ctxs[i]["steps"][j]["data"]
   if fmt == "uops": return {"src":get_stdout(lambda: print_uops(data.uops or [])), "lang":"txt"}
-  if fmt == "code": return {"src":"ELF" if isinstance(data.src, bytes) else data.src, "lang":"cpp"}
+  if fmt == "code":
+    with open("tiny.cpp", "r") as f: src = f.read()
+    return {"src":src if isinstance(data.src, bytes) else data.src, "lang":"cpp"}
   if fmt == "asm":
     compiler = Device[data.device].compiler
     if isinstance(data.src, bytes): lib = data.src
