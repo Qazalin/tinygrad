@@ -373,10 +373,12 @@ def amd_readelf(lib:bytes) -> list[dict]:
 def get_render(i:int, j:int, fmt:str) -> dict:
   data = ctxs[i]["steps"][j]["data"]
   if fmt == "uops": return {"src":get_stdout(lambda: print_uops(data.uops or [])), "lang":"txt"}
-  if fmt == "code": return {"src":data.src, "lang":"cpp"}
+  if fmt == "code": return {"src":"ELF" if isinstance(data.src, bytes) else data.src, "lang":"cpp"}
   if fmt == "asm":
     compiler = Device[data.device].compiler
-    disasm_str = get_stdout(lambda: compiler.disassemble(compiler.compile(data.src)))
+    if isinstance(data.src, bytes): lib = data.src
+    else: lib = compiler.compile(data.src)
+    disasm_str = get_stdout(lambda: compiler.disassemble(lib))
     from tinygrad.runtime.support.compiler_cpu import llvm, LLVMCompiler
     if isinstance(compiler, LLVMCompiler):
       return get_llvm_mca(disasm_str, ctypes.string_at(llvm.LLVMGetTargetMachineTriple(tm:=compiler.target_machine)).decode(),
@@ -384,7 +386,7 @@ def get_render(i:int, j:int, fmt:str) -> dict:
     metadata:list = []
     if data.device.startswith("AMD"):
       with soft_err(lambda err: metadata.append(err)):
-        metadata.append(amd_readelf(compiler.compile(data.src)))
+        metadata.append(amd_readelf(lib))
     return {"src":disasm_str, "lang":"amdgpu" if data.device.startswith("AMD") else None, "metadata":metadata}
   if fmt == "sqtt-insts":
     columns = ["PC", "Instruction", "Hits", "Duration", "Stall", "Type"]
