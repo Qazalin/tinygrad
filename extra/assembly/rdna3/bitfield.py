@@ -3,9 +3,13 @@ from types import SimpleNamespace
 from dataclasses import dataclass
 
 @dataclass(frozen=True)
-class field:
+class bits:
   lo:int
   hi:int
+
+  def __class_getitem__(cls, s):
+    assert isinstance(s, slice) and s.step is None and s.start is not None and s.stop is not None, f"invalid slice for bits: {s}"
+    return cls(lo=s.stop, hi=s.start)
 
   @property
   def mask(self) -> int: return ((1 << (self.hi - self.lo + 1)) - 1) << self.lo
@@ -17,7 +21,7 @@ class field:
 class PackTrait:
   @classmethod
   @functools.cache
-  def fields(cls) -> tuple[tuple[str, field], ...]: return tuple([(k,v) for k,v in cls.__dict__.items() if isinstance(v, field)][1:])
+  def fields(cls) -> tuple[tuple[str, bits], ...]: return tuple([(k,v) for k,v in cls.__dict__.items() if isinstance(v, bits)][1:])
 
   @classmethod
   def pack(cls, *args:tuple[int, ...]) -> int:

@@ -1,13 +1,13 @@
 # TODO: this should be auto generated from the XML
 from enum import IntEnum, auto
-from extra.assembly.rdna3.bitfield import PackTrait, field
+from extra.assembly.rdna3.bitfield import PackTrait, bits
 
 class SOPC(PackTrait):
   ENC = 0b10_1111110
-  encoding = field(23, 31)
-  op       = field(16, 22)
-  ssrc1    = field(8, 15)
-  ssrc0    = field(0, 7)
+  encoding = bits[31:23]
+  op       = bits[22:16]
+  ssrc1    = bits[15:8]
+  ssrc0    = bits[7:0]
 
 class SOPCOps(IntEnum):
   S_CMP_EQ_I32 = 0
