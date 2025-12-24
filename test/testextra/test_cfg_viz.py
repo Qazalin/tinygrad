@@ -1,5 +1,4 @@
 import unittest
-import textwrap
 
 from tinygrad import Device, Tensor
 from tinygrad.uop.ops import UOp, Ops, track_rewrites
