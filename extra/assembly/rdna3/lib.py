@@ -62,8 +62,8 @@ class Id(EncodingTrait):
   def enc(v): return v
 
 class SSRC(EncodingTrait):
-  def dec(self, v):
-    if 0 <= v <= 105: return sgpr(v)
+  def dec(v):
+    if 0 <= v <= 105: return s[v]
     raise Exception(f"todo {v}")
   def enc(v):
     if isinstance(v, SGPR): return v.idx

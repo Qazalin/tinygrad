@@ -7,9 +7,9 @@ class SOPCOps(IntEnum):
 
 class SOPC(PackTrait):
   ENC = 0b10_1111110
-  encoding = field(bits[31:23], Id)
-  op       = field(bits[22:16], Opcode(SOPCOps))
-  ssrc1    = field(bits[15:8], SSRC)
   ssrc0    = field(bits[7:0], SSRC)
+  ssrc1    = field(bits[15:8], SSRC)
+  op       = field(bits[22:16], Opcode(SOPCOps))
+  encoding = field(bits[31:23], Id)
 
-def s_cmp_eq_i32(*args): return SOPC.pack(SOPC.ENC, SOPCOps.S_CMP_EQ_I32, *args)
+def s_cmp_eq_i32(*args): return SOPC.pack(*args, SOPCOps.S_CMP_EQ_I32, SOPC.ENC)
