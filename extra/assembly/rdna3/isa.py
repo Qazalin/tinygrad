@@ -12,4 +12,4 @@ class SOPC(PackTrait):
   ssrc1    = field(bits[15:8], SSRC)
   ssrc0    = field(bits[7:0], SSRC)
 
-def s_cmp_eq_i32(*args): return SOPC.pack(SOPCOps.S_CMP_EQ_I32, *args)
+def s_cmp_eq_i32(*args): return SOPC.pack(SOPC.ENC, SOPCOps.S_CMP_EQ_I32, *args)

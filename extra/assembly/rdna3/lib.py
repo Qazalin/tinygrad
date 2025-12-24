@@ -66,13 +66,10 @@ class field:
 class PackTrait:
   @classmethod
   @functools.cache
-  def fields(cls) -> tuple[tuple[str, field], ...]: return tuple([(k,v) for k,v in cls.__dict__.items() if isinstance(v, field)][1:])
+  def fields(cls) -> tuple[tuple[str, field], ...]: return tuple([(k,v) for k,v in cls.__dict__.items() if isinstance(v, field)])
 
   @classmethod
-  def pack(cls, *args:tuple[int, ...]) -> int:
-    ret = cls.encoding.prep(cls.ENC)
-    for ((_,f), v) in zip(cls.fields(), args): ret |= f.prep(v)
-    return ret
+  def pack(cls, *args:tuple[int, ...]) -> int: return sum(f.prep(v) for ((_, f), v) in zip(cls.fields(), args))
 
   @classmethod
   def unpack(cls, word:int): return SimpleNamespace(**{k:f.get(word) for k,f in cls.fields()})
