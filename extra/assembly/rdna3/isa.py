@@ -12,4 +12,4 @@ class SOPC(PackTrait):
   op       = bits[22:16]
   encoding = bits[31:23]
 
-def s_cmp_eq_i32(*args): return SOPC.pack(*args, SOPCOps.S_CMP_EQ_I32, SOPC.ENC)
+s_cmp_eq_i32 = functools.partial(SOPC.pack, op=SOPCOps.S_CMP_EQ_I32, encoding=SOPC.ENC)

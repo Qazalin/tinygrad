@@ -49,10 +49,12 @@ class PackTrait:
   def fields(cls) -> tuple[tuple[str, bits], ...]: return tuple([(k,v) for k,v in cls.__dict__.items() if isinstance(v, bits)])
 
   @classmethod
-  def pack(cls, *args:tuple[int, ...]) -> int:
+  def pack(cls, *args, **kwargs) -> int:
     word = 0
     for ((n, f), v) in zip(cls.fields(), args):
       word |= f.prep(encode_field(n, v))
+    for n,v in kwargs.items():
+      word |= getattr(cls, n).prep(encode_field(n, v))
     return word
 
   @classmethod
