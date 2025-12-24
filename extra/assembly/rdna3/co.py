@@ -1,6 +1,9 @@
 # codeobject V3 kernel descriptor for RDNA3
 # https://rocm.docs.amd.com/projects/llvm-project/en/latest/LLVM/llvm/html/AMDGPUUsage.html#code-object-v3-kernel-descriptor
 import textwrap
+from tinygrad.runtime.support.compiler_amd import HIPCompiler
+from tinygrad.runtime.support.elf import elf_loader
+
 
 template = """.text
 .globl fn_name
@@ -46,3 +49,9 @@ amdhsa.kernels:
 """
 
 def fmt_asm(src:str, name:str="test") -> str: return template.replace("fn_name", name).replace("INSTRUCTION", textwrap.dedent(src))
+
+def llvm_asm(asm:str) -> int:
+  lib = HIPCompiler("gfx1100").compile(fmt_asm(asm))
+  image, sections, _ = elf_loader(lib)
+  data = next((s for s in sections if s.name.startswith(".text"))).content
+  return int.from_bytes(data, byteorder="little", signed=False)

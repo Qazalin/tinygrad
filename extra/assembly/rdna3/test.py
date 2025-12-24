@@ -1,15 +1,21 @@
+import unittest
+
 from extra.assembly.rdna3.isa import *
 from extra.assembly.rdna3.lib import *
 
-from tinygrad.runtime.support.compiler_amd import HIPCompiler
-from tinygrad.runtime.support.elf import elf_loader
-from extra.assembly.rdna3.co import fmt_asm
+from extra.assembly.rdna3.co import llvm_asm
 
-code = s_cmp_eq_i32(s[2], s[1])
+class TestRDNA(unittest.TestCase):
+  def test_asm(self):
+    self.assertEqual(s_cmp_eq_i32(s[1], s[2]), llvm_asm("s_cmp_eq_i32 s1 s2"))
+    self.assertEqual(s_cmp_eq_i32(ssrc1=s[2], ssrc0=s[1]), llvm_asm("s_cmp_eq_i32 s1 s2"))
+    self.assertEqual(s_cmp_eq_i32(s[1], ssrc1=s[2]), llvm_asm("s_cmp_eq_i32 s1 s2"))
 
-lib = HIPCompiler("gfx1100").compile(fmt_asm("s_cmp_eq_i32 s2 s1"))
-image, sections, _ = elf_loader(lib)
-data = next((s for s in sections if s.name.startswith(".text"))).content
-code_llvm = int.from_bytes(data, byteorder="little", signed=False)
+    with self.assertRaisesRegex(TypeError, "wrong number of arguments"):
+      s_cmp_eq_i32(s[2], s[1], 1)
 
-assert code_llvm == code
+    with self.assertRaises(KeyError): # could do better
+      s_cmp_eq_i32(s[2], sdst=s[3])
+
+if __name__ == "__main__":
+  unittest.main()

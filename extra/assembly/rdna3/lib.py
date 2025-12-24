@@ -1,6 +1,5 @@
-import functools
 from types import SimpleNamespace
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # ** byte packing helper
 
@@ -44,18 +43,19 @@ def decode_field(name:str, v:int): raise Exception("todo!")
 
 @dataclass(frozen=True)
 class PackTrait:
-  @classmethod
-  @functools.cache
-  def fields(cls) -> tuple[tuple[str, bits], ...]: return tuple([(k,v) for k,v in cls.__dict__.items() if isinstance(v, bits)])
+  fields:dict[str, bits] = field(default_factory=dict)
+  def __init_subclass__(cls):
+    super().__init_subclass__()
+    cls.fields = {k:v for k,v in cls.__dict__.items() if isinstance(v, bits)}
 
   @classmethod
   def pack(cls, *args, **kwargs) -> int:
+    if (nargs:=len(args)+len(kwargs)) != len(cls.fields):
+      raise TypeError(f"wrong number of arguments for {cls.__name__}, expected {len(cls.fields)}, got {nargs}")
     word = 0
-    for ((n, f), v) in zip(cls.fields(), args):
-      word |= f.prep(encode_field(n, v))
-    for n,v in kwargs.items():
-      word |= getattr(cls, n).prep(encode_field(n, v))
+    for n,v in [*zip(cls.fields, args), *kwargs.items()]:
+      word |= cls.fields[n].prep(encode_field(n, v))
     return word
 
   @classmethod
-  def unpack(cls, word:int): return SimpleNamespace(**{k:decode_field(k, f.get(word)) for k,f in cls.fields()})
+  def unpack(cls, word:int): return SimpleNamespace(**{k:decode_field(k, f.get(word)) for k,f in cls.fields.items()})

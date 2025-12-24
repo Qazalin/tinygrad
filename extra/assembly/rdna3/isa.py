@@ -1,4 +1,5 @@
 # TODO: this should be auto generated from the XML
+import functools
 from enum import IntEnum
 from extra.assembly.rdna3.lib import *
 
