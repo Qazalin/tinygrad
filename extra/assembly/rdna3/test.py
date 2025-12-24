@@ -17,5 +17,13 @@ class TestRDNA(unittest.TestCase):
     with self.assertRaises(KeyError): # could do better
       s_cmp_eq_i32(s[2], sdst=s[3])
 
+  def test_disasm(self):
+    bits = s_cmp_eq_i32(s[1], s[2])
+    sopc = SOPC.unpack(bits)
+
+    assert sopc.ssrc0 is s[1] and sopc.ssrc1 is s[2]
+    # TODO: this doesn't pass yet
+    assert llvm_asm(str(sopc)) == bits
+
 if __name__ == "__main__":
   unittest.main()

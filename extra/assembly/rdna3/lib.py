@@ -39,7 +39,11 @@ def encode_field(name:str, v) -> int:
   if name in {"op", "encoding"}: return v
   raise ValueError(f"no encoding for field {name} with value {v}")
 
-def decode_field(name:str, v:int): raise Exception("todo!")
+def decode_field(name:str, v:int):
+  if name.startswith("ssrc"):
+    if 0 <= v <= SGPR_COUNT: return s[v]
+  if name in {"op", "encoding"}: return v
+  raise Exception(f"todo! {name}")
 
 @dataclass(frozen=True)
 class PackTrait:
