@@ -1,6 +1,7 @@
 import functools
 from types import SimpleNamespace
 from dataclasses import dataclass
+from typing import Callable, Generic, Protocol, TypeVar, runtime_checkable
 
 # ** byte packing helper
 
@@ -19,16 +20,19 @@ class bits:
   def get(self, word:int) -> int: return (word & self.mask) >> self.lo
   def prep(self, value:int) -> int: return (value << self.lo) & self.mask
 
-class EncodingTrait:
-  def enc(v): ...
-  def dec(v): ...
+T = TypeVar("T")
+
+@runtime_checkable
+class EncodingTrait(Protocol[T]):
+  enc: Callable[[T], int]
+  dec: Callable[[int], T]
 
 @dataclass(frozen=True)
-class field:
+class field(Generic[T]):
   b:bits
-  e:EncodingTrait
-  def get(self, word:int) -> EncodingTrait: return self.e.dec(self.b.get(word))
-  def prep(self, v:EncodingTrait) -> int: return self.b.prep(self.e.enc(v))
+  e:EncodingTrait[T]
+  def get(self, word:int) -> T: return self.e.dec(self.b.get(word))
+  def prep(self, v:T) -> int: return self.b.prep(self.e.enc(v))
 
 @dataclass(frozen=True)
 class PackTrait:
@@ -58,18 +62,22 @@ s = _SGPR()
 # ** instruction operands
 
 class Id(EncodingTrait):
+  @staticmethod
   def dec(v): return v
+  @staticmethod
   def enc(v): return v
 
 class SSRC(EncodingTrait):
+  @staticmethod
   def dec(v):
     if 0 <= v <= 105: return s[v]
     raise Exception(f"todo {v}")
+  @staticmethod
   def enc(v):
     if isinstance(v, SGPR): return v.idx
     raise Exception(f"todo {v}")
 
 class Opcode(EncodingTrait):
   def __init__(self, ty): self.ty = ty
-  def dec(self, r): return self.value
-  def enc(self, code): return self.ty(code)
+  def dec(self, v): return self.ty(v)
+  def enc(self, v): return int(v)
