@@ -19,41 +19,9 @@ class bits:
   def get(self, word:int) -> int: return (word & self.mask) >> self.lo
   def prep(self, value:int) -> int: return (value << self.lo) & self.mask
 
-# ** register types
-
-@dataclass(frozen=True)
-class SGPR: idx:int
-
-SGPR_COUNT = 128
-
-class _SGPR:
-  def __init__(self): self.sgprs = [SGPR(i) for i in range(SGPR_COUNT)]
-  def __getitem__(self, s): return self.sgprs.__getitem__(s)
-
-s = _SGPR()
-
-# ** instruction operands
-
 class EncodingTrait:
   def enc(v): ...
   def dec(v): ...
-
-class Id(EncodingTrait):
-  def dec(v): return v
-  def enc(v): return v
-
-class SSRC(EncodingTrait):
-  def dec(self, v):
-    if 0 <= v <= 105: return sgpr(v)
-    raise Exception(f"todo {v}")
-  def enc(v):
-    if isinstance(v, SGPR): return v.idx
-    raise Exception(f"todo {v}")
-
-class Opcode(EncodingTrait):
-  def __init__(self, ty): self.ty = ty
-  def dec(self, r): return self.value
-  def enc(self, code): return self.ty(code)
 
 @dataclass(frozen=True)
 class field:
@@ -73,3 +41,35 @@ class PackTrait:
 
   @classmethod
   def unpack(cls, word:int): return SimpleNamespace(**{k:f.get(word) for k,f in cls.fields()})
+
+# ** register types
+
+@dataclass(frozen=True)
+class SGPR: idx:int
+
+SGPR_COUNT = 128
+
+class _SGPR:
+  def __init__(self): self.sgprs = [SGPR(i) for i in range(SGPR_COUNT)]
+  def __getitem__(self, s): return self.sgprs.__getitem__(s)
+
+s = _SGPR()
+
+# ** instruction operands
+
+class Id(EncodingTrait):
+  def dec(v): return v
+  def enc(v): return v
+
+class SSRC(EncodingTrait):
+  def dec(self, v):
+    if 0 <= v <= 105: return sgpr(v)
+    raise Exception(f"todo {v}")
+  def enc(v):
+    if isinstance(v, SGPR): return v.idx
+    raise Exception(f"todo {v}")
+
+class Opcode(EncodingTrait):
+  def __init__(self, ty): self.ty = ty
+  def dec(self, r): return self.value
+  def enc(self, code): return self.ty(code)
