@@ -21,7 +21,9 @@ class bits:
 # ** register types
 
 @dataclass(frozen=True)
-class SGPR: idx:int
+class SGPR:
+  idx:int
+  def __str__(self): return f"s{self.idx}"
 
 SGPR_COUNT = 128
 
@@ -63,3 +65,13 @@ class PackTrait:
 
   @classmethod
   def unpack(cls, word:int): return SimpleNamespace(**{k:decode_field(k, f.get(word)) for k,f in cls.fields.items()})
+
+  @classmethod
+  def to_str(cls, word:int) -> str:
+    ns = cls.unpack(word)
+    st = f"{cls.OPS(ns.op).name.lower()}"
+    for k in list(cls.fields)[:2]: st += f" {str(getattr(ns, k))}"
+    return st
+
+  @classmethod
+  def match(cls, word:int) -> bool: return cls.encoding.get(word) == int(cls.ENC) 

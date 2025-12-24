@@ -8,9 +8,12 @@ class SOPCOps(IntEnum):
 
 class SOPC(PackTrait):
   ENC = 0b10_1111110
+  OPS = SOPCOps
   ssrc0    = bits[7:0]
   ssrc1    = bits[15:8]
   op       = bits[22:16]
   encoding = bits[31:23]
 
 s_cmp_eq_i32 = functools.partial(SOPC.pack, op=SOPCOps.S_CMP_EQ_I32, encoding=SOPC.ENC)
+
+FORMATS = [SOPC]
