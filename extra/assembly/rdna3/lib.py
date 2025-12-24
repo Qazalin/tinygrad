@@ -41,7 +41,11 @@ class PackTrait:
   def fields(cls) -> tuple[tuple[str, field], ...]: return tuple([(k,v) for k,v in cls.__dict__.items() if isinstance(v, field)])
 
   @classmethod
-  def pack(cls, *args:tuple[int, ...]) -> int: return sum(f.prep(v) for ((_, f), v) in zip(cls.fields(), args))
+  def pack(cls, *args:tuple[int, ...]) -> int:
+    word = 0
+    for ((_, f), v) in zip(cls.fields(), args):
+      word |= f.prep(v)
+    return word
 
   @classmethod
   def unpack(cls, word:int): return SimpleNamespace(**{k:f.get(word) for k,f in cls.fields()})
