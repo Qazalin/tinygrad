@@ -18,6 +18,7 @@ fn_name:
 .rodata
 .p2align 6
 .amdhsa_kernel fn_name
+  .amdhsa_kernarg_size 8
   .amdhsa_user_sgpr_kernarg_segment_ptr 1
   .amdhsa_next_free_vgpr .amdgcn.next_free_vgpr
   .amdhsa_next_free_sgpr .amdgcn.next_free_sgpr
