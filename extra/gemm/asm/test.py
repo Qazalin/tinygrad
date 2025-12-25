@@ -3,7 +3,7 @@ from tinygrad import Tensor, Device, dtypes
 from tinygrad.engine.realize import ExecItem, CompiledRunner
 from tinygrad.renderer import ProgramSpec
 from tinygrad.uop.ops import track_rewrites, UOp
-from tinygrad.helpers import TracingKey
+from tinygrad.helpers import TracingKey, getenv
 
 # ** generate inputs on CPU
 
@@ -16,6 +16,12 @@ A = (torch.randn(N, N, dtype=torch.float32, device="cpu") / scale).to(torch.bflo
 B = (torch.randn(N, N, dtype=torch.float32, device="cpu") / scale).to(torch.bfloat16).contiguous()
 Bt = B.t().contiguous() # transpose B for the baseline gemm
 C_torch = A@Bt
+
+if getenv("EGEMM"):
+  from aiter.tuned_gemm import tgemm
+  gpu = "cuda:0"
+  C_aiter = tgemm.mm(A.to(gpu), B.to(gpu), None, None, None)
+  assert torch.allclose(C_aiter.to("cpu"), C_torch, rtol=1e-2, atol=1e-3)
 
 # ** copy buffers to AMD
 
