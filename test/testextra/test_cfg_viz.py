@@ -4,7 +4,7 @@ import textwrap
 from tinygrad import Device, Tensor
 from tinygrad.uop.ops import UOp, Ops, track_rewrites
 from tinygrad.renderer import ProgramSpec
-from tinygrad.helpers import TracingKey
+from tinygrad.helpers import TracingKey, getenv
 from tinygrad.engine.realize import ExecItem, CompiledRunner
 
 # TODO: use the RDNA3 renderer when it's in master
@@ -54,12 +54,13 @@ amdhsa.kernels:
 
 @track_rewrites(name=lambda *args,ret,**kwargs: TracingKey(ret.name, ret=ret))
 def run_asm(name:str, src:str) -> ProgramSpec:
-  prg = ProgramSpec(name, template.replace("fn_name", name).replace("INSTRUCTION", textwrap.dedent(src)), Device.DEFAULT, UOp(Ops.SINK))
+  prg = ProgramSpec(name, template.replace("fn_name", name).replace("INSTRUCTION", textwrap.dedent(src)), Device.DEFAULT, UOp(Ops.SINK),
+                    global_size=[1, 1, 1], local_size=[1, 1, 1], globals=[0])
   ei = ExecItem(UOp(Ops.SINK), [Tensor.empty(1).uop.buffer.ensure_allocated()], prg=CompiledRunner(prg))
   ei.run()
   return prg
 
-@unittest.skipUnless(Device.DEFAULT == "AMD", "only on AMD")
+@unittest.skipUnless(Device.DEFAULT == "AMD" and not getenv("AMD_LLVM"), "only on AMD with comgr")
 class TestCfg(unittest.TestCase):
   def setUp(self):
     arch = Device["AMD"].arch

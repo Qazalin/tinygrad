@@ -290,7 +290,6 @@ class CLikeArgsState(HCQArgsState[ProgramType]):
     super().__init__(buf, prg, bufs, vals=vals)
 
     if prefix is not None: self.buf.cpu_view().view(size=len(prefix) * 4, fmt='I')[:] = array.array('I', prefix)
-    print(vals, len(bufs), self.buf.size)
 
     self.bind_sints_to_buf(*[b.va_addr for b in bufs], buf=self.buf, fmt='Q', offset=len(prefix or []) * 4)
     self.bind_sints_to_buf(*vals, buf=self.buf, fmt='I', offset=len(prefix or []) * 4 + len(bufs) * 8)
