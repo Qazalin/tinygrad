@@ -410,7 +410,7 @@ def amdgpu_cfg(lib:bytes, arch:str) -> dict:
     else: assert curr is not None, f"no basic block found for {pc}"
     blocks[curr].append(pc)
     # control flow ends in endpgm
-    if asm == "s_endpgm": break
+    #if asm == "s_endpgm": break
     # otherwise a basic block can have exactly one or two paths
     nx = pc+sz
     if (offset:=parse_branch(asm)) is not None:
