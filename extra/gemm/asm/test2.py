@@ -39,9 +39,9 @@ def build_kernel_args(bufs):
   # bufs: [out, A, B]
   args = KernelArgs()
 
-  args.gemm_info = 1
+  args.gemm_info = 0
   args.kernel_info0 = 1
-  args.kernel_info1 = 1
+  args.kernel_info1 = 0
 
 # 256x256 tile => ceil(M/256)*ceil(N/256) for a single matrix
   args.numWG = ((N + 255) // 256) * ((N + 255) // 256)
@@ -95,7 +95,7 @@ extra, _blob_keep, _sz_keep = pack_kernel_args(args)
 
 prg = dev.runtime(name, lib)
 prg.vargs = extra
-et = prg(global_size=[262144//256, 1, 1], local_size=[256, 1, 1], wait=True)
+et = prg(global_size=[262144//128, 1, 1], local_size=[256, 1, 1], wait=True)
 print(f"gemm finished in {et*1e3:9.2f} ms")
 
 # ** correctness
