@@ -429,7 +429,7 @@ def get_render(i:int, j:int, fmt:str) -> dict:
   if fmt == "asm":
     ret:dict = {"metadata":[]}
     if data.device.startswith("AMD") and data.lib is not None:
-      arch = "gfx%d%x%x" % ((target:=unwrap(device_events[data.device].props)['gfx_target_version']) // 10000, (target // 100) % 100, target % 100)
+      arch = "gfx%d%x%x" % ((target:=unwrap(device_events[data.device].props)["gfx_target_version"]) // 10000, (target // 100) % 100, target % 100)
       with soft_err(lambda err: ret.update(err)):
         ret["data"] = amdgpu_cfg(lib:=data.lib, arch)
         with soft_err(lambda err: ret["metadata"].append(err)): ret["metadata"].append(amd_readelf(lib))
