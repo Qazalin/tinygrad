@@ -137,8 +137,10 @@ def option(s:int|None) -> int: return 0 if s is None else s+1
 
 # Profiler API
 
-device_ts_diffs:dict[str, tuple[Decimal, Decimal]] = {}
-def cpu_ts_diff(device:str, thread=0) -> Decimal: return device_ts_diffs.get(device, (Decimal(0),))[thread]
+device_events:dict[str, ProfileDeviceEvent] = {}
+def cpu_ts_diff(device:str, thread=0) -> Decimal:
+  if (e:=device_events.get(device)) is None: return Decimal(0)
+  return e.comp_tdiff if thread == 0 or e.copy_tdiff is None else e.copy_tdiff
 
 DevEvent = ProfileRangeEvent|ProfileGraphEntry|ProfilePointEvent
 def flatten_events(profile:list[ProfileEvent]) -> Generator[tuple[Decimal, Decimal, DevEvent], None, None]:
@@ -241,13 +243,11 @@ def load_counters(profile:list[ProfileEvent]) -> None:
   counter_events:dict[tuple[str, int], dict] = {}
   durations:dict[str, list[float]] = {}
   prg_events:dict[str, ProfileProgramEvent] = {}
-  dev_events:dict[str, ProfileDeviceEvent] = {}
   for e in profile:
     if isinstance(e, (ProfilePMCEvent, ProfileSQTTEvent)): counter_events.setdefault((e.kern, e.exec_tag), {}).setdefault(type(e), []).append(e)
     if isinstance(e, ProfileRangeEvent) and e.device.startswith("AMD") and e.en is not None:
       durations.setdefault(str(e.name), []).append(float(e.en-e.st))
     if isinstance(e, ProfileProgramEvent): prg_events[str(e.name)] = e
-    if isinstance(e, ProfileDeviceEvent): dev_events[e.device] = e
   if len(counter_events) == 0: return None
   ctxs.append({"name":"All Counters", "steps":[create_step("PMC", ("/all-pmc", len(ctxs), 0), (durations, all_counters:={}))]})
   run_number = {n:0 for n,_ in counter_events}
@@ -261,7 +261,7 @@ def load_counters(profile:list[ProfileEvent]) -> None:
       all_counters[(name, run_number[k], k)] = pmc[0]
     if (sqtt:=v.get(ProfileSQTTEvent)):
       # to decode a SQTT trace, we need the raw stream, program binary and device properties
-      steps.append(create_step("SQTT", ("/prg-sqtt", len(ctxs), len(steps)), ((k, tag), [*sqtt, prg_events[k], dev_events[sqtt[0].device]])))
+      steps.append(create_step("SQTT", ("/prg-sqtt", len(ctxs), len(steps)), ((k, tag), [*sqtt, prg_events[k], device_events[sqtt[0].device]])))
       if getenv("SQTT_PARSE"):
         # run our decoder on startup, we don't use this since it only works on gfx11
         from extra.sqtt.attempt_sqtt_parse import parse_sqtt_print_packets
@@ -308,7 +308,7 @@ def get_profile(profile:list[ProfileEvent], sort_fn:Callable[[str], Any]=device_
   device_decoders:dict[str, Callable[[list[ProfileEvent]], None]] = {}
   for ev in profile:
     if isinstance(ev, ProfileDeviceEvent):
-      device_ts_diffs[ev.device] = (ev.comp_tdiff,ev.copy_tdiff if ev.copy_tdiff is not None else ev.comp_tdiff)
+      device_events[ev.device] = ev
       if (d:=ev.device.split(":")[0]) == "AMD": device_decoders[d] = load_counters
   # load device specific counters
   for fxn in device_decoders.values(): fxn(profile)
@@ -427,13 +427,13 @@ def get_render(i:int, j:int, fmt:str) -> dict:
   if fmt == "uops": return {"src":get_stdout(lambda: print_uops(data.uops or [])), "lang":"txt"}
   if fmt == "code": return {"src":data.src, "lang":"cpp"}
   if fmt == "asm":
-    compiler = Device[data.device].compiler
     ret:dict = {"metadata":[]}
-    if data.device.startswith("AMD"):
+    if data.device.startswith("AMD") and data.lib is not None:
+      arch = "gfx%d%x%x" % ((target:=unwrap(device_events[data.device].props)['gfx_target_version']) // 10000, (target // 100) % 100, target % 100)
       with soft_err(lambda err: ret.update(err)):
-        ret["data"] = amdgpu_cfg(lib:=compiler.compile(data.src), getattr(compiler, "arch"))
+        ret["data"] = amdgpu_cfg(lib:=data.lib, arch)
         with soft_err(lambda err: ret["metadata"].append(err)): ret["metadata"].append(amd_readelf(lib))
-    else: ret["src"] = get_stdout(lambda: compiler.disassemble(compiler.compile(data.src)))
+    else: ret["src"] = get_stdout(lambda: (c:=Device[data.device].compiler).disassemble(c.compile(data.src)))
     return ret
   if fmt == "all-pmc":
     durations, pmc = data
