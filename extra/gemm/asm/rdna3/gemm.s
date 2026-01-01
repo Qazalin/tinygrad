@@ -1,5 +1,4 @@
 .set label_GW_End_2, label_KernelEnd
-.set label_ASM_End, label_Activation_None_VW1
 .set label_GSU_4, label_LoadExternalEpilogueStructEnd_1
 .set label_PrefetchGlobalLastIterEnd, label_toPGR1end_OrdNLL
 .set label_ActivationSetPCAddrEnd, label_GW_B0_E0
@@ -11,40 +10,40 @@
 .set label_BiasAddrValid_End, label_Load_Biasf32_0
 
 label_ASM_Start:
-// load only the 3 buffer pointers from kernargs base s[0:1]
-s_load_b64   s[28:29], s[0:1], 0x00   // C
-s_load_b64   s[34:35], s[0:1], 0x08   // A
-s_load_b64   s[32:33], s[0:1], 0x10   // B
-s_waitcnt    lgkmcnt(0)
+  // load only the 3 buffer pointers from kernargs base s[0:1]
+  s_load_b64   s[28:29], s[0:1], 0x00   // C
+  s_load_b64   s[34:35], s[0:1], 0x08   // A
+  s_load_b64   s[32:33], s[0:1], 0x10   // B
+  s_waitcnt    lgkmcnt(0)
 
-// hardcode the non-pointer args into the SAME regs the kernel already uses
+  // hardcode the non-pointer args into the SAME regs the kernel already uses
 
-// gemm_info / kernel_info / numWG
-s_mov_b32    s47, 0x00000001          // gemm_info
-s_mov_b32    s48, 0x00000000          // gemm_info >> 30 (gemm_info = 1)
-s_mov_b32    s49, 0x02200001          // kernel_info0
-s_mov_b32    s11, 0x0c010008          // kernel_info1
-s_mov_b32    s50, 1849              // numWG
+  // gemm_info / kernel_info / numWG
+  s_mov_b32    s47, 0x00000001          // gemm_info
+  s_mov_b32    s48, 0x00000000          // gemm_info >> 30 (gemm_info = 1)
+  s_mov_b32    s49, 0x02200001          // kernel_info0
+  s_mov_b32    s11, 0x0c010008          // kernel_info1
+  s_mov_b32    s50, 1849              // numWG
 
-// Sizes*
-s_mov_b32    s24, 4096                   // SizesFree0
-s_mov_b32    s25, s24                   // SizesFree1
-s_mov_b32    s26, 1                   // SizesFree2
-s_mov_b32    s27, s24                   // SizesSum0
+  // Sizes*
+  s_mov_b32    s24, 4096                   // SizesFree0
+  s_mov_b32    s25, s24                   // SizesFree1
+  s_mov_b32    s26, 1                   // SizesFree2
+  s_mov_b32    s27, s24                   // SizesSum0
 
-// strides
-s_mov_b32    s36, s24                   // strideD0
-s_mov_b32    s37, 0                   // strideD1
-s_mov_b32    s38, s24                   // strideC0
-s_mov_b32    s39, 0                   // strideC1
-s_mov_b32    s40, s24                   // strideA0
-s_mov_b32    s41, 0                   // strideA1
-s_mov_b32    s42, s24                   // strideB0
-s_mov_b32    s43, 0                   // strideB1
+  // strides
+  s_mov_b32    s36, s24                   // strideD0
+  s_mov_b32    s37, 0                   // strideD1
+  s_mov_b32    s38, s24                   // strideC0
+  s_mov_b32    s39, 0                   // strideC1
+  s_mov_b32    s40, s24                   // strideA0
+  s_mov_b32    s41, 0                   // strideA1
+  s_mov_b32    s42, s24                   // strideB0
+  s_mov_b32    s43, 0                   // strideB1
 
-// alpha / beta (float bit patterns)
-s_mov_b32    s44, 0x3f800000          // alpha = 1.0f
-s_mov_b32    s45, 0x00000000          // beta  = 0.0f
+  // alpha / beta (float bit patterns)
+  s_mov_b32    s44, 0x3f800000          // alpha = 1.0f
+  s_mov_b32    s45, 0x00000000          // beta  = 0.0f
 
 
 	s_and_b32 s10, s49, 0xffff0000                             // 00000017CF68: 8B0AFF31 FFFF0000
