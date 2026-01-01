@@ -3,8 +3,6 @@ import math, pathlib
 from tinygrad import Device, dtypes
 from tinygrad.uop.ops import UOp, Ops, KernelInfo
 
-from extra.assembly.amd.autogen.rdna3.ins import *
-
 from extra.gemm.amd_uop_matmul import test_matmul
 
 M = N = K = 4096
@@ -23,7 +21,7 @@ def asm_kernel() -> UOp:
   b = UOp.placeholder((N*N,), dtypes.half, slot=2)
   c = UOp.placeholder((N*N,), dtypes.half, slot=0)
 
-  src = (pathlib.Path(__file__).parent/"template.s").read_text().replace("INSTRUCTIONS", (pathlib.Path(__file__).parent/"gemm.s").read_text())
+  src = template.replace("INSTRUCTIONS", (pathlib.Path(__file__).parent/"gemm.s").read_text())
 
   sink = UOp.sink(a, b, c, lidx, gidx, arg=KernelInfo(name="gemm"))
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src)))
