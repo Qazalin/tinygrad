@@ -1,9 +1,6 @@
-.set label_GW_End_2, label_KernelEnd
 .set label_GSU_4, label_LoadExternalEpilogueStructEnd_1
-.set label_PrefetchGlobalLastIterEnd, label_toPGR1end_OrdNLL
 .set label_ActivationSetPCAddrEnd, label_GW_B0_E0
 .set label_SkipTailLoopL, label_TailLoopEndL
-.set label_Summation_End_9D1UR0E1HFDO5QNC, label_TailLoopEndL
 .set label_MultiGemmEnd, label_NoEarlyStop_wgExceed
 .set label_Bias_1AddrValid_End, label_Load_Biasf32_0_1
 .set label_GSU_3, label_OptNLL_End
@@ -57,9 +54,6 @@ label_ASM_Start:
 	s_ctz_i32_b32 s56, s56                                     // 00000017CF94: BEB80838
 	s_lshr_b32 s57, s11, 22                                    // 00000017CF98: 8539960B
 	s_cmp_gt_i32 s56, 0                                        // 00000017CF9C: BF028038
-	s_cbranch_scc0 label_skip_WGMXCC                           // 00000017CFA0: BFA10046
-
-label_skip_WGMXCC:
 	v_and_b32_e32 v1, 31, v254                                 // 00000017D0C4: 3603FC9F
 	v_and_b32_e32 v0, 15, v1                                   // 00000017D0C8: 3600028F
 	v_lshrrev_b32_e32 v4, 5, v254                              // 00000017D0CC: 3209FC85
@@ -6940,7 +6934,7 @@ label_GW_B0_E0_2:
 	v_cvt_f16_f32_e32 v97, v97                                 // 000000186528: 7EC21561
 	buffer_store_b16 v97, v79, s[16:19], 0 offen offset:128    // 00000018652C: E0640080 8044614F
 	s_nop 0                                                    // 000000186534: BF800000
-	s_branch label_GW_End_2                                    // 000000186538: BFA015B2
+	s_branch label_KernelEnd                                    // 000000186538: BFA015B2
 
 label_GW_B0_E1_1:
 	v_mov_b32_e32 v78, 0x80000000                              // 00000018653C: 7E9C02FF 80000000
@@ -8215,7 +8209,7 @@ label_GW_B0_E1_1:
 	v_cvt_f16_f32_e32 v82, v82                                 // 000000188314: 7EA41552
 	buffer_store_b16 v82, v95, s[16:19], 0 offen               // 000000188318: E0640000 8044525F
 	s_nop 0                                                    // 000000188320: BF800000
-	s_branch label_GW_End_2                                    // 000000188324: BFA00E37
+	s_branch label_KernelEnd                                    // 000000188324: BFA00E37
 
 label_GW_Beta_2:
 	s_mov_b32 s35, 0                                           // 000000188328: BEA30080
@@ -9129,7 +9123,7 @@ label_GW_B1_E0:
 	v_cvt_f16_f32_e32 v111, v111                               // 000000189504: 7EDE156F
 	buffer_store_b16 v111, v79, s[16:19], 0 offen offset:128   // 000000189508: E0640080 80446F4F
 	s_nop 0                                                    // 000000189510: BF800000
-	s_branch label_GW_End_2                                    // 000000189514: BFA009BB
+	s_branch label_KernelEnd                                    // 000000189514: BFA009BB
 
 label_GW_B1_E1:
 	v_mov_b32_e32 v78, 0x80000000                              // 000000189518: 7E9C02FF 80000000
@@ -10692,7 +10686,7 @@ label_GW_B1_E1:
 	v_cvt_f16_f32_e32 v94, v94                                 // 00000018BBF0: 7EBC155E
 	buffer_store_b16 v94, v147, s[16:19], 0 offen              // 00000018BBF4: E0640000 80445E93
 	s_nop 0                                                    // 00000018BBFC: BF800000
-	s_branch label_GW_End_2                                    // 00000018BC00: BFA00000
+	s_branch label_KernelEnd                                    // 00000018BC00: BFA00000
 
 label_KernelEnd:
 	s_endpgm                                                   // 00000018BC04: BFB00000
