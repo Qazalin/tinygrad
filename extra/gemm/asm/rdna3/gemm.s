@@ -10700,34 +10700,4 @@ label_KernelEnd:
 
 label_Activation_None_VW1:
 	s_setpc_b64 s[30:31]                                       // 00000018BC08: BE80481E
-
-label_Activation_Gelu_VW1:
-	v_mul_f32_e32 v77, 0x3d372713, v76                         // 00000018BC0C: 109A98FF 3D372713
-	v_fma_f32 v77, v76, v77, 1.0                               // 00000018BC14: D613004D 03CA9B4C
-	v_mul_f32_e32 v77, v76, v77                                // 00000018BC1C: 109A9B4C
-	v_mul_f32_e32 v77, 0x40135761, v77                         // 00000018BC20: 109A9AFF 40135761
-	v_exp_f32_e32 v77, v77                                     // 00000018BC28: 7E9A4B4D
-	v_add_f32_e32 v77, 1.0, v77                                // 00000018BC2C: 069A9AF2
-	v_rcp_f32_e32 v77, v77                                     // 00000018BC30: 7E9A554D
-	v_fma_f32 v77, -2.0, v77, 2.0                              // 00000018BC34: D613004D 03D29AF5
-	v_mul_f32_e32 v77, v76, v77                                // 00000018BC3C: 109A9B4C
-	v_mul_f32_e32 v76, 0.5, v77                                // 00000018BC40: 10989AF0
-	s_setpc_b64 s[30:31]                                       // 00000018BC44: BE80481E
-
-label_Activation_Relu_VW1:
-	v_max_f32_e64 v76, v76, 0                                  // 00000018BC48: D510004C 0001014C
-	s_setpc_b64 s[30:31]                                       // 00000018BC50: BE80481E
-
-label_Activation_Silu_VW1:
-	v_mul_f32_e32 v77, 0xbfb8aa3b, v76                         // 00000018BC54: 109A98FF BFB8AA3B
-	v_exp_f32_e32 v77, v77                                     // 00000018BC5C: 7E9A4B4D
-	v_add_f32_e32 v77, 1.0, v77                                // 00000018BC60: 069A9AF2
-	v_rcp_f32_e32 v77, v77                                     // 00000018BC64: 7E9A554D
-	v_mul_f32_e32 v76, v76, v77                                // 00000018BC68: 10989B4C
-	s_setpc_b64 s[30:31]                                       // 00000018BC6C: BE80481E
-
-label_Activation_Clamp_VW1:
-	v_min_f32_e32 v76, s55, v76                                // 00000018BC70: 1E989837
-	v_max_f32_e32 v76, s54, v76                                // 00000018BC74: 20989836
-	s_setpc_b64 s[30:31]                                       // 00000018BC78: BE80481E
 	s_endpgm                                                   // 00000018BC7C: BFB00000
