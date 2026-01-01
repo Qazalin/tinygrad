@@ -5,8 +5,6 @@ from tinygrad.uop.ops import UOp, Ops, KernelInfo
 
 from extra.gemm.amd_uop_matmul import test_matmul
 
-from tinygrad.helpers import getenv
-
 M = N = K = 4096
 TM = TN = 96
 THREADS_PER_WG = 128
@@ -23,10 +21,7 @@ def asm_kernel() -> UOp:
   b = UOp.placeholder((N*N,), dtypes.half, slot=2)
   c = UOp.placeholder((N*N,), dtypes.half, slot=0)
 
-  if getenv("DSL"):
-    from extra.gemm.asm.rdna3.gemm import asm
-    src = "\n".join([s if isinstance(s, str) else s.disasm() for s in asm])
-  else: src = (pathlib.Path(__file__).parent/"gemm.s").read_text()
+  src = (pathlib.Path(__file__).parent/"gemm.s").read_text()
   src = template.replace("INSTRUCTIONS", src)
 
   sink = UOp.sink(a, b, c, lidx, gidx, arg=KernelInfo(name="gemm"))
