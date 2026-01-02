@@ -163,10 +163,14 @@ def test_matmul(sink:UOp, dtype=dtypes.float32, N=N):
       print(hc.numpy())
       print(tc.numpy())
     with Context(DEBUG=0):
+      np.testing.assert_allclose(hc.numpy(), tc.numpy())
+    """
+    with Context(DEBUG=0):
       err = (hc - tc).square().mean().item()
     print(f"mean squared error {err}")
     if err > 1e-06:
       raise RuntimeError("matmul is wrong!")
+    """
 
 if __name__ == "__main__":
   test_matmul(hand_spec_kernel3(), N=N)

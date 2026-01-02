@@ -22912,7 +22912,6 @@ v_add_f32_e32 v76, v138, v82
 v_mov_b32_e32 v82, v76
 v_cvt_f16_f32_e32 v82, v82
 buffer_store_b16 v82, v79, s[16:19], 0 offen
-s_endpgm
 s_waitcnt lgkmcnt(2)
 v_mul_f32_e32 v83, v141, v83
 v_add_f32_e32 v76, v140, v83
@@ -22925,6 +22924,7 @@ v_add_f32_e32 v76, v142, v84
 v_mov_b32_e32 v84, v76
 v_cvt_f16_f32_e32 v84, v84
 buffer_store_b16 v84, v79, s[16:19], 0 offen offset:128
+s_endpgm
 v_mul_f32_e32 v85, v139, v85
 v_add_f32_e32 v76, v138, v85
 v_mov_b32_e32 v85, v76
