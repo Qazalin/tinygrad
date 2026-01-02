@@ -9,7 +9,7 @@ from extra.assembly.amd.autogen.rdna3.enum import (VOP1Op, VOP2Op, VOP3Op, VOP3S
   SOPCOp, SOPKOp, SOPPOp, SMEMOp, DSOp, FLATOp, MUBUFOp, MTBUFOp, MIMGOp, VINTERPOp)
 
 # Common masks and bit conversion functions
-MASK32, MASK64 = 0xffffffff, 0xffffffffffffffff
+MASK32, MASK64, MASK128 = 0xffffffff, 0xffffffffffffffff, (1 << 128) - 1
 _struct_f, _struct_I = struct.Struct("<f"), struct.Struct("<I")
 _struct_e, _struct_H = struct.Struct("<e"), struct.Struct("<H")
 _struct_d, _struct_Q = struct.Struct("<d"), struct.Struct("<Q")
@@ -429,7 +429,7 @@ class Inst:
     return result + (lit32 & MASK32).to_bytes(4, 'little')
 
   @classmethod
-  def _size(cls) -> int: return 4 if issubclass(cls, Inst32) else 8
+  def _size(cls) -> int: return 4 if issubclass(cls, Inst32) else 12 if issubclass(cls, Inst96) else 8
   def size(self) -> int:
     # Literal is always 4 bytes in the binary (for 64-bit ops, it's in high 32 bits)
     return self._size() + (4 if self._literal is not None else 0)
@@ -531,3 +531,4 @@ class Inst:
 
 class Inst32(Inst): pass
 class Inst64(Inst): pass
+class Inst96(Inst): pass
