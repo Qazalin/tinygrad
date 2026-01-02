@@ -465,7 +465,7 @@ def get_render(query:str) -> dict:
     return {**ret, "steps":[{k:v for k,v in s.items() if k != "data"} for s in steps[j+1:]]}
   if fmt == "cu-sqtt": return {"value":get_profile(data, sort_fn=row_tuple), "content_type":"application/octet-stream"}
   if fmt == "sqtt-insts":
-    columns = ["PC", "Instruction", "Hits", "Cycles", "Stall", "Type", "Addr"]
+    columns = ["PC", "Instruction", "Hits", "Addr"]
     inst_columns = ["N", "Clk", "Idle", "Dur", "Stall"]
     # Idle:     The total time gap between the completion of previous instruction and the beginning of the current instruction.
     #           The idle time can be caused by:
@@ -481,12 +481,14 @@ def get_render(query:str) -> dict:
     for e in w.unpack_insts():
       if start_pc is None: start_pc = e.pc
       if (inst:=rows.get(e.pc)) is None:
-        rows[e.pc] = inst = {"pc":e.pc-start_pc, "inst":pc_to_inst[e.pc][0], "hit_count":0, "dur":0, "stall":0, "type":str(e.typ).split("_")[-1],
+        rows[e.pc] = inst = {"pc":e.pc-start_pc, "inst":pc_to_inst[e.pc][0], "hit_count":0, # "dur":0, "stall":0, "type":str(e.typ).split("_")[-1],
                              "addr":f"{(elf_addr+e.pc-start_pc):012X}", "hits":{"cols":inst_columns, "rows":[]}}
       inst["hit_count"] += 1
+      """
       inst["dur"] += e.dur
       inst["stall"] += e.stall
       inst["hits"]["rows"].append((inst["hit_count"]-1, e.time, max(0, e.time-prev_instr), e.dur, e.stall))
+      """
       prev_instr = max(prev_instr, e.time + e.dur)
     summary = [{"label":"Total Cycles", "value":w.end_time-w.begin_time}, {"label":"SE", "value":w.se}, {"label":"CU", "value":w.cu},
                {"label":"SIMD", "value":w.simd}, {"label":"Wave ID", "value":w.wave_id}, {"label":"Run number", "value":data["run_number"]}]
