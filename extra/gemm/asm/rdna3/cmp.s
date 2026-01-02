@@ -22913,6 +22913,7 @@ v_mov_b32_e32 v82, v76
 v_cvt_f16_f32_e32 v82, v82
 v_mov_b32 v82 0x3C003C00
 buffer_store_b16 v82, v79, s[16:19], 0 offen
+s_endpgm
 s_waitcnt lgkmcnt(2)
 v_mul_f32_e32 v83, v141, v83
 v_add_f32_e32 v76, v140, v83

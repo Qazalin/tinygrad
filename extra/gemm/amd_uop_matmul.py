@@ -144,7 +144,7 @@ def test_matmul(sink:UOp, dtype=dtypes.float32, N=N):
   rng = np.random.default_rng()
   a = Tensor(rng.random((N, N), dtype=np.float32)-0.5, dtype=dtype)
   b = Tensor(rng.random((N, N), dtype=np.float32)-0.5, dtype=dtype)
-  hc = Tensor.empty_like(a)
+  hc = Tensor(np.zeros((N, N)), dtype=dtype)
   Tensor.realize(a, b, hc)
 
   ei = ExecItem(sink, [t.uop.buffer for t in [hc, a, b]], prg=get_runner(Device.DEFAULT, sink))
