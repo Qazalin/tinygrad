@@ -16,19 +16,16 @@ for e in profile:
   if isinstance(e, ProfileProgramEvent) and e.name == "gemm": p = e
   if isinstance(e, ProfileSQTTEvent) and e.kern == "gemm": sqtt.append(e)
 
-"""
 base = unwrap(p.base)
 disasm = {addr+base:inst_disasm for addr,inst_disasm in llvm_disasm(device_props[p.device]["gfx_target_version"], unwrap(p.lib)).items()}
 r = decode(sqtt, {p.name:disasm})
 inst = r.inst_execs[('gemm', 1)]
 insts = list(inst[0].unpack_insts())
-print(len(insts))
-print(p.base)
-"""
 
-from tinygrad.runtime.support.elf import elf_loader
-_, sections, __ = elf_loader(p.lib)
-text_entry = next((sh.header.sh_addr for sh in sections if sh.name == ".text"))
-print(f"{text_entry:08X}")
+lines:list[str] = []
+for i in insts:
+  asm = disasm[i.pc][0]
+  if "branch" in asm or "pc" in asm: continue
+  lines.append(asm)
 
-#with open("/tmp/test", "wb") as f: f.write(p.lib)
+with open("/tmp/cmp.s", "w") as f: f.write("\n".join(lines))
