@@ -625,10 +625,8 @@ label_ShadowInitStart:
 	ds_load_b128 v[193:196], v81 offset:2576                   // 000000002250: DBFC0A10 C1000051
 	ds_load_b128 v[197:200], v81 offset:5120                   // 000000002258: DBFC1400 C5000051
 	ds_load_b128 v[201:204], v81 offset:5136                   // 000000002260: DBFC1410 C9000051
-	s_cmp_eq_u32 s12, 1                                        // 000000002268: BF06810C
-	s_cbranch_scc1 label_toPGR1                                // 00000000226C: BFA2026D
 
-label_LoopBeginL:
+loop_n1:
 	s_waitcnt lgkmcnt(4)                                       // 000000002278: BF89FC47
 	v_wmma_f32_16x16x16_f16 v[0:7], v[181:188], v[84:91], v[0:7]// 00000000227C: CC404000 1C02A9B5
 	ds_load_u16 v108, v80 offset:3104                          // 000000002284: D8F00C20 6C000050
@@ -803,7 +801,7 @@ label_LoopBeginL:
 	v_wmma_f32_16x16x16_f16 v[64:71], v[221:228], v[124:131], v[64:71]// 000000002758: CC404040 1D02F9DD
 	s_sub_u32 s12, s12, 1                                      // 000000002760: 808C810C
 	s_cmp_eq_i32 s12, 2                                        // 000000002764: BF00820C
-	s_cbranch_scc0 label_LoopBeginL                            // 000000002768: BFA1FEC3
+	s_cbranch_scc0 loop_n1                            // 000000002768: BFA1FEC3
 
 label_LoopEndL:
 	s_waitcnt lgkmcnt(4)                                       // 00000000276C: BF89FC47
