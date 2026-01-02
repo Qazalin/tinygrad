@@ -3,7 +3,6 @@
 .set label_SkipTailLoopL, label_TailLoopEndL
 .set label_Bias_1AddrValid_End, label_Load_Biasf32_0_1
 .set label_GSU_3, label_OptNLL_End
-.set label_BiasAddrValid_End, label_Load_Biasf32_0
 
 label_ASM_Start:
   // load only the 3 buffer pointers from kernargs base s[0:1]
@@ -1163,15 +1162,7 @@ label_LoadExternalEpilogueStructEnd:
 	s_waitcnt lgkmcnt(0)                                       // 00000017F2C8: BF89FC07
 	s_mov_b64 s[32:33], s[48:49]                               // 00000017F2CC: BEA00130
 	s_mov_b32 s35, 0x31004000                                  // 00000017F2D0: BEA300FF 31004000
-	s_cmp_eq_u64 s[48:49], 0                                   // 00000017F2D8: BF108030
-	s_cbranch_scc0 label_ScaleAlphaVecAddrValid                // 00000017F2DC: BFA10002
 	s_mov_b32 s34, 0                                           // 00000017F2E0: BEA20080
-	s_branch label_ScaleAlphaVecAddrValid_End                  // 00000017F2E4: BFA00001
-
-label_ScaleAlphaVecAddrValid:
-	s_mov_b32 s34, s24                                         // 00000017F2E8: BEA20018
-
-label_ScaleAlphaVecAddrValid_End:
 	s_mul_i32 s34, 4, s34                                      // 00000017F2EC: 96222284
 	s_add_u32 s8, s4, 1                                        // 00000017F2F0: 80088104
 	s_mul_i32 s8, s53, s8                                      // 00000017F2F4: 96080835
@@ -1179,15 +1170,7 @@ label_ScaleAlphaVecAddrValid_End:
 	s_cselect_b32 s8, s24, s8                                  // 00000017F2FC: 98080818
 	s_mov_b64 s[40:41], s[50:51]                               // 00000017F300: BEA80132
 	s_mov_b32 s43, 0x31004000                                  // 00000017F304: BEAB00FF 31004000
-	s_cmp_eq_u64 s[50:51], 0                                   // 00000017F30C: BF108032
-	s_cbranch_scc0 label_BiasAddrValid                         // 00000017F310: BFA10002
 	s_mov_b32 s42, 0                                           // 00000017F314: BEAA0080
-	s_branch label_BiasAddrValid_End                           // 00000017F318: BFA00001
-
-label_BiasAddrValid:
-	s_mov_b32 s42, s8                                          // 00000017F31C: BEAA0008
-
-label_Load_Biasf32_0:
 	s_mul_i32 s8, 0x60, s2                                     // 00000017F328: 960802FF 00000060
 	v_add_nc_u32_e32 v80, s8, v254                             // 00000017F330: 4AA1FC08
 	s_mul_i32 s42, 4, s42                                      // 00000017F334: 962A2A84
@@ -1208,17 +1191,6 @@ label_Load_Biasf32_0:
 	v_cndmask_b32_e64 v77, 1.0, v77, s48                       // 00000017F384: D501004D 00C29AF2
 	ds_store_b32 v80, v77 offset:512                           // 00000017F38C: D8340200 00004D50
 
-label_Load_Bias_End:
-	s_cmpk_eq_u32 s56, 0x3                                     // 00000017F414: B4B80003
-	s_cbranch_scc1 label_To_Activation_Gelu_VW1                // 00000017F418: BFA2000C
-	s_cmpk_eq_u32 s56, 0x5                                     // 00000017F41C: B4B80005
-	s_cbranch_scc1 label_To_Activation_Relu_VW1                // 00000017F420: BFA20010
-	s_cmpk_eq_u32 s56, 0xa                                     // 00000017F424: B4B8000A
-	s_cbranch_scc1 label_To_Activation_Silu_VW1                // 00000017F428: BFA20014
-	s_cmpk_eq_u32 s56, 0xc                                     // 00000017F42C: B4B8000C
-	s_cbranch_scc1 label_To_Activation_Clamp_VW1               // 00000017F430: BFA20018
-
-label_To_Activation_None_VW1:
 	s_getpc_b64 s[12:13]                                       // 00000017F434: BE8C4700
 	s_add_i32 s8, 0xc7cc, 4                                    // 00000017F438: 810884FF 0000C7CC
 	s_add_u32 s12, s12, s8                                     // 00000017F440: 800C080C
