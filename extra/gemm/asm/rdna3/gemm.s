@@ -1,7 +1,6 @@
 .set label_GSU_4, label_LoadExternalEpilogueStructEnd_1
 .set label_ActivationSetPCAddrEnd, label_GW_B0_E0
 .set label_SkipTailLoopL, label_TailLoopEndL
-.set label_MultiGemmEnd, label_NoEarlyStop_wgExceed
 .set label_Bias_1AddrValid_End, label_Load_Biasf32_0_1
 .set label_GSU_3, label_OptNLL_End
 .set label_BiasAddrValid_End, label_Load_Biasf32_0
@@ -173,33 +172,19 @@ label_ASM_Start:
 	s_mov_b32 s3, s48                                          // 00000017D338: BE830030
 	s_mul_i32 s48, s3, s14                                     // 00000017D33C: 96300E03
 	s_sub_u32 s2, s2, s48                                      // 00000017D340: 80823002
-	s_branch label_MultiGemmEnd                                // 00000017D344: BFA0011B
 
 label_NoEarlyStop_wgExceed:
 	s_sub_u32 s32, s32, 16                                     // 00000017D7B4: 80A09020
 	s_subb_u32 s33, s33, 0                                     // 00000017D7B8: 82A18021
 	s_sub_u32 s34, s34, 16                                     // 00000017D7BC: 80A29022
 	s_subb_u32 s35, s35, 0                                     // 00000017D7C0: 82A38023
-	v_cmp_eq_f32_e64 vcc_lo, s44, 0                            // 00000017D7C4: D412006A 0001002C
-	s_cbranch_vccz label_AlphaNonZero                          // 00000017D7CC: BFA30001
-	s_mov_b32 s27, 0                                           // 00000017D7D0: BE9B0080
 
-label_AlphaNonZero:
-	s_and_b32 s66, s46, 0x3fff                                 // 00000017D7D4: 8B42FF2E 00003FFF
-	s_cmp_eq_u32 s66, 1                                        // 00000017D7DC: BF068142
-	s_cbranch_scc1 label_GSU                                   // 00000017D7E0: BFA2003B
-
-label_GSU:
 	s_mov_b64 s[6:7], 0                                        // 00000017D8D0: BE860180
 	s_mov_b32 s8, 1                                            // 00000017D8D4: BE880081
 	s_mov_b32 s9, 1                                            // 00000017D8D8: BE890081
 
-label_GSU_End:
 	s_sext_i32_i16 s11, s11                                    // 00000017D8DC: BE8B0F0B
-	s_cmp_gt_i32 s11, 1                                        // 00000017D8E0: BF02810B
-	s_cbranch_scc1 label_WGMPositive                           // 00000017D8E4: BFA20053
 
-label_WGMPositive:
 	s_mov_b32 s11, s11                                         // 00000017DA34: BE8B000B
 	v_cvt_f32_u32_e32 v6, s11                                  // 00000017DA38: 7E0C0C0B
 	v_rcp_iflag_f32_e32 v6, v6                                 // 00000017DA3C: 7E0C5706
@@ -268,7 +253,6 @@ label_WGMPositive:
 	s_mul_i32 s68, s68, s11                                    // 00000017DB6C: 96440B44
 	s_add_u32 s3, s3, s68                                      // 00000017DB70: 80034403
 
-label_WGM:
 	v_mov_b32_e32 v6, v0                                       // 00000017DB74: 7E0C0300
 	v_add_co_u32 v7, vcc_lo, 32, v6                            // 00000017DB78: D7006A07 00020CA0
 	v_add_co_u32 v8, vcc_lo, 32, v7                            // 00000017DB80: D7006A08 00020EA0
@@ -10689,6 +10673,7 @@ label_GW_B1_E1:
 	s_branch label_KernelEnd                                    // 00000018BC00: BFA00000
 
 label_KernelEnd:
+end:
 	s_endpgm                                                   // 00000018BC04: BFB00000
 
 label_Activation_None_VW1:
