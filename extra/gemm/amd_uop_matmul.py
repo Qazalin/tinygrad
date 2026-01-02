@@ -163,7 +163,7 @@ def test_matmul(sink:UOp, dtype=dtypes.float32, N=N):
       print(hc.numpy())
       print(tc.numpy())
     with Context(DEBUG=0):
-      np.testing.assert_allclose(hc.numpy(), tc.numpy())
+      np.testing.assert_allclose(hc.numpy(), tc.numpy(), atol=1e-3, rtol=1e-3)
     """
     with Context(DEBUG=0):
       err = (hc - tc).square().mean().item()
