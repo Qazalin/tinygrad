@@ -22924,7 +22924,6 @@ v_add_f32_e32 v76, v142, v84
 v_mov_b32_e32 v84, v76
 v_cvt_f16_f32_e32 v84, v84
 buffer_store_b16 v84, v79, s[16:19], 0 offen offset:128
-s_endpgm
 v_mul_f32_e32 v85, v139, v85
 v_add_f32_e32 v76, v138, v85
 v_mov_b32_e32 v85, v76
@@ -23194,6 +23193,7 @@ v_mul_f32_e32 v129, v143, v129
 v_add_f32_e32 v76, v142, v129
 v_mov_b32_e32 v129, v76
 v_cvt_f16_f32_e64 v129, v129
+s_endpgm
 buffer_store_b16 v129, v79, s[16:19], 0 offen offset:128
 v_mul_f32_e32 v130, v139, v130
 v_add_f32_e32 v76, v138, v130
