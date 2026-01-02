@@ -22,10 +22,19 @@ r = decode(sqtt, {p.name:disasm})
 inst = r.inst_execs[('gemm', 1)]
 insts = list(inst[0].unpack_insts())
 
-lines:list[str] = []
-for i in insts:
-  asm = disasm[i.pc][0]
-  if "branch" in asm or "pc" in asm: continue
-  lines.append(asm)
+from tinygrad.runtime.support.elf import elf_loader
+_, sections, __ = elf_loader(p.lib)
+elf_addr = next((sh.header.sh_addr for sh in sections if sh.name == ".text"))
 
-with open("/tmp/cmp.s", "w") as f: f.write("\n".join(lines))
+lines:list[str] = []
+start_pc = None
+for i in insts:
+  if start_pc is None: start_pc = i.pc
+  asm = disasm[i.pc][0]
+  if "branch" in asm or "pc" in asm:
+    lines.append(f"// {asm}")
+    continue
+  addr = elf_addr+i.pc-start_pc
+  lines.append(f"{asm} // {addr:012X}")
+
+with open("./extra/gemm/asm/rdna3/cmp.s", "w") as f: f.write("\n".join(lines))
