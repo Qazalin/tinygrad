@@ -553,14 +553,6 @@ label_ShadowInitStart:
 	v_mov_b32_e32 v70, 0                                       // 000000002008: 7E8C0280
 	v_mov_b32_e32 v71, 0                                       // 00000000200C: 7E8E0280
 	s_cmp_eq_u32 s12, 0                                        // 000000002010: BF06800C
-	s_cbranch_scc0 label_NoBranch_2N9UHJ18GAG2UJZG             // 000000002014: BFA10006
-	s_getpc_b64 s[66:67]                                       // 000000002018: BEC24700
-	s_add_i32 s68, 0x1ec0, 4                                   // 00000000201C: 814484FF 00001EC0
-	s_add_u32 s66, s66, s68                                    // 000000002024: 80424442
-	s_addc_u32 s67, s67, 0                                     // 000000002028: 82438043
-	s_setpc_b64 s[66:67]                                       // 00000000202C: BE804842
-
-label_NoBranch_2N9UHJ18GAG2UJZG:
 	s_waitcnt vmcnt(0)                                         // 000000002030: BF8903F7
 	ds_store_b128 v78, v[230:233]                              // 000000002034: DB7C0000 0000E64E
 	ds_store_b128 v78, v[234:237] offset:64                    // 00000000203C: DB7C0040 0000EA4E
@@ -570,16 +562,12 @@ label_NoBranch_2N9UHJ18GAG2UJZG:
 	ds_store_b128 v79, v[250:253] offset:5120                  // 00000000205C: DB7C1400 0000FA4F
 	v_xor_b32_e32 v78, 0x4000, v78                             // 000000002064: 3A9C9CFF 00004000
 	v_xor_b32_e32 v79, 0x4000, v79                             // 00000000206C: 3A9E9EFF 00004000
-	s_cmp_eq_u32 s12, 1                                        // 000000002074: BF06810C
-	s_cbranch_scc1 label_skipPGR2                              // 000000002078: BFA2000C
 	buffer_load_b128 v[230:233], v72, s[48:51], 0 offen        // 00000000207C: E05C0000 804CE648
 	buffer_load_b128 v[234:237], v73, s[48:51], 0 offen        // 000000002084: E05C0000 804CEA49
 	buffer_load_b128 v[238:241], v74, s[48:51], 0 offen        // 00000000208C: E05C0000 804CEE4A
 	buffer_load_b128 v[242:245], v75, s[52:55], 0 offen        // 000000002094: E05C0000 804DF24B
 	buffer_load_b128 v[246:249], v76, s[52:55], 0 offen        // 00000000209C: E05C0000 804DF64C
 	buffer_load_b128 v[250:253], v77, s[52:55], 0 offen        // 0000000020A4: E05C0000 804DFA4D
-
-label_skipPGR2:
 	s_waitcnt lgkmcnt(0)                                       // 0000000020AC: BF89FC07
 	s_waitcnt lgkmcnt(0)                                       // 0000000020B0: BF89FC07
 	s_barrier                                                  // 0000000020B4: BFBD0000
@@ -637,12 +625,8 @@ label_skipPGR2:
 	ds_load_b128 v[193:196], v81 offset:2576                   // 000000002250: DBFC0A10 C1000051
 	ds_load_b128 v[197:200], v81 offset:5120                   // 000000002258: DBFC1400 C5000051
 	ds_load_b128 v[201:204], v81 offset:5136                   // 000000002260: DBFC1410 C9000051
-
-label_openLoopL:
 	s_cmp_eq_u32 s12, 1                                        // 000000002268: BF06810C
 	s_cbranch_scc1 label_toPGR1                                // 00000000226C: BFA2026D
-	s_cmp_le_u32 s12, 2                                        // 000000002270: BF0B820C
-	s_cbranch_scc1 label_LoopEndL                              // 000000002274: BFA2013D
 
 label_LoopBeginL:
 	s_waitcnt lgkmcnt(4)                                       // 000000002278: BF89FC47

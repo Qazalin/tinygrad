@@ -17,26 +17,26 @@ pcs = {**pc_map}
 #with open("./extra/gemm/asm/rdna3/trace2.s", "r") as f: src = f.read()
 
 hits = {}
-srcs = {}
 for i,(asm,pc) in enumerate(code):
-  if "branch" in asm:
-    next_asm, next_pc = code[i+1]
-    hits[next_pc] = hits.get(next_pc, 0)+1
-    srcs.setdefault(next_pc, []).append(pc)
+  hits[pc] = hits.get(pc, 0)+1
 
-DONT_REMOVE = set()
+new_lines:list[str] = []
+curr = None
+cnt = 0
 for k,v in hits.items():
-  ss = set(srcs[k])
-  if v > 1:
-    print(PC(k), pc_map[k], v)
-    for s in ss: DONT_REMOVE.add(s)
+  asm = pc_map[k]
+  if v == 1:
+    if "branch" in asm:
+      new_lines.append(f"  // {asm}")
+      continue
+    new_lines.append(f"  {asm} // {k:012X}")
+    continue
+  if curr is None:
+    cnt += 1
+    new_lines.append(f"\nloop_n{cnt}:")
+    curr = k
+  if "branch" in asm: curr = None
+  print(f"  {asm} // {k:012X} hits={v}")
+  new_lines.append(f"  {asm} // {k:012X}")
 
-for ss in srcs.values():
-  for s in ss:
-    if s not in DONT_REMOVE:
-      del pcs[s]
-
-new_lines = []
-for addr,asm in pcs.items():
-  new_lines.append(f"{asm} // {addr:012X}")
-with open("./extra/gemm/asm/rdna3/trace2.s", "w") as f: f.write("\n".join(new_lines))
+#with open("./extra/gemm/asm/rdna3/trace2.s", "w") as f: f.write("\n".join(new_lines))
