@@ -1,9 +1,3 @@
-.set label_GSU_4, label_LoadExternalEpilogueStructEnd_1
-.set label_ActivationSetPCAddrEnd, label_GW_B0_E0
-.set label_SkipTailLoopL, label_TailLoopEndL
-.set label_Bias_1AddrValid_End, label_Load_Biasf32_0_1
-.set label_GSU_3, label_OptNLL_End
-
 label_ASM_Start:
   // load only the 3 buffer pointers from kernargs base s[0:1]
   s_load_b64   s[28:29], s[0:1], 0x00   // C
@@ -1129,7 +1123,6 @@ label_toPGR1:
 	v_wmma_f32_16x16x16_f16 v[56:63], v[221:228], v[116:123], v[56:63]// 00000017F21C: CC404038 1CE2E9DD
 	v_wmma_f32_16x16x16_f16 v[64:71], v[221:228], v[124:131], v[64:71]// 00000017F224: CC404040 1D02F9DD
 
-label_toPGR1end_OptNLL:
 	s_cmp_eq_u32 s5, 2                                         // 00000017F22C: BF068205
 	s_cbranch_scc1 label_LoadExternalEpilogueStruct            // 00000017F230: BFA20005
 	s_load_b256 s[48:55], s[0:1], 0x58                         // 00000017F234: F40C0C00 F8000058
@@ -1225,7 +1218,7 @@ label_To_Activation_Clamp_VW1:
 	s_addc_u32 s13, s13, 0                                     // 00000017F4A4: 820D800D
 	s_branch label_ActivationSetPCAddrEnd                      // 00000017F4A8: BFA00000
 
-label_GW_B0_E0:
+label_ActivationSetPCAddrEnd:
 	s_mul_i32 s8, 0x60, s2                                     // 00000017F4AC: 960802FF 00000060
 	v_sub_nc_u32_e64 v81, v72, s8                              // 00000017F4B4: D5260051 00001148
 	v_lshlrev_b32_e32 v81, 2, v81                              // 00000017F4BC: 30A2A282
@@ -1830,7 +1823,7 @@ label_GW_B0_E0:
 label_GW_End:
 	s_endpgm                                                   // 00000017FF90: BFB00000
 
-label_OptNLL_End:
+label_GSU_3:
 	s_waitcnt lgkmcnt(4)                                       // 00000017FF94: BF89FC47
 	v_wmma_f32_16x16x16_f16 v[0:7], v[181:188], v[84:91], v[0:7]// 00000017FF98: CC404000 1C02A9B5
 	ds_load_u16 v108, v80 offset:3104                          // 00000017FFA0: D8F00C20 6C000050
@@ -1949,7 +1942,7 @@ label_GSUC_TL:
 label_GSUC_TL_End:
 	s_cmp_eq_u32 s12, 0                                        // 000000180290: BF06800C
 	s_mov_b32 s13, 0                                           // 000000180294: BE8D0080
-	s_cbranch_scc1 label_SkipTailLoopL                         // 000000180298: BFA20216
+	s_cbranch_scc1 label_TailLoopEndL                         // 000000180298: BFA20216
 	s_sub_i32 s66, 3, s47                                      // 00000018029C: 81C22F83
 	s_cmp_ge_i32 s66, 0                                        // 0000001802A0: BF038042
 	s_cbranch_scc0 label_Negative_Y32LC9KJ96BAW0GB             // 0000001802A4: BFA10003
@@ -2261,12 +2254,12 @@ label_TailLoopBeginL:
 label_TailLoopEndL:
 	s_and_b32 s8, s46, 0x3fff                                  // 000000180AF4: 8B08FF2E 00003FFF
 	s_cmp_eq_u32 s8, 1                                         // 000000180AFC: BF068108
-	s_cbranch_scc0 label_GSU_4                                 // 000000180B00: BFA1000F
+	s_cbranch_scc0 label_LoadExternalEpilogueStructEnd_1                                 // 000000180B00: BFA1000F
 	s_cmp_eq_u32 s5, 2                                         // 000000180B04: BF068205
 	s_cbranch_scc1 label_LoadExternalEpilogueStruct_1          // 000000180B08: BFA20005
 	s_load_b256 s[48:55], s[0:1], 0x58                         // 000000180B0C: F40C0C00 F8000058
 	s_load_b32 s56, s[0:1], 0x78                               // 000000180B14: F4000E00 F8000078
-	s_branch label_GSU_4                                       // 000000180B1C: BFA00008
+	s_branch label_LoadExternalEpilogueStructEnd_1                                       // 000000180B1C: BFA00008
 
 label_LoadExternalEpilogueStruct_1:
 	s_load_b128 s[48:51], s[0:1], 0x90                         // 000000180B20: F4080C00 F8000090
@@ -6162,7 +6155,7 @@ label_ScaleAlphaVec_1AddrValid_End:
 label_Bias_1AddrValid:
 	s_mov_b32 s42, s8                                          // 000000185830: BEAA0008
 
-label_Load_Biasf32_0_1:
+label_Bias_1AddrValid_End:
 	s_cmpk_lg_u32 s52, 0x0                                     // 000000185834: B5340000
 	s_cbranch_scc1 label_Load_Biasf16_0_1                      // 000000185838: BFA2001C
 	s_mul_i32 s8, 0x60, s2                                     // 00000018583C: 960802FF 00000060
