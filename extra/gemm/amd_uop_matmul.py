@@ -7,7 +7,7 @@ from tinygrad.helpers import getenv
 
 N = getenv("N", 4096)
 M = K = N
-run_count = getenv("CNT", 5)
+run_count = getenv("CNT", 1)
 
 # ---------------------------
 # launch/config constants
@@ -155,7 +155,7 @@ def test_matmul(sink:UOp, dtype=dtypes.float32, N=N):
       ets.append(ei.run(wait=True))
   print(f"REAL TFLOPS {N * N * N * 2 / min(ets) * 1e-12:.2f}")
 
-  if getenv("VERIFY", 1):
+  if getenv("VERIFY", 1) or True:
     GlobalCounters.reset()
     with Context(DEBUG=2):
       tc = (a @ b).realize()
