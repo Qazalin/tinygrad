@@ -276,6 +276,9 @@ def unpack_sqtt(key:tuple[str, int], data:list, p:ProfileProgramEvent) -> tuple[
   base = unwrap(p.base)
   disasm = {addr+base:inst_disasm for addr,inst_disasm in llvm_disasm(device_props[p.device]["gfx_target_version"], unwrap(p.lib)).items()}
   rctx = decode(data, {p.name:disasm})
+  from tinygrad.runtime.support.elf import elf_loader
+  _, sections, __ = elf_loader(p.lib)
+  elf_addr = next((sh.header.sh_addr for sh in sections if sh.name == ".text"))
   cu_events:dict[str, list[ProfileEvent]] = {}
   # * INST waves
   wave_insts:dict[str, dict[str, dict]] = {}
@@ -285,7 +288,7 @@ def unpack_sqtt(key:tuple[str, int], data:list, p:ProfileProgramEvent) -> tuple[
     n = next(inst_units[u])
     if (events:=cu_events.get(w.cu_loc)) is None: cu_events[w.cu_loc] = events = []
     events.append(ProfileRangeEvent(w.simd_loc, loc:=f"INST WAVE:{w.wave_id} N:{n}", Decimal(w.begin_time), Decimal(w.end_time)))
-    wave_insts.setdefault(w.cu_loc, {})[f"{u} N:{n}"] = {"wave":w, "disasm":disasm, "run_number":n, "loc":loc}
+    wave_insts.setdefault(w.cu_loc, {})[f"{u} N:{n}"] = {"wave":w, "disasm":disasm, "elf_addr":elf_addr, "run_number":n, "loc":loc}
   # * OCC waves
   units:dict[str, itertools.count] = {}
   wave_start:dict[str, int] = {}
@@ -462,7 +465,7 @@ def get_render(query:str) -> dict:
     return {**ret, "steps":[{k:v for k,v in s.items() if k != "data"} for s in steps[j+1:]]}
   if fmt == "cu-sqtt": return {"value":get_profile(data, sort_fn=row_tuple), "content_type":"application/octet-stream"}
   if fmt == "sqtt-insts":
-    columns = ["PC", "Instruction", "Hits", "Cycles", "Stall", "Type"]
+    columns = ["PC", "Instruction", "Hits", "Cycles", "Stall", "Type", "Addr"]
     inst_columns = ["N", "Clk", "Idle", "Dur", "Stall"]
     # Idle:     The total time gap between the completion of previous instruction and the beginning of the current instruction.
     #           The idle time can be caused by:
@@ -472,14 +475,14 @@ def get_render(query:str) -> dict:
     # Stall:    The total number of cycles the hardware pipe couldn't issue an instruction.
     # Duration: Total latency in cycles, defined as "Stall time + Issue time" for gfx9 or "Stall time + Execute time" for gfx10+.
     prev_instr = (w:=data["wave"]).begin_time
-    pc_to_inst = data["disasm"]
+    pc_to_inst, elf_addr = data["disasm"], data["elf_addr"]
     start_pc = None
     rows:dict[int, dict] = {}
     for e in w.unpack_insts():
       if start_pc is None: start_pc = e.pc
       if (inst:=rows.get(e.pc)) is None:
         rows[e.pc] = inst = {"pc":e.pc-start_pc, "inst":pc_to_inst[e.pc][0], "hit_count":0, "dur":0, "stall":0, "type":str(e.typ).split("_")[-1],
-                             "hits":{"cols":inst_columns, "rows":[]}}
+                             "addr":f"{(elf_addr+e.pc-start_pc):012X}", "hits":{"cols":inst_columns, "rows":[]}}
       inst["hit_count"] += 1
       inst["dur"] += e.dur
       inst["stall"] += e.stall
