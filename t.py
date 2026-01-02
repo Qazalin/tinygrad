@@ -1,40 +1,42 @@
-import pickle
-from extra.sqtt.roc import decode
-from tinygrad.device import ProfileDeviceEvent, ProfileProgramEvent
-from tinygrad.runtime.ops_amd import ProfileSQTTEvent
-from tinygrad.helpers import temp, unwrap
-from tinygrad.viz.serve import llvm_disasm
+with open("./extra/gemm/asm/rdna3/trace.s", "r") as f: src = f.read()
 
-with open(temp("profile.pkl", append_user=True), "rb") as f:
-  profile = pickle.load(f)
+class PC(int):
+  def __repr__(self): return f"{self:012X}"
 
-device_props = {}
-p = None
-sqtt = []
-for e in profile:
-  if isinstance(e, ProfileDeviceEvent) and e.device.startswith("AMD"): device_props[e.device] = e.props
-  if isinstance(e, ProfileProgramEvent) and e.name == "gemm": p = e
-  if isinstance(e, ProfileSQTTEvent) and e.kern == "gemm": sqtt.append(e)
+lines = src.splitlines()
+code = []
+pc_map = {}
+pcs = []
+for i,s in enumerate(lines):
+  asm, pc = s.split(" // ")
+  pc = int("0X"+pc, base=16)
+  code.append((asm, PC(pc)))
+  pc_map[pc] = asm
 
-base = unwrap(p.base)
-disasm = {addr+base:inst_disasm for addr,inst_disasm in llvm_disasm(device_props[p.device]["gfx_target_version"], unwrap(p.lib)).items()}
-r = decode(sqtt, {p.name:disasm})
-inst = r.inst_execs[('gemm', 1)]
-insts = list(inst[0].unpack_insts())
+pcs = {**pc_map}
+#with open("./extra/gemm/asm/rdna3/trace2.s", "r") as f: src = f.read()
 
-from tinygrad.runtime.support.elf import elf_loader
-_, sections, __ = elf_loader(p.lib)
-elf_addr = next((sh.header.sh_addr for sh in sections if sh.name == ".text"))
+hits = {}
+srcs = {}
+for i,(asm,pc) in enumerate(code):
+  if "branch" in asm:
+    next_asm, next_pc = code[i+1]
+    hits[next_pc] = hits.get(next_pc, 0)+1
+    srcs.setdefault(next_pc, []).append(pc)
 
-lines:list[str] = []
-start_pc = None
-for i in insts:
-  if start_pc is None: start_pc = i.pc
-  asm = disasm[i.pc][0]
-  if "branch" in asm or "pc" in asm:
-    lines.append(f"// {asm}")
-    continue
-  addr = elf_addr+i.pc-start_pc
-  lines.append(f"{asm} // {addr:012X}")
+DONT_REMOVE = set()
+for k,v in hits.items():
+  ss = set(srcs[k])
+  if v > 1:
+    print(PC(k), pc_map[k], v)
+    for s in ss: DONT_REMOVE.add(s)
 
-with open("./extra/gemm/asm/rdna3/cmp.s", "w") as f: f.write("\n".join(lines))
+for ss in srcs.values():
+  for s in ss:
+    if s not in DONT_REMOVE:
+      del pcs[s]
+
+new_lines = []
+for addr,asm in pcs.items():
+  new_lines.append(f"{asm} // {addr:012X}")
+with open("./extra/gemm/asm/rdna3/trace2.s", "w") as f: f.write("\n".join(new_lines))
