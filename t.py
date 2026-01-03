@@ -26,7 +26,7 @@ cnt = 0
 for k,v in hits.items():
   asm = pc_map[k]
   if v == 1:
-    if "branch" in asm:
+    if "branch" in asm or "pc" in asm:
       new_lines.append(f"  // {asm}")
       continue
     new_lines.append(f"  {asm} // {k:012X}")
@@ -36,7 +36,7 @@ for k,v in hits.items():
     new_lines.append(f"\nloop_n{cnt}:")
     curr = k
   if "branch" in asm: curr = None
-  print(f"  {asm} // {k:012X} hits={v}")
+  #print(f"  {asm} // {k:012X} hits={v}")
   new_lines.append(f"  {asm} // {k:012X}")
 
-#with open("./extra/gemm/asm/rdna3/trace2.s", "w") as f: f.write("\n".join(new_lines))
+with open("./extra/gemm/asm/rdna3/trace2.s", "w") as f: f.write("\n".join(new_lines))

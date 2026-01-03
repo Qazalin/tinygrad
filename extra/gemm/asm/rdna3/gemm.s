@@ -1132,32 +1132,10 @@ loop_n1:
 	s_branch label_ActivationSetPCAddrEnd                      // 000000003080: BFA00018
 
 label_To_Activation_Gelu_VW1:
-	s_getpc_b64 s[12:13]                                       // 000000003084: BE8C4700
-	s_add_i32 s8, 0xc7b8, 4                                    // 000000003088: 810884FF 0000C7B8
-	s_add_u32 s12, s12, s8                                     // 000000003090: 800C080C
-	s_addc_u32 s13, s13, 0                                     // 000000003094: 820D800D
-	s_branch label_ActivationSetPCAddrEnd                      // 000000003098: BFA00012
-
 label_To_Activation_Relu_VW1:
-	s_getpc_b64 s[12:13]                                       // 00000000309C: BE8C4700
-	s_add_i32 s8, 0xc7dc, 4                                    // 0000000030A0: 810884FF 0000C7DC
-	s_add_u32 s12, s12, s8                                     // 0000000030A8: 800C080C
-	s_addc_u32 s13, s13, 0                                     // 0000000030AC: 820D800D
-	s_branch label_ActivationSetPCAddrEnd                      // 0000000030B0: BFA0000C
-
 label_To_Activation_Silu_VW1:
-	s_getpc_b64 s[12:13]                                       // 0000000030B4: BE8C4700
-	s_add_i32 s8, 0xc7d0, 4                                    // 0000000030B8: 810884FF 0000C7D0
-	s_add_u32 s12, s12, s8                                     // 0000000030C0: 800C080C
-	s_addc_u32 s13, s13, 0                                     // 0000000030C4: 820D800D
-	s_branch label_ActivationSetPCAddrEnd                      // 0000000030C8: BFA00006
-
 label_To_Activation_Clamp_VW1:
-	s_getpc_b64 s[12:13]                                       // 0000000030CC: BE8C4700
-	s_add_i32 s8, 0xc7d4, 4                                    // 0000000030D0: 810884FF 0000C7D4
-	s_add_u32 s12, s12, s8                                     // 0000000030D8: 800C080C
-	s_addc_u32 s13, s13, 0                                     // 0000000030DC: 820D800D
-	s_branch label_ActivationSetPCAddrEnd                      // 0000000030E0: BFA00000
+s_nop 0
 
 label_ActivationSetPCAddrEnd:
 	s_mul_i32 s8, 0x60, s2                                     // 0000000030E4: 960802FF 00000060
@@ -1231,6 +1209,7 @@ label_ActivationSetPCAddrEnd:
 	s_waitcnt lgkmcnt(4)                                       // 000000003218: BF89FC47
 	v_mul_f32_e32 v82, v139, v82                               // 00000000321C: 10A4A58B
 	v_add_f32_e32 v76, v138, v82                               // 000000003220: 0698A58A
+  s_endpgm
 	s_swappc_b64 s[30:31], s[12:13]                            // 000000003224: BE9E490C
 	v_mov_b32_e32 v82, v76                                     // 000000003228: 7EA4034C
 	v_cvt_f16_f32_e32 v82, v82                                 // 00000000322C: 7EA41552
