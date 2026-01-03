@@ -1126,18 +1126,14 @@ loop_n1:
 	v_cndmask_b32_e64 v77, 1.0, v77, s48                       // 00000000305C: D501004D 00C29AF2
 	ds_store_b32 v80, v77 offset:512                           // 000000003064: D8340200 00004D50
 	s_getpc_b64 s[12:13]                                       // 00000000306C: BE8C4700
-	s_add_i32 s8, 0xc7cc, 4                                    // 000000003070: 810884FF 0000C7CC
-	s_add_u32 s12, s12, s8                                     // 000000003078: 800C080C
-	s_addc_u32 s13, s13, 0                                     // 00000000307C: 820D800D
-	s_branch label_ActivationSetPCAddrEnd                      // 000000003080: BFA00018
+.Lbase:
+  s_add_u32  s12, s12, label_Activation_None_VW1 - .Lbase
+  s_addc_u32 s13, s13, 0
 
-label_To_Activation_Gelu_VW1:
-label_To_Activation_Relu_VW1:
-label_To_Activation_Silu_VW1:
-label_To_Activation_Clamp_VW1:
-s_nop 0
+	// s_add_i32 s8, 0xc7cc, 4                                    // 000000003070: 810884FF 0000C7CC
+	// s_add_u32 s12, s12, s8                                     // 000000003078: 800C080C
+	// s_addc_u32 s13, s13, 0                                     // 00000000307C: 820D800D
 
-label_ActivationSetPCAddrEnd:
 	s_mul_i32 s8, 0x60, s2                                     // 0000000030E4: 960802FF 00000060
 	v_sub_nc_u32_e64 v81, v72, s8                              // 0000000030EC: D5260051 00001148
 	v_lshlrev_b32_e32 v81, 2, v81                              // 0000000030F4: 30A2A282
@@ -1209,7 +1205,6 @@ label_ActivationSetPCAddrEnd:
 	s_waitcnt lgkmcnt(4)                                       // 000000003218: BF89FC47
 	v_mul_f32_e32 v82, v139, v82                               // 00000000321C: 10A4A58B
 	v_add_f32_e32 v76, v138, v82                               // 000000003220: 0698A58A
-  s_endpgm
 	s_swappc_b64 s[30:31], s[12:13]                            // 000000003224: BE9E490C
 	v_mov_b32_e32 v82, v76                                     // 000000003228: 7EA4034C
 	v_cvt_f16_f32_e32 v82, v82                                 // 00000000322C: 7EA41552
@@ -6039,14 +6034,11 @@ label_GW_B0_E1:
 	buffer_store_b32 v149, v221, s[16:19], 0 offen             // 0000000093E8: E0680000 804495DD
 	buffer_store_b32 v150, v222, s[16:19], 0 offen             // 0000000093F0: E0680000 804496DE
 	s_nop 0                                                    // 0000000093F8: BF800000
+
 	s_branch label_GW_End_1                                    // 0000000093FC: BFA00000
 
 label_GW_End_1:
-	s_getpc_b64 s[30:31]                                       // 000000009400: BE9E4700
-	s_add_i32 s32, 0x6434, 4                                   // 000000009404: 812084FF 00006434
-	s_add_u32 s30, s30, s32                                    // 00000000940C: 801E201E
-	s_addc_u32 s31, s31, 0                                     // 000000009410: 821F801F
-	s_setpc_b64 s[30:31]                                       // 000000009414: BE80481E
+  s_nop 0
 
 label_GSU_5:
 	s_mov_b64 s[32:33], s[48:49]                               // 000000009418: BEA00130
@@ -6125,51 +6117,13 @@ label_Load_Biasf16_0_1:
 	s_branch label_Load_Bias_End_1                             // 00000000955C: BFA00000
 
 label_Load_Bias_End_1:
-	s_cmpk_eq_u32 s56, 0x3                                     // 000000009560: B4B80003
-	s_cbranch_scc1 label_To_Activation_Gelu_VW1_1              // 000000009564: BFA2000C
-	s_cmpk_eq_u32 s56, 0x5                                     // 000000009568: B4B80005
-	s_cbranch_scc1 label_To_Activation_Relu_VW1_1              // 00000000956C: BFA20010
-	s_cmpk_eq_u32 s56, 0xa                                     // 000000009570: B4B8000A
-	s_cbranch_scc1 label_To_Activation_Silu_VW1_1              // 000000009574: BFA20014
-	s_cmpk_eq_u32 s56, 0xc                                     // 000000009578: B4B8000C
-	s_cbranch_scc1 label_To_Activation_Clamp_VW1_1             // 00000000957C: BFA20018
+s_nop 0
 
 label_To_Activation_None_VW1_1:
-	s_getpc_b64 s[12:13]                                       // 000000009580: BE8C4700
-	s_add_i32 s8, 0x62b8, 4                                    // 000000009584: 810884FF 000062B8
-	s_add_u32 s12, s12, s8                                     // 00000000958C: 800C080C
-	s_addc_u32 s13, s13, 0                                     // 000000009590: 820D800D
-	s_branch label_ActivationSetPCAddrEnd_1                    // 000000009594: BFA00018
-
-label_To_Activation_Gelu_VW1_1:
-	s_getpc_b64 s[12:13]                                       // 000000009598: BE8C4700
-	s_add_i32 s8, 0x62a4, 4                                    // 00000000959C: 810884FF 000062A4
-	s_add_u32 s12, s12, s8                                     // 0000000095A4: 800C080C
-	s_addc_u32 s13, s13, 0                                     // 0000000095A8: 820D800D
-	s_branch label_ActivationSetPCAddrEnd_1                    // 0000000095AC: BFA00012
-
-label_To_Activation_Relu_VW1_1:
-	s_getpc_b64 s[12:13]                                       // 0000000095B0: BE8C4700
-	s_add_i32 s8, 0x62c8, 4                                    // 0000000095B4: 810884FF 000062C8
-	s_add_u32 s12, s12, s8                                     // 0000000095BC: 800C080C
-	s_addc_u32 s13, s13, 0                                     // 0000000095C0: 820D800D
-	s_branch label_ActivationSetPCAddrEnd_1                    // 0000000095C4: BFA0000C
-
-label_To_Activation_Silu_VW1_1:
-	s_getpc_b64 s[12:13]                                       // 0000000095C8: BE8C4700
-	s_add_i32 s8, 0x62bc, 4                                    // 0000000095CC: 810884FF 000062BC
-	s_add_u32 s12, s12, s8                                     // 0000000095D4: 800C080C
-	s_addc_u32 s13, s13, 0                                     // 0000000095D8: 820D800D
-	s_branch label_ActivationSetPCAddrEnd_1                    // 0000000095DC: BFA00006
-
-label_To_Activation_Clamp_VW1_1:
-	s_getpc_b64 s[12:13]                                       // 0000000095E0: BE8C4700
-	s_add_i32 s8, 0x62c0, 4                                    // 0000000095E4: 810884FF 000062C0
-	s_add_u32 s12, s12, s8                                     // 0000000095EC: 800C080C
-	s_addc_u32 s13, s13, 0                                     // 0000000095F0: 820D800D
-	s_branch label_ActivationSetPCAddrEnd_1                    // 0000000095F4: BFA00000
-
-label_ActivationSetPCAddrEnd_1:
+  s_getpc_b64 s[12:13]
+.Lbase_To_Activation_None_VW1_1:
+  s_add_u32  s12, s12, label_Activation_None_VW1 - .Lbase_To_Activation_None_VW1_1
+  s_addc_u32 s13, s13, 0
 	s_cmpk_eq_u32 s45, 0x0                                     // 0000000095F8: B4AD0000
 	s_cbranch_scc0 label_GW_Beta_2                             // 0000000095FC: BFA10A58
 	s_mov_b32 s35, 0                                           // 000000009600: BEA30080
