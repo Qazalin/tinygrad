@@ -1127,7 +1127,7 @@ loop_n1:
 	ds_store_b32 v80, v77 offset:512                           // 000000003064: D8340200 00004D50
 	s_getpc_b64 s[12:13]                                       // 00000000306C: BE8C4700
 .Lbase:
-  s_add_u32  s12, s12, label_Activation_None_VW1 - .Lbase
+  s_add_u32  s12, s12, label_fn - .Lbase
   s_addc_u32 s13, s13, 0
 
 	// s_add_i32 s8, 0xc7cc, 4                                    // 000000003070: 810884FF 0000C7CC
@@ -5187,7 +5187,7 @@ label_ScaleAlphaVec_1AddrValid_End:
 label_To_Activation_None_VW1_1:
   s_getpc_b64 s[12:13]
 .Lbase_To_Activation_None_VW1_1:
-  s_add_u32  s12, s12, label_Activation_None_VW1 - .Lbase_To_Activation_None_VW1_1
+  s_add_u32  s12, s12, label_fn - .Lbase_To_Activation_None_VW1_1
   s_addc_u32 s13, s13, 0
 	s_cmpk_eq_u32 s45, 0x0                                     // 0000000095F8: B4AD0000
 	s_cbranch_scc0 label_GW_Beta_2                             // 0000000095FC: BFA10A58
@@ -9579,6 +9579,6 @@ label_GW_B1_E1:
 end:
 	s_endpgm                                                   // 00000000F83C: BFB00000
 
-label_Activation_None_VW1:
+label_fn:
 	s_setpc_b64 s[30:31]                                       // 00000000F840: BE80481E
 	s_endpgm                                                   // 00000000F844: BFB00000

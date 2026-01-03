@@ -43,6 +43,8 @@ class CompiledRunner(Runner):
       with cpu_profile(TracingKey(f"compile {p.name}", (p.function_name,)), "TINY"):
         p = replace(p, lib=Device[p.device].compiler.compile_cached(p.src))
     self.p:ProgramSpec = p
+    if self.p.name == "gemm":
+      with open("/tmp/test", "wb") as f: f.write(self.p.lib)
     assert self.p.lib is not None
     if DEBUG >= 7: Device[p.device].compiler.disassemble(self.p.lib)
     self._prg = Device[p.device].runtime(p.function_name, self.p.lib) if prg is None else prg
