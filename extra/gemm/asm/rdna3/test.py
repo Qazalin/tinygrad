@@ -22,7 +22,7 @@ def asm_kernel() -> UOp:
   b = UOp.placeholder((N*N,), dtypes.half, slot=2)
   c = UOp.placeholder((N*N,), dtypes.half, slot=0)
 
-  src = (pathlib.Path(__file__).parent/"gemm3.s").read_text()
+  src = (pathlib.Path(__file__).parent/"gemm.s").read_text()
   src = template.replace("INSTRUCTIONS", src)
 
   sink = UOp.sink(a, b, c, lidx, gidx, arg=KernelInfo(name="gemm"))
