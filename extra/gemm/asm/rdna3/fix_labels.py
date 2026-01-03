@@ -12,4 +12,3 @@ for line in src.splitlines():
 
 with open("./extra/gemm/asm/rdna3/gemm3.s", "w") as f:
   f.write("\n".join(lines))
-
