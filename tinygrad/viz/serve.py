@@ -423,7 +423,15 @@ def amdgpu_cfg(lib:bytes, target:int) -> dict:
       if asm.startswith("s_branch"): paths[curr][nx+offset] = UNCOND
       else: paths[curr].update([(nx+offset, COND_TAKEN), (nx, COND_NOT_TAKEN)])
     elif nx in leaders: paths[curr][nx] = UNCOND
-  return {"data":{"blocks":blocks, "paths":paths, "pc_table":pc_table, "colors":cfg_colors}, "src":"\n".join(lines)}
+  from extra.assembly.amd.asm import asm
+  tokens_table:dict[int, list[str]] = {}
+  for pc, (text,_) in pc_table.items():
+    try:
+      dsl = asm(text)
+      print(dsl._values)
+    # fallback to text
+    except Exception as e: tokens_table[pc] = [text]
+  return {"data":{"blocks":blocks, "paths":paths, "tokens_table":tokens_table, "colors":cfg_colors}, "src":"\n".join(lines)}
 
 # ** Main render function to get the complete details about a trace event
 

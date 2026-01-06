@@ -13,7 +13,7 @@ onmessage = (e) => {
   self.close();
 }
 
-const layoutCfg = (g, { blocks, paths, pc_table, counters, colors }) => {
+const layoutCfg = (g, { blocks, paths, tokens_table, counters, colors }) => {
   g.setGraph({ rankdir:"TD", font:"monospace" });
   ctx.font = `350 ${LINE_HEIGHT}px ${g.graph().font}`;
   // basic blocks render the assembly in nodes
@@ -21,13 +21,13 @@ const layoutCfg = (g, { blocks, paths, pc_table, counters, colors }) => {
   for (const [lead, members] of Object.entries(blocks)) {
     let [width, height, label] = [0, 0, []];
     for (const m of members) {
-      const text = pc_table[m][0];
+      const tokens = tokens_table[m];
       if (counters != null) {
         const num = counters[m]?.hit_count || 0;
         if (num > maxColor) maxColor = num;
-        label.push([{st:text, color:num}]);
-      } else { const [inst, ...operands] = text.split(" "); label.push([{st:inst+" ", color:"#7aa2f7"}, {st:operands.join(" "), color:"#9aa5ce"}]); }
-      width = Math.max(width, ctx.measureText(text).width);
+        labels.push(tokens.map(t => ({st:t, color:num})));
+      } else { const [inst, ...operands] = tokens; label.push([{st:inst+" ", color:"#7aa2f7"}, ...operands.map(o => ({st:o, color:"#9aa5ce"}))]); }
+      width = Math.max(width, ctx.measureText(tokens.join(" ")).width);
       height += LINE_HEIGHT;
     }
     g.setNode(lead, { ...rectDims(width, height), label, id:lead, color:"#1a1b26" });
