@@ -352,6 +352,26 @@
   tr.main-row.has-children.expanded > td:first-child::before {
     content: "▾ ";
   }
+  /* register highlighting */
+  tspan.clickable-reg {
+    cursor: pointer;
+  }
+  tspan.clickable-reg:hover {
+    text-decoration: underline;
+  }
+  tspan.reg-highlight {
+    font-weight: bold;
+  }
+  tspan.reg-highlight.reg-def {
+    fill: #ff9e64 !important;
+    text-decoration: underline;
+    text-decoration-color: #ff9e64;
+  }
+  tspan.reg-highlight.reg-use {
+    fill: #7dcfff !important;
+    text-decoration: underline;
+    text-decoration-color: #7dcfff;
+  }
   </style>
 </head>
 <body>

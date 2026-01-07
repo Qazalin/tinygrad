@@ -61,25 +61,14 @@ const drawGraph = (data) => {
   const g = dagre.graphlib.json.read(data);
   if (data.value.colorDomain != null) colorScale.domain(data.value.colorDomain);
   // draw nodes
-  d3.select("#graph-svg").on("click", () => d3.selectAll(".highlight").classed("highlight", false));
   const nodes = d3.select("#nodes").selectAll("g").data(g.nodes().map(id => g.node(id)), d => d).join("g").attr("class", d => d.className ?? "node")
-    .attr("transform", d => `translate(${d.x},${d.y})`).classed("clickable", d => d.ref != null).on("click", (e,d) => {
-      if (d.ref != null) return switchCtx(d.ref);
-      const parents = g.predecessors(d.id);
-      const children = g.successors(d.id);
-      if (parents == null && children == null) return;
-      const src = [...parents, ...children, d.id];
-      nodes.classed("highlight", n => src.includes(n.id)).classed("child", n => children.includes(n.id));
-      const matchEdge = (v, w) => (v===d.id && children.includes(w)) ? "highlight child " : (parents.includes(v) && w===d.id) ? "highlight " : "";
-      d3.select("#edges").selectAll("path.edgePath").attr("class", e => matchEdge(e.v, e.w)+"edgePath");
-      d3.select("#edge-labels").selectAll("g.port").attr("class",  (_, i, n) => matchEdge(...n[i].id.split("-"))+"port");
-      e.stopPropagation();
-    });
+    .attr("transform", d => `translate(${d.x},${d.y})`).classed("clickable", d => d.ref != null);
   nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
     .attr("x", d => -d.width/2).attr("y", d => -d.height/2);
   const STROKE_WIDTH = 1.4;
   const labels = nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label");
   labels.attr("transform", d => `translate(-${d.labelWidth/2}, -${d.labelHeight/2+STROKE_WIDTH*2})`);
+  const regMap = g.graph().regMap;
   labels.selectAll("text").data(d => {
     if (Array.isArray(d.label)) return [d.label];
     const ret = [[]];
@@ -91,7 +80,38 @@ const drawGraph = (data) => {
     }
     return [ret];
   }).join("text").selectAll("tspan").data(d => d).join("tspan").attr("x", "0").attr("dy", 14).selectAll("tspan").data(d => d).join("tspan")
-    .attr("fill", d => typeof d.color === "string" ? d.color : colorScale(d.color)).text(d => d.st).attr("xml:space", "preserve").style("font-family", g.graph().font);
+    .attr("fill", d => typeof d.color === "string" ? d.color : colorScale(d.color)).text(d => d.st).attr("xml:space", "preserve").style("font-family", g.graph().font)
+    .attr("data-reg", d => d.reg).attr("data-pc", d => d.pc).classed("clickable-reg", d => d.reg != null)
+    .on("click", (e, d) => {
+      if (!d.reg || !regMap) return;
+      e.stopPropagation();
+      // clear previous highlights
+      d3.selectAll(".reg-highlight").classed("reg-highlight", false).classed("reg-def", false).classed("reg-use", false);
+      // expand clicked register to individual registers (e.g., v[4:5] -> [v4, v5])
+      const expandReg = (reg) => {
+        const match = reg.match(/^([vs])\[(\d+):(\d+)\]$/);
+        if (match) {
+          const [_, prefix, start, end] = match;
+          return Array.from({length: parseInt(end) - parseInt(start) + 1}, (_, i) => `${prefix}${parseInt(start) + i}`);
+        }
+        return [reg];
+      };
+      // collect all related entries from regMap
+      const defs = [], uses = [];
+      for (const indivReg of expandReg(d.reg)) {
+        const info = regMap[indivReg];
+        if (!info) continue;
+        for (const entry of info.defs) defs.push(entry);
+        for (const entry of info.uses) uses.push(entry);
+      }
+      // highlight all occurrences
+      for (const {pc, displayReg} of defs) {
+        d3.selectAll(`tspan[data-pc="${pc}"][data-reg="${displayReg}"]`).classed("reg-highlight", true).classed("reg-def", true);
+      }
+      for (const {pc, displayReg} of uses) {
+        d3.selectAll(`tspan[data-pc="${pc}"][data-reg="${displayReg}"]`).classed("reg-highlight", true).classed("reg-use", true);
+      }
+    });
   addTags(nodes.selectAll("g.tag").data(d => d.tag != null ? [d] : []).join("g").attr("class", "tag")
     .attr("transform", d => `translate(${-d.width/2+8}, ${-d.height/2+8})`).datum(e => e.tag));
   // draw edges

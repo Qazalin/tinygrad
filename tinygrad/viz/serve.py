@@ -423,14 +423,41 @@ def amdgpu_cfg(lib:bytes, target:int) -> dict:
       if asm.startswith("s_branch"): paths[curr][nx+offset] = UNCOND
       else: paths[curr].update([(nx+offset, COND_TAKEN), (nx, COND_NOT_TAKEN)])
     elif nx in leaders: paths[curr][nx] = UNCOND
-  from extra.assembly.amd.asm import asm
-  tokens_table:dict[int, list[str]] = {}
+  from extra.assembly.amd.asm import asm, _fmt_src, _fmt_sdst
+  from extra.assembly.amd.dsl import _VGPRField, _SGPRField, _Src, _SSrc
+
+  DST_FIELDS = {'vdst', 'sdst'}
+
+  def field_to_reg(name:str, val:int, marker, n_regs:int=1) -> tuple[str, str]|None:
+    """Returns (reg_string, 'def'|'use') or None for non-register operands."""
+    if marker is _VGPRField:
+      reg = f"v{val}" if n_regs == 1 else f"v[{val}:{val+n_regs-1}]"
+    elif marker is _SGPRField:
+      reg = _fmt_sdst(val, n_regs)
+    elif marker in (_Src, _SSrc):
+      if val >= 256 or val <= 105 or 106 <= val <= 127:  # VGPR, SGPR, or special regs
+        reg = _fmt_src(val, n_regs)
+      else:
+        return None  # inline const or literal
+    else:
+      return None
+    return (reg, 'def' if name in DST_FIELDS else 'use')
+
+  tokens_table:dict[int, dict] = {}
   for pc, (text,_) in pc_table.items():
     try:
       dsl = asm(text)
-      print(dsl._values)
-    # fallback to text
-    except Exception as e: tokens_table[pc] = [text]
+      regs:dict = {'defs': [], 'uses': []}
+      for name, bf in dsl._fields.items():
+        if name in {"encoding", "op"}: continue
+        val = getattr(dsl, name)
+        n_regs = dsl.dst_regs() if name in DST_FIELDS else dsl.src_regs({'src0':0,'ssrc0':0,'src1':1,'ssrc1':1,'vsrc1':1,'src2':2}.get(name,0))
+        if (reg_info := field_to_reg(name, val, bf.marker, n_regs)):
+          reg, kind = reg_info
+          regs['defs' if kind == 'def' else 'uses'].append(reg)
+      tokens_table[pc] = {"text": text, "op": dsl.op_name, **regs}
+    except Exception:
+      tokens_table[pc] = {"text": text, "op": None, "defs": [], "uses": []}
   return {"data":{"blocks":blocks, "paths":paths, "tokens_table":tokens_table, "colors":cfg_colors}, "src":"\n".join(lines)}
 
 # ** Main render function to get the complete details about a trace event

@@ -13,26 +13,68 @@ onmessage = (e) => {
   self.close();
 }
 
+// expand register range like v[4:5] -> [v4, v5]
+const expandReg = (reg) => {
+  const match = reg.match(/^([vs])\[(\d+):(\d+)\]$/);
+  if (match) {
+    const [_, prefix, start, end] = match;
+    return Array.from({length: parseInt(end) - parseInt(start) + 1}, (_, i) => `${prefix}${parseInt(start) + i}`);
+  }
+  return [reg];
+};
+
 const layoutCfg = (g, { blocks, paths, tokens_table, counters, colors }) => {
   g.setGraph({ rankdir:"TD", font:"monospace" });
   ctx.font = `350 ${LINE_HEIGHT}px ${g.graph().font}`;
   // basic blocks render the assembly in nodes
   let maxColor = 0;
+  // build a map of individual register -> list of {pc, displayReg} where it's used/defined
+  // this handles ranges: v[4:5] expands to v4, v5, so clicking v4 highlights v[4:5] too
+  const regMap = {};
+  for (const [pc, info] of Object.entries(tokens_table)) {
+    const defs = info.defs || [];
+    const uses = info.uses || [];
+    for (const displayReg of defs) {
+      for (const reg of expandReg(displayReg)) {
+        (regMap[reg] ??= {defs:[], uses:[]}).defs.push({pc, displayReg});
+      }
+    }
+    for (const displayReg of uses) {
+      for (const reg of expandReg(displayReg)) {
+        (regMap[reg] ??= {defs:[], uses:[]}).uses.push({pc, displayReg});
+      }
+    }
+  }
   for (const [lead, members] of Object.entries(blocks)) {
     let [width, height, label] = [0, 0, []];
     for (const m of members) {
-      const tokens = tokens_table[m];
+      const info = tokens_table[m];
+      const text = info?.text ?? info;  // handle both new dict format and old string format
       if (counters != null) {
         const num = counters[m]?.hit_count || 0;
         if (num > maxColor) maxColor = num;
-        labels.push(tokens.map(t => ({st:t, color:num})));
-      } else { const [inst, ...operands] = tokens; label.push([{st:inst+" ", color:"#7aa2f7"}, ...operands.map(o => ({st:o, color:"#9aa5ce"}))]); }
-      width = Math.max(width, ctx.measureText(tokens.join(" ")).width);
+        label.push([{st:text, color:num, pc:m}]);
+      } else {
+        // parse instruction: op + operands, tag registers with their role
+        const parts = text.split(/\s+/);
+        const [inst, ...operands] = parts;
+        const lineTokens = [{st:inst+" ", color:"#7aa2f7", pc:m}];
+        for (let o of operands) {
+          o = o.replace(",", "");
+          const isDef = info.defs?.includes(o);
+          const isUse = info.uses?.includes(o);
+          const reg = isDef || isUse ? o : null;
+          lineTokens.push({st:o+" ", color: isDef ? "#ff9e64" : isUse ? "#9aa5ce" : "#565f89", reg, pc:m});
+        }
+        label.push(lineTokens);
+      }
+      width = Math.max(width, ctx.measureText(text).width);
       height += LINE_HEIGHT;
     }
     g.setNode(lead, { ...rectDims(width, height), label, id:lead, color:"#1a1b26" });
   }
   g.graph().colorDomain = [0, maxColor];
+  g.graph().regMap = regMap;
   // paths become edges between basic blocks
   for (const [lead, value] of Object.entries(paths)) {
     for (const [id, color] of Object.entries(value)) g.setEdge(lead, id, {label:{type:"port", text:""}, color:colors[color]});
