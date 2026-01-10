@@ -257,7 +257,7 @@ def load_counters(profile:list[ProfileEvent]) -> None:
     run_number[k] += 1
     steps:list[dict] = []
     if (pmc:=v.get(ProfilePMCEvent)):
-      steps.append(create_step("PMC", ("/prg-pmc", len(ctxs), len(steps)), pmc))
+      steps.append(create_step("PMC", ("/prg-pmc", len(ctxs), len(steps)), pmc+[prg_events[k]]))
       all_counters[(name, run_number[k], k)] = pmc[0]
     if (sqtt:=v.get(ProfileSQTTEvent)):
       # to decode a SQTT trace, we need the raw stream, program binary and device properties
@@ -437,6 +437,148 @@ def amdgpu_cfg(lib:bytes, target:int) -> dict:
     pc_tokens[pc] = [{"st":s, "keys":amdgpu_tokenize(s) if i>0 else [s], "kind":int(i>0)} for i,s in enumerate(text.replace(",", " , ").split(" "))]
   return {"data":{"blocks":blocks, "paths":paths, "colors":cfg_colors, "pc_tokens":pc_tokens}, "src":"\n".join(lines)}
 
+def print_gpu_regfile_usage(reg_map,
+                           sgprs=132,
+                           vgprs=256,
+                           sgpr_cols=22,
+                           vgpr_cols=32,
+                           show_numbers=True,
+                           use_color=True,
+                           max_color_at=None):
+  """
+  Print fixed-size SGPR/VGPR grids (132 SGPRs, 256 VGPRs by default).
+
+  reg_map: dict like {("s", 4): 2, ("v", 0): 5, ...}
+  - Each cell shows either a usage number or '.' when unused.
+  - Optional ANSI color heatmap (works in most terminals).
+  """
+
+  def build_array(kind, size):
+    arr = [0] * size
+    for (k, idx), uses in reg_map.items():
+      if k != kind:
+        continue
+      if 0 <= idx < size:
+        try:
+          arr[idx] = int(uses)
+        except Exception:
+          arr[idx] = 0
+    return arr
+
+  s_use = build_array("s", sgprs)
+  v_use = build_array("v", vgprs)
+
+  # Determine scaling for color intensity.
+  max_seen = 0
+  for x in s_use:
+    if x > max_seen:
+      max_seen = x
+  for x in v_use:
+    if x > max_seen:
+      max_seen = x
+  if max_color_at is None:
+    max_color_at = max_seen if max_seen > 0 else 1
+
+  # ANSI helpers (background heat, readable foreground).
+  def clamp(n, lo, hi):
+    if n < lo:
+      return lo
+    if n > hi:
+      return hi
+    return n
+
+  def cell_text(val, width):
+    if not show_numbers:
+      return "#" * width if val > 0 else "." * width
+    if val == 0:
+      return "." * width
+    s = str(val)
+    if len(s) > width:
+      # Keep last digits; avoids widening grid.
+      s = s[-width:]
+    return s.rjust(width, " ")
+
+  def colorize(val, txt):
+    if not use_color:
+      return txt
+    if val <= 0:
+      return txt
+    # Map usage -> 0..5 intensity levels (simple, stable).
+    level = int(round((val / float(max_color_at)) * 5))
+    level = clamp(level, 1, 5)
+
+    # Background colors: dim -> hot
+    # 1: blue, 2: cyan, 3: green, 4: yellow, 5: red
+    bg = {
+      1: 44,  # blue
+      2: 46,  # cyan
+      3: 42,  # green
+      4: 43,  # yellow
+      5: 41,  # red
+    }[level]
+
+    # Foreground: black for yellow/green, white otherwise.
+    fg = 30 if level in (3, 4) else 97
+
+    return f"\x1b[{bg};{fg}m{txt}\x1b[0m"
+
+  def print_grid(title, uses, cols, idx_prefix):
+    size = len(uses)
+
+    # Pick cell width based on max usage (keeps alignment).
+    if show_numbers:
+      w = max(2, len(str(max_seen)) if max_seen > 0 else 1)
+    else:
+      w = 2
+
+    rows = (size + cols - 1) // cols
+    print(f"{title}  (total={size}, used={sum(1 for x in uses if x > 0)}, "
+          f"max_use={max_seen}, scale={max_color_at})")
+    print("-" * (len(title) + 40))
+
+    for r in range(rows):
+      base = r * cols
+      end = base + cols
+      # Row label shows the register index range.
+      lo = base
+      hi = min(end - 1, size - 1)
+      label = f"{idx_prefix}{lo:>3}-{idx_prefix}{hi:<3} | "
+
+      line = []
+      for i in range(base, min(end, size)):
+        val = uses[i]
+        txt = cell_text(val, w)
+        line.append(colorize(val, txt))
+      # Pad last row to keep a rectangle.
+      while len(line) < cols:
+        line.append("." * w)
+
+      print(label + " ".join(line))
+    print()
+
+  print_grid("SGPR FILE", s_use, sgpr_cols, "s")
+  print_grid("VGPR FILE", v_use, vgpr_cols, "v")
+
+def print_simd(e:ProfileProgramEvent):
+  from extra.assembly.amd.dsl import s, v, Reg, VCC_LO, VCC_HI, VCC, EXEC_LO, EXEC_HI, EXEC, SCC, M0, NULL, OFF
+  from extra.assembly.amd.asm import _op2dsl
+  pc_table = llvm_disasm(device_props[e.device]["gfx_target_version"], e.lib)
+  hw:dict[tuple[str, int], list[str]] = {}
+  for pc, (asm, _) in pc_table.items():
+    inst, *operands = asm.replace(",", " , ").split(" ")
+    regs = []
+    for op in operands:
+      try:
+        regs.append(eval(_op2dsl(op), {'s':s, 'v':v, 'VCC_LO':VCC_LO, 'VCC_HI':VCC_HI, 'VCC':VCC, 'EXEC_LO':EXEC_LO, 'EXEC_HI':EXEC_HI, 'EXEC':EXEC,
+                                 'SCC':SCC, 'M0':M0, 'NULL':NULL, 'OFF':OFF}))
+      except Exception: pass
+    for r in regs:
+      if not isinstance(r, Reg): continue
+      kind = type(r).__name__[0].lower()
+      for i in range(r.count):
+        hw.setdefault((kind, r.idx+i), []).append(inst)
+  print_gpu_regfile_usage({k:len(v) for k,v in hw.items()})
+
 # ** Main render function to get the complete details about a trace event
 
 def get_render(query:str) -> dict:
@@ -463,7 +605,9 @@ def get_render(query:str) -> dict:
       ret["rows"].append((name, durations[k][n-1], *[r[1] for r in pmc_table["rows"]]))
     ret["cols"] = ["Kernel", "Duration", *ret["cols"]]
     return ret
-  if fmt == "prg-pmc": return unpack_pmc(data[0])
+  if fmt == "prg-pmc":
+    print_simd(data[1])
+    return unpack_pmc(data[0])
   if fmt == "prg-sqtt":
     ret = {}
     if len((steps:=ctxs[i]["steps"])[j+1:]) == 0:
