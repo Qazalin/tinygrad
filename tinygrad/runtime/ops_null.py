@@ -34,8 +34,15 @@ class NullDevice(Compiled):
   def __init__(self, device:str):
     renderer:functools.partial|type[Renderer]
     match str(EMULATE.value):
-      case "AMD": renderer = functools.partial(AMDLLVMRenderer, "gfx1100")
-      case "AMD_RDNA4": renderer = functools.partial(AMDLLVMRenderer, "gfx1201")
+      case "AMD":
+        renderer = functools.partial(AMDLLVMRenderer, "gfx1100")
+        self.arch = "gfx1100"
+      case "AMD_RDNA4":
+        renderer = functools.partial(AMDLLVMRenderer, "gfx1201")
+        self.arch = "gfx1201"
+      case "AMD_CDNA4":
+        renderer = functools.partial(AMDLLVMRenderer, "gfx1201")
+        self.arch = "gfx950"
       case "": renderer = NullRenderer
       case _: raise RuntimeError(f"can't EMULATE device: {EMULATE.value}")
     compilers = CompilerSet([CompilerPair(renderer, Compiler), CompilerPair(functools.partial(IR3Renderer, 0x6030001), None, NULL_IR3), # adreno 630

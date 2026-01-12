@@ -398,13 +398,11 @@ class Inst:
       seg = self._values.get('seg', 0)
       if (seg.val if isinstance(seg, RawImm) else seg) == 1 and isinstance(orig_args.get('addr'), VGPR): self._values['sve'] = 1
     if cls_name == 'VOP3P':
-      op = orig_args.get('op')
-      is_cdna = 'cdna' in 
-      if hasattr(op, 'value'): op = op.value
-      # fma_mix ops (32-34) default to opsel_hi=0, WMMA ops (64-69 on RDNA3, 64-90 on RDNA4) default to opsel_hi=7 to match LLVM
-      if op in (32, 33, 34) and 'opsel_hi' not in orig_args: self._values['opsel_hi'] = self._values['opsel_hi2'] = 0
-      is_wmma = ('rdna3' in self.__class__.__module__ and op in range(64, 69)) or ('rdna4' in self.__class__.__module__ and op in range(64, 90))
-      if is_wmma and 'opsel_hi' not in orig_args: self._values['opsel_hi'], self._values['opsel_hi2'] = 3, 1
+      op_name = self.op_name.lower()
+      # fma_mix ops default to opsel_hi=0, WMMA ops default to opsel_hi=7 to match LLVM
+      if 'fma' in op_name and 'opsel_hi' not in orig_args: self._values['opsel_hi'] = self._values['opsel_hi2'] = 0
+      if 'wmma' in op_name and 'opsel_hi' not in orig_args: self._values['opsel_hi'], self._values['opsel_hi2'] = 3, 1
+      if 'mfma' in op_name and 'clmp' not in orig_args: self._values['clmp'] = 1
 
     # Encode all fields
     for name, val in list(self._values.items()):
