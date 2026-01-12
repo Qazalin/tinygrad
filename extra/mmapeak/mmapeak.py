@@ -37,7 +37,7 @@ def launchBenchmark(instruction, vgprIndices, dense=True, accum=False, **kwargs)
   insts = [s_mov_b32(S_LOOP_N, INTERNAL_LOOP)]
   loop_body = [instructions]*INSTRUCTIONS_PER_LOOP + [INST_LOOP_STEP, s_cmp_lg_i32(S_LOOP_N, 0)]
   insts += loop_body + [s_cbranch_scc1(-(sum(i.size() for i in loop_body) + 4) // 4), s_endpgm()]
-  lib = pack_hsaco(b"".join(i.to_bytes() for i in insts), KD)
+  lib = pack_hsaco(b"".join(i.to_bytes() for i in insts), KD, DEV.arch)
   fxn = AMDProgram(DEV, "matmul", lib)
   elapsed = min([fxn(global_size=(NUM_WORKGROUPS,1,1), local_size=(WAVE_SIZE*NUM_WAVES,1,1), wait=True) for _ in range(2)])
   FLOPs = FLOPS_PER_MATMUL * NUM_WAVES * NUM_WORKGROUPS * INTERNAL_LOOP * INSTRUCTIONS_PER_LOOP
