@@ -17,7 +17,24 @@ DIRECTIVE = ".amdhsa_wavefront_size32 1"
 
 assemblyTemplate = (pathlib.Path(__file__).parent / "template.s").read_text()
 
-def launchBenchmark(instruction, vgprIndices, dense=True, accum=False, extra=""):
+
+def createInst(instruction, vgprIndices, dense=True, accum=False, extra=""):
+  if accum:
+    instructions = instruction(v[0:vgprIndices[0]],
+                               v[vgprIndices[1]:vgprIndices[2]],
+                               v[vgprIndices[1]:vgprIndices[2]], **kwargs)
+  elif dense:
+    instructions = instruction(v[0:vgprIndices[0]],
+                               v[vgprIndices[1]:vgprIndices[2]],
+                               v[vgprIndices[1]:vgprIndices[2]], 1)
+  else:
+    instructions = instruction(v[0:vgprIndices[0]],
+                               v[vgprIndices[1]:vgprIndices[2]],
+                               v[vgprIndices[3]:vgprIndices[4]],
+                               v[vgprIndices[5]])
+  return instructions
+
+def launchBenchmark(inst, instruction, vgprIndices, dense=True, accum=False, extra=""):
   if accum:
     instructions = "{} a[0:{}], v[{}:{}], v[{}:{}], 1{}\n".format(instruction, vgprIndices[0],
                                                                 vgprIndices[1], vgprIndices[2],
@@ -31,6 +48,11 @@ def launchBenchmark(instruction, vgprIndices, dense=True, accum=False, extra="")
                                                                   vgprIndices[1], vgprIndices[2],
                                                                   vgprIndices[3], vgprIndices[4],
                                                                   vgprIndices[5])
+  from extra.assembly.amd.test.test_roundtrip import compile_asm
+  ours = createInst(inst, vgprIndices, dense, accum, extra)
+  print(instructions.rstrip())
+  print(ours.disasm())
+  return
   src = assemblyTemplate.replace("INTERNAL_LOOP", str(INTERNAL_LOOP)).replace("INSTRUCTION", instructions*INSTRUCTIONS_PER_LOOP)
   src = src.replace("DIRECTIVE", DIRECTIVE)
   lib = COMPILER.compile(src)
@@ -56,32 +78,33 @@ if __name__=="__main__":
     launchBenchmark("v_wmma_f32_16x16x16_f16", (7,8,15))
     launchBenchmark("v_wmma_i32_16x16x16_iu4", (7,8,9))
     launchBenchmark("v_wmma_i32_16x16x16_iu8", (7,8,11))
-  elif DEV.arch == 'gfx1201':
+  elif DEV.arch == 'gfx1200':
+    from extra.assembly.amd.autogen.rdna4.ins import *
     NUM_WORKGROUPS = 64
-    launchBenchmark("v_wmma_bf16_16x16x16_bf16", (3,4,7))
-    launchBenchmark("v_wmma_f16_16x16x16_f16", (3,4,7))
-    launchBenchmark("v_wmma_f32_16x16x16_bf16", (7,8,11))
-    launchBenchmark("v_wmma_f32_16x16x16_f16", (7,8,11))
-    launchBenchmark("v_wmma_i32_16x16x16_iu4", (7,8,8))
-    launchBenchmark("v_wmma_i32_16x16x16_iu8", (7,8,9))
-    launchBenchmark("v_wmma_f32_16x16x16_fp8_fp8", (7,8,9))
-    launchBenchmark("v_wmma_f32_16x16x16_fp8_bf8", (7,8,9))
-    launchBenchmark("v_wmma_f32_16x16x16_bf8_fp8", (7,8,9))
-    launchBenchmark("v_wmma_f32_16x16x16_bf8_bf8", (7,8,9))
+    launchBenchmark(v_wmma_bf16_16x16x16_bf16, "v_wmma_bf16_16x16x16_bf16", (3,4,7))
+    launchBenchmark(v_wmma_f16_16x16x16_f16, "v_wmma_f16_16x16x16_f16", (3,4,7))
+    launchBenchmark(v_wmma_f32_16x16x16_bf16, "v_wmma_f32_16x16x16_bf16", (7,8,11))
+    launchBenchmark(v_wmma_f32_16x16x16_f16, "v_wmma_f32_16x16x16_f16", (7,8,11))
+    launchBenchmark(v_wmma_i32_16x16x16_iu4, "v_wmma_i32_16x16x16_iu4", (7,8,8))
+    launchBenchmark(v_wmma_i32_16x16x16_iu8, "v_wmma_i32_16x16x16_iu8", (7,8,9))
+    launchBenchmark(v_wmma_f32_16x16x16_fp8_fp8, "v_wmma_f32_16x16x16_fp8_fp8", (7,8,9))
+    launchBenchmark(v_wmma_f32_16x16x16_fp8_bf8, "v_wmma_f32_16x16x16_fp8_bf8", (7,8,9))
+    launchBenchmark(v_wmma_f32_16x16x16_bf8_fp8, "v_wmma_f32_16x16x16_bf8_fp8", (7,8,9))
+    launchBenchmark(v_wmma_f32_16x16x16_bf8_bf8, "v_wmma_f32_16x16x16_bf8_bf8", (7,8,9))
     FLOPS_PER_MATMUL = 16*16*32*2
-    launchBenchmark("v_wmma_i32_16X16X32_iu4", (7,8,9))
-    launchBenchmark("v_swmmac_f32_16x16x32_f16", (7,8,11,12,19,20), False)
-    launchBenchmark("v_swmmac_f32_16x16x32_bf16", (7,8,11,12,19,20), False)
-    launchBenchmark("v_swmmac_f16_16x16x32_f16", (3,4,7,8,15,16), False)
-    launchBenchmark("v_swmmac_bf16_16x16x32_bf16", (3,4,7,8,15,16), False)
-    launchBenchmark("v_swmmac_i32_16x16x32_iu8", (7,8,9,10,13,14), False)
-    launchBenchmark("v_swmmac_i32_16x16x32_iu4", (7,8,8,9,10,11), False)
-    launchBenchmark("v_swmmac_f32_16x16x32_fp8_fp8", (7,8,9,10,13,14), False)
-    launchBenchmark("v_swmmac_f32_16x16x32_fp8_bf8", (7,8,9,10,13,14), False)
-    launchBenchmark("v_swmmac_f32_16x16x32_bf8_fp8", (7,8,9,10,13,14), False)
-    launchBenchmark("v_swmmac_f32_16x16x32_bf8_bf8", (7,8,9,10,13,14), False)
+    launchBenchmark(v_wmma_i32_16x16x32_iu4, "v_wmma_i32_16X16X32_iu4", (7,8,9))
+    launchBenchmark(v_swmmac_f32_16x16x32_f16, "v_swmmac_f32_16x16x32_f16", (7,8,11,12,19,20), False)
+    launchBenchmark(v_swmmac_f32_16x16x32_bf16, "v_swmmac_f32_16x16x32_bf16", (7,8,11,12,19,20), False)
+    launchBenchmark(v_swmmac_f16_16x16x32_f16, "v_swmmac_f16_16x16x32_f16", (3,4,7,8,15,16), False)
+    launchBenchmark(v_swmmac_bf16_16x16x32_bf16, "v_swmmac_bf16_16x16x32_bf16", (3,4,7,8,15,16), False)
+    launchBenchmark(v_swmmac_i32_16x16x32_iu8, "v_swmmac_i32_16x16x32_iu8", (7,8,9,10,13,14), False)
+    launchBenchmark(v_swmmac_i32_16x16x32_iu4, "v_swmmac_i32_16x16x32_iu4", (7,8,8,9,10,11), False)
+    launchBenchmark(v_swmmac_f32_16x16x32_fp8_fp8, "v_swmmac_f32_16x16x32_fp8_fp8", (7,8,9,10,13,14), False)
+    launchBenchmark(v_swmmac_f32_16x16x32_fp8_bf8, "v_swmmac_f32_16x16x32_fp8_bf8", (7,8,9,10,13,14), False)
+    launchBenchmark(v_swmmac_f32_16x16x32_bf8_fp8, "v_swmmac_f32_16x16x32_bf8_fp8", (7,8,9,10,13,14), False)
+    launchBenchmark(v_swmmac_f32_16x16x32_bf8_bf8, "v_swmmac_f32_16x16x32_bf8_bf8", (7,8,9,10,13,14), False)
     FLOPS_PER_MATMUL = 16*16*64*2
-    launchBenchmark("v_swmmac_i32_16x16x64_iu4", (7,8,9,10,13,14), False)
+    launchBenchmark(v_swmmac_i32_16x16x64_iu4, "v_swmmac_i32_16x16x64_iu4", (7,8,9,10,13,14), False)
   elif DEV.arch == 'gfx950':
     DIRECTIVE = ".amdhsa_accum_offset 4"
     NUM_WORKGROUPS = 256
