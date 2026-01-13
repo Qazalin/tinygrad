@@ -298,6 +298,83 @@ def unpack_sqtt(key:tuple[str, int], data:list, p:ProfileProgramEvent) -> tuple[
       events.append(ProfileRangeEvent(occ.simd_loc, f"OCC WAVE:{occ.wave_id} N:{next(units[u])}", Decimal(wave_start.pop(u)), Decimal(occ.time)))
   return cu_events, list(units), wave_insts
 
+# ** SQTT timeline decoder - converts raw SQTT packets to ProfileRangeEvents for visualization
+
+_VMEM_OPS = {"GLOBAL_LOAD", "GLOBAL_LOAD_VADDR", "GLOBAL_STORE", "GLOBAL_STORE_64", "GLOBAL_STORE_96", "GLOBAL_STORE_128", "GLOBAL_STORE_VADDR_128",
+             "FLAT_LOAD", "FLAT_STORE", "FLAT_STORE_64", "FLAT_STORE_96", "FLAT_STORE_128",
+             "OTHER_GLOBAL_LOAD", "OTHER_GLOBAL_LOAD_VADDR", "OTHER_GLOBAL_STORE_64", "OTHER_GLOBAL_STORE_96", "OTHER_GLOBAL_STORE_128",
+             "OTHER_GLOBAL_STORE_VADDR_128", "OTHER_FLAT_LOAD", "OTHER_FLAT_STORE", "OTHER_FLAT_STORE_64", "OTHER_FLAT_STORE_96",
+             "OTHER_FLAT_STORE_128"}
+_LDS_OPS = {"LDS_LOAD", "LDS_STORE", "LDS_STORE_64", "LDS_STORE_128",
+            "OTHER_LDS_LOAD", "OTHER_LDS_STORE", "OTHER_LDS_STORE_64", "OTHER_LDS_STORE_128"}
+
+def decode_sqtt_events(data: bytes) -> list[ProfileRangeEvent]:
+  """Decode raw SQTT blob into ProfileRangeEvents for timeline visualization.
+
+  Uses queues to pair issue packets (start time) with completion packets (end time):
+  - VALU: VALUINST issues -> ALUEXEC(VALU) completes
+  - VMEM: INST(GLOBAL_*/FLAT_*) issues -> VMEMEXEC(VMEM) completes
+  - LDS: INST(LDS_*) issues -> VMEMEXEC(LDS) completes
+  - SALU: INST(SALU/SMEM) issues -> ALUEXEC(SALU) completes
+  """
+  from collections import deque
+  from extra.assembly.amd.sqtt import decode, INST, VALUINST, ALUEXEC, VMEMEXEC, WAVESTART, WAVEEND, AluSrc, MemSrc, InstOp
+  events: list[ProfileRangeEvent] = []
+  wave_starts: dict[int, int] = {}  # wave_id -> start_time
+
+  # queues hold (start_time, name) for issued but not yet completed ops
+  valu_q: deque[tuple[int, str]] = deque()
+  vmem_q: deque[tuple[int, str]] = deque()
+  lds_q: deque[tuple[int, str]] = deque()
+  salu_q: deque[tuple[int, str]] = deque()
+
+  for p in decode(data):
+    # stop after 700K events?
+    if len(events) > 700_000: break
+    t = p._time
+    if isinstance(p, WAVESTART):
+      wave_starts[p.wave] = t
+    elif isinstance(p, WAVEEND):
+      if (st := wave_starts.pop(p.wave, None)) is not None:
+        events.append(ProfileRangeEvent("WAVE", f"wave:{p.wave}", Decimal(st), Decimal(t)))
+    elif isinstance(p, INST):
+      op_name = p.op.name if isinstance(p.op, InstOp) else f"0x{p.op:02x}"
+      # VMEM ops: global/flat memory
+      if op_name in _VMEM_OPS:
+        name = "load" if "LOAD" in op_name else "store"
+        vmem_q.append((t, name))
+      # LDS ops
+      elif op_name in _LDS_OPS:
+        name = "load" if "LOAD" in op_name else "store"
+        lds_q.append((t, name))
+      # SALU/SMEM ops
+      elif op_name in {"SALU", "SMEM", "SALU_SAVEEXEC"}:
+        salu_q.append((t, op_name.lower()))
+      # point events (no completion packet)
+      elif op_name == "MESSAGE":
+        events.append(ProfileRangeEvent("MSG", "send", Decimal(t), Decimal(t)))
+      elif op_name == "BARRIER":
+        events.append(ProfileRangeEvent("BARRIER", "wait", Decimal(t), Decimal(t)))
+    elif isinstance(p, VALUINST):
+      valu_q.append((t, "valu"))
+    elif isinstance(p, ALUEXEC):
+      if isinstance(p.src, AluSrc):
+        if p.src in {AluSrc.VALU, AluSrc.VALU_ALT} and valu_q:
+          st, name = valu_q.popleft()
+          events.append(ProfileRangeEvent("VALU", name, Decimal(st), Decimal(t)))
+        elif p.src == AluSrc.SALU and salu_q:
+          st, name = salu_q.popleft()
+          events.append(ProfileRangeEvent("SALU", name, Decimal(st), Decimal(t)))
+    elif isinstance(p, VMEMEXEC):
+      if isinstance(p.src, MemSrc):
+        if p.src in {MemSrc.VMEM, MemSrc.VMEM_ALT} and vmem_q:
+          st, name = vmem_q.popleft()
+          events.append(ProfileRangeEvent("VMEM", name, Decimal(st), Decimal(t)))
+        elif p.src in {MemSrc.LDS, MemSrc.LDS_ALT} and lds_q:
+          st, name = lds_q.popleft()
+          events.append(ProfileRangeEvent("LDS", name, Decimal(st), Decimal(t)))
+  return events
+
 def device_sort_fn(k:str) -> tuple[int, str, int]:
   order = {"GC": 0, "USER": 1, "TINY": 2, "DISK": 999}
   dname = k.split()[0]
@@ -467,6 +544,13 @@ def get_render(query:str) -> dict:
     ret = {}
     if len((steps:=ctxs[i]["steps"])[j+1:]) == 0:
       with soft_err(lambda err: ret.update(err)):
+        # add timeline step using our decoder
+        _, sqtt_list, _ = data
+        for idx, sqtt_evt in enumerate(sqtt_list):
+          timeline_events = decode_sqtt_events(sqtt_evt.blob)
+          if timeline_events:
+            steps.append(create_step(f"Timeline {idx}", ("/sqtt-timeline", i, len(steps)), depth=1, data=timeline_events))
+        # existing cu-level steps
         cu_events, units, wave_insts = unpack_sqtt(*data)
         for cu in sorted(cu_events, key=row_tuple):
           steps.append(create_step(f"{cu} {len(cu_events[cu])}", ("/cu-sqtt", i, len(steps)), depth=1,
@@ -475,6 +559,9 @@ def get_render(query:str) -> dict:
             steps.append(create_step(k.replace(cu, ""), ("/sqtt-insts", i, len(steps)), loc=(data:=wave_insts[cu][k])["loc"], depth=2, data=data))
     return {**ret, "steps":[{k:v for k,v in s.items() if k != "data"} for s in steps[j+1:]]}
   if fmt == "cu-sqtt": return {"value":get_profile(data, sort_fn=row_tuple), "content_type":"application/octet-stream"}
+  if fmt == "sqtt-timeline":
+    order = {"WAVE": 0, "SMEM": 1, "SALU": 2, "VALU": 3, "VMEM": 4, "LDS": 5, "MSG": 6, "BARRIER": 7}
+    return {"value":get_profile(data, sort_fn=lambda k: (order.get(k, 99), k)), "content_type":"application/octet-stream"}
   if fmt == "sqtt-insts":
     columns = ["PC", "Instruction", "Hits", "Cycles", "Stall", "Type"]
     inst_columns = ["N", "Clk", "Idle", "Dur", "Stall"]
