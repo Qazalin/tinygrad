@@ -317,7 +317,7 @@ def unpack_sqtt2(data:list) -> tuple[dict[str, list[ProfileEvent]], list[str]]:
   cu_events:dict[str, list[ProfileEvent]] = {}
   wave_starts:dict[WaveUnit, int] = {} # unit -> start_time
   inst_traces:dict[WaveUnit, int] = {} # unit -> number of inst traces
-  units:dict[WaveUnit, itertools.count] = {} # unit -> number of waves that landed on it
+  rows:dict[str, itertools.count] = {} # row name -> number of traces on that row
   for e in data:
     if e.se != 1: continue
     if getenv("PRINT_PACKETS"): print_packets(decode(e.blob))
@@ -325,15 +325,16 @@ def unpack_sqtt2(data:list) -> tuple[dict[str, list[ProfileEvent]], list[str]]:
       if any(len(v) > 10_000 for v in cu_events.values()): break
       if isinstance(p, WAVESTART): wave_starts[WaveUnit.from_packet(e, p)] = p._time
       elif isinstance(p, WAVEEND):
-        if (wu:=WaveUnit.from_packet(e, p)) not in units: units[wu] = itertools.count(0)
+        if (wu:=WaveUnit.from_packet(e, p)).wave_loc not in rows: rows[wu.wave_loc] = itertools.count(0)
         if (events:=cu_events.get(wu.cu_loc)) is None: cu_events[wu.cu_loc] = events = []
         wave_type = "INST" if inst_traces.get(wu) else "OCC"
-        events.append(ProfileRangeEvent(wu.simd_loc, f"{wave_type} WAVE:{p.wave} N:{next(units[wu])}", Decimal(wave_starts.pop(wu)),Decimal(p._time)))
+        st = wave_starts.pop(wu)
+        events.append(ProfileRangeEvent(wu.simd_loc, f"{wave_type} WAVE:{p.wave} N:{next(rows[wu.wave_loc])}", Decimal(st),Decimal(p._time)))
       elif isinstance(p, INST):
         # TODO: cu and simd numbers are not correct, what is the right way to get CU/SIMD of the INST packet?
         wu = WaveUnit(e.se, 0, 0, p.wave)
         inst_traces[wu] = inst_traces.get(wu, 0) + 1
-  return cu_events, [k.wave_loc for k in units]
+  return cu_events, list(rows)
 
 def device_sort_fn(k:str) -> tuple[int, str, int]:
   order = {"GC": 0, "USER": 1, "TINY": 2, "DISK": 999}
