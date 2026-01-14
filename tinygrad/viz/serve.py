@@ -300,6 +300,13 @@ def unpack_sqtt(key:tuple[str, int], data:list, p:ProfileProgramEvent) -> tuple[
 
 # ** SQTT timeline decoder - converts raw SQTT packets to ProfileRangeEvents for visualization
 
+# Maps InstOp to (device_row, event_name)
+_INST_OP_MAP: dict[str, tuple[str, str]] = {
+  "SMEM": ("SMEM", "issue"), "MESSAGE": ("MSG", "send"), "BARRIER": ("BARRIER", "issue"),
+  "VALU_TRANS": ("VALU", "trans"), "VALU_64_SHIFT": ("VALU", "shift64"), "VALU_MAD64": ("VALU", "mad64"), "VALU_64": ("VALU", "op64"),
+  "VINTERP": ("VALU", "interp"), "JUMP": ("SALU", "jump"), "JUMP_NO": ("SALU", "jump_no"), "SALU": ("SALU", "issue"),
+  "SALU_SAVEEXEC": ("SALU", "saveexec"), "VALU_CMPX": ("VALU", "cmpx"),
+}
 _VMEM_OPS = {"GLOBAL_LOAD", "GLOBAL_LOAD_VADDR", "GLOBAL_STORE", "GLOBAL_STORE_64", "GLOBAL_STORE_96", "GLOBAL_STORE_128", "GLOBAL_STORE_VADDR_128",
              "FLAT_LOAD", "FLAT_STORE", "FLAT_STORE_64", "FLAT_STORE_96", "FLAT_STORE_128",
              "OTHER_GLOBAL_LOAD", "OTHER_GLOBAL_LOAD_VADDR", "OTHER_GLOBAL_STORE_64", "OTHER_GLOBAL_STORE_96", "OTHER_GLOBAL_STORE_128",
@@ -309,70 +316,41 @@ _LDS_OPS = {"LDS_LOAD", "LDS_STORE", "LDS_STORE_64", "LDS_STORE_128",
             "OTHER_LDS_LOAD", "OTHER_LDS_STORE", "OTHER_LDS_STORE_64", "OTHER_LDS_STORE_128"}
 
 def decode_sqtt_events(data: bytes) -> list[ProfileRangeEvent]:
-  """Decode raw SQTT blob into ProfileRangeEvents for timeline visualization.
-
-  Uses queues to pair issue packets (start time) with completion packets (end time):
-  - VALU: VALUINST issues -> ALUEXEC(VALU) completes
-  - VMEM: INST(GLOBAL_*/FLAT_*) issues -> VMEMEXEC(VMEM) completes
-  - LDS: INST(LDS_*) issues -> VMEMEXEC(LDS) completes
-  - SALU: INST(SALU/SMEM) issues -> ALUEXEC(SALU) completes
-  """
-  from collections import deque
+  """Decode raw SQTT blob into ProfileRangeEvents for timeline visualization."""
   from extra.assembly.amd.sqtt import decode, INST, VALUINST, ALUEXEC, VMEMEXEC, WAVESTART, WAVEEND, AluSrc, MemSrc, InstOp
   events: list[ProfileRangeEvent] = []
   wave_starts: dict[int, int] = {}  # wave_id -> start_time
-
-  # queues hold (start_time, name) for issued but not yet completed ops
-  valu_q: deque[tuple[int, str]] = deque()
-  vmem_q: deque[tuple[int, str]] = deque()
-  lds_q: deque[tuple[int, str]] = deque()
-  salu_q: deque[tuple[int, str]] = deque()
+  S = 1
 
   for p in decode(data):
-    # stop after 700K events?
-    if len(events) > 700_000: break
-    t = p._time
+    if len(events) > 10_000: break
+    t = Decimal(p._time)
     if isinstance(p, WAVESTART):
-      wave_starts[p.wave] = t
+      wave_starts[p.wave] = p._time
     elif isinstance(p, WAVEEND):
       if (st := wave_starts.pop(p.wave, None)) is not None:
-        events.append(ProfileRangeEvent("WAVE", f"wave:{p.wave}", Decimal(st), Decimal(t)))
+        events.append(ProfileRangeEvent("WAVE", f"wave:{p.wave}", Decimal(st), t))
     elif isinstance(p, INST):
       op_name = p.op.name if isinstance(p.op, InstOp) else f"0x{p.op:02x}"
-      # VMEM ops: global/flat memory
-      if op_name in _VMEM_OPS:
+      if op_name in _INST_OP_MAP:
+        dev, name = _INST_OP_MAP[op_name]
+        events.append(ProfileRangeEvent(dev, name, t, t+S))
+      elif op_name in _VMEM_OPS:
         name = "load" if "LOAD" in op_name else "store"
-        vmem_q.append((t, name))
-      # LDS ops
+        events.append(ProfileRangeEvent("VMEM", name, t, t+S))
       elif op_name in _LDS_OPS:
         name = "load" if "LOAD" in op_name else "store"
-        lds_q.append((t, name))
-      # SALU/SMEM ops
-      elif op_name in {"SALU", "SMEM", "SALU_SAVEEXEC"}:
-        salu_q.append((t, op_name.lower()))
-      # point events (no completion packet)
-      elif op_name == "MESSAGE":
-        events.append(ProfileRangeEvent("MSG", "send", Decimal(t), Decimal(t)))
-      elif op_name == "BARRIER":
-        events.append(ProfileRangeEvent("BARRIER", "wait", Decimal(t), Decimal(t)))
+        events.append(ProfileRangeEvent("LDS", name, t, t+S))
     elif isinstance(p, VALUINST):
-      valu_q.append((t, "valu"))
+      events.append(ProfileRangeEvent("VALU", "issue", t, t+S))
     elif isinstance(p, ALUEXEC):
       if isinstance(p.src, AluSrc):
-        if p.src in {AluSrc.VALU, AluSrc.VALU_ALT} and valu_q:
-          st, name = valu_q.popleft()
-          events.append(ProfileRangeEvent("VALU", name, Decimal(st), Decimal(t)))
-        elif p.src == AluSrc.SALU and salu_q:
-          st, name = salu_q.popleft()
-          events.append(ProfileRangeEvent("SALU", name, Decimal(st), Decimal(t)))
+        if p.src in {AluSrc.SALU}: events.append(ProfileRangeEvent("SALU", "exec", t, t+S))
+        elif p.src in {AluSrc.VALU, AluSrc.VALU_ALT}: events.append(ProfileRangeEvent("VALU", "exec", t, t+S))
     elif isinstance(p, VMEMEXEC):
       if isinstance(p.src, MemSrc):
-        if p.src in {MemSrc.VMEM, MemSrc.VMEM_ALT} and vmem_q:
-          st, name = vmem_q.popleft()
-          events.append(ProfileRangeEvent("VMEM", name, Decimal(st), Decimal(t)))
-        elif p.src in {MemSrc.LDS, MemSrc.LDS_ALT} and lds_q:
-          st, name = lds_q.popleft()
-          events.append(ProfileRangeEvent("LDS", name, Decimal(st), Decimal(t)))
+        if p.src in {MemSrc.VMEM, MemSrc.VMEM_ALT}: events.append(ProfileRangeEvent("VMEM", "exec", t, t+S))
+        elif p.src in {MemSrc.LDS, MemSrc.LDS_ALT}: events.append(ProfileRangeEvent("LDS", "exec", t, t+S))
   return events
 
 def device_sort_fn(k:str) -> tuple[int, str, int]:

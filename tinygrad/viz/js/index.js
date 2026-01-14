@@ -789,7 +789,7 @@ async function main() {
     // timeline with cycles on the x axis
     if (ret instanceof ArrayBuffer) {
       // cu layout has a fixed level for each wave slot, otherwise use the default overlapping layout
-      opts = {heightScale:0.5, hideLabels:true, levelKey:ckey.startswith("/cu-sqtt") ? (e) => parseInt(e.name.split(" ")[1].split(":")[1]) : null };
+      opts = {heightScale:0.5, hideLabels:true, levelKey:ckey.startsWith("/cu-sqtt") ? (e) => parseInt(e.name.split(" ")[1].split(":")[1]) : null };
       return renderProfiler(ckey, "clk", opts);
     }
     metadata.innerHTML = "";
