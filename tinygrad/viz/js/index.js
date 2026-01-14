@@ -325,10 +325,14 @@ async function renderProfiler(path, unit, opts) {
         }
         if (depth === 0) colorKey = e.name.split(" ")[0];
         if (!colorMap.has(colorKey)) {
-          const color = colors instanceof Map ? (colors.get(colorKey) || colors.get("DEFAULT")) : cycleColors(colors, colorMap.size);
+          let color = colors instanceof Map ? (colors.get(colorKey) || colors.get("DEFAULT")) : cycleColors(colors, colorMap.size);
           colorMap.set(colorKey, d3.rgb(color));
         }
-        const fillColor = colorMap.get(colorKey).brighter(0.3*depth).toString();
+        let color = colorMap.get(colorKey);
+        if (e.name.includes("BARRIER")) {
+          color = d3.rgb("#d00000");
+        }
+        const fillColor = color.brighter(0.3*depth).toString();
         const label = parseColors(e.name).map(({ color, st }) => ({ color, st, width:ctx.measureText(st).width }));
         let shapeRef = e.ref;
         if (shapeRef != null) { ref = {ctx:e.ref, step:0}; shapeRef = ref; }
@@ -481,7 +485,8 @@ async function renderProfiler(path, unit, opts) {
           if (e.x>et || e.x+e.width<st) continue;
           const x = xscale(e.x);
           const y = offsetY+e.y;
-          const width = xscale(e.x+e.width)-x;
+          let width = xscale(e.x+e.width)-x;
+          if (width < 0.01) width = 0.01;
           p.rect(x, y, width, e.height);
           visible.push({ y0:y, y1:y+e.height, x0:x, x1:x+width, arg:e.arg });
           ctx.fillStyle = e.fillColor; ctx.fill(p);

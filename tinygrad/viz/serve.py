@@ -320,12 +320,14 @@ def unpack_sqtt2(data:list) -> tuple[dict[str, list[ProfileEvent]], list[str]]:
   rows:dict[str, itertools.count] = {} # row name -> number of traces on that row
   all_ops:dict[str, int] = {}
   unpacked_waves = 0
+  unpacked_events = 0
   for e in data:
     #if e.se != 1: continue
     if getenv("PRINT_PACKETS"): print_packets(decode(e.blob))
-    N_CYCLES = 100 # 1 cycle is too small to show the INST / VALUINST shapes, find a better way
+    N_CYCLES = 1 # 1 cycle is too small to show the INST / VALUINST shapes, find a better way
     for p in decode(e.blob):
-      if unpacked_waves > 1000: break
+      if unpacked_events > 100_000: break
+      if unpacked_waves > 10: break
       t = Decimal(p._time)
       if isinstance(p, WAVESTART): wave_starts[WaveUnit.from_packet(e, p)] = t
       elif isinstance(p, WAVEEND):
@@ -337,6 +339,7 @@ def unpack_sqtt2(data:list) -> tuple[dict[str, list[ProfileEvent]], list[str]]:
         st = wave_starts.pop(wu)
         events.append(ProfileRangeEvent(wu.simd_loc, f"{wave_type} WAVE:{p.wave} N:{next(rows[wu.wave_loc])}", Decimal(st), t))
       elif isinstance(p, INST):
+        unpacked_events += 1
         # TODO: cu and simd numbers are not correct, what is the right way to get CU/SIMD of the INST packet?
         wu = WaveUnit(e.se, 0, 0, p.wave)
         inst_traces[wu] = inst_traces.get(wu, 0) + 1
@@ -347,8 +350,11 @@ def unpack_sqtt2(data:list) -> tuple[dict[str, list[ProfileEvent]], list[str]]:
         row_name = f"{wu.wave_loc} {packet_type}:1"
         if row_name not in rows: rows[row_name] = itertools.count(0)
         if (events:=cu_events.get(wu.cu_loc)) is None: cu_events[wu.cu_loc] = events = []
-        events.append(ProfileRangeEvent(row_name, f"{packet_type} {op_name}:{op_idx}", t, t+N_CYCLES))
+        WIDTH = N_CYCLES
+        if "BARRIER" in op_name: WIDTH = 40
+        events.append(ProfileRangeEvent(row_name, f"{packet_type} {op_name}:{op_idx}", t, t+WIDTH))
       elif isinstance(p, VALUINST):
+        unpacked_events += 1
         # TODO: cu and simd numbers are not correct, what is the right way to get CU/SIMD of the INST packet?
         wu = WaveUnit(e.se, 0, 0, p.wave)
         inst_traces[wu] = inst_traces.get(wu, 0) + 1
@@ -359,6 +365,7 @@ def unpack_sqtt2(data:list) -> tuple[dict[str, list[ProfileEvent]], list[str]]:
         if (events:=cu_events.get(wu.cu_loc)) is None: cu_events[wu.cu_loc] = events = []
         events.append(ProfileRangeEvent(row_name, f"{packet_type} OP:{op_idx}", t, t+N_CYCLES))
       elif isinstance(p, IMMEDIATE):
+        unpacked_events += 1
         # TODO: cu and simd numbers are not correct, what is the right way to get CU/SIMD of the INST packet?
         wu = WaveUnit(e.se, 0, 0, p.wave)
         inst_traces[wu] = inst_traces.get(wu, 0) + 1
@@ -369,6 +376,7 @@ def unpack_sqtt2(data:list) -> tuple[dict[str, list[ProfileEvent]], list[str]]:
         if (events:=cu_events.get(wu.cu_loc)) is None: cu_events[wu.cu_loc] = events = []
         events.append(ProfileRangeEvent(row_name, f"{packet_type} OP:{op_idx}", t, t+N_CYCLES))
       elif isinstance(p, VMEMEXEC):
+        unpacked_events += 1
         # TODO: cu and simd numbers are not correct, what is the right way to get CU/SIMD of the INST packet?
         wu = WaveUnit(e.se, 0, 0, 0)
         inst_traces[wu] = inst_traces.get(wu, 0) + 1
@@ -379,6 +387,7 @@ def unpack_sqtt2(data:list) -> tuple[dict[str, list[ProfileEvent]], list[str]]:
         if (events:=cu_events.get(wu.cu_loc)) is None: cu_events[wu.cu_loc] = events = []
         events.append(ProfileRangeEvent(row_name, f"{packet_type} OP:{op_idx}", t, t+N_CYCLES))
       elif isinstance(p, ALUEXEC):
+        unpacked_events += 1
         # TODO: cu and simd numbers are not correct, what is the right way to get CU/SIMD of the INST packet?
         wu = WaveUnit(e.se, 0, 0, 0)
         inst_traces[wu] = inst_traces.get(wu, 0) + 1
