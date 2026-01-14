@@ -313,27 +313,81 @@ class WaveUnit:
   def wave_loc(self) -> str: return f"{self.simd_loc} W:{self.wave_id}"
 
 def unpack_sqtt2(data:list) -> tuple[dict[str, list[ProfileEvent]], list[str]]:
-  from extra.assembly.amd.sqtt import decode, print_packets, WAVESTART, WAVEEND, INST
+  from extra.assembly.amd.sqtt import decode, print_packets, WAVESTART, WAVEEND, INST, InstOp, VALUINST, IMMEDIATE, VMEMEXEC, ALUEXEC
   cu_events:dict[str, list[ProfileEvent]] = {}
   wave_starts:dict[WaveUnit, int] = {} # unit -> start_time
   inst_traces:dict[WaveUnit, int] = {} # unit -> number of inst traces
   rows:dict[str, itertools.count] = {} # row name -> number of traces on that row
+  all_ops:dict[str, int] = {}
+  unpacked_waves = 0
   for e in data:
-    if e.se != 1: continue
+    #if e.se != 1: continue
     if getenv("PRINT_PACKETS"): print_packets(decode(e.blob))
+    N_CYCLES = 100 # 1 cycle is too small to show the INST / VALUINST shapes, find a better way
     for p in decode(e.blob):
-      if any(len(v) > 10_000 for v in cu_events.values()): break
-      if isinstance(p, WAVESTART): wave_starts[WaveUnit.from_packet(e, p)] = p._time
+      if unpacked_waves > 1000: break
+      t = Decimal(p._time)
+      if isinstance(p, WAVESTART): wave_starts[WaveUnit.from_packet(e, p)] = t
       elif isinstance(p, WAVEEND):
+        unpacked_waves += 1
+        #continue
         if (wu:=WaveUnit.from_packet(e, p)).wave_loc not in rows: rows[wu.wave_loc] = itertools.count(0)
         if (events:=cu_events.get(wu.cu_loc)) is None: cu_events[wu.cu_loc] = events = []
         wave_type = "INST" if inst_traces.get(wu) else "OCC"
         st = wave_starts.pop(wu)
-        events.append(ProfileRangeEvent(wu.simd_loc, f"{wave_type} WAVE:{p.wave} N:{next(rows[wu.wave_loc])}", Decimal(st),Decimal(p._time)))
+        events.append(ProfileRangeEvent(wu.simd_loc, f"{wave_type} WAVE:{p.wave} N:{next(rows[wu.wave_loc])}", Decimal(st), t))
       elif isinstance(p, INST):
         # TODO: cu and simd numbers are not correct, what is the right way to get CU/SIMD of the INST packet?
         wu = WaveUnit(e.se, 0, 0, p.wave)
         inst_traces[wu] = inst_traces.get(wu, 0) + 1
+        op_name = p.op.name if isinstance(p.op, InstOp) else f"0x{p.op:02x}"
+        op_idx = all_ops.setdefault(op_name, len(all_ops)) # TODO: make this a fixed order (eg. SMEM is always the first row)
+        #fields = f"wave={p.wave} op={op_name}" + (" flag1" if p.flag1 else "") + (" flag2" if p.flag2 else "")
+        packet_type = "SINST"
+        row_name = f"{wu.wave_loc} {packet_type}:1"
+        if row_name not in rows: rows[row_name] = itertools.count(0)
+        if (events:=cu_events.get(wu.cu_loc)) is None: cu_events[wu.cu_loc] = events = []
+        events.append(ProfileRangeEvent(row_name, f"{packet_type} {op_name}:{op_idx}", t, t+N_CYCLES))
+      elif isinstance(p, VALUINST):
+        # TODO: cu and simd numbers are not correct, what is the right way to get CU/SIMD of the INST packet?
+        wu = WaveUnit(e.se, 0, 0, p.wave)
+        inst_traces[wu] = inst_traces.get(wu, 0) + 1
+        packet_type = "VALUINST"
+        op_idx = 0
+        row_name = f"{wu.wave_loc} {packet_type}:1"
+        if row_name not in rows: rows[row_name] = itertools.count(0)
+        if (events:=cu_events.get(wu.cu_loc)) is None: cu_events[wu.cu_loc] = events = []
+        events.append(ProfileRangeEvent(row_name, f"{packet_type} OP:{op_idx}", t, t+N_CYCLES))
+      elif isinstance(p, IMMEDIATE):
+        # TODO: cu and simd numbers are not correct, what is the right way to get CU/SIMD of the INST packet?
+        wu = WaveUnit(e.se, 0, 0, p.wave)
+        inst_traces[wu] = inst_traces.get(wu, 0) + 1
+        packet_type = "IMMEDIATE"
+        op_idx = 0
+        row_name = f"{wu.wave_loc} {packet_type}:1"
+        if row_name not in rows: rows[row_name] = itertools.count(0)
+        if (events:=cu_events.get(wu.cu_loc)) is None: cu_events[wu.cu_loc] = events = []
+        events.append(ProfileRangeEvent(row_name, f"{packet_type} OP:{op_idx}", t, t+N_CYCLES))
+      elif isinstance(p, VMEMEXEC):
+        # TODO: cu and simd numbers are not correct, what is the right way to get CU/SIMD of the INST packet?
+        wu = WaveUnit(e.se, 0, 0, 0)
+        inst_traces[wu] = inst_traces.get(wu, 0) + 1
+        packet_type = "VMEMEXEC"
+        op_idx = 0
+        row_name = f"{wu.simd_loc} {packet_type}:0"
+        if row_name not in rows: rows[row_name] = itertools.count(0)
+        if (events:=cu_events.get(wu.cu_loc)) is None: cu_events[wu.cu_loc] = events = []
+        events.append(ProfileRangeEvent(row_name, f"{packet_type} OP:{op_idx}", t, t+N_CYCLES))
+      elif isinstance(p, ALUEXEC):
+        # TODO: cu and simd numbers are not correct, what is the right way to get CU/SIMD of the INST packet?
+        wu = WaveUnit(e.se, 0, 0, 0)
+        inst_traces[wu] = inst_traces.get(wu, 0) + 1
+        packet_type = "ALUEXEC"
+        op_idx = 0
+        row_name = f"{wu.simd_loc} {packet_type}:0"
+        if row_name not in rows: rows[row_name] = itertools.count(0)
+        if (events:=cu_events.get(wu.cu_loc)) is None: cu_events[wu.cu_loc] = events = []
+        events.append(ProfileRangeEvent(row_name, f"{packet_type} OP:{op_idx}", t, t+N_CYCLES))
   return cu_events, list(rows)
 
 def device_sort_fn(k:str) -> tuple[int, str, int]:
