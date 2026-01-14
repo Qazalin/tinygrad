@@ -313,13 +313,14 @@ class WaveUnit:
   def wave_loc(self) -> str: return f"{self.simd_loc} W:{self.wave_id}"
 
 def unpack_sqtt2(data:list) -> tuple[dict[str, list[ProfileEvent]], list[str]]:
-  from extra.assembly.amd.sqtt import decode, WAVESTART, WAVEEND, INST
+  from extra.assembly.amd.sqtt import decode, print_packets, WAVESTART, WAVEEND, INST
   cu_events:dict[str, list[ProfileEvent]] = {}
   wave_starts:dict[WaveUnit, int] = {} # unit -> start_time
   inst_traces:dict[WaveUnit, int] = {} # unit -> number of inst traces
   units:dict[WaveUnit, itertools.count] = {} # unit -> number of waves that landed on it
   for e in data:
     if e.se != 1: continue
+    if getenv("PRINT_PACKETS"): print_packets(decode(e.blob))
     for p in decode(e.blob):
       if any(len(v) > 10_000 for v in cu_events.values()): break
       if isinstance(p, WAVESTART): wave_starts[WaveUnit.from_packet(e, p)] = p._time
