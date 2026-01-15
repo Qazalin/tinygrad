@@ -56,17 +56,17 @@ amdhsa.kernels:
         .size: 8
         .value_kind: global_buffer
         .value_type: bf16
-      - .name: M
+      - .name: AM
         .offset: 24
         .size: 4
         .value_kind: by_value
         .value_type: u32
-      - .name: N
+      - .name: BN
         .offset: 28
         .size: 4
         .value_kind: by_value
         .value_type: u32
-      - .name: K
+      - .name: CK
         .offset: 32
         .size: 4
         .value_kind: by_value
