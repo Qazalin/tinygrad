@@ -23,8 +23,9 @@ _RDNA_FORMATS_32 = [SOP1, SOPC, SOPP, SOPK, VOPC, VOP1, SOP2, VOP2]  # SOP2/VOP2
 _CDNA_FORMATS_64 = [C_VOP3P, VOP3A, C_DS, C_FLAT, C_SMEM]
 _CDNA_FORMATS_32 = [C_SOP1, C_SOPC, C_SOPP, C_SOPK, C_VOPC, C_VOP1, C_SOP2, C_VOP2]
 _CDNA_VOP3B_OPS = {281, 282, 283, 284, 285, 286, 480, 481, 488, 489}  # VOP3B opcodes
-_RDNA4_FORMATS_64 = [R4_VOPD, R4_VOP3P, R4_VINTERP, R4_VOP3, R4_DS, R4_SMEM]
-_RDNA4_FORMATS_32 = [R4_SOP1, R4_SOPC, R4_SOPP, R4_SOPK, R4_VOPC, R4_VOP1, R4_SOP2, R4_VOP2]
+# RDNA4 kernels compiled by HIP use RDNA3-compatible encodings, but VOPD uses RDNA4-specific opcode names
+_RDNA4_FORMATS_64 = [R4_VOPD, VOP3P, VINTERP, VOP3, DS, FLAT, SMEM]
+_RDNA4_FORMATS_32 = _RDNA_FORMATS_32
 _RDNA4_VOP3SD_OPS = {288, 289, 290, 764, 765, 766, 767, 768, 769, 770}
 _RDNA3_VOP3SD_OPS = {288, 289, 290, 764, 765, 766, 767, 768, 769, 770}
 # Instructions with SGPR destination (READLANE, READFIRSTLANE, and VOP3-encoded VOPC)
@@ -51,15 +52,15 @@ def detect_format(data: bytes, arch: str = "rdna3") -> type[Inst]:
     if (word >> 30) == 0b11:
       for cls in _RDNA4_FORMATS_64:
         if _matches_encoding(word, cls):
-          if cls is R4_VOP3:
+          if cls is VOP3:  # RDNA4 uses RDNA3's VOP3 class
             opcode = (word >> 16) & 0x3ff
-            if opcode in _RDNA4_VOP3SD_OPS: return R4_VOP3SD
-            if opcode in _VOP3_SDST_OPS or opcode < 256: return R4_VOP3_SDST  # VOP3-encoded VOPC (op < 256) writes to SGPR
+            if opcode in _RDNA3_VOP3SD_OPS: return VOP3SD
+            if opcode in _VOP3_SDST_OPS or opcode < 256: return VOP3_SDST  # VOP3-encoded VOPC (op < 256) writes to SGPR
           return cls
       raise ValueError(f"unknown RDNA4 64-bit format word={word:#010x}")
     for cls in _RDNA4_FORMATS_32:
       if _matches_encoding(word, cls):
-        if cls is R4_VOP1 and ((word >> 9) & 0xff) in _VOP1_SDST_OPS: return R4_VOP1_SDST
+        if cls is VOP1 and ((word >> 9) & 0xff) in _VOP1_SDST_OPS: return VOP1_SDST
         return cls
     raise ValueError(f"unknown RDNA4 32-bit format word={word:#010x}")
   # RDNA3 (default)

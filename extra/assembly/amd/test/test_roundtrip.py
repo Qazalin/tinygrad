@@ -4,6 +4,7 @@ import unittest, io, sys, re, subprocess, os
 from extra.assembly.amd.dsl import Inst
 from extra.assembly.amd.decode import decode_inst, detect_format
 from extra.assembly.amd.test.helpers import get_llvm_mc, get_llvm_objdump
+from extra.assembly.amd.autogen.rdna4.ins import VOPD as R4_VOPD  # RDNA4-specific opcodes in VOPD format
 
 # arch: (mcpu, mattr)
 ARCH_CONFIG = {
@@ -98,7 +99,7 @@ class TestTinygradKernelRoundtrip(unittest.TestCase):
     compiler = HIPCompiler(mcpu)
 
     # First pass: decode all instructions and collect info
-    decoded_instrs: list[tuple] = []  # list of (ki, offset, orig_bytes, decoded, our_disasm, decode_ok, decode_err)
+    decoded_instrs: list[tuple] = []  # list of (ki, offset, orig_bytes, decoded, our_disasm, decode_ok, decode_err, fmt)
     for ki, kernel in enumerate(kernels):
       compiler.disassemble(elfs[ki])
       offset = 0
@@ -106,7 +107,7 @@ class TestTinygradKernelRoundtrip(unittest.TestCase):
         remaining = kernel.code[offset:]
         fmt = detect_format(remaining, arch)
         if fmt is None:
-          decoded_instrs.append((ki, offset, None, None, None, False, "no format"))
+          decoded_instrs.append((ki, offset, None, None, None, False, "no format", None))
           offset += 4
           continue
 
@@ -123,27 +124,33 @@ class TestTinygradKernelRoundtrip(unittest.TestCase):
           print(our_disasm)
           decode_ok = reencoded == orig_bytes
           decode_err: str | None = None if decode_ok else f"orig={orig_bytes.hex()} reenc={reencoded.hex()}"
-          decoded_instrs.append((ki, offset, orig_bytes, decoded, our_disasm, decode_ok, decode_err))
+          decoded_instrs.append((ki, offset, orig_bytes, decoded, our_disasm, decode_ok, decode_err, fmt))
         except Exception as e:
-          decoded_instrs.append((ki, offset, remaining[:base_size], None, None, False, str(e)))
+          decoded_instrs.append((ki, offset, remaining[:base_size], None, None, False, str(e), fmt))
           size = base_size
 
         offset += size
 
     # Collect disasm strings for batched LLVM calls - skip unknown opcodes (op_X) that LLVM can't compile
-    asm_test_instrs: list[tuple[int, str, bytes]] = []  # (idx, our_disasm, orig_bytes) for asm test
+    asm_test_instrs: list[tuple[int, str, bytes, str]] = []  # (idx, our_disasm, orig_bytes, compile_arch) for asm test
     disasm_test_instrs: list[tuple[int, str]] = []  # (idx, our_disasm) for disasm comparison test
 
-    for idx, (ki, offset, orig_bytes, decoded, our_disasm, decode_ok, decode_err) in enumerate(decoded_instrs):
+    for idx, (ki, offset, orig_bytes, decoded, our_disasm, decode_ok, decode_err, fmt) in enumerate(decoded_instrs):
       if our_disasm is None: continue
       # Skip unknown opcodes and malformed instructions
       if our_disasm.startswith('op_') or re.search(r', \d+, \d+, \d+,', our_disasm): continue
-      asm_test_instrs.append((idx, our_disasm, orig_bytes))
+      # RDNA4 kernels use RDNA3-compatible encodings, but VOPD has RDNA4-specific opcodes
+      compile_arch = arch if fmt is R4_VOPD else ('rdna3' if arch == 'rdna4' else arch)
+      asm_test_instrs.append((idx, our_disasm, orig_bytes, compile_arch))
       disasm_test_instrs.append((idx, our_disasm))
 
-    # Batch compile for asm test (our disasm -> LLVM asm -> bytes)
-    asm_llvm_results = compile_asm_batch([d for _, d, _ in asm_test_instrs], arch)
-    asm_llvm_map = {idx: (result, orig) for (idx, _, orig), result in zip(asm_test_instrs, asm_llvm_results)}
+    # Batch compile for asm test (our disasm -> LLVM asm -> bytes), grouped by compile_arch
+    asm_llvm_map: dict[int, tuple[bytes, bytes]] = {}
+    for compile_arch_group in set(ca for _, _, _, ca in asm_test_instrs):
+      group_instrs = [(idx, d, orig) for idx, d, orig, ca in asm_test_instrs if ca == compile_arch_group]
+      group_results = compile_asm_batch([d for _, d, _ in group_instrs], compile_arch_group)
+      for (idx, _, orig), result in zip(group_instrs, group_results):
+        asm_llvm_map[idx] = (result, orig)
 
     # Batch compile+disasm for disasm comparison test
     disasm_llvm_results = compile_and_disasm_batch([d for _, d in disasm_test_instrs], arch)
@@ -157,7 +164,7 @@ class TestTinygradKernelRoundtrip(unittest.TestCase):
     asm_failures: list[str] = []
     disasm_failures: list[str] = []
 
-    for idx, (ki, offset, orig_bytes, decoded, our_disasm, decode_ok, decode_err) in enumerate(decoded_instrs):
+    for idx, (ki, offset, orig_bytes, decoded, our_disasm, decode_ok, decode_err, fmt) in enumerate(decoded_instrs):
       # Decode test
       if decode_ok:
         decode_passed += 1
