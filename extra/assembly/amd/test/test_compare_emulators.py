@@ -292,6 +292,7 @@ def get_kernels_from_tinygrad(op_fn) -> tuple[list[KernelInfo], dict[int, int], 
   out = op_fn(Tensor)
   sched = out.schedule()
   kernels = []
+  elfs = []
   buf_pool: dict[int, int] = {}  # buffer id -> size
   buf_data: dict[int, bytes] = {}  # buffer id -> initial data from COPY
 
@@ -311,6 +312,7 @@ def get_kernels_from_tinygrad(op_fn) -> tuple[list[KernelInfo], dict[int, int], 
     elif ei.ast.op.name == 'SINK':
       if lowered.prg and lowered.prg.p.lib:
         lib = bytes(lowered.prg.p.lib)
+        elfs.append(lib)
         _, sections, _ = elf_loader(lib)
         for sec in sections:
           if sec.name == '.text':
@@ -330,7 +332,7 @@ def get_kernels_from_tinygrad(op_fn) -> tuple[list[KernelInfo], dict[int, int], 
               buf_sizes=buf_sizes
             ))
   if not kernels: raise RuntimeError("No kernel found")
-  return kernels, buf_pool, buf_data
+  return kernels, buf_pool, buf_data, elfs
 
 def get_kernel_from_tinygrad(op_fn) -> tuple[bytes, tuple[int, int, int], tuple[int, int, int], list]:
   """Compile a tinygrad operation and extract the last (main) kernel binary. Legacy wrapper."""
