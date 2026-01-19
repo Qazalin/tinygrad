@@ -91,8 +91,9 @@ if __name__=="__main__":
     launchBenchmark(v_mfma_f32_16x16x32_f16, (3,0,3), accum=True)
     launchBenchmark(v_mfma_f32_16x16x32_bf16, (3,0,3), accum=True)
     FLOPS_PER_MATMUL = 16*16*128*2
+    # TODO: should be 5 VGPRS, DSL asserts
     launchBenchmark(v_mfma_f32_16x16x128_f8f6f4, (3,0,7), accum=True) # fp8
-    launchBenchmark(v_mfma_f32_16x16x128_f8f6f4, (3,0,5), accum=True, neg_hi=2, neg=2) # fp6
-    launchBenchmark(v_mfma_f32_16x16x128_f8f6f4, (3,0,3), accum=True, neg_hi=4, neg=4) # fp4
+    # TODO: should be 3 VGPRS, DSL asserts
+    launchBenchmark(v_mfma_f32_16x16x128_f8f6f4, (3,0,7), accum=True, neg_hi=4, neg=4) # fp4
   else:
     raise RuntimeError(f"arch {DEV.arch} not supported.")

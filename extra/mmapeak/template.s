@@ -15,6 +15,7 @@ matmul:
 .rodata
 .p2align 6
 .amdhsa_kernel matmul
+  # TODO: these should also be updated to use our DSL
   .amdhsa_next_free_vgpr .amdgcn.next_free_vgpr
   .amdhsa_next_free_sgpr .amdgcn.next_free_sgpr
   DIRECTIVE
