@@ -32,7 +32,7 @@ def test_invalid(fn, expected_errors, desc):
     names = "/".join(e.__name__ for e in expected_errors)
     print(f"  FAIL: {desc} - expected {names} but no error raised")
   except expected_errors as e:
-    print(f"  PASS: {desc} -> {type(e).__name__}")
+    print("  PASS")
   except Exception as e:
     names = "/".join(err.__name__ for err in expected_errors)
     print(f"  FAIL: {desc} - expected {names} but got {type(e).__name__}: {e}")

@@ -112,7 +112,7 @@ def fast_matmul(A: Tensor, B: Tensor) -> Tensor:
                                  ctypes.cast(ctypes.pointer(arg_size), ctypes.c_void_p), 3)
 
   _prg.vargs = extra
-  et = _prg(global_size=[numWG * WORKGROUP_SIZE, 1, 1], local_size=[WORKGROUP_SIZE, 1, 1], wait=True)
+  et = _prg(global_size=[numWG, 1, 1], local_size=[WORKGROUP_SIZE, 1, 1], wait=True)
   flops = 2 * BM * N * K / et
   print(f"tm {colored(time_to_str(et, w=9), 'yellow' if et > 0.01 else None)} ({colored(f'{flops*1e-12:7.2f} TFLOPS', 'green')})")
 
