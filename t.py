@@ -8,10 +8,10 @@ class KernArgs(ctypes.Structure):
   _pack_ = 1
   _fields_ = [
     ("A", ctypes.c_void_p), ("B", ctypes.c_void_p), ("C", ctypes.c_void_p), ("D", ctypes.c_void_p),
+    ("AddressWS", ctypes.c_void_p), ("AddressFlags", ctypes.c_void_p),
     ("Gemm_info", ctypes.c_uint32), ("kernel_info0", ctypes.c_uint32), ("kernel_info1", ctypes.c_uint32),
     ("numWG", ctypes.c_uint32), ("SizesFree0", ctypes.c_uint32), ("SizesFree1", ctypes.c_uint32),
     ("SizesFree2", ctypes.c_uint32), ("SizesSum0", ctypes.c_uint32),
-    ("AddressWS", ctypes.c_void_p), ("AddressFlags", ctypes.c_void_p),
     ("strideD0", ctypes.c_uint32), ("strideD1", ctypes.c_uint32), ("strideC0", ctypes.c_uint32), ("strideC1", ctypes.c_uint32),
     ("strideA0", ctypes.c_uint32), ("strideA1", ctypes.c_uint32), ("strideB0", ctypes.c_uint32), ("strideB1", ctypes.c_uint32),
     ("alpha", ctypes.c_float), ("beta", ctypes.c_float),

@@ -14,21 +14,20 @@ label_ASM_Start:
   s_load_dword s27, s[0:1], 0x14   // C_hi
   s_load_dword s24, s[0:1], 0x18   // D_lo
   s_load_dword s25, s[0:1], 0x1c   // D_hi
+  s_load_dword s32, s[0:1], 0x20   // AddressWS_lo
+  s_load_dword s33, s[0:1], 0x24   // AddressWS_hi
+  s_load_dword s34, s[0:1], 0x28   // AddressFlags_lo
+  s_load_dword s35, s[0:1], 0x2c   // AddressFlags_hi
 
-  s_load_dword s58, s[0:1], 0x20   // Gemm_info
-  s_load_dword s64, s[0:1], 0x24   // kernel_info0
-  s_load_dword s7,  s[0:1], 0x28   // kernel_info1
-  s_load_dword s65, s[0:1], 0x2c   // numWG
+  s_load_dword s58, s[0:1], 0x30   // Gemm_info
+  s_load_dword s64, s[0:1], 0x34   // kernel_info0
+  s_load_dword s7,  s[0:1], 0x38   // kernel_info1
+  s_load_dword s65, s[0:1], 0x3c   // numWG
 
-  s_load_dword s20, s[0:1], 0x30   // SizesFree0
-  s_load_dword s21, s[0:1], 0x34   // SizesFree1
-  s_load_dword s22, s[0:1], 0x38   // SizesFree2
-  s_load_dword s23, s[0:1], 0x3c   // SizesSum0
-
-  s_load_dword s32, s[0:1], 0x40   // AddressWS_lo
-  s_load_dword s33, s[0:1], 0x44   // AddressWS_hi
-  s_load_dword s34, s[0:1], 0x48   // AddressFlags_lo
-  s_load_dword s35, s[0:1], 0x4c   // AddressFlags_hi
+  s_load_dword s20, s[0:1], 0x40   // SizesFree0
+  s_load_dword s21, s[0:1], 0x44   // SizesFree1
+  s_load_dword s22, s[0:1], 0x48   // SizesFree2
+  s_load_dword s23, s[0:1], 0x4c   // SizesSum0
 
   s_load_dword s36, s[0:1], 0x50   // strideD0
   s_load_dword s37, s[0:1], 0x54   // strideD1
