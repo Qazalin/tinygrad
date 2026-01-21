@@ -1,17 +1,6 @@
-import os
-os.environ["HIP"] = "1"
-import pathlib, ctypes
+import pathlib, struct
 from tinygrad import Tensor, Device, dtypes
 from tinygrad.helpers import getenv, time_to_str, colored
-from tinygrad.runtime.support.c import init_c_struct_t
-
-# Build kernel args struct type: 6 ptrs, 8 u32, 8 u32 (strides), 2 float, 7 u32
-_arg_types = [ctypes.c_void_p]*6 + [ctypes.c_uint32]*8 + [ctypes.c_uint32]*8 + [ctypes.c_float]*2 + [ctypes.c_uint32]*7
-_arg_fields, _offset = [], 0
-for i, ty in enumerate(_arg_types):
-  _arg_fields.append((f'f{i}', ty, _offset))
-  _offset += ctypes.sizeof(ty)
-KernArgs = init_c_struct_t(_offset, tuple(_arg_fields))
 
 # MT128x128x64 kernel constants
 MT0, MT1, KT, WORKGROUP_SIZE = 128, 128, 64, 256
@@ -22,7 +11,6 @@ _dev, _lib, _prg, _ws_buf, _flags_buf = None, None, None, None, None
 def _init():
   global _dev, _lib, _prg, _ws_buf, _flags_buf
   if _dev is None:
-    Device.DEFAULT = "HIP"
     _dev = Device[Device.DEFAULT]
     _lib = _dev.compiler.compile((pathlib.Path(__file__).parent / "kernel.s").read_text())
     _prg = _dev.runtime("gemm", _lib)
@@ -30,8 +18,8 @@ def _init():
     _flags_buf = Tensor.empty(1024*1024, dtype=dtypes.half).uop.buffer.allocate()
 
 def _ceildiv(a, b): return -(-a // b)
-
 def _magic(d): return 0xFFFFFFFF if d <= 1 else min(((1 << 32) + d - 1) // d, 0xFFFFFFFF)
+def _f32(f): return struct.unpack('I', struct.pack('f', f))[0]
 
 def fast_matmul(A: Tensor, B: Tensor) -> Tensor:
   """
@@ -77,22 +65,16 @@ def fast_matmul(A: Tensor, B: Tensor) -> Tensor:
   numWG = tiles_N * tiles_BM
   iters = K // KT
 
-  # Build kernel args
+  # Build kernel args: 6 ptrs as args, rest as vals (floats converted to int bits)
   bufs = [out.uop.buffer.allocate()._buf, A.uop.buffer.ensure_allocated()._buf, B.uop.buffer.ensure_allocated()._buf]
-  args = KernArgs(
-    bufs[2].value, bufs[1].value, bufs[0].value, bufs[0].value, _ws_buf._buf, _flags_buf._buf,  # A, B, C, D, WS, Flags
+  args = (bufs[2], bufs[1], bufs[0], bufs[0], _ws_buf._buf, _flags_buf._buf)
+  vals = (
     1, 0, (((tiles_N << 11) + 1) << 16) | 0x0006, numWG, N, BM, 1, K,  # Gemm_info, kernel_info0/1, numWG, SizesFree0/1/2, SizesSum0
     N, 0, N, 0, N, 0, K, 0,  # strideD0/1, strideC0/1, strideA0/1, strideB0/1
-    1.0, 0.0,  # alpha, beta
+    _f32(1.0), _f32(0.0),  # alpha, beta
     iters, _magic(iters), 0, numWG * iters, iters, numWG, numWG,  # ItersPerTile, Magic*, TotalIters, SKItersPerWG, skGrid, skTiles
   )
-
-  # Pack args and run
-  extra = (ctypes.c_void_p * 5)(1, ctypes.cast(ctypes.byref(args), ctypes.c_void_p), 2,
-                                 ctypes.cast(ctypes.pointer(ctypes.c_size_t(ctypes.sizeof(args))), ctypes.c_void_p), 3)
-
-  _prg.vargs = extra
-  et = _prg(global_size=[numWG, 1, 1], local_size=[WORKGROUP_SIZE, 1, 1], wait=True)
+  et = _prg(*args, global_size=[numWG, 1, 1], local_size=[WORKGROUP_SIZE, 1, 1], vals=vals, wait=True)
   flops = 2 * BM * N * K / et
   print(f"tm {colored(time_to_str(et, w=9), 'yellow' if et > 0.01 else None)} ({colored(f'{flops*1e-12:7.2f} TFLOPS', 'green')})")
 
