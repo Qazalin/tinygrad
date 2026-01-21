@@ -10,44 +10,42 @@ label_ASM_Start:
   s_load_dword s29, s[0:1], 0x04   // A_hi
   s_load_dword s30, s[0:1], 0x08   // B_lo
   s_load_dword s31, s[0:1], 0x0c   // B_hi
-  s_load_dword s26, s[0:1], 0x10   // C_lo
-  s_load_dword s27, s[0:1], 0x14   // C_hi
-  s_load_dword s24, s[0:1], 0x18   // D_lo
-  s_load_dword s25, s[0:1], 0x1c   // D_hi
-  s_load_dword s32, s[0:1], 0x20   // AddressWS_lo
-  s_load_dword s33, s[0:1], 0x24   // AddressWS_hi
-  s_load_dword s34, s[0:1], 0x28   // AddressFlags_lo
-  s_load_dword s35, s[0:1], 0x2c   // AddressFlags_hi
+  s_load_dword s24, s[0:1], 0x10   // D_lo
+  s_load_dword s25, s[0:1], 0x14   // D_hi
+  s_load_dword s32, s[0:1], 0x18   // AddressWS_lo
+  s_load_dword s33, s[0:1], 0x1c   // AddressWS_hi
+  s_load_dword s34, s[0:1], 0x20   // AddressFlags_lo
+  s_load_dword s35, s[0:1], 0x24   // AddressFlags_hi
 
-  s_load_dword s58, s[0:1], 0x30   // Gemm_info
-  s_load_dword s64, s[0:1], 0x34   // kernel_info0
-  s_load_dword s7,  s[0:1], 0x38   // kernel_info1
-  s_load_dword s65, s[0:1], 0x3c   // numWG
+  s_load_dword s58, s[0:1], 0x28   // Gemm_info
+  s_load_dword s64, s[0:1], 0x2c   // kernel_info0
+  s_load_dword s7,  s[0:1], 0x30   // kernel_info1
+  s_load_dword s65, s[0:1], 0x34   // numWG
 
-  s_load_dword s20, s[0:1], 0x40   // SizesFree0
-  s_load_dword s21, s[0:1], 0x44   // SizesFree1
-  s_load_dword s22, s[0:1], 0x48   // SizesFree2
-  s_load_dword s23, s[0:1], 0x4c   // SizesSum0
+  s_load_dword s20, s[0:1], 0x38   // SizesFree0
+  s_load_dword s21, s[0:1], 0x3c   // SizesFree1
+  s_load_dword s22, s[0:1], 0x40   // SizesFree2
+  s_load_dword s23, s[0:1], 0x44   // SizesSum0
 
-  s_load_dword s36, s[0:1], 0x50   // strideD0
-  s_load_dword s37, s[0:1], 0x54   // strideD1
-  s_load_dword s38, s[0:1], 0x58   // strideC0
-  s_load_dword s39, s[0:1], 0x5c   // strideC1
-  s_load_dword s40, s[0:1], 0x60   // strideA0
-  s_load_dword s41, s[0:1], 0x64   // strideA1
-  s_load_dword s42, s[0:1], 0x68   // strideB0
-  s_load_dword s43, s[0:1], 0x6c   // strideB1
+  s_load_dword s36, s[0:1], 0x48   // strideD0
+  s_load_dword s37, s[0:1], 0x4c   // strideD1
+  s_load_dword s38, s[0:1], 0x50   // strideC0
+  s_load_dword s39, s[0:1], 0x54   // strideC1
+  s_load_dword s40, s[0:1], 0x58   // strideA0
+  s_load_dword s41, s[0:1], 0x5c   // strideA1
+  s_load_dword s42, s[0:1], 0x60   // strideB0
+  s_load_dword s43, s[0:1], 0x64   // strideB1
 
-  s_load_dword s44, s[0:1], 0x70   // alpha
-  s_load_dword s45, s[0:1], 0x74   // beta
+  s_load_dword s44, s[0:1], 0x68   // alpha
+  s_load_dword s45, s[0:1], 0x6c   // beta
 
-  s_load_dword s46, s[0:1], 0x78   // ItersPerTile
-  s_load_dword s47, s[0:1], 0x7c   // MagicNumberItersPerTile
-  s_load_dword s48, s[0:1], 0x80   // MagicShiftItersPerTile
-  s_load_dword s49, s[0:1], 0x84   // TotalIters
-  s_load_dword s50, s[0:1], 0x88   // SKItersPerWG
-  s_load_dword s51, s[0:1], 0x8c   // skGrid
-  s_load_dword s52, s[0:1], 0x90   // skTiles
+  s_load_dword s46, s[0:1], 0x70   // ItersPerTile
+  s_load_dword s47, s[0:1], 0x74   // MagicNumberItersPerTile
+  s_load_dword s48, s[0:1], 0x78   // MagicShiftItersPerTile
+  s_load_dword s49, s[0:1], 0x7c   // TotalIters
+  s_load_dword s50, s[0:1], 0x80   // SKItersPerWG
+  s_load_dword s51, s[0:1], 0x84   // skGrid
+  s_load_dword s52, s[0:1], 0x88   // skTiles
 
   s_add_u32 s0, s0, 16
   s_addc_u32 s1, s1, 0
