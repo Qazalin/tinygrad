@@ -6,6 +6,10 @@
 
 gemm:
 label_ASM_Start:
+  // save workgroup IDs
+  s_mov_b32 s13, s2
+  s_mov_b32 s14, s3
+  s_mov_b32 s15, s4
   s_load_dword s58, s[0:1], 0x0
   s_load_dword s64, s[0:1], 0x4
   s_load_dword s7, s[0:1], 0x8
@@ -9621,8 +9625,8 @@ label_NoBranch_LMYADZ5IUPFIU87Z:
   .amdhsa_system_sgpr_workgroup_id_y 1
   .amdhsa_system_sgpr_workgroup_id_z 1
   .amdhsa_user_sgpr_kernarg_segment_ptr 1
-  .amdhsa_user_sgpr_count 13
-  .amdhsa_user_sgpr_kernarg_preload_length 11
+  .amdhsa_user_sgpr_count 2
+  .amdhsa_user_sgpr_kernarg_preload_length 0
   .amdhsa_user_sgpr_kernarg_preload_offset 0
   .amdhsa_accum_offset 192
   .amdhsa_uses_dynamic_stack 0

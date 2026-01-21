@@ -1,3 +1,5 @@
+import os
+os.environ["HIP"] = "1"
 import pathlib, ctypes
 from tinygrad import Tensor, Device, dtypes
 from tinygrad.helpers import getenv, time_to_str, colored
