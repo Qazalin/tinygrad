@@ -16,20 +16,12 @@ label_ASM_Start:
   s_load_dword s65, s[0:1], 0xc
   s_waitcnt lgkmcnt(0)
   s_lshr_b32 s59, s58, 30
-  s_and_b32 s58, 0x3fffffff, s58
-  s_cmp_eq_u32 s59, 0
-  s_cbranch_scc0 label_HBMArgs
   s_add_u32 s0, s0, 16
   s_addc_u32 s1, s1, 0
   s_load_dwordx16 s[20:35], s[0:1], 0x0
   s_load_dwordx16 s[36:51], s[0:1], 0x40
   s_load_dword s52, s[0:1], 0x80
   s_waitcnt lgkmcnt(0)
-  s_branch label_LoadArgsEnd
-label_HBMArgs:
-  s_load_dwordx2 s[0:1], s[0:1], 0x10
-  s_waitcnt lgkmcnt(0)
-label_LoadArgsEnd:
   s_branch label_common_kernel_entry
   s_nop 0
   s_nop 0
