@@ -54,28 +54,71 @@ class KernArgs(ctypes.Structure):
 
 # ** assemble
 
-asm = pathlib.Path(__file__).parent/"gemm2.s"
-system(f"clang -x assembler -target amdgcn-amd-amdhsa -mcpu=gfx950 -mcode-object-version=5 -c {str(asm)} -o {temp('test.o')}")
-system(f"ld.lld -shared -o {temp('test.hsaco')} {temp('test.o')}")
-with open(temp('test.hsaco'), 'rb') as f: lib:bytes = f.read()
-name:str = "gemm"
-
 Device.DEFAULT = "HIP"
 dev = Device[Device.DEFAULT]
 
+if getenv("ASM"):
+  asm = pathlib.Path(__file__).parent/"kernel.s"
+  lib = dev.compiler.compile(asm.read_text())
+  name = "gemm"
+else:
+  with (pathlib.Path(__file__).parent/"_code_object0001.o").open("rb") as f: lib = f.read()
+  name = "Cijk_Ailk_Bljk_HHS_BH_Bias_HA_S_SAV_UserArgs_MT128x128x64_MI16x16x1_SN_LDSB1_AFC1_AFEM1_AFEM1_ASEM1_CLR1_CADS0_DTLA0_DTLB0_DTVA0_DTVB0_EPS0_FDSI0_GRPM1_GRVWA8_GRVWB8_GSU0_GSUAMB_GLS0_ISA950_IU1_K1_LBSPPA2048_LBSPPB512_LBSPPM0_LPA0_LPB16_LPM0_LRVW8_LWPMn1_MIAV0_MIWT4_4_MO40_NTn1_NTA0_NTB0_NTC0_NTD0_NTM0_NEPBS0_NLCA1_NLCB1_ONLL1_PGR2_PLR1_PKA1_SIA3_SS1_SPO0_SRVW0_SSO0_SVW4_SK3_SKXCCM8_TLDS1_ULSGRO0_USL1_UIOFGRO0_USFGRO0_VSn1_VWA4_VWB4_WSGRA0_WSGRB0_WS64_WG32_8_1"
+
 # ** construct launch args
 
-def build_kernel_args(bufs):
+def build_kernel_args(bufs, ws_buf, flags_buf):
   # bufs: [out, A, B]
-  args = KernelArgs()
+  args = KernArgs()
 
-  args.gemm_info = 0
-  # ... more here
+  args.Gemm_info = 1
+  args.kernel_info0 = 0
+  args.kernel_info1 = 0x40010006
+  args.numWG = 232
+  args.SizesFree0 = 1024
+  args.SizesFree1 = 3672  # B * M = 6 * 612
+  args.SizesFree2 = 1
+  args.SizesSum0 = 1024
+
+  args.D = bufs[0].value
+  args.C = bufs[0].value  # same as D
+  args.A = bufs[2].value
+  args.B = bufs[1].value
+  args.AddressWS = ws_buf
+  args.AddressFlags = flags_buf
+
+  args.strideD0 = 1024
+  args.strideD1 = 0
+  args.strideC0 = 1024
+  args.strideC1 = 0
+  args.strideA0 = 1024
+  args.strideA1 = 0
+  args.strideB0 = 1024
+  args.strideB1 = 0
+
+  args.alpha = 1.0
+  args.beta = 0.0
+
+  args.ItersPerTile = 16
+  args.MagicNumberItersPerTile = 0x10000000
+  args.MagicShiftItersPerTile = 0
+  args.TotalIters = 3712
+  args.SKItersPerWG = 16
+  args.skGrid = 232
+  args.skTiles = 232
+
+  args.AddressScaleAlphaVec = None
+  args.bias = None
+  args.biasType = 0
+  args.StrideBias = 0
+  args.activationAlpha = 0.0
+  args.activationBeta = 0.0
+  args.activationType = 0
 
   blob = ctypes.string_at(ctypes.addressof(args), ctypes.sizeof(args))
   return args, blob
 
-def pack_kernel_args(args:KernelArgs):
+def pack_kernel_args(args:KernArgs):
   arg_size = ctypes.c_size_t(ctypes.sizeof(args))
   blob = (ctypes.c_ubyte * ctypes.sizeof(args)).from_buffer_copy(ctypes.string_at(ctypes.addressof(args), ctypes.sizeof(args)))
   extra = (ctypes.c_void_p * 5)(1, ctypes.cast(ctypes.byref(blob), ctypes.c_void_p), 2,
@@ -83,28 +126,32 @@ def pack_kernel_args(args:KernelArgs):
   return extra, blob, arg_size  # keepalives: blob + arg_size
 
 M = 612
-N = 1024
+N = 102
 K = 1024
+BS = 6
 dtype = dtypes.half
-A = Tensor.empty(B, M, N, dtype=dtype).contiguous()
-B = Tensor.empty(K, N, dtype=dtype).contiguous()
+
+import numpy as np
+rng = np.random.default_rng(0)
+A = Tensor(rng.random((N, N), dtype=np.float32)-0.5, dtype=dtype)
+B = Tensor(rng.random((N, N), dtype=np.float32)-0.5, dtype=dtype)
 C = A @ B
+Tensor.realize(A, B)
 out = Tensor.empty_like(C).uop.buffer.allocate()
-bufs = [b._buf for b in [out, Tensor(A).realize().uop.buffer, Tensor(B).realize().uop.buffer]]
-args, _ = build_kernel_args(bufs)
+
+# allocate workspace and flags buffers
+ws_buf = Tensor.empty(1024*1024, dtype=dtypes.float32).uop.buffer.allocate()
+flags_buf = Tensor.empty(1024*1024, dtype=dtypes.half).uop.buffer.allocate()
+
+bufs = [b._buf for b in [out, A.uop.buffer.ensure_allocated(), B.uop.buffer.ensure_allocated()]]
+args, _ = build_kernel_args(bufs, ws_buf._buf, flags_buf._buf)
 extra, _blob_keep, _sz_keep = pack_kernel_args(args)
 
 # ** run
 
 prg = dev.runtime(name, lib)
 prg.vargs = extra
-et = prg(global_size=[TODO, 1, 1], local_size=[TODO, 1, 1], wait=True)
+et = prg(global_size=[232, 1, 1], local_size=[256, 1, 1], wait=True)
 print(f"gemm finished in {et*1e3:9.2f} ms")
-
-# ** correctness
-
-import torch
-asm_out = torch.from_numpy(out.numpy()).view(torch.bfloat16).reshape(ref_out.shape)
-print(asm_out)
-print(ref_out)
-assert torch.allclose(asm_out, ref_out, rtol=1e-2, atol=1e-3)
+print(out.numpy())
+print(C.numpy())

@@ -9605,9 +9605,9 @@ label_GW_End_1:
   s_subb_u32 s75, s75, 0
   s_setpc_b64 s[74:75]
 label_KernelEnd:
+end:
 label_NoBranch_LMYADZ5IUPFIU87Z:
   s_endpgm
-label_ASM_End:
 
 .section .rodata,"a",@progbits
 .p2align 6, 0x0
@@ -9838,7 +9838,7 @@ amdhsa.kernels:
     .kernarg_segment_align: 8
     .kernarg_segment_size: 184
     .max_flat_workgroup_size: 256
-    .sgpr_count: 91
+    .sgpr_count: 0
     .sgpr_spill_count: 0
     .vgpr_count: 192
     .vgpr_spill_count: 0
