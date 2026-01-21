@@ -57,13 +57,9 @@ class KernArgs(ctypes.Structure):
 Device.DEFAULT = "HIP"
 dev = Device[Device.DEFAULT]
 
-if getenv("ASM"):
-  asm = pathlib.Path(__file__).parent/"kernel.s"
-  lib = dev.compiler.compile(asm.read_text())
-  name = "gemm"
-else:
-  with (pathlib.Path(__file__).parent/"_code_object0001.o").open("rb") as f: lib = f.read()
-  name = "Cijk_Ailk_Bljk_HHS_BH_Bias_HA_S_SAV_UserArgs_MT128x128x64_MI16x16x1_SN_LDSB1_AFC1_AFEM1_AFEM1_ASEM1_CLR1_CADS0_DTLA0_DTLB0_DTVA0_DTVB0_EPS0_FDSI0_GRPM1_GRVWA8_GRVWB8_GSU0_GSUAMB_GLS0_ISA950_IU1_K1_LBSPPA2048_LBSPPB512_LBSPPM0_LPA0_LPB16_LPM0_LRVW8_LWPMn1_MIAV0_MIWT4_4_MO40_NTn1_NTA0_NTB0_NTC0_NTD0_NTM0_NEPBS0_NLCA1_NLCB1_ONLL1_PGR2_PLR1_PKA1_SIA3_SS1_SPO0_SRVW0_SSO0_SVW4_SK3_SKXCCM8_TLDS1_ULSGRO0_USL1_UIOFGRO0_USFGRO0_VSn1_VWA4_VWB4_WSGRA0_WSGRB0_WS64_WG32_8_1"
+asm = pathlib.Path(__file__).parent/"kernel.s"
+lib = dev.compiler.compile(asm.read_text())
+name = "gemm"
 
 # ** construct launch args
 
@@ -126,24 +122,24 @@ def pack_kernel_args(args:KernArgs):
   return extra, blob, arg_size  # keepalives: blob + arg_size
 
 M = 612
-N = 102
+N = 1024
 K = 1024
-BS = 6
+B = 6
 dtype = dtypes.half
 
 import numpy as np
 rng = np.random.default_rng(0)
-A = Tensor(rng.random((N, N), dtype=np.float32)-0.5, dtype=dtype)
-B = Tensor(rng.random((N, N), dtype=np.float32)-0.5, dtype=dtype)
+A = Tensor(rng.random((B, M, N), dtype=np.float32)-0.5, dtype=dtype)
+B = Tensor(rng.random((K, N), dtype=np.float32)-0.5, dtype=dtype)
 C = A @ B
 Tensor.realize(A, B)
-out = Tensor.empty_like(C).uop.buffer.allocate()
+out = Tensor.empty_like(C)
 
 # allocate workspace and flags buffers
 ws_buf = Tensor.empty(1024*1024, dtype=dtypes.float32).uop.buffer.allocate()
 flags_buf = Tensor.empty(1024*1024, dtype=dtypes.half).uop.buffer.allocate()
 
-bufs = [b._buf for b in [out, A.uop.buffer.ensure_allocated(), B.uop.buffer.ensure_allocated()]]
+bufs = [b._buf for b in [out.uop.buffer.allocate(), A.uop.buffer.ensure_allocated(), B.uop.buffer.ensure_allocated()]]
 args, _ = build_kernel_args(bufs, ws_buf._buf, flags_buf._buf)
 extra, _blob_keep, _sz_keep = pack_kernel_args(args)
 
@@ -153,5 +149,4 @@ prg = dev.runtime(name, lib)
 prg.vargs = extra
 et = prg(global_size=[232, 1, 1], local_size=[256, 1, 1], wait=True)
 print(f"gemm finished in {et*1e3:9.2f} ms")
-print(out.numpy())
-print(C.numpy())
+np.testing.assert_allclose(out.numpy(), C.numpy(), rtol=1e-3, atol=1e-2)

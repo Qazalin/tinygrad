@@ -23,7 +23,7 @@ def gemm():
   C_gpu = A.to(gpu)@B.to(gpu)
   C_gpu.cpu()
 
-  #load_arg()
+  load_arg()
 
 def load_arg():
   if not getenv("LD_PRELOAD", ""): return
