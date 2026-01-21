@@ -63,18 +63,28 @@ name = "gemm"
 
 # ** construct launch args
 
-def build_kernel_args(bufs, ws_buf, flags_buf):
+def ceildiv(a, b): return -(-a // b)
+
+def build_kernel_args(bufs, ws_buf, flags_buf, M, N, K, B, MT0, MT1, KT):
   # bufs: [out, A, B]
   args = KernArgs()
+
+  # Calculate tile counts and work groups
+  BM = B * M  # flattened batch*M dimension
+  tiles_N = ceildiv(N, MT0)
+  tiles_BM = ceildiv(BM, MT1)
+  numWG = tiles_N * tiles_BM
+  iters_per_tile = K // KT
+  total_iters = numWG * iters_per_tile
 
   args.Gemm_info = 1
   args.kernel_info0 = 0
   args.kernel_info1 = 0x40010006
-  args.numWG = 232
-  args.SizesFree0 = 1024
-  args.SizesFree1 = 3672  # B * M = 6 * 612
+  args.numWG = numWG
+  args.SizesFree0 = N
+  args.SizesFree1 = BM
   args.SizesFree2 = 1
-  args.SizesSum0 = 1024
+  args.SizesSum0 = K
 
   args.D = bufs[0].value
   args.C = bufs[0].value  # same as D
@@ -83,25 +93,25 @@ def build_kernel_args(bufs, ws_buf, flags_buf):
   args.AddressWS = ws_buf
   args.AddressFlags = flags_buf
 
-  args.strideD0 = 1024
+  args.strideD0 = N
   args.strideD1 = 0
-  args.strideC0 = 1024
+  args.strideC0 = N
   args.strideC1 = 0
-  args.strideA0 = 1024
+  args.strideA0 = N
   args.strideA1 = 0
-  args.strideB0 = 1024
+  args.strideB0 = N
   args.strideB1 = 0
 
   args.alpha = 1.0
   args.beta = 0.0
 
-  args.ItersPerTile = 16
+  args.ItersPerTile = iters_per_tile
   args.MagicNumberItersPerTile = 0x10000000
   args.MagicShiftItersPerTile = 0
-  args.TotalIters = 3712
-  args.SKItersPerWG = 16
-  args.skGrid = 232
-  args.skTiles = 232
+  args.TotalIters = total_iters
+  args.SKItersPerWG = iters_per_tile
+  args.skGrid = numWG
+  args.skTiles = numWG
 
   args.AddressScaleAlphaVec = None
   args.bias = None
@@ -112,7 +122,7 @@ def build_kernel_args(bufs, ws_buf, flags_buf):
   args.activationType = 0
 
   blob = ctypes.string_at(ctypes.addressof(args), ctypes.sizeof(args))
-  return args, blob
+  return args, blob, numWG
 
 def pack_kernel_args(args:KernArgs):
   arg_size = ctypes.c_size_t(ctypes.sizeof(args))
@@ -121,32 +131,41 @@ def pack_kernel_args(args:KernArgs):
                                 ctypes.cast(ctypes.pointer(arg_size), ctypes.c_void_p), 3)
   return extra, blob, arg_size  # keepalives: blob + arg_size
 
-M = 612
-N = 1024
-K = 1024
-B = 6
+# Read dimensions from env variables (defaults match original)
+M = getenv("M", 612)
+N = getenv("N", 1024)
+K = getenv("K", 1024)
+B = getenv("B", 6)
 dtype = dtypes.half
+
+# MT128x128x64 kernel tile sizes
+MT0, MT1, KT = 128, 128, 64
+WORKGROUP_SIZE = 256
 
 import numpy as np
 rng = np.random.default_rng(0)
-A = Tensor(rng.random((B, M, N), dtype=np.float32)-0.5, dtype=dtype)
-B = Tensor(rng.random((K, N), dtype=np.float32)-0.5, dtype=dtype)
-C = A @ B
-Tensor.realize(A, B)
-out = Tensor.empty_like(C)
+inp_A = Tensor(rng.random((B, M, N), dtype=np.float32)-0.5, dtype=dtype)
+inp_B = Tensor(rng.random((K, N), dtype=np.float32)-0.5, dtype=dtype)
+expected = inp_A @ inp_B
+Tensor.realize(inp_A, inp_B)
+out = Tensor.empty_like(expected)
 
 # allocate workspace and flags buffers
 ws_buf = Tensor.empty(1024*1024, dtype=dtypes.float32).uop.buffer.allocate()
 flags_buf = Tensor.empty(1024*1024, dtype=dtypes.half).uop.buffer.allocate()
 
-bufs = [b._buf for b in [out.uop.buffer.allocate(), A.uop.buffer.ensure_allocated(), B.uop.buffer.ensure_allocated()]]
-args, _ = build_kernel_args(bufs, ws_buf._buf, flags_buf._buf)
+bufs = [b._buf for b in [out.uop.buffer.allocate(), inp_A.uop.buffer.ensure_allocated(), inp_B.uop.buffer.ensure_allocated()]]
+args, _, numWG = build_kernel_args(bufs, ws_buf._buf, flags_buf._buf, M, N, K, B, MT0, MT1, KT)
 extra, _blob_keep, _sz_keep = pack_kernel_args(args)
+
+print(f"M={M} N={N} K={K} B={B} => numWG={numWG} global_size={numWG*WORKGROUP_SIZE}")
 
 # ** run
 
 prg = dev.runtime(name, lib)
 prg.vargs = extra
-et = prg(global_size=[232, 1, 1], local_size=[256, 1, 1], wait=True)
+et = prg(global_size=[numWG*WORKGROUP_SIZE, 1, 1], local_size=[WORKGROUP_SIZE, 1, 1], wait=True)
 print(f"gemm finished in {et*1e3:9.2f} ms")
-np.testing.assert_allclose(out.numpy(), C.numpy(), rtol=1e-3, atol=1e-2)
+np.testing.assert_allclose(out.numpy(), expected.numpy(), rtol=1e-3, atol=1e-2)
+print(out.flatten().numpy()[:8])
+print(expected.flatten().numpy()[:8])
