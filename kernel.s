@@ -49,16 +49,6 @@ label_ASM_Start:
   s_load_dword s51, s[0:1], 0x8c   // skGrid
   s_load_dword s52, s[0:1], 0x90   // skTiles
 
-  s_load_dword s53, s[0:1], 0x94   // AddressScaleAlphaVec_lo
-  s_load_dword s54, s[0:1], 0x98   // AddressScaleAlphaVec_hi
-  s_load_dword s55, s[0:1], 0x9c   // bias_lo
-  s_load_dword s56, s[0:1], 0xa0   // bias_hi
-  s_load_dword s57, s[0:1], 0xa4   // biasType
-  s_load_dword s59, s[0:1], 0xa8   // StrideBias
-  s_load_dword s60, s[0:1], 0xac   // activationAlpha
-  s_load_dword s61, s[0:1], 0xb0   // activationBeta
-  s_load_dword s62, s[0:1], 0xb4   // activationType
-
   s_add_u32 s0, s0, 16
   s_addc_u32 s1, s1, 0
   s_waitcnt lgkmcnt(0)
@@ -9587,7 +9577,7 @@ label_NoBranch_LMYADZ5IUPFIU87Z:
 .amdhsa_kernel gemm
   .amdhsa_group_segment_fixed_size 33792
   .amdhsa_private_segment_fixed_size 0
-  .amdhsa_kernarg_size 184
+  .amdhsa_kernarg_size 148
   .amdhsa_next_free_vgpr 256
   .amdhsa_next_free_sgpr 96
   .amdhsa_system_sgpr_workgroup_id_x 1
@@ -9608,82 +9598,82 @@ amdhsa.kernels:
   - .name: gemm
     .symbol: gemm.kd
     .args:
-      - .name: Gemm_info
-        .offset: 0
-        .size: 4
-        .value_kind: by_value
-        .value_type: u32
-      - .name: kernel_info0
-        .offset: 4
-        .size: 4
-        .value_kind: by_value
-        .value_type: u32
-      - .name: kernel_info1
-        .offset: 8
-        .size: 4
-        .value_kind: by_value
-        .value_type: u32
-      - .name: numWG
-        .offset: 12
-        .size: 4
-        .value_kind: by_value
-        .value_type: u32
-      - .name: SizesFree0
-        .offset: 16
-        .size: 4
-        .value_kind: by_value
-        .value_type: u32
-      - .name: SizesFree1
-        .offset: 20
-        .size: 4
-        .value_kind: by_value
-        .value_type: u32
-      - .name: SizesFree2
-        .offset: 24
-        .size: 4
-        .value_kind: by_value
-        .value_type: u32
-      - .name: SizesSum0
-        .offset: 28
-        .size: 4
-        .value_kind: by_value
-        .value_type: u32
-      - .name: D
-        .address_space: global
-        .offset: 32
-        .size: 8
-        .value_kind: global_buffer
-        .value_type: f16
-      - .name: C
-        .address_space: global
-        .offset: 40
-        .size: 8
-        .value_kind: global_buffer
-        .value_type: f16
       - .name: A
         .address_space: global
-        .offset: 48
+        .offset: 0
         .size: 8
         .value_kind: global_buffer
         .value_type: f16
       - .name: B
         .address_space: global
-        .offset: 56
+        .offset: 8
+        .size: 8
+        .value_kind: global_buffer
+        .value_type: f16
+      - .name: C
+        .address_space: global
+        .offset: 16
+        .size: 8
+        .value_kind: global_buffer
+        .value_type: f16
+      - .name: D
+        .address_space: global
+        .offset: 24
         .size: 8
         .value_kind: global_buffer
         .value_type: f16
       - .name: AddressWS
         .address_space: global
-        .offset: 64
+        .offset: 32
         .size: 8
         .value_kind: global_buffer
         .value_type: f32
       - .name: AddressFlags
         .address_space: global
-        .offset: 72
+        .offset: 40
         .size: 8
         .value_kind: global_buffer
         .value_type: f16
+      - .name: Gemm_info
+        .offset: 48
+        .size: 4
+        .value_kind: by_value
+        .value_type: u32
+      - .name: kernel_info0
+        .offset: 52
+        .size: 4
+        .value_kind: by_value
+        .value_type: u32
+      - .name: kernel_info1
+        .offset: 56
+        .size: 4
+        .value_kind: by_value
+        .value_type: u32
+      - .name: numWG
+        .offset: 60
+        .size: 4
+        .value_kind: by_value
+        .value_type: u32
+      - .name: SizesFree0
+        .offset: 64
+        .size: 4
+        .value_kind: by_value
+        .value_type: u32
+      - .name: SizesFree1
+        .offset: 68
+        .size: 4
+        .value_kind: by_value
+        .value_type: u32
+      - .name: SizesFree2
+        .offset: 72
+        .size: 4
+        .value_kind: by_value
+        .value_type: u32
+      - .name: SizesSum0
+        .offset: 76
+        .size: 4
+        .value_kind: by_value
+        .value_type: u32
       - .name: strideD0
         .offset: 80
         .size: 4
@@ -9769,47 +9759,10 @@ amdhsa.kernels:
         .size: 4
         .value_kind: by_value
         .value_type: u32
-      - .name: AddressScaleAlphaVec
-        .address_space: global
-        .offset: 148
-        .size: 8
-        .value_kind: global_buffer
-        .value_type: f32
-      - .name: bias
-        .address_space: global
-        .offset: 156
-        .size: 8
-        .value_kind: global_buffer
-        .value_type: void
-      - .name: biasType
-        .offset: 164
-        .size: 4
-        .value_kind: by_value
-        .value_type: u32
-      - .name: StrideBias
-        .offset: 168
-        .size: 4
-        .value_kind: by_value
-        .value_type: u32
-      - .name: activationAlpha
-        .offset: 172
-        .size: 4
-        .value_kind: by_value
-        .value_type: f32
-      - .name: activationBeta
-        .offset: 176
-        .size: 4
-        .value_kind: by_value
-        .value_type: f32
-      - .name: activationType
-        .offset: 180
-        .size: 4
-        .value_kind: by_value
-        .value_type: u32
     .group_segment_fixed_size: 33792
     .private_segment_fixed_size: 0
     .kernarg_segment_align: 8
-    .kernarg_segment_size: 184
+    .kernarg_segment_size: 148
     .max_flat_workgroup_size: 256
     .sgpr_count: 0
     .sgpr_spill_count: 0

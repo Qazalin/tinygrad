@@ -5,7 +5,6 @@ from tinygrad import Tensor, Device, dtypes
 from tinygrad.helpers import getenv, time_to_str, colored
 
 class KernArgs(ctypes.Structure):
-  _pack_ = 1
   _fields_ = [
     ("A", ctypes.c_void_p), ("B", ctypes.c_void_p), ("C", ctypes.c_void_p), ("D", ctypes.c_void_p),
     ("AddressWS", ctypes.c_void_p), ("AddressFlags", ctypes.c_void_p),
@@ -17,8 +16,6 @@ class KernArgs(ctypes.Structure):
     ("alpha", ctypes.c_float), ("beta", ctypes.c_float),
     ("ItersPerTile", ctypes.c_uint32), ("MagicNumberItersPerTile", ctypes.c_uint32), ("MagicShiftItersPerTile", ctypes.c_uint32),
     ("TotalIters", ctypes.c_uint32), ("SKItersPerWG", ctypes.c_uint32), ("skGrid", ctypes.c_uint32), ("skTiles", ctypes.c_uint32),
-    ("AddressScaleAlphaVec", ctypes.c_void_p), ("bias", ctypes.c_void_p), ("biasType", ctypes.c_uint32), ("StrideBias", ctypes.c_uint32),
-    ("activationAlpha", ctypes.c_float), ("activationBeta", ctypes.c_float), ("activationType", ctypes.c_uint32),
   ]
 
 # MT128x128x64 kernel constants
