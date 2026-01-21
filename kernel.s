@@ -10,12 +10,11 @@ label_ASM_Start:
   s_load_dword s64, s[0:1], 0x4
   s_load_dword s7, s[0:1], 0x8
   s_load_dword s65, s[0:1], 0xc
-  s_waitcnt lgkmcnt(0)
+  s_load_dwordx16 s[20:35], s[0:1], 0x10
+  s_load_dwordx16 s[36:51], s[0:1], 0x50
+  s_load_dword s52, s[0:1], 0x90
   s_add_u32 s0, s0, 16
   s_addc_u32 s1, s1, 0
-  s_load_dwordx16 s[20:35], s[0:1], 0x0
-  s_load_dwordx16 s[36:51], s[0:1], 0x40
-  s_load_dword s52, s[0:1], 0x80
   s_waitcnt lgkmcnt(0)
   s_lshr_b32 s59, s58, 30
   s_and_b32 s6, s64, 0xffff0000
