@@ -6,13 +6,59 @@
 
 gemm:
 label_ASM_Start:
-  s_load_dword s58, s[0:1], 0x0
-  s_load_dword s64, s[0:1], 0x4
-  s_load_dword s7, s[0:1], 0x8
-  s_load_dword s65, s[0:1], 0xc
-  s_load_dwordx16 s[20:35], s[0:1], 0x10
-  s_load_dwordx16 s[36:51], s[0:1], 0x50
-  s_load_dword s52, s[0:1], 0x90
+  s_load_dword s58, s[0:1], 0x00   // Gemm_info
+  s_load_dword s64, s[0:1], 0x04   // kernel_info0
+  s_load_dword s7,  s[0:1], 0x08   // kernel_info1
+  s_load_dword s65, s[0:1], 0x0c   // numWG
+
+  s_load_dword s20, s[0:1], 0x10   // SizesFree0
+  s_load_dword s21, s[0:1], 0x14   // SizesFree1
+  s_load_dword s22, s[0:1], 0x18   // SizesFree2
+  s_load_dword s23, s[0:1], 0x1c   // SizesSum0
+
+  s_load_dword s24, s[0:1], 0x20   // D_lo
+  s_load_dword s25, s[0:1], 0x24   // D_hi
+  s_load_dword s26, s[0:1], 0x28   // C_lo
+  s_load_dword s27, s[0:1], 0x2c   // C_hi
+  s_load_dword s28, s[0:1], 0x30   // A_lo
+  s_load_dword s29, s[0:1], 0x34   // A_hi
+  s_load_dword s30, s[0:1], 0x38   // B_lo
+  s_load_dword s31, s[0:1], 0x3c   // B_hi
+  s_load_dword s32, s[0:1], 0x40   // AddressWS_lo
+  s_load_dword s33, s[0:1], 0x44   // AddressWS_hi
+  s_load_dword s34, s[0:1], 0x48   // AddressFlags_lo
+  s_load_dword s35, s[0:1], 0x4c   // AddressFlags_hi
+
+  s_load_dword s36, s[0:1], 0x50   // strideD0
+  s_load_dword s37, s[0:1], 0x54   // strideD1
+  s_load_dword s38, s[0:1], 0x58   // strideC0
+  s_load_dword s39, s[0:1], 0x5c   // strideC1
+  s_load_dword s40, s[0:1], 0x60   // strideA0
+  s_load_dword s41, s[0:1], 0x64   // strideA1
+  s_load_dword s42, s[0:1], 0x68   // strideB0
+  s_load_dword s43, s[0:1], 0x6c   // strideB1
+
+  s_load_dword s44, s[0:1], 0x70   // alpha
+  s_load_dword s45, s[0:1], 0x74   // beta
+
+  s_load_dword s46, s[0:1], 0x78   // ItersPerTile
+  s_load_dword s47, s[0:1], 0x7c   // MagicNumberItersPerTile
+  s_load_dword s48, s[0:1], 0x80   // MagicShiftItersPerTile
+  s_load_dword s49, s[0:1], 0x84   // TotalIters
+  s_load_dword s50, s[0:1], 0x88   // SKItersPerWG
+  s_load_dword s51, s[0:1], 0x8c   // skGrid
+  s_load_dword s52, s[0:1], 0x90   // skTiles
+
+  s_load_dword s53, s[0:1], 0x94   // AddressScaleAlphaVec_lo
+  s_load_dword s54, s[0:1], 0x98   // AddressScaleAlphaVec_hi
+  s_load_dword s55, s[0:1], 0x9c   // bias_lo
+  s_load_dword s56, s[0:1], 0xa0   // bias_hi
+  s_load_dword s57, s[0:1], 0xa4   // biasType
+  s_load_dword s59, s[0:1], 0xa8   // StrideBias
+  s_load_dword s60, s[0:1], 0xac   // activationAlpha
+  s_load_dword s61, s[0:1], 0xb0   // activationBeta
+  s_load_dword s62, s[0:1], 0xb4   // activationType
+
   s_add_u32 s0, s0, 16
   s_addc_u32 s1, s1, 0
   s_waitcnt lgkmcnt(0)
