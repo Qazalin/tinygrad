@@ -19,7 +19,8 @@ def _init():
 
 def _ceildiv(a, b): return -(-a // b)
 def _magic(d): return 0xFFFFFFFF if d <= 1 else min(((1 << 32) + d - 1) // d, 0xFFFFFFFF)
-def _f32(f): return struct.unpack('I', struct.pack('f', f))[0]
+def _f32(f): return struct.unpack('i', struct.pack('f', f))[0]
+def _u32(u): return struct.unpack('i', struct.pack('I', u & 0xFFFFFFFF))[0]
 
 def fast_matmul(A: Tensor, B: Tensor) -> Tensor:
   """
@@ -69,10 +70,10 @@ def fast_matmul(A: Tensor, B: Tensor) -> Tensor:
   bufs = [out.uop.buffer.allocate()._buf, A.uop.buffer.ensure_allocated()._buf, B.uop.buffer.ensure_allocated()._buf]
   args = (bufs[2], bufs[1], bufs[0], bufs[0], _ws_buf._buf, _flags_buf._buf)
   vals = (
-    1, 0, (((tiles_N << 11) + 1) << 16) | 0x0006, numWG, N, BM, 1, K,  # Gemm_info, kernel_info0/1, numWG, SizesFree0/1/2, SizesSum0
+    1, 0, _u32((((tiles_N << 11) + 1) << 16) | 0x0006), numWG, N, BM, 1, K,  # Gemm_info, kernel_info0/1, numWG, SizesFree0/1/2, SizesSum0
     N, 0, N, 0, N, 0, K, 0,  # strideD0/1, strideC0/1, strideA0/1, strideB0/1
     _f32(1.0), _f32(0.0),  # alpha, beta
-    iters, _magic(iters), 0, numWG * iters, iters, numWG, numWG,  # ItersPerTile, Magic*, TotalIters, SKItersPerWG, skGrid, skTiles
+    iters, _u32(_magic(iters)), 0, numWG * iters, iters, numWG, numWG,  # ItersPerTile, Magic*, TotalIters, SKItersPerWG, skGrid, skTiles
   )
   et = _prg(*args, global_size=[numWG, 1, 1], local_size=[WORKGROUP_SIZE, 1, 1], vals=vals, wait=True)
   flops = 2 * BM * N * K / et
