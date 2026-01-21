@@ -6,86 +6,18 @@
 
 gemm:
 label_ASM_Start:
-  // save workgroup IDs
-  s_mov_b32 s13, s2
-  s_mov_b32 s14, s3
-  s_mov_b32 s15, s4
   s_load_dword s58, s[0:1], 0x0
   s_load_dword s64, s[0:1], 0x4
   s_load_dword s7, s[0:1], 0x8
   s_load_dword s65, s[0:1], 0xc
   s_waitcnt lgkmcnt(0)
-  s_lshr_b32 s59, s58, 30
   s_add_u32 s0, s0, 16
   s_addc_u32 s1, s1, 0
   s_load_dwordx16 s[20:35], s[0:1], 0x0
   s_load_dwordx16 s[36:51], s[0:1], 0x40
   s_load_dword s52, s[0:1], 0x80
   s_waitcnt lgkmcnt(0)
-  s_branch label_common_kernel_entry
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-  s_nop 0
-label_Preload_Offset_Start:
-  s_and_b32 s58, 0x3fffffff, s2
-  s_lshr_b32 s59, s2, 30
-  s_mov_b32 s64, s3
-  s_cmp_eq_u32 s59, 0
-  s_cbranch_scc0 label_Preload_HBMArgs
-  s_add_u32 s0, s0, 16
-  s_addc_u32 s1, s1, 0
-  s_load_dword s27, s[0:1], 0x1c
-  s_load_dwordx16 s[28:43], s[0:1], 0x20
-  s_load_dwordx8 s[44:51], s[0:1], 0x60
-  s_load_dword s52, s[0:1], 0x80
-  s_mov_b64 s[20:21], s[6:7]
-  s_mov_b64 s[22:23], s[8:9]
-  s_mov_b64 s[24:25], s[10:11]
-  s_mov_b32 s26, s12
-  s_branch label_Preload_LoadArgsEnd
-label_Preload_HBMArgs:
-  s_mov_b64 s[0:1], s[6:7]
-label_Preload_LoadArgsEnd:
-  s_mov_b32 s7, s4
-  s_mov_b32 s65, s5
-label_common_kernel_entry:
-  s_mov_b32 s2, s13
-  s_mov_b32 s3, s14
-  s_mov_b32 s4, s15
+  s_lshr_b32 s59, s58, 30
   s_and_b32 s6, s64, 0xffff0000
   s_lshr_b32 s6, s6, 16
   s_mov_b32 s5, s59
