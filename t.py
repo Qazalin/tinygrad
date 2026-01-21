@@ -3,20 +3,15 @@ os.environ["HIP"] = "1"
 import pathlib, ctypes
 from tinygrad import Tensor, Device, dtypes
 from tinygrad.helpers import getenv, time_to_str, colored
+from tinygrad.runtime.support.c import init_c_struct_t
 
-class KernArgs(ctypes.Structure):
-  _fields_ = [
-    ("A", ctypes.c_void_p), ("B", ctypes.c_void_p), ("C", ctypes.c_void_p), ("D", ctypes.c_void_p),
-    ("AddressWS", ctypes.c_void_p), ("AddressFlags", ctypes.c_void_p),
-    ("Gemm_info", ctypes.c_uint32), ("kernel_info0", ctypes.c_uint32), ("kernel_info1", ctypes.c_uint32),
-    ("numWG", ctypes.c_uint32), ("SizesFree0", ctypes.c_uint32), ("SizesFree1", ctypes.c_uint32),
-    ("SizesFree2", ctypes.c_uint32), ("SizesSum0", ctypes.c_uint32),
-    ("strideD0", ctypes.c_uint32), ("strideD1", ctypes.c_uint32), ("strideC0", ctypes.c_uint32), ("strideC1", ctypes.c_uint32),
-    ("strideA0", ctypes.c_uint32), ("strideA1", ctypes.c_uint32), ("strideB0", ctypes.c_uint32), ("strideB1", ctypes.c_uint32),
-    ("alpha", ctypes.c_float), ("beta", ctypes.c_float),
-    ("ItersPerTile", ctypes.c_uint32), ("MagicNumberItersPerTile", ctypes.c_uint32), ("MagicShiftItersPerTile", ctypes.c_uint32),
-    ("TotalIters", ctypes.c_uint32), ("SKItersPerWG", ctypes.c_uint32), ("skGrid", ctypes.c_uint32), ("skTiles", ctypes.c_uint32),
-  ]
+# Build kernel args struct type: 6 ptrs, 8 u32, 8 u32 (strides), 2 float, 7 u32
+_arg_types = [ctypes.c_void_p]*6 + [ctypes.c_uint32]*8 + [ctypes.c_uint32]*8 + [ctypes.c_float]*2 + [ctypes.c_uint32]*7
+_arg_fields, _offset = [], 0
+for i, ty in enumerate(_arg_types):
+  _arg_fields.append((f'f{i}', ty, _offset))
+  _offset += ctypes.sizeof(ty)
+KernArgs = init_c_struct_t(_offset, tuple(_arg_fields))
 
 # MT128x128x64 kernel constants
 MT0, MT1, KT, WORKGROUP_SIZE = 128, 128, 64, 256
@@ -83,32 +78,18 @@ def fast_matmul(A: Tensor, B: Tensor) -> Tensor:
   iters = K // KT
 
   # Build kernel args
-  args = KernArgs()
-  args.Gemm_info, args.kernel_info0 = 1, 0
-  args.kernel_info1 = (((tiles_N << 11) + 1) << 16) | 0x0006
-  args.numWG, args.SizesFree0, args.SizesFree1, args.SizesFree2, args.SizesSum0 = numWG, N, BM, 1, K
-
   bufs = [out.uop.buffer.allocate()._buf, A.uop.buffer.ensure_allocated()._buf, B.uop.buffer.ensure_allocated()._buf]
-  args.D = args.C = bufs[0].value
-  args.A, args.B = bufs[2].value, bufs[1].value
-  args.AddressWS, args.AddressFlags = _ws_buf._buf, _flags_buf._buf
-
-  args.strideD0 = args.strideC0 = args.strideA0 = N
-  args.strideD1 = args.strideC1 = args.strideA1 = 0
-  args.strideB0, args.strideB1 = K, 0
-  args.alpha, args.beta = 1.0, 0.0
-
-  args.ItersPerTile = args.SKItersPerWG = iters
-  args.MagicNumberItersPerTile, args.MagicShiftItersPerTile = _magic(iters), 0
-  args.TotalIters = numWG * iters
-  args.skGrid = args.skTiles = numWG
+  args = KernArgs(
+    bufs[2].value, bufs[1].value, bufs[0].value, bufs[0].value, _ws_buf._buf, _flags_buf._buf,  # A, B, C, D, WS, Flags
+    1, 0, (((tiles_N << 11) + 1) << 16) | 0x0006, numWG, N, BM, 1, K,  # Gemm_info, kernel_info0/1, numWG, SizesFree0/1/2, SizesSum0
+    N, 0, N, 0, N, 0, K, 0,  # strideD0/1, strideC0/1, strideA0/1, strideB0/1
+    1.0, 0.0,  # alpha, beta
+    iters, _magic(iters), 0, numWG * iters, iters, numWG, numWG,  # ItersPerTile, Magic*, TotalIters, SKItersPerWG, skGrid, skTiles
+  )
 
   # Pack args and run
-  arg_size = ctypes.c_size_t(ctypes.sizeof(args))
-  blob = (ctypes.c_ubyte * ctypes.sizeof(args)).from_buffer_copy(
-    ctypes.string_at(ctypes.addressof(args), ctypes.sizeof(args)))
-  extra = (ctypes.c_void_p * 5)(1, ctypes.cast(ctypes.byref(blob), ctypes.c_void_p), 2,
-                                 ctypes.cast(ctypes.pointer(arg_size), ctypes.c_void_p), 3)
+  extra = (ctypes.c_void_p * 5)(1, ctypes.cast(ctypes.byref(args), ctypes.c_void_p), 2,
+                                 ctypes.cast(ctypes.pointer(ctypes.c_size_t(ctypes.sizeof(args))), ctypes.c_void_p), 3)
 
   _prg.vargs = extra
   et = _prg(global_size=[numWG, 1, 1], local_size=[WORKGROUP_SIZE, 1, 1], wait=True)
