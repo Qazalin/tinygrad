@@ -6,16 +6,18 @@ from tinygrad.helpers import getenv, time_to_str, colored
 MT0, MT1, KT, WORKGROUP_SIZE = 128, 128, 64, 256
 
 # Lazy-initialized globals
-_dev, _lib, _prg, _ws_buf, _flags_buf = None, None, None, None, None
+_dev, _lib, _prg, ws, flags = None, None, None, None, None
 
 def _init():
-  global _dev, _lib, _prg, _ws_buf, _flags_buf
+  global _dev, _lib, _prg, ws, flags
   if _dev is None:
     _dev = Device[Device.DEFAULT]
     _lib = _dev.compiler.compile((pathlib.Path(__file__).parent / "kernel.s").read_text())
     _prg = _dev.runtime("gemm", _lib)
-    _ws_buf = Tensor.empty(1024*1024, dtype=dtypes.float32).uop.buffer.allocate()
-    _flags_buf = Tensor.empty(1024*1024, dtype=dtypes.half).uop.buffer.allocate()
+    ws = Tensor.empty(1024*1024, dtype=dtypes.float32)
+    ws.uop.buffer.allocate()
+    flags = Tensor.empty(1024*1024, dtype=dtypes.half)
+    flags.uop.buffer.allocate()
 
 def _ceildiv(a, b): return -(-a // b)
 def _magic(d): return 0xFFFFFFFF if d <= 1 else min(((1 << 32) + d - 1) // d, 0xFFFFFFFF)
@@ -56,9 +58,9 @@ def fast_matmul(A: Tensor, B: Tensor) -> Tensor:
   assert K >= KT * 3, \
     f"K must be >= {KT * 3} (minimum 3 iterations), got K={K}"
 
-  # Realize inputs and allocate output
-  Tensor.realize(A, B)
+  # allocate output
   out = Tensor.empty((batch, M, N), dtype=dtypes.half)
+  out.uop.buffer.allocate()
 
   # Calculate kernel parameters
   BM = batch * M
@@ -67,8 +69,8 @@ def fast_matmul(A: Tensor, B: Tensor) -> Tensor:
   iters = K // KT
 
   # Build kernel args: 6 ptrs as args, rest as vals (floats converted to int bits)
-  bufs = [out.uop.buffer.allocate()._buf, A.uop.buffer.ensure_allocated()._buf, B.uop.buffer.ensure_allocated()._buf]
-  args = (bufs[2], bufs[1], bufs[0], _ws_buf._buf, _flags_buf._buf)
+  bufs = [B, A, out, ws, flags]
+  args = [b.uop.buffer._buf for b in bufs]
   vals = (
     1, 0, _u32((((tiles_N << 11) + 1) << 16) | 0x0006), numWG, N, BM, 1, K,  # Gemm_info, kernel_info0/1, numWG, SizesFree0/1/2, SizesSum0
     N, 0, N, 0, N, 0, K, 0,  # strideD0/1, strideC0/1, strideA0/1, strideB0/1
@@ -92,6 +94,7 @@ if __name__ == "__main__":
   rng = np.random.default_rng(0)
   A = Tensor(rng.random((B, M, K), dtype=np.float32) - 0.5, dtype=dtypes.half)
   B_mat = Tensor(rng.random((K, N), dtype=np.float32) - 0.5, dtype=dtypes.half)
+  Tensor.realize(A, B_mat)
 
   out = fast_matmul(A, B_mat)
   expected = A @ B_mat

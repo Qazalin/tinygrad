@@ -15,6 +15,7 @@ def test_valid(batch, M, N, K, desc=""):
     # 3D test
     A = Tensor(rng.random((batch, M, K), dtype=np.float32) - 0.5, dtype=dtypes.half)
   B = Tensor(rng.random((K, N), dtype=np.float32) - 0.5, dtype=dtypes.half)
+  Tensor.realize(A, B)
 
   out = fast_matmul(A, B)
   expected = A @ B
