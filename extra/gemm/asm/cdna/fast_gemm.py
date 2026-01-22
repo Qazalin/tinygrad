@@ -31,8 +31,8 @@ def _u32(u): return u & 0xFFFFFFFF
 def can_use_fast_gemm(A: Tensor, B: Tensor) -> bool:
   """Check if fast_gemm can be used for this matmul."""
   _fast_gemm_stats["checked"] += 1
-  if not Device.DEFAULT.startswith(("AMD", "HIP")): return _reject("not AMD/HIP")
-  if A.dtype != dtypes.half or B.dtype != dtypes.half: return _reject(f"dtype {A.dtype}/{B.dtype} not half")
+  if not Device.DEFAULT.startswith(("AMD", "HIP", "NULL")): return _reject("not AMD/HIP")
+  if A.dtype != dtypes.half or B.dtype != dtypes.half: return _reject(f"dtype {A.dtype} {B.dtype} not half")
   if A.ndim < 2 or B.ndim != 2: return _reject(f"ndim {A.ndim}/{B.ndim}")
   K, N = A.shape[-1], B.shape[1]
   if K != B.shape[0]: return _reject(f"K mismatch {K} vs {B.shape[0]}")
@@ -48,6 +48,8 @@ def can_use_fast_gemm(A: Tensor, B: Tensor) -> bool:
 
 def fast_gemm(A: Tensor, B: Tensor) -> Tensor:
   """Fast batched matmul using AMD's Tensile GEMM kernel (MT128x128x64)."""
+  if not can_use_fast_gemm(A, B):
+    raise AssertionError(list(_fast_gemm_stats["reasons"].keys())[0])
   _fast_gemm_stats["used"] += 1
   # Handle 2D input (add batch dim)
   squeeze = A.ndim == 2

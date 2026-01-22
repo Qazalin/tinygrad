@@ -16,7 +16,7 @@ def test_valid(batch, M, N, K, desc=""):
   with Context(DEBUG=0):
     Tensor.realize(A, B)
 
-  out = fast_matmul(A, B)
+  out = fast_gemm(A, B)
   expected = A @ B
   Tensor.realize(out, expected)
 
@@ -77,7 +77,7 @@ class TestMatmul(unittest.TestCase):
 
     # Wrong dtype
     test_invalid(
-      lambda: fast_matmul(
+      lambda: fast_gemm(
         Tensor.randn(4, 256, 512),  # float32, not half
         Tensor.randn(512, 1024).cast(dtypes.half)
       ),
@@ -86,7 +86,7 @@ class TestMatmul(unittest.TestCase):
     )
 
     test_invalid(
-      lambda: fast_matmul(
+      lambda: fast_gemm(
         Tensor.randn(4, 256, 512).cast(dtypes.half),
         Tensor.randn(512, 1024)  # float32, not half
       ),
@@ -96,7 +96,7 @@ class TestMatmul(unittest.TestCase):
 
     # Dimension mismatch
     test_invalid(
-      lambda: fast_matmul(
+      lambda: fast_gemm(
         Tensor.randn(4, 256, 512).cast(dtypes.half),  # K=512
         Tensor.randn(1024, 256).cast(dtypes.half)     # K=1024
       ),
@@ -105,7 +105,7 @@ class TestMatmul(unittest.TestCase):
     )
 
     test_invalid(
-      lambda: fast_matmul(
+      lambda: fast_gemm(
         Tensor.randn(4, 256, 256).cast(dtypes.half),  # K=256
         Tensor.randn(512, 1024).cast(dtypes.half)     # K=512
       ),
@@ -115,7 +115,7 @@ class TestMatmul(unittest.TestCase):
 
     # K not multiple of 64 (KT=64)
     test_invalid(
-      lambda: fast_matmul(
+      lambda: fast_gemm(
         Tensor.randn(4, 256, 300).cast(dtypes.half),  # K=300, not multiple of 64
         Tensor.randn(300, 512).cast(dtypes.half)
       ),
@@ -125,7 +125,7 @@ class TestMatmul(unittest.TestCase):
 
     # K too small (need at least ~192 for iters >= 3)
     test_invalid(
-      lambda: fast_matmul(
+      lambda: fast_gemm(
         Tensor.randn(4, 256, 64).cast(dtypes.half),  # K=64, iters=1
         Tensor.randn(64, 512).cast(dtypes.half)
       ),
