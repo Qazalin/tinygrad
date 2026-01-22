@@ -4,7 +4,7 @@ from extra.gemm.asm.cdna.fast_gemm import fast_gemm
 from tinygrad import Tensor, dtypes, Context
 from tinygrad.engine.jit import TinyJit
 
-def test_gemm(A_shape, B_shape):
+def _test_gemm(A_shape, B_shape):
   rng = np.random.default_rng(1337)
   A = Tensor(rng.random(A_shape, dtype=np.float32) - 0.5, dtype=dtypes.half)
   B = Tensor(rng.random(B_shape, dtype=np.float32) - 0.5, dtype=dtypes.half)
@@ -17,67 +17,67 @@ def test_gemm(A_shape, B_shape):
 
 class TestGemm(unittest.TestCase):
   def test_default(self):
-    test_gemm((6, 612, 1024), (1024, 1024))
+    _test_gemm((6, 612, 1024), (1024, 1024))
 
   def test_small(self):
-    test_gemm((1, 128, 256), (256, 256))
+    _test_gemm((1, 128, 256), (256, 256))
 
   def test_large_batch(self):
-    test_gemm((12, 1024, 1024), (1024, 1024))
+    _test_gemm((12, 1024, 1024), (1024, 1024))
 
   def test_2d(self):
-    test_gemm((256, 512), (512, 512))
+    _test_gemm((256, 512), (512, 512))
 
   def test_2d_large(self):
-    test_gemm((128, 1024), (1024, 1024))
+    _test_gemm((128, 1024), (1024, 1024))
 
   def test_n_128(self):
-    test_gemm((4, 256, 512), (512, 128))
+    _test_gemm((4, 256, 512), (512, 128))
 
   def test_n_256(self):
-    test_gemm((4, 256, 512), (512, 256))
+    _test_gemm((4, 256, 512), (512, 256))
 
   def test_n_512(self):
-    test_gemm((4, 256, 512), (512, 512))
+    _test_gemm((4, 256, 512), (512, 512))
 
   def test_n_1024(self):
-    test_gemm((4, 256, 512), (512, 1024))
+    _test_gemm((4, 256, 512), (512, 1024))
 
   def test_n_2048(self):
-    test_gemm((4, 256, 512), (512, 2048))
+    _test_gemm((4, 256, 512), (512, 2048))
 
   def test_k_192(self):
-    test_gemm((4, 256, 192), (192, 512))
+    _test_gemm((4, 256, 192), (192, 512))
 
   def test_k_256(self):
-    test_gemm((4, 256, 256), (256, 512))
+    _test_gemm((4, 256, 256), (256, 512))
 
   def test_k_512(self):
-    test_gemm((4, 256, 512), (512, 512))
+    _test_gemm((4, 256, 512), (512, 512))
 
   def test_k_1024(self):
-    test_gemm((4, 256, 1024), (1024, 512))
+    _test_gemm((4, 256, 1024), (1024, 512))
 
   def test_k_2048(self):
-    test_gemm((4, 256, 2048), (2048, 512))
+    _test_gemm((4, 256, 2048), (2048, 512))
 
   def test_n_512_k_1024(self):
-    test_gemm((2, 512, 1024), (1024, 512))
+    _test_gemm((2, 512, 1024), (1024, 512))
 
   def test_n_1024_k_512(self):
-    test_gemm((2, 512, 512), (512, 1024))
+    _test_gemm((2, 512, 512), (512, 1024))
 
   def test_n_2048_k_2048(self):
-    test_gemm((2, 512, 2048), (2048, 2048))
+    _test_gemm((2, 512, 2048), (2048, 2048))
 
   def test_b1_m64(self):
-    test_gemm((1, 64, 256), (256, 256))
+    _test_gemm((1, 64, 256), (256, 256))
 
   def test_b1_m1024(self):
-    test_gemm((1, 1024, 512), (512, 512))
+    _test_gemm((1, 1024, 512), (512, 512))
 
   def test_b16(self):
-    test_gemm((16, 128, 512), (512, 512))
+    _test_gemm((16, 128, 512), (512, 512))
 
   def test_invalid_a_dtype(self):
     A = Tensor.randn(4, 256, 512)
@@ -116,10 +116,10 @@ class TestGemm(unittest.TestCase):
       fast_gemm(A, B)
 
   def test_gpt2(self):
-    test_gemm((1, 13, 1024), (1024, 1024))
+    _test_gemm((1, 13, 1024), (1024, 1024))
 
   def test_gpt2_alt(self):
-    test_gemm((1, 13, 1024), (1024, 3072))
+    _test_gemm((1, 13, 1024), (1024, 3072))
 
   def test_backward(self):
     rng = np.random.default_rng(1337)
@@ -171,33 +171,37 @@ class TestGemm(unittest.TestCase):
       Tensor.realize(C_tiny)
       np.testing.assert_allclose(C_asm.numpy(), C_tiny.numpy(), rtol=1e-2, atol=1e-2)
 
-  @unittest.skip("KNOWN BUG: multiple fast_gemm in single JIT fails intermittently")
+  @unittest.skip("KNOWN BUG: JIT replay without sync causes race condition with stream-k flags")
   def test_jit_chained(self):
     """
     Two fast_gemm calls within a single JIT function.
     This simulates the GPT2 pattern where multiple Linear layers use fast_gemm.
 
-    KNOWN BUG: This test fails intermittently after JIT capture when run with:
-      JIT=2 FAST_GEMM=1
+    KNOWN BUG: This test fails after JIT capture when run without synchronization.
 
-    But passes consistently with:
-      JIT=0 FAST_GEMM=1  (no JIT)
-      DEBUG=2 JIT=2 FAST_GEMM=1  (with wait=True synchronization)
+    Passes with:
+      JIT=0              (no JIT - kernels run with implicit sync)
+      WAIT=1 JIT=2       (explicit sync between kernels)
+      DEBUG=2 JIT=2      (wait=True adds sync)
 
-    Root cause investigation completed:
-    - Single fast_gemm in JIT: works fine
-    - Multiple fast_gemm without JIT: works fine (even chained or independent)
-    - Multiple fast_gemm with JIT: fails after JIT capture (iterations 2+)
-    - The issue is NOT about chaining - even independent gemms fail in JIT
-    - Added KernelInfo.outs/ins for custom kernel dependency tracking - didn't fix it
-    - Added flags buffer zeroing (stream-k sync assumes flags start at 0) - didn't fix it
-    - The issue is specific to JIT replay with multiple custom kernels
+    Fails with:
+      JIT=2              (JIT replay without graph, no sync)
+      JIT=1              (JIT replay with HCQ graph - hangs)
 
-    The failure manifests as near-zero or wrong output values, suggesting the
-    JIT replay doesn't properly handle multiple instances of the same custom
-    kernel with their separate workspace/flags buffers.
+    ROOT CAUSE: The fast_gemm kernel uses stream-k which requires the flags
+    buffer to be zeroed before kernel execution. A separate zeros kernel
+    initializes the flags. During JIT replay without sync, the gemm kernel
+    starts before the zeros kernel completes, reading uninitialized flag values.
 
-    This is blocking GPT2 from working with FAST_GEMM=1 when JIT is enabled.
+    The dependency tracking (KernelInfo.outs/ins) is correctly set:
+    - Zeros kernel: outs=[0] writes to flags buffer
+    - Gemm kernel: ins=[..., 4, ...] reads flags buffer (buffer 4)
+
+    However, JIT=2 replay doesn't use dependency info - it just launches
+    kernels in sequence without waiting. JIT=1 creates an HCQ graph which
+    should handle dependencies but hangs (needs investigation).
+
+    WORKAROUND: Use WAIT=1 to ensure synchronization between kernels.
 
     Run with: python extra/gemm/asm/cdna/test_fast_gemm.py debug
     """
@@ -221,11 +225,22 @@ class TestGemm(unittest.TestCase):
       np.testing.assert_allclose(C_asm.numpy(), C_tiny.numpy(), rtol=1e-2, atol=1e-2, err_msg=f"Failed at iteration {i}")
 
 def debug_jit_chained():
-  """Debug script for the chained JIT issue - run directly to investigate."""
-  import sys
+  """
+  Debug script for the chained JIT issue.
 
-  # Test 1: Two chained gemms (the failing case)
-  print("=== Test: Two chained fast_gemms in JIT ===")
+  Run with different settings:
+    JIT=0: No JIT (should pass)
+    JIT=2: JIT without graph (should fail after iter 1)
+    JIT=1: JIT with HCQ graph (may hang)
+    WAIT=1 JIT=2: JIT with explicit sync (should pass)
+  """
+  import sys
+  from tinygrad.helpers import getenv
+
+  jit_level = getenv("JIT", 2)
+  wait = getenv("WAIT", 0)
+  print(f"JIT={jit_level} WAIT={wait}")
+
   @TinyJit
   def two_gemms(x, W1, W2):
     h = fast_gemm(x, W1)
@@ -247,31 +262,9 @@ def debug_jit_chained():
     diff = np.abs(C_asm.numpy() - C_tiny.numpy()).max()
     status = "PASS" if diff < 0.1 else "FAIL"
     if diff >= 0.1: failed = True
-    print(f"  Iter {i}: {status} max_diff={diff:.6f}")
+    print(f"Iter {i}: {status} max_diff={diff:.6f}")
 
-  # Test 2: Two independent gemms without JIT
-  print("\n=== Test: Two independent fast_gemms WITHOUT JIT ===")
-  for i in range(5):
-    x1 = Tensor(rng.random((2, 1, 256), dtype=np.float32) - 0.5, dtype=dtypes.half)
-    x2 = Tensor(rng.random((2, 1, 256), dtype=np.float32) - 0.5, dtype=dtypes.half)
-    with Context(DEBUG=0): Tensor.realize(x1, x2)
-    out1 = fast_gemm(x1, W1)
-    out2 = fast_gemm(x2, W2)
-    C_asm = Tensor.stack(out1, out2).realize()
-    C1_tiny = x1 @ W1
-    C2_tiny = x2 @ W2
-    C_tiny = Tensor.stack(C1_tiny, C2_tiny)
-    Tensor.realize(C_tiny)
-    diff = np.abs(C_asm.numpy() - C_tiny.numpy()).max()
-    status = "PASS" if diff < 0.1 else "FAIL"
-    if diff >= 0.1: failed = True
-    print(f"  Iter {i}: {status} max_diff={diff:.6f}")
-
-  if failed:
-    print("\nSome tests FAILED")
-    sys.exit(1)
-  else:
-    print("\nAll tests PASSED")
+  sys.exit(1 if failed else 0)
 
 if __name__ == "__main__":
   import sys
