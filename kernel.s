@@ -12,35 +12,37 @@ label_ASM_Start:
   s_load_dwordx2 s[32:33], s[0:1], 0x18 // WS
   s_load_dwordx2 s[34:35], s[0:1], 0x20 // FL
 
-  s_load_dword s58, s[0:1], 0x28   // Gemm_info
-  s_load_dword s64, s[0:1], 0x2c   // kernel_info0
-  s_load_dword s7,  s[0:1], 0x30   // kernel_info1
-  s_load_dword s65, s[0:1], 0x34   // numWG
+  s_load_dwordx2 s[76:77], s[0:1], 0x28 // params ptr
+  s_waitcnt lgkmcnt(0)
+  s_load_dword s58, s[76:77], 0x00   // Gemm_info
+  s_load_dword s64, s[76:77], 0x04   // kernel_info0
+  s_load_dword s7,  s[76:77], 0x08   // kernel_info1
+  s_load_dword s65, s[76:77], 0x0c   // numWG
 
-  s_load_dword s20, s[0:1], 0x38   // SizesFree0
-  s_load_dword s21, s[0:1], 0x3c   // SizesFree1
-  s_load_dword s22, s[0:1], 0x40   // SizesFree2
-  s_load_dword s23, s[0:1], 0x44   // SizesSum0
+  s_load_dword s20, s[76:77], 0x10   // SizesFree0
+  s_load_dword s21, s[76:77], 0x14   // SizesFree1
+  s_load_dword s22, s[76:77], 0x18   // SizesFree2
+  s_load_dword s23, s[76:77], 0x1c   // SizesSum0
 
-  s_load_dword s36, s[0:1], 0x48   // strideD0
-  s_load_dword s37, s[0:1], 0x4c   // strideD1
-  s_load_dword s38, s[0:1], 0x50   // strideC0
-  s_load_dword s39, s[0:1], 0x54   // strideC1
-  s_load_dword s40, s[0:1], 0x58   // strideA0
-  s_load_dword s41, s[0:1], 0x5c   // strideA1
-  s_load_dword s42, s[0:1], 0x60   // strideB0
-  s_load_dword s43, s[0:1], 0x64   // strideB1
+  s_load_dword s36, s[76:77], 0x20   // strideD0
+  s_load_dword s37, s[76:77], 0x24   // strideD1
+  s_load_dword s38, s[76:77], 0x28   // strideC0
+  s_load_dword s39, s[76:77], 0x2c   // strideC1
+  s_load_dword s40, s[76:77], 0x30   // strideA0
+  s_load_dword s41, s[76:77], 0x34   // strideA1
+  s_load_dword s42, s[76:77], 0x38   // strideB0
+  s_load_dword s43, s[76:77], 0x3c   // strideB1
 
-  s_load_dword s44, s[0:1], 0x68   // alpha
-  s_load_dword s45, s[0:1], 0x6c   // beta
+  s_load_dword s44, s[76:77], 0x40   // alpha
+  s_load_dword s45, s[76:77], 0x44   // beta
 
-  s_load_dword s46, s[0:1], 0x70   // ItersPerTile
-  s_load_dword s47, s[0:1], 0x74   // MagicNumberItersPerTile
-  s_load_dword s48, s[0:1], 0x78   // MagicShiftItersPerTile
-  s_load_dword s49, s[0:1], 0x7c   // TotalIters
-  s_load_dword s50, s[0:1], 0x80   // SKItersPerWG
-  s_load_dword s51, s[0:1], 0x84   // skGrid
-  s_load_dword s52, s[0:1], 0x88   // skTiles
+  s_load_dword s46, s[76:77], 0x48   // ItersPerTile
+  s_load_dword s47, s[76:77], 0x4c   // MagicNumberItersPerTile
+  s_load_dword s48, s[76:77], 0x50   // MagicShiftItersPerTile
+  s_load_dword s49, s[76:77], 0x54   // TotalIters
+  s_load_dword s50, s[76:77], 0x58   // SKItersPerWG
+  s_load_dword s51, s[76:77], 0x5c   // skGrid
+  s_load_dword s52, s[76:77], 0x60   // skTiles
 
   s_add_u32 s0, s0, 16
   s_addc_u32 s1, s1, 0

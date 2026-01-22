@@ -1,5 +1,3 @@
-import os
-os.environ["HIP"] = "1"
 import unittest
 import numpy as np
 from t import fast_matmul
