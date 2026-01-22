@@ -171,29 +171,35 @@ class TestGemm(unittest.TestCase):
       Tensor.realize(C_tiny)
       np.testing.assert_allclose(C_asm.numpy(), C_tiny.numpy(), rtol=1e-2, atol=1e-2)
 
-  @unittest.skip("KNOWN BUG: multiple fast_gemm in single JIT fails intermittently without sync")
+  @unittest.skip("KNOWN BUG: multiple fast_gemm in single JIT fails intermittently")
   def test_jit_chained(self):
     """
     Two fast_gemm calls within a single JIT function.
     This simulates the GPT2 pattern where multiple Linear layers use fast_gemm.
 
-    KNOWN BUG: This test fails intermittently (iterations 2-3 often fail) when run with:
-      DEBUG=1 JIT=2 FAST_GEMM=1  (no synchronization)
+    KNOWN BUG: This test fails intermittently after JIT capture when run with:
+      JIT=2 FAST_GEMM=1
 
     But passes consistently with:
+      JIT=0 FAST_GEMM=1  (no JIT)
       DEBUG=2 JIT=2 FAST_GEMM=1  (with wait=True synchronization)
 
-    The failure manifests as near-zero output values, suggesting a race condition
-    or buffer aliasing issue with the workspace/flags buffers between the two
-    fast_gemm calls when they're not synchronized.
-
-    Root cause investigation:
+    Root cause investigation completed:
     - Single fast_gemm in JIT: works fine
-    - Two fast_gemm without JIT: works fine
-    - Two fast_gemm with JIT: fails intermittently without sync
-    - Adding DEBUG=2 (wait=True) makes it pass consistently
+    - Multiple fast_gemm without JIT: works fine (even chained or independent)
+    - Multiple fast_gemm with JIT: fails after JIT capture (iterations 2+)
+    - The issue is NOT about chaining - even independent gemms fail in JIT
+    - Added KernelInfo.outs/ins for custom kernel dependency tracking - didn't fix it
+    - Added flags buffer zeroing (stream-k sync assumes flags start at 0) - didn't fix it
+    - The issue is specific to JIT replay with multiple custom kernels
 
-    This is blocking GPT2 from working with WAIT=1 FAST_GEMM=1.
+    The failure manifests as near-zero or wrong output values, suggesting the
+    JIT replay doesn't properly handle multiple instances of the same custom
+    kernel with their separate workspace/flags buffers.
+
+    This is blocking GPT2 from working with FAST_GEMM=1 when JIT is enabled.
+
+    Run with: python extra/gemm/asm/cdna/test_fast_gemm.py debug
     """
     @TinyJit
     def two_gemms(x, W1, W2):
@@ -214,5 +220,62 @@ class TestGemm(unittest.TestCase):
       Tensor.realize(C_tiny)
       np.testing.assert_allclose(C_asm.numpy(), C_tiny.numpy(), rtol=1e-2, atol=1e-2, err_msg=f"Failed at iteration {i}")
 
+def debug_jit_chained():
+  """Debug script for the chained JIT issue - run directly to investigate."""
+  import sys
+
+  # Test 1: Two chained gemms (the failing case)
+  print("=== Test: Two chained fast_gemms in JIT ===")
+  @TinyJit
+  def two_gemms(x, W1, W2):
+    h = fast_gemm(x, W1)
+    out = fast_gemm(h, W2)
+    return out.realize()
+
+  rng = np.random.default_rng(1337)
+  W1 = Tensor(rng.random((256, 256), dtype=np.float32) - 0.5, dtype=dtypes.half)
+  W2 = Tensor(rng.random((256, 256), dtype=np.float32) - 0.5, dtype=dtypes.half)
+  with Context(DEBUG=0): Tensor.realize(W1, W2)
+
+  failed = False
+  for i in range(5):
+    x = Tensor(rng.random((2, 1, 256), dtype=np.float32) - 0.5, dtype=dtypes.half)
+    with Context(DEBUG=0): x.realize()
+    C_asm = two_gemms(x, W1, W2)
+    C_tiny = (x @ W1) @ W2
+    Tensor.realize(C_tiny)
+    diff = np.abs(C_asm.numpy() - C_tiny.numpy()).max()
+    status = "PASS" if diff < 0.1 else "FAIL"
+    if diff >= 0.1: failed = True
+    print(f"  Iter {i}: {status} max_diff={diff:.6f}")
+
+  # Test 2: Two independent gemms without JIT
+  print("\n=== Test: Two independent fast_gemms WITHOUT JIT ===")
+  for i in range(5):
+    x1 = Tensor(rng.random((2, 1, 256), dtype=np.float32) - 0.5, dtype=dtypes.half)
+    x2 = Tensor(rng.random((2, 1, 256), dtype=np.float32) - 0.5, dtype=dtypes.half)
+    with Context(DEBUG=0): Tensor.realize(x1, x2)
+    out1 = fast_gemm(x1, W1)
+    out2 = fast_gemm(x2, W2)
+    C_asm = Tensor.stack(out1, out2).realize()
+    C1_tiny = x1 @ W1
+    C2_tiny = x2 @ W2
+    C_tiny = Tensor.stack(C1_tiny, C2_tiny)
+    Tensor.realize(C_tiny)
+    diff = np.abs(C_asm.numpy() - C_tiny.numpy()).max()
+    status = "PASS" if diff < 0.1 else "FAIL"
+    if diff >= 0.1: failed = True
+    print(f"  Iter {i}: {status} max_diff={diff:.6f}")
+
+  if failed:
+    print("\nSome tests FAILED")
+    sys.exit(1)
+  else:
+    print("\nAll tests PASSED")
+
 if __name__ == "__main__":
-  unittest.main()
+  import sys
+  if len(sys.argv) > 1 and sys.argv[1] == "debug":
+    debug_jit_chained()
+  else:
+    unittest.main()

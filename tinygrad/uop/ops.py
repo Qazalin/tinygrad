@@ -832,6 +832,9 @@ class KernelInfo:
   applied_opts: tuple = tuple()
   opts_to_apply: tuple|None = None
   estimates: Estimates|None = None
+  # for custom kernels: explicit buffer indices that are outputs/inputs (used for dependency tracking)
+  outs: tuple[int, ...]|None = None
+  ins: tuple[int, ...]|None = None
   @property
   def function_name(self): return to_function_name(self.name)
 

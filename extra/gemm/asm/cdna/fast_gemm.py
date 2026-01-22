@@ -2,7 +2,6 @@ import pathlib, struct, atexit
 from tinygrad import Tensor, Device, dtypes
 from tinygrad.uop.ops import UOp, Ops, KernelInfo
 from tinygrad.engine.realize import Estimates
-from tinygrad.helpers import Context
 
 # MT128x128x64 kernel constants
 MT0, MT1, KT, WORKGROUP_SIZE = 128, 128, 64, 256
@@ -82,8 +81,10 @@ def fast_gemm(A: Tensor, B: Tensor) -> Tensor:
     gidx = UOp.special(numWG, "gidx0")
     src = (pathlib.Path(__file__).parent / "kernel.s").read_text()
     # Sink: out, A, B, ws, flags, params (6 buffers)
+    # outs/ins for dependency tracking: out(0), ws(3), flags(4) are written; A(1), B(2), ws(3), flags(4), params(5) are read
     sink = UOp.sink(out_uop.base, A_uop.base, B_uop.base, ws_uop.base, flags_uop.base, params_uop.base,
-                    lidx, gidx, arg=KernelInfo(name="gemm", estimates=Estimates(ops=2*BM*N*K, mem=(BM*K + K*N + BM*N)*2)))
+                    lidx, gidx, arg=KernelInfo(name="gemm", estimates=Estimates(ops=2*BM*N*K, mem=(BM*K + K*N + BM*N)*2),
+                                               outs=(0, 3, 4), ins=(1, 2, 3, 4, 5)))
     return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src)))
 
   def custom_backward_gemm(gradient:UOp, kernel:UOp):
@@ -96,12 +97,14 @@ def fast_gemm(A: Tensor, B: Tensor) -> Tensor:
   if is_multi:
     out = Tensor(Tensor.empty((shard_batch, shard_M, N), device=devs, dtype=dtypes.half).uop.multi(axis), device=devs)
     ws = Tensor.empty(1024*1024, dtype=dtypes.float32).to(devs)
-    flags = Tensor.empty(1024*1024, dtype=dtypes.half).to(devs)
+    # flags must be zeroed - kernel uses them for stream-k synchronization (wait for flag==1, reset to 0)
+    flags = Tensor.zeros(1024*1024, dtype=dtypes.int32).to(devs)
     params = params.to(devs)
   else:
     out = Tensor.empty((batch, M, N), dtype=dtypes.half)
     ws = Tensor.empty(1024*1024, dtype=dtypes.float32)
-    flags = Tensor.empty(1024*1024, dtype=dtypes.half)
+    # flags must be zeroed - kernel uses them for stream-k synchronization (wait for flag==1, reset to 0)
+    flags = Tensor.zeros(1024*1024, dtype=dtypes.int32)
   out = Tensor.custom_kernel(out, A, B, ws, flags, params, fxn=custom_gemm, grad_fxn=custom_backward_gemm)[0]
 
   return out.squeeze(0) if squeeze else out
