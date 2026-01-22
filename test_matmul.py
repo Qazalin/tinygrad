@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 from t import fast_matmul
-from tinygrad import Tensor, dtypes
+from tinygrad import Tensor, dtypes, Context
 
 def test_valid(batch, M, N, K, desc=""):
   """Test that valid inputs produce correct results."""
@@ -13,14 +13,14 @@ def test_valid(batch, M, N, K, desc=""):
     # 3D test
     A = Tensor(rng.random((batch, M, K), dtype=np.float32) - 0.5, dtype=dtypes.half)
   B = Tensor(rng.random((K, N), dtype=np.float32) - 0.5, dtype=dtypes.half)
-  Tensor.realize(A, B)
+  with Context(DEBUG=0):
+    Tensor.realize(A, B)
 
   out = fast_matmul(A, B)
   expected = A @ B
+  Tensor.realize(out, expected)
 
   np.testing.assert_allclose(out.numpy(), expected.numpy(), rtol=1e-2, atol=1e-2)
-  shape_str = f"({M},{K})@({K},{N})" if batch is None else f"({batch},{M},{K})@({K},{N})"
-  print(f"  PASS: {shape_str} {desc}")
 
 def test_invalid(fn, expected_errors, desc):
   """Test that invalid inputs raise the expected error."""
