@@ -84,9 +84,14 @@ def fast_gemm(A: Tensor, B: Tensor) -> Tensor:
                     lidx, gidx, arg=KernelInfo(name="gemm", estimates=Estimates(ops=2*BM*N*K, mem=(BM*K + K*N + BM*N)*2)))
     return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src)))
 
+  def backward_gemm(gradient:UOp, kernel:UOp):
+    # TODO
+    out, a, b, ws, flags, params = kernel.src
+    return (None, None, None, None, None, None)
+
   out = Tensor.empty((batch, M, N), dtype=dtypes.half)
   ws = Tensor.empty(1024*1024, dtype=dtypes.float32)
   flags = Tensor.empty(1024*1024, dtype=dtypes.half)
-  out = Tensor.custom_kernel(out, A, B, ws, flags, params, fxn=custom_gemm)[0]
+  out = Tensor.custom_kernel(out, A, B, ws, flags, params, fxn=custom_gemm, grad_fxn=backward_gemm)[0]
 
   return out.squeeze(0) if squeeze else out
