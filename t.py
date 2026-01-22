@@ -69,7 +69,7 @@ def fast_matmul(A: Tensor, B: Tensor) -> Tensor:
   iters = K // KT
 
   # Build kernel args: 6 ptrs as args, rest as vals (floats converted to int bits)
-  bufs = [B, A, out, ws, flags]
+  bufs = [out, A, B, ws, flags]
   args = [b.uop.buffer._buf for b in bufs]
   vals = (
     1, 0, _u32((((tiles_N << 11) + 1) << 16) | 0x0006), numWG, N, BM, 1, K,  # Gemm_info, kernel_info0/1, numWG, SizesFree0/1/2, SizesSum0

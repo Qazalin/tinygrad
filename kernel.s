@@ -6,16 +6,11 @@
 
 gemm:
 label_ASM_Start:
-  s_load_dword s28, s[0:1], 0x00   // A_lo
-  s_load_dword s29, s[0:1], 0x04   // A_hi
-  s_load_dword s30, s[0:1], 0x08   // B_lo
-  s_load_dword s31, s[0:1], 0x0c   // B_hi
-  s_load_dword s24, s[0:1], 0x10   // D_lo
-  s_load_dword s25, s[0:1], 0x14   // D_hi
-  s_load_dword s32, s[0:1], 0x18   // AddressWS_lo
-  s_load_dword s33, s[0:1], 0x1c   // AddressWS_hi
-  s_load_dword s34, s[0:1], 0x20   // AddressFlags_lo
-  s_load_dword s35, s[0:1], 0x24   // AddressFlags_hi
+  s_load_dwordx2 s[24:25], s[0:1], 0x00 // C
+  s_load_dwordx2 s[30:31], s[0:1], 0x08 // A
+  s_load_dwordx2 s[28:29], s[0:1], 0x10 // B
+  s_load_dwordx2 s[32:33], s[0:1], 0x18 // WS
+  s_load_dwordx2 s[34:35], s[0:1], 0x20 // FL
 
   s_load_dword s58, s[0:1], 0x28   // Gemm_info
   s_load_dword s64, s[0:1], 0x2c   // kernel_info0
