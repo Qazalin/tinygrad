@@ -76,7 +76,6 @@ def fast_gemm(A: Tensor, B: Tensor) -> Tensor:
     _f32(1.0), _f32(0.0),
     iters, _u32(_magic(iters)), 0, numWG * iters, iters, numWG, numWG,
   ], dtype=dtypes.uint32)
-  with Context(DEBUG=0): params.realize()
 
   def custom_gemm(out_uop: UOp, A_uop: UOp, B_uop: UOp, ws_uop: UOp, flags_uop: UOp, params_uop: UOp) -> UOp:
     lidx = UOp.special(WORKGROUP_SIZE, "lidx0")

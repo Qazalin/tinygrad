@@ -171,5 +171,48 @@ class TestGemm(unittest.TestCase):
       Tensor.realize(C_tiny)
       np.testing.assert_allclose(C_asm.numpy(), C_tiny.numpy(), rtol=1e-2, atol=1e-2)
 
+  @unittest.skip("KNOWN BUG: multiple fast_gemm in single JIT fails intermittently without sync")
+  def test_jit_chained(self):
+    """
+    Two fast_gemm calls within a single JIT function.
+    This simulates the GPT2 pattern where multiple Linear layers use fast_gemm.
+
+    KNOWN BUG: This test fails intermittently (iterations 2-3 often fail) when run with:
+      DEBUG=1 JIT=2 FAST_GEMM=1  (no synchronization)
+
+    But passes consistently with:
+      DEBUG=2 JIT=2 FAST_GEMM=1  (with wait=True synchronization)
+
+    The failure manifests as near-zero output values, suggesting a race condition
+    or buffer aliasing issue with the workspace/flags buffers between the two
+    fast_gemm calls when they're not synchronized.
+
+    Root cause investigation:
+    - Single fast_gemm in JIT: works fine
+    - Two fast_gemm without JIT: works fine
+    - Two fast_gemm with JIT: fails intermittently without sync
+    - Adding DEBUG=2 (wait=True) makes it pass consistently
+
+    This is blocking GPT2 from working with WAIT=1 FAST_GEMM=1.
+    """
+    @TinyJit
+    def two_gemms(x, W1, W2):
+      h = fast_gemm(x, W1)
+      out = fast_gemm(h, W2)
+      return out.realize()
+
+    rng = np.random.default_rng(1337)
+    W1 = Tensor(rng.random((256, 256), dtype=np.float32) - 0.5, dtype=dtypes.half)
+    W2 = Tensor(rng.random((256, 256), dtype=np.float32) - 0.5, dtype=dtypes.half)
+    with Context(DEBUG=0): Tensor.realize(W1, W2)
+
+    for i in range(5):
+      x = Tensor(rng.random((2, 1, 256), dtype=np.float32) - 0.5, dtype=dtypes.half)
+      with Context(DEBUG=0): x.realize()
+      C_asm = two_gemms(x, W1, W2)
+      C_tiny = (x @ W1) @ W2
+      Tensor.realize(C_tiny)
+      np.testing.assert_allclose(C_asm.numpy(), C_tiny.numpy(), rtol=1e-2, atol=1e-2, err_msg=f"Failed at iteration {i}")
+
 if __name__ == "__main__":
   unittest.main()
