@@ -230,7 +230,26 @@ class CapturedJit(Generic[ReturnType]):
       self._first_run = False
 
     if DEBUG >= 1 and len(self._jit_cache) >= 10: print(f"jit execs {len(self._jit_cache)} kernels")
-    for ei in self._jit_cache: ei.run(var_vals, jit=True)
+    # For JIT>=2 (no graph), track write dependencies and sync when there's a read-after-write hazard
+    if JIT >= 2:
+      w_dependency: dict[int, str] = {}  # buffer id -> device that wrote it
+      for ei in self._jit_cache:
+        if isinstance(ei.prg, CompiledRunner):
+          bufs = [cast(Buffer, ei.bufs[i]) for i in ei.prg.p.globals]
+          # Check for RAW hazard: reading from a buffer that was written by a previous kernel
+          devices_to_sync: set[str] = set()
+          for i, buf in enumerate(bufs):
+            if i not in ei.prg.p.outs and (dev := w_dependency.get(id(buf.base._buf))) is not None:
+              devices_to_sync.add(dev)
+          for dev in devices_to_sync: Device[dev].synchronize()
+          ei.run(var_vals, jit=True)
+          # Track buffers written by this kernel
+          for out_idx in ei.prg.p.outs:
+            w_dependency[id(bufs[out_idx].base._buf)] = ei.prg.device
+        else:
+          ei.run(var_vals, jit=True)
+    else:
+      for ei in self._jit_cache: ei.run(var_vals, jit=True)
     self._clear_inputs()
     return self.ret
 

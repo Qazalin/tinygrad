@@ -171,39 +171,13 @@ class TestGemm(unittest.TestCase):
       Tensor.realize(C_tiny)
       np.testing.assert_allclose(C_asm.numpy(), C_tiny.numpy(), rtol=1e-2, atol=1e-2)
 
-  @unittest.skip("KNOWN BUG: JIT replay without sync causes race condition with stream-k flags")
   def test_jit_chained(self):
     """
     Two fast_gemm calls within a single JIT function.
     This simulates the GPT2 pattern where multiple Linear layers use fast_gemm.
 
-    KNOWN BUG: This test fails after JIT capture when run without synchronization.
-
-    Passes with:
-      JIT=0              (no JIT - kernels run with implicit sync)
-      WAIT=1 JIT=2       (explicit sync between kernels)
-      DEBUG=2 JIT=2      (wait=True adds sync)
-
-    Fails with:
-      JIT=2              (JIT replay without graph, no sync)
-      JIT=1              (JIT replay with HCQ graph - hangs)
-
-    ROOT CAUSE: The fast_gemm kernel uses stream-k which requires the flags
-    buffer to be zeroed before kernel execution. A separate zeros kernel
-    initializes the flags. During JIT replay without sync, the gemm kernel
-    starts before the zeros kernel completes, reading uninitialized flag values.
-
-    The dependency tracking (KernelInfo.outs/ins) is correctly set:
-    - Zeros kernel: outs=[0] writes to flags buffer
-    - Gemm kernel: ins=[..., 4, ...] reads flags buffer (buffer 4)
-
-    However, JIT=2 replay doesn't use dependency info - it just launches
-    kernels in sequence without waiting. JIT=1 creates an HCQ graph which
-    should handle dependencies but hangs (needs investigation).
-
-    WORKAROUND: Use WAIT=1 to ensure synchronization between kernels.
-
-    Run with: python extra/gemm/asm/cdna/test_fast_gemm.py debug
+    This test previously failed with JIT=2 due to missing dependency tracking.
+    The fix in jit.py now tracks read-after-write hazards and syncs when needed.
     """
     @TinyJit
     def two_gemms(x, W1, W2):
