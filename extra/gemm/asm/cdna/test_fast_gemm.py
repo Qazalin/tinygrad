@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from t import fast_matmul
+from extra.gemm.asm.cdna.fast_gemm import fast_gemm
 from tinygrad import Tensor, dtypes, Context
 
 def test_valid(batch, M, N, K, desc=""):
