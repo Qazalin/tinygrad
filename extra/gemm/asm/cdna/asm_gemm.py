@@ -7,23 +7,23 @@ from tinygrad.helpers import Context
 # MT128x128x64 kernel constants
 MT0, MT1, KT, WORKGROUP_SIZE = 128, 128, 64, 256
 
-# Global counters for fast_gemm usage
-_fast_gemm_stats = {"checked": 0, "used": 0, "reasons": {}}
-def _print_fast_gemm_stats():
-  if _fast_gemm_stats["checked"] > 0:
-    print(f"fast_gemm: {_fast_gemm_stats['used']}/{_fast_gemm_stats['checked']} used")
-    if _fast_gemm_stats["reasons"]:
-      print("fast_gemm skip reason:")
-      for reason, lst in _fast_gemm_stats["reasons"].items(): print(f"{reason} - {len(lst)} times")
-atexit.register(_print_fast_gemm_stats)
+# Global counters for asm_gemm usage
+_asm_gemm_stats = {"checked": 0, "used": 0, "reasons": {}}
+def _print_asm_gemm_stats():
+  if _asm_gemm_stats["checked"] > 0:
+    print(f"asm_gemm: {_asm_gemm_stats['used']}/{_asm_gemm_stats['checked']} used")
+    if _asm_gemm_stats["reasons"]:
+      print("asm_gemm skip reason:")
+      for reason, lst in _asm_gemm_stats["reasons"].items(): print(f"{reason} - {len(lst)} times")
+atexit.register(_print_asm_gemm_stats)
 
 def _reject(reason: str) -> bool:
   reason_key = reason.split(":")[0]
-  _fast_gemm_stats["reasons"].setdefault(reason_key, []).append(reason)
+  _asm_gemm_stats["reasons"].setdefault(reason_key, []).append(reason)
   return False
 
-def can_use_fast_gemm(A: Tensor, B: Tensor, track_stats=True) -> bool:
-  if track_stats: _fast_gemm_stats["checked"] += 1
+def can_use_asm_gemm(A: Tensor, B: Tensor, track_stats=True) -> bool:
+  if track_stats: _asm_gemm_stats["checked"] += 1
   if not Device.DEFAULT.startswith(("AMD", "HIP", "NULL")): return _reject("DEVICE: not AMD/HIP")
   if A.dtype != dtypes.half or B.dtype != dtypes.half: return _reject(f"dtype must be half: dtype {A.dtype} {B.dtype} not half")
   if A.ndim < 2 or B.ndim != 2: return _reject(f"ndim 2: {A.ndim} < 2 or {B.ndim} != 2")
@@ -37,9 +37,9 @@ def _magic(d): return 0xFFFFFFFF if d <= 1 else min(((1 << 32) + d - 1) // d, 0x
 def _f32(f): return struct.unpack('I', struct.pack('f', f))[0]
 def _u32(u): return u & 0xFFFFFFFF
 
-def fast_gemm(A: Tensor, B: Tensor) -> Tensor:
-  assert can_use_fast_gemm(A, B, track_stats=False)
-  _fast_gemm_stats["used"] += 1
+def asm_gemm(A: Tensor, B: Tensor) -> Tensor:
+  assert can_use_asm_gemm(A, B, track_stats=False)
+  _asm_gemm_stats["used"] += 1
   # Handle 2D input (add batch dim)
   squeeze = A.ndim == 2
   if squeeze:
@@ -96,7 +96,7 @@ if __name__ == "__main__":
   B = Tensor(rng.random((K, N), dtype=np.float32) - 0.5, dtype=dtypes.half)
   Tensor.realize(A, B)
 
-  C_asm = fast_gemm(A, B)
+  C_asm = asm_gemm(A, B)
   C_tiny = A @ B
 
   Tensor.realize(C_asm, C_tiny)

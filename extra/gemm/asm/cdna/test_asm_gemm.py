@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from extra.gemm.asm.cdna.fast_gemm import fast_gemm
+from extra.gemm.asm.cdna.asm_gemm import asm_gemm
 from tinygrad import Tensor, dtypes, Context
 
 def test_gemm(A_shape, B_shape):
@@ -9,7 +9,7 @@ def test_gemm(A_shape, B_shape):
   B = Tensor(rng.random(B_shape, dtype=np.float32) - 0.5, dtype=dtypes.half)
   with Context(DEBUG=0):
     Tensor.realize(A, B)
-  C_asm = fast_gemm(A, B)
+  C_asm = asm_gemm(A, B)
   C_tiny = A @ B
   Tensor.realize(C_asm, C_tiny)
   np.testing.assert_allclose(C_asm.numpy(), C_tiny.numpy(), rtol=1e-2, atol=1e-2)
@@ -82,37 +82,37 @@ class TestGemm(unittest.TestCase):
     A = Tensor.randn(4, 256, 512)
     B = Tensor.randn(512, 1024).cast(dtypes.half)
     with self.assertRaises(AssertionError):
-      fast_gemm(A, B)
+      asm_gemm(A, B)
 
   def test_invalid_b_dtype(self):
     A = Tensor.randn(4, 256, 512).cast(dtypes.half)
     B = Tensor.randn(512, 1024)
     with self.assertRaises(AssertionError):
-      fast_gemm(A, B)
+      asm_gemm(A, B)
 
   def test_invalid_k_mismatch_512_1024(self):
     A = Tensor.randn(4, 256, 512).cast(dtypes.half)
     B = Tensor.randn(1024, 256).cast(dtypes.half)
     with self.assertRaises(AssertionError):
-      fast_gemm(A, B)
+      asm_gemm(A, B)
 
   def test_invalid_k_mismatch_256_512(self):
     A = Tensor.randn(4, 256, 256).cast(dtypes.half)
     B = Tensor.randn(512, 1024).cast(dtypes.half)
     with self.assertRaises(AssertionError):
-      fast_gemm(A, B)
+      asm_gemm(A, B)
 
   def test_invalid_k_not_multiple_64(self):
     A = Tensor.randn(4, 256, 300).cast(dtypes.half)
     B = Tensor.randn(300, 512).cast(dtypes.half)
     with self.assertRaises((AssertionError, ZeroDivisionError, RuntimeError)):
-      fast_gemm(A, B)
+      asm_gemm(A, B)
 
   def test_invalid_k_too_small(self):
     A = Tensor.randn(4, 256, 64).cast(dtypes.half)
     B = Tensor.randn(64, 512).cast(dtypes.half)
     with self.assertRaises((AssertionError, RuntimeError)):
-      fast_gemm(A, B)
+      asm_gemm(A, B)
 
 if __name__ == "__main__":
   unittest.main()
