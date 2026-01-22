@@ -114,5 +114,11 @@ class TestGemm(unittest.TestCase):
     with self.assertRaises((AssertionError, RuntimeError)):
       fast_gemm(A, B)
 
+  def test_gpt2(self):
+    test_gemm((1, 13, 1024), (1024, 1024))
+
+  def test_gpt2_alt(self):
+    test_gemm((1, 13, 1024), (1024, 3072))
+
 if __name__ == "__main__":
   unittest.main()
