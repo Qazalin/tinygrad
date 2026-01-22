@@ -121,7 +121,6 @@ class TestGemm(unittest.TestCase):
   def test_gpt2_alt(self):
     test_gemm((1, 13, 1024), (1024, 3072))
 
-  @unittest.skip("backward not implemented")
   def test_backward(self):
     rng = np.random.default_rng(1337)
     A_np = rng.random((4, 256, 256), dtype=np.float32) - 0.5
@@ -147,7 +146,6 @@ class TestGemm(unittest.TestCase):
     np.testing.assert_allclose(grad_A_asm.numpy(), grad_A_ref.numpy(), rtol=1e-2, atol=1e-2)
     np.testing.assert_allclose(grad_B_asm.numpy(), grad_B_ref.numpy(), rtol=1e-2, atol=1e-2)
 
-  @unittest.skip("multi not implemented")
   def test_multi(self):
     devs = ("AMD:0", "AMD:1")
     rng = np.random.default_rng(1337)

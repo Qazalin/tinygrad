@@ -45,12 +45,26 @@ def fast_gemm(A: Tensor, B: Tensor) -> Tensor:
   if squeeze:
     A = A.unsqueeze(0)
 
+  # Check for multi-device
+  is_multi = isinstance(A.device, tuple)
+  devs = A.device if is_multi else None
+  axis = A.uop.axis if is_multi else None
+
   # Extract dimensions: A=(batch,M,K), B=(K,N), out=(batch,M,N)
   batch, M, K = A.shape
   N = B.shape[1]
 
-  # Calculate kernel parameters
-  BM = batch * M
+  # For multi, compute per-shard dimensions
+  if is_multi:
+    num_devs = len(devs)
+    shard_batch = batch // num_devs if axis == 0 else batch
+    shard_M = M // num_devs if axis == 1 else M
+    shard_BM = shard_batch * shard_M
+  else:
+    shard_batch, shard_M, shard_BM = batch, M, batch * M
+
+  # Calculate kernel parameters (use per-shard dimensions for multi)
+  BM = shard_BM
   tiles_N, tiles_BM = _ceildiv(N, MT0), _ceildiv(BM, MT1)
   numWG = tiles_N * tiles_BM
   iters = K // KT
@@ -74,13 +88,21 @@ def fast_gemm(A: Tensor, B: Tensor) -> Tensor:
     return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src)))
 
   def custom_backward_gemm(gradient:UOp, kernel:UOp):
-    # TODO
     out, a, b, ws, flags, params = kernel.src
-    return (None, None, None, None, None, None)
+    grad_tensor, a_tensor, b_tensor = Tensor(gradient), Tensor(a), Tensor(b)
+    grad_a = (grad_tensor @ b_tensor.T).uop
+    grad_b = (a_tensor.transpose(-2, -1) @ grad_tensor).sum(tuple(range(a_tensor.ndim - 2))).uop
+    return (None, grad_a, grad_b, None, None, None)
 
-  out = Tensor.empty((batch, M, N), dtype=dtypes.half)
-  ws = Tensor.empty(1024*1024, dtype=dtypes.float32)
-  flags = Tensor.empty(1024*1024, dtype=dtypes.half)
+  if is_multi:
+    out = Tensor(Tensor.empty((shard_batch, shard_M, N), device=devs, dtype=dtypes.half).uop.multi(axis), device=devs)
+    ws = Tensor.empty(1024*1024, dtype=dtypes.float32).to(devs)
+    flags = Tensor.empty(1024*1024, dtype=dtypes.half).to(devs)
+    params = params.to(devs)
+  else:
+    out = Tensor.empty((batch, M, N), dtype=dtypes.half)
+    ws = Tensor.empty(1024*1024, dtype=dtypes.float32)
+    flags = Tensor.empty(1024*1024, dtype=dtypes.half)
   out = Tensor.custom_kernel(out, A, B, ws, flags, params, fxn=custom_gemm, grad_fxn=custom_backward_gemm)[0]
 
   return out.squeeze(0) if squeeze else out
