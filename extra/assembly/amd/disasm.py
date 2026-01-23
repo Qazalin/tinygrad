@@ -243,6 +243,7 @@ def _disasm_sopp(inst: SOPP) -> str:
     if name == 's_set_gpr_idx_mode':
       flags = [n for i, n in enumerate(['SRC0', 'SRC1', 'SRC2', 'DST']) if inst.simm16 & (1 << i)]
       return f"{name} gpr_idx({','.join(flags)})"
+    if name == 's_nop': return f"{name} {inst.simm16}"
     return f"{name} 0x{inst.simm16:x}" if inst.simm16 else name
   # RDNA (use name-based checks instead of enum-based for cross-arch compatibility)
   if name == 's_waitcnt':
