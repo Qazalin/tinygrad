@@ -114,5 +114,16 @@ class TestGemm(unittest.TestCase):
     with self.assertRaises((AssertionError, RuntimeError)):
       asm_gemm(A, B)
 
+  def test_gemm_work(self):
+    rng = np.random.default_rng(1337)
+    N = 256
+    for i in range(2):
+      x = Tensor(rng.random((2, 1, N), dtype=np.float32) - 0.5, dtype=dtypes.half).realize()
+      y = Tensor(rng.random((N, N), dtype=np.float32) - 0.5, dtype=dtypes.half).realize()
+      C_tiny = x + y
+      C_asm = asm_gemm(x, y)
+      Tensor.realize(C_asm, C_tiny)
+      C_asm.numpy()
+
 if __name__ == "__main__":
   unittest.main()
