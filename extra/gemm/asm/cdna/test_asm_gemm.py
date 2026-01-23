@@ -118,7 +118,7 @@ class TestGemm(unittest.TestCase):
     rng = np.random.default_rng(1337)
     N = 256
     for i in range(2):
-      x = Tensor(rng.random((2, 1, N), dtype=np.float32) - 0.5, dtype=dtypes.half).realize()
+      x = Tensor(rng.random((1, N), dtype=np.float32) - 0.5, dtype=dtypes.half).realize()
       y = Tensor(rng.random((N, N), dtype=np.float32) - 0.5, dtype=dtypes.half).realize()
       C_tiny = x + y
       C_asm = asm_gemm(x, y)
