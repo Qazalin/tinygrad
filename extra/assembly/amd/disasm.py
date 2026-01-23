@@ -84,7 +84,7 @@ from extra.assembly.amd.autogen.rdna4.ins import (VOP1 as R4_VOP1, VOP1_SDST as 
   VOP3SD as R4_VOP3SD, VOP3SD_LIT as R4_VOP3SD_LIT, VOP3P as R4_VOP3P, VOP3P_LIT as R4_VOP3P_LIT, VOPC as R4_VOPC, VOPC_LIT as R4_VOPC_LIT,
   VOPD as R4_VOPD, VOPD_LIT as R4_VOPD_LIT, VINTERP as R4_VINTERP, SOP1 as R4_SOP1, SOP1_LIT as R4_SOP1_LIT, SOP2 as R4_SOP2, SOP2_LIT as R4_SOP2_LIT,
   SOPC as R4_SOPC, SOPC_LIT as R4_SOPC_LIT, SOPK as R4_SOPK, SOPK_LIT as R4_SOPK_LIT, SOPP as R4_SOPP, SMEM as R4_SMEM, DS as R4_DS,
-  VOPDOp as R4_VOPDOp, HWREG as HWREG_RDNA4)
+  VFLAT as R4_FLAT, VGLOBAL as R4_GLOBAL, VSCRATCH as R4_SCRATCH, VOPDOp as R4_VOPDOp, HWREG as HWREG_RDNA4)
 from extra.assembly.amd.autogen.cdna.ins import FLAT as C_FLAT, HWREG as HWREG_CDNA
 
 def _is_cdna(inst: Inst) -> bool: return 'cdna' in inst.__class__.__module__
@@ -348,6 +348,38 @@ def _disasm_flat(inst: FLAT) -> str:
   if 'store' in name: return f"{instr} {addr_s}, {data_s}{saddr_s}{mods}"
   return f"{instr} {reg_fn(inst.vdst, w)}, {addr_s}{saddr_s}{mods}"
 
+def _disasm_vflat(inst) -> str:
+  """Disassemble RDNA4 VFLAT/VGLOBAL/VSCRATCH instructions."""
+  name = inst.op_name.lower()
+  # Determine segment from class name
+  cls_name = inst.__class__.__name__
+  seg = 'flat' if cls_name == 'VFLAT' else ('global' if cls_name == 'VGLOBAL' else 'scratch')
+  instr = f"{seg}_{name.split('_', 1)[1] if '_' in name else name}"
+  # RDNA4 uses 24-bit signed offset (ioffset)
+  off_val = inst.ioffset
+  if off_val >= (1 << 23): off_val -= (1 << 24)  # sign extend 24-bit
+  regs = inst.canonical_op_regs
+  w = regs.get('data', regs.get('d', 1)) if 'store' in name or 'atomic' in name else regs.get('d', 1)
+  off_s = f" offset:{off_val}" if off_val else ""
+  # RDNA4 uses scope/th instead of glc/slc/dlc - for now just show offset
+  mods = off_s
+  if seg == 'flat': saddr_s = ""
+  elif _unwrap(inst.saddr) in (0x7F, 124): saddr_s = ", off"
+  elif seg == 'scratch': saddr_s = f", {decode_src(inst.saddr)}"
+  elif _unwrap(inst.saddr) in SPECIAL_PAIRS: saddr_s = f", {SPECIAL_PAIRS[_unwrap(inst.saddr)]}"
+  elif t := _ttmp(inst.saddr, 2): saddr_s = f", {t}"
+  else: saddr_s = f", {_sreg(inst.saddr, 2) if _unwrap(inst.saddr) < 106 else decode_src(_unwrap(inst.saddr))}"
+  # RDNA4: vaddr instead of addr, vsrc instead of data
+  if 'addtid' in name: return f"{instr} {_vreg(inst.vsrc if 'store' in name else inst.vdst)}{saddr_s}{mods}"
+  if seg == 'flat': addr_w = 2
+  else: addr_w = 1 if seg == 'scratch' or (_unwrap(inst.saddr) not in (0x7F, 124)) else 2
+  addr_s = "off" if not inst.sve and seg == 'scratch' else _vreg(inst.vaddr, addr_w)
+  data_s, vdst_s = _vreg(inst.vsrc, w), _vreg(inst.vdst, w // 2 if 'cmpswap' in name else w)
+  if 'atomic' in name:
+    return f"{instr} {vdst_s}, {addr_s}, {data_s}{saddr_s if seg != 'flat' else ''}{mods}" if inst.scope else f"{instr} {addr_s}, {data_s}{saddr_s if seg != 'flat' else ''}{mods}"
+  if 'store' in name: return f"{instr} {addr_s}, {data_s}{saddr_s}{mods}"
+  return f"{instr} {_vreg(inst.vdst, w)}, {addr_s}{saddr_s}{mods}"
+
 def _disasm_ds(inst: DS) -> str:
   op, name = inst.op, inst.op_name.lower()
   acc = getattr(inst, 'acc', 0)
@@ -583,6 +615,7 @@ DISASM_HANDLERS: dict[type, callable] = {
   R4_VOP3: _disasm_vop3, R4_VOP3_SDST: _disasm_vop3, R4_VOP3_SDST_LIT: _disasm_vop3, R4_VOP3_LIT: _disasm_vop3,
   R4_VOP3SD: _disasm_vop3sd, R4_VOP3SD_LIT: _disasm_vop3sd, R4_VOP3P: _disasm_vop3p, R4_VOP3P_LIT: _disasm_vop3p,
   R4_VOPD: _disasm_vopd, R4_VOPD_LIT: _disasm_vopd, R4_VINTERP: _disasm_vinterp, R4_SOPP: _disasm_sopp, R4_SMEM: _disasm_smem, R4_DS: _disasm_ds,
+  R4_FLAT: _disasm_vflat, R4_GLOBAL: _disasm_vflat, R4_SCRATCH: _disasm_vflat,
   R4_SOP1: _disasm_sop1, R4_SOP1_LIT: _disasm_sop1, R4_SOP2: _disasm_sop2, R4_SOP2_LIT: _disasm_sop2,
   R4_SOPC: _disasm_sopc, R4_SOPC_LIT: _disasm_sopc, R4_SOPK: _disasm_sopk, R4_SOPK_LIT: _disasm_sopk}
 
