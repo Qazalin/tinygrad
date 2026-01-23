@@ -225,8 +225,7 @@ NO_ARG_SOPP = {SOPPOp.S_BARRIER, SOPPOp.S_WAKEUP, SOPPOp.S_ICACHE_INV,
                SOPPOp.S_WAIT_IDLE, SOPPOp.S_ENDPGM_SAVED, SOPPOp.S_CODE_END, SOPPOp.S_ENDPGM_ORDERED_PS_DONE, SOPPOp.S_TTRACEDATA}
 
 def _disasm_sopp(inst: SOPP) -> str:
-  name, cdna = inst.op_name.lower(), _is_cdna(inst)
-  is_rdna4 = 'rdna4' in inst.__class__.__module__
+  name, r4, cdna = inst.op_name.lower(), _is_r4(inst), _is_cdna(inst)
   # Ops that have no argument when simm16 == 0
   no_arg_zero = {'s_barrier', 's_wakeup', 's_icache_inv', 's_ttracedata', 's_wait_idle', 's_endpgm_saved',
                  's_endpgm_ordered_ps_done', 's_code_end'}
@@ -246,7 +245,7 @@ def _disasm_sopp(inst: SOPP) -> str:
     return f"{name} 0x{inst.simm16:x}" if inst.simm16 else name
   # RDNA (use name-based checks instead of enum-based for cross-arch compatibility)
   if name == 's_waitcnt':
-    if is_rdna4:
+    if r4:
       return f"{name} {inst.simm16}" if inst.simm16 else f"{name} 0"
     vm, exp, lgkm = (inst.simm16 >> 10) & 0x3f, inst.simm16 & 0xf, (inst.simm16 >> 4) & 0x3f
     p = [f"vmcnt({vm})" if vm != 0x3f else "", f"expcnt({exp})" if exp != 7 else "", f"lgkmcnt({lgkm})" if lgkm != 0x3f else ""]
@@ -262,11 +261,10 @@ def _disasm_sopp(inst: SOPP) -> str:
   return f"{name} 0x{inst.simm16:x}"
 
 def _disasm_smem(inst: SMEM) -> str:
-  name, cdna = inst.op_name.lower(), _is_cdna(inst)
+  name, cdna, r4 = inst.op_name.lower(), _is_cdna(inst), _is_r4(inst)
   if name in ('s_gl1_inv', 's_dcache_inv', 's_dcache_inv_vol', 's_dcache_wb', 's_dcache_wb_vol', 's_icache_inv'): return name
   soe, imm = getattr(inst, 'soe', 0) or getattr(inst, 'soffset_en', 0), getattr(inst, 'imm', 1)
-  is_rdna4 = 'rdna4' in inst.__class__.__module__
-  offset = inst.ioffset if is_rdna4 else getattr(inst, 'offset', 0)
+  offset = inst.ioffset if r4 else getattr(inst, 'offset', 0)
   if cdna:
     if soe and imm: off_s = f"{decode_src(inst.soffset, cdna)} offset:0x{offset:x}"
     elif imm: off_s = f"0x{offset:x}"
@@ -289,7 +287,7 @@ def _disasm_smem(inst: SMEM) -> str:
   # Use get_field_bits for register count
   dst_n = inst.canonical_op_regs.get('d', 1)
   th, scope = getattr(inst, 'th', 0), getattr(inst, 'scope', 0)
-  if is_rdna4:  # RDNA4 uses th/scope instead of glc/dlc
+  if r4:  # RDNA4 uses th/scope instead of glc/dlc
     th_names = ['TH_LOAD_RT', 'TH_LOAD_NT', 'TH_LOAD_HT', 'TH_LOAD_LU']
     scope_names = ['SCOPE_CU', 'SCOPE_SE', 'SCOPE_DEV', 'SCOPE_SYS']
     mods = (f" th:{th_names[th]}" if th else "") + (f" scope:{scope_names[scope]}" if scope else "")
@@ -465,8 +463,8 @@ def _disasm_vop3sd(inst: VOP3SD) -> str:
 
 def _disasm_vopd(inst: VOPD) -> str:
   lit = inst._literal
-  is_rdna4 = 'rdna4' in inst.__class__.__module__
-  op_enum = R4_VOPDOp if is_rdna4 else VOPDOp
+  r4 = _is_r4(inst)
+  op_enum = R4_VOPDOp if r4 else VOPDOp
   vdst_y, nx, ny = (_unwrap(inst.vdsty) << 1) | ((_unwrap(inst.vdstx) & 1) ^ 1), op_enum(inst.opx).name.lower(), op_enum(inst.opy).name.lower()
   def half(n, vd, s0, vs1):
     vd, vs1 = _vi(vd), _vi(vs1)
@@ -551,9 +549,8 @@ _HWREG_BLACKLIST_CDNA = {'HW_REG_PC_LO', 'HW_REG_PC_HI', 'HW_REG_IB_DBG1', 'HW_R
                          'HW_REG_SQ_SHADER_TMA_LO', 'HW_REG_SQ_SHADER_TMA_HI', 'HW_REG_SQ_PERF_SNAPSHOT_DATA', 'HW_REG_SQ_PERF_SNAPSHOT_DATA1',
                          'HW_REG_SQ_PERF_SNAPSHOT_PC_LO', 'HW_REG_SQ_PERF_SNAPSHOT_PC_HI', 'HW_REG_XCC_ID'}
 def _disasm_sopk(inst: SOPK) -> str:
-  op, name, cdna = inst.op, inst.op_name.lower(), _is_cdna(inst)
-  is_rdna4 = 'rdna4' in inst.__class__.__module__
-  hw = HWREG_CDNA if cdna else (HWREG_RDNA4 if is_rdna4 else HWREG)
+  op, name, cdna, r4 = inst.op, inst.op_name.lower(), _is_cdna(inst), _is_r4(inst)
+  hw = HWREG_CDNA if cdna else (HWREG_RDNA4 if r4 else HWREG)
   blacklist = _HWREG_BLACKLIST_CDNA if cdna else _HWREG_BLACKLIST
   def fmt_hwreg(hid, hoff, hsz):
     try: hr_name = hw(hid).name.replace("HW_REG_WAVE_", "HW_REG_")
