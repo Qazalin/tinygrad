@@ -652,7 +652,7 @@ def _disasm_vop3a(inst) -> str:
   opsel = _opsel_str(inst.opsel, opsel_n, inst.opsel != 0, False)
   orig_name = name
   name = _CDNA_VOP3_ALIASES.get(name, name)
-  # v_bitop3: neg/abs encode LUT, not source modifiers
+  # v_bitop3: neg/abs/omod encode LUT, not source modifiers
   is_bitop3 = 'bitop3' in name
   if name != orig_name:
     s0, s1 = _cdna_src(inst, inst.src0, inst.neg&1, inst.abs&1, 1), _cdna_src(inst, inst.src1, inst.neg&2, inst.abs&2, 1)
@@ -666,6 +666,11 @@ def _disasm_vop3a(inst) -> str:
     else:
       s0, s1, s2 = _cdna_src(inst, inst.src0, inst.neg&1, inst.abs&1, r0), _cdna_src(inst, inst.src1, inst.neg&2, inst.abs&2, r1), _cdna_src(inst, inst.src2, inst.neg&4, inst.abs&4, r2)
     dst = _vreg(inst.vdst, dregs) if dregs > 1 else _vreg(inst.vdst)
+  if is_bitop3:
+    # v_bitop3: LUT = neg | (abs << 3) | (omod << 6)
+    lut = inst.neg | (inst.abs << 3) | (inst.omod << 6)
+    lut_s = f" bitop3:0x{lut:02x}" if lut else ""
+    return f"{name} {dst}, {s0}, {s1}, {s2}{lut_s}"
   if op_val >= 512:
     return f"{name} {dst}, {s0}, {s1}, {s2}{opsel}{cl}{om}" if n == 3 else f"{name} {dst}, {s0}, {s1}{opsel}{cl}{om}"
   if op_val < 256:
