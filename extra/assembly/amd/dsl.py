@@ -331,9 +331,10 @@ class Inst:
       if 'cmp' in name and 'vdst' in bits: bits['vdst'] = 32
     # GLOBAL/FLAT: addr is 32-bit if saddr is valid SGPR, 64-bit if saddr is NULL
     # SCRATCH: addr is always 32-bit (offset from scratch base, not absolute address)
-    if 'addr' in bits and (saddr_field := getattr(type(self), 'saddr', None)) and type(self).__name__ not in ('SCRATCH', 'VSCRATCH'):
+    addr_key = 'vaddr' if 'vaddr' in bits else ('addr' if 'addr' in bits else None)
+    if addr_key and (saddr_field := getattr(type(self), 'saddr', None)) and type(self).__name__ not in ('SCRATCH', 'VSCRATCH'):
       saddr_val = (self._raw >> saddr_field.lo) & saddr_field.mask  # access _raw directly to avoid recursion
-      bits['addr'] = 64 if saddr_val in (124, 125) else 32  # 124=NULL, 125=M0
+      bits[addr_key] = 64 if saddr_val in (124, 125) else 32  # 124=NULL, 125=M0
     # MUBUF/MTBUF: vaddr size depends on offen/idxen (1 or 2 regs)
     if 'vaddr' in bits and hasattr(self, 'offen') and hasattr(self, 'idxen'):
       bits['vaddr'] = max(1, self.offen + self.idxen) * 32
@@ -360,7 +361,7 @@ class Inst:
       elif name in ('src1', 'vsrc1', 'ssrc1'): bits['s1'] = val
       elif name == 'src2': bits['s2'] = val
       elif name in ('vdst', 'sdst', 'sdata'): bits['d'] = val
-      elif name in ('data', 'vdata', 'data0'): bits['data'] = val
+      elif name in ('data', 'vdata', 'data0', 'vsrc'): bits['data'] = val
     return bits
   @property
   def canonical_op_regs(self) -> dict[str, int]:

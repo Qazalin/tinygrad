@@ -242,7 +242,7 @@ def _disasm_sopp(inst: SOPP) -> str:
     if name == 's_set_gpr_idx_mode':
       flags = [n for i, n in enumerate(['SRC0', 'SRC1', 'SRC2', 'DST']) if inst.simm16 & (1 << i)]
       return f"{name} gpr_idx({','.join(flags)})"
-    return f"{name} 0x{inst.simm16:x}" if inst.simm16 else name
+    return f"{name} 0x{inst.simm16:x}"
   # RDNA (use name-based checks instead of enum-based for cross-arch compatibility)
   if name == 's_waitcnt':
     if is_rdna4:
@@ -652,6 +652,8 @@ def _disasm_vop3a(inst) -> str:
   opsel = _opsel_str(inst.opsel, opsel_n, inst.opsel != 0, False)
   orig_name = name
   name = _CDNA_VOP3_ALIASES.get(name, name)
+  # v_bitop3: neg/abs encode LUT, not source modifiers
+  is_bitop3 = 'bitop3' in name
   if name != orig_name:
     s0, s1 = _cdna_src(inst, inst.src0, inst.neg&1, inst.abs&1, 1), _cdna_src(inst, inst.src1, inst.neg&2, inst.abs&2, 1)
     s2 = ""
@@ -659,7 +661,10 @@ def _disasm_vop3a(inst) -> str:
   else:
     regs = inst.canonical_op_regs
     dregs, r0, r1, r2 = regs['d'], regs['s0'], regs['s1'], regs['s2']
-    s0, s1, s2 = _cdna_src(inst, inst.src0, inst.neg&1, inst.abs&1, r0), _cdna_src(inst, inst.src1, inst.neg&2, inst.abs&2, r1), _cdna_src(inst, inst.src2, inst.neg&4, inst.abs&4, r2)
+    if is_bitop3:
+      s0, s1, s2 = _cdna_src(inst, inst.src0, 0, 0, r0), _cdna_src(inst, inst.src1, 0, 0, r1), _cdna_src(inst, inst.src2, 0, 0, r2)
+    else:
+      s0, s1, s2 = _cdna_src(inst, inst.src0, inst.neg&1, inst.abs&1, r0), _cdna_src(inst, inst.src1, inst.neg&2, inst.abs&2, r1), _cdna_src(inst, inst.src2, inst.neg&4, inst.abs&4, r2)
     dst = _vreg(inst.vdst, dregs) if dregs > 1 else _vreg(inst.vdst)
   if op_val >= 512:
     return f"{name} {dst}, {s0}, {s1}, {s2}{opsel}{cl}{om}" if n == 3 else f"{name} {dst}, {s0}, {s1}{opsel}{cl}{om}"
@@ -669,7 +674,7 @@ def _disasm_vop3a(inst) -> str:
     if sdst_val >= 256: sdst_val -= 256
     sdst = _fmt_sdst(sdst_val, 2, cdna=True)
     return f"{name} {sdst}, {s0}, {s1}{cl}"
-  if 320 <= op_val < 512:
+  if 320 <= op_val < 448:
     if name in ('v_nop', 'v_clrexcp', 'v_nop_e64', 'v_clrexcp_e64'): return name.replace('_e64', '')
     return f"{name} {dst}, {s0}{cl}{om}"
   if name == 'v_cndmask_b32':
@@ -683,7 +688,8 @@ def _disasm_vop3b(inst) -> str:
   n = inst.num_srcs() or _num_srcs(inst)
   regs = inst.canonical_op_regs
   dregs, r0, r1, r2 = regs['d'], regs['s0'], regs['s1'], regs['s2']
-  s0, s1, s2 = _cdna_src(inst, inst.src0, inst.neg&1, n=r0), _cdna_src(inst, inst.src1, inst.neg&2, n=r1), _cdna_src(inst, inst.src2, inst.neg&4, n=r2)
+  abs_ = getattr(inst, 'abs', 0)
+  s0, s1, s2 = _cdna_src(inst, inst.src0, inst.neg&1, abs_&1, r0), _cdna_src(inst, inst.src1, inst.neg&2, abs_&2, r1), _cdna_src(inst, inst.src2, inst.neg&4, abs_&4, r2)
   # CDNA VOP3_SDST uses vdst field for sdst (but vdst adds 256), RDNA uses separate sdst field
   sdst_val = getattr(inst, 'sdst', None)
   if sdst_val is None and hasattr(inst, 'vdst'):
@@ -764,7 +770,9 @@ def _disasm_cdna_vop3p(inst) -> str:
     return f"{name} {dst}, {src0}, {src1}, {src2}{' ' + ' '.join(mods) if mods else ''}"
 
   # Standard VOP3P instructions
-  src0, src1, src2, dst = get_src(inst.src0, 1), get_src(inst.src1, 1), get_src(inst.src2, 1), _vreg(inst.vdst)
+  regs = inst.canonical_op_regs
+  dregs, r0, r1, r2 = regs['d'], regs['s0'], regs['s1'], regs['s2']
+  src0, src1, src2, dst = get_src(inst.src0, r0), get_src(inst.src1, r1), get_src(inst.src2, r2), _vreg(inst.vdst, dregs)
   opsel_hi = inst.opsel_hi  # CDNA VOP3P only has 2 bits for opsel_hi (no opsel_hi2)
   opsel_hi_default = 3  # CDNA default is 0b11 (2 bits), not 0b111 like RDNA
   mods = ([_fmt_bits("op_sel", inst.opsel, n)] if inst.opsel else []) + ([_fmt_bits("op_sel_hi", opsel_hi, n)] if opsel_hi != opsel_hi_default else []) + \
