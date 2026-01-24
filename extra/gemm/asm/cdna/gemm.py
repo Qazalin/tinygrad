@@ -22,7 +22,8 @@ class Kernel:
 def asm_gemm_kernel(N:int, arch:str="gfx950", dtype=dtypes.half) -> Kernel:
   v_mfma_32x32x16 = {dtypes.half:v_mfma_f32_32x32x16_f16, dtypes.bfloat16:v_mfma_f32_32x32x16_bf16}[dtype]
   v_mfma_16x16x32 = {dtypes.half:v_mfma_f32_16x16x32_f16, dtypes.bfloat16:v_mfma_f32_16x16x32_bf16}[dtype]
-  v_cvt_out = {dtypes.half:v_cvt_pk_f16_f32, dtypes.bfloat16:v_cvt_pk_bf16_f32}[dtype]
+  # gfx950 (CDNA4) has packed f32->f16 conversion, gfx942 (CDNA3) needs scalar conversion + pack
+  v_cvt_pk = {dtypes.half:v_cvt_pk_f16_f32, dtypes.bfloat16:v_cvt_pk_bf16_f32}[dtype]
 
   k = Kernel(arch, "gemm")
   k.emit(s_load_dwordx2(s[28:29], s[0:1], s[0], 0, 0, 0, 0, 1))
@@ -1120,10 +1121,24 @@ def asm_gemm_kernel(N:int, arch:str="gfx950", dtype=dtypes.half) -> Kernel:
   k.emit(v_mov_b32_e32(v[10], 32767))
 
   # convert f32 acc pairs to packed fp16/bf16 and store
-  # packed cast only exists in cdna4, use the unpacked cast on cdna3
+  # gfx950 (CDNA4) has packed conversion, gfx942 (CDNA3) needs scalar + pack
+  def emit_cvt_pack(base):
+    if arch == "gfx950":
+      for j in range(4): k.emit(v_cvt_pk(v[base + j], v[base + j*2], v[base + j*2 + 1]))
+    else:  # gfx942
+      for j in range(4):
+        if dtype == dtypes.half:
+          k.emit(v_cvt_f16_f32_e32(v[base + j], v[base + j*2]))    # first f32 -> f16 in low bits
+          k.emit(v_cvt_f16_f32_e32(v[12], v[base + j*2 + 1]))      # second f32 -> f16 in temp v[12]
+          k.emit(v_pack_b32_f16(v[base + j], v[base + j], v[12]))  # pack {hi=v[12], lo=v[base+j]}
+        else:  # bf16: just truncate f32 (take upper 16 bits) and pack
+          k.emit(v_lshrrev_b32_e32(v[base + j], 16, v[base + j*2]))     # first f32 upper 16 bits -> bf16
+          k.emit(v_lshrrev_b32_e32(v[12], 16, v[base + j*2 + 1]))       # second f32 upper 16 bits -> bf16 in temp
+          k.emit(v_lshl_or_b32(v[base + j], v[12], 16, v[base + j]))    # pack: {hi=v[12]<<16, lo=v[base+j]}
+
   store_bases = list(range(16, 128, 8)) + list(range(136, 248, 8))
   for i, base in enumerate(store_bases):
-    for j in range(4): k.emit(v_cvt_out(v[base + j], v[base + j*2], v[base + j*2 + 1]))
+    emit_cvt_pack(base)
     # pointer update (skip for first store)
     if i > 0:
       k.emit(s_lshl_b32(s[12], s[36], 1))
@@ -1140,10 +1155,10 @@ def asm_gemm_kernel(N:int, arch:str="gfx950", dtype=dtypes.half) -> Kernel:
   k.emit(v_mov_b32_e32(v[9], 2147418112))
   k.emit(v_mov_b32_e32(v[10], 32767))
 
-  # Convert and store
+  # Convert and store (second batch: 4 stores)
   for i in range(4):
     base = 16 + i * 8
-    for j in range(4): k.emit(v_cvt_out(v[base + j], v[base + j*2], v[base + j*2 + 1]))
+    emit_cvt_pack(base)
     k.emit(s_lshl_b32(s[12], s[36], 1))
     k.emit(s_add_u32(s[16], s[16], s[12]))
     k.emit(s_addc_u32(s[17], s[17], 0))
