@@ -24,19 +24,12 @@ def _reject(reason: str) -> bool:
 
 def can_use_asm_gemm(A: Tensor, B: Tensor, track_stats=True) -> bool:
   if track_stats: _asm_gemm_stats["checked"] += 1
-  if not Device.DEFAULT.startswith(("AMD", "HIP", "NULL")): return _reject("not AMD/HIP")
-  if A.dtype != dtypes.half or B.dtype != dtypes.half: return _reject(f"dtype {A.dtype} {B.dtype} not half")
-  if A.ndim < 2 or B.ndim != 2: return _reject(f"ndim {A.ndim}/{B.ndim}")
-  K, N = A.shape[-1], B.shape[1]
-  if K != B.shape[0]: return _reject(f"K mismatch {K} vs {B.shape[0]}")
-  if K % KT != 0: return _reject(f"K={K} not divisible by {KT}")
-  if K < KT * 3: return _reject(f"K={K} < {KT*3}")
-  # Kernel uses 128x128 tiles, need reasonable M and N
-  M = A.shape[-2] if A.ndim >= 2 else 1
-  batch = int(A.shape[0]) if A.ndim == 3 else 1
-  BM = batch * M
-  if BM < MT1: return _reject(f"BM={BM} < {MT1}")
-  if N < MT0: return _reject(f"N={N} < {MT0}")
+  if not Device.DEFAULT.startswith(("AMD", "HIP", "NULL")): return _reject("DEVICE: not AMD/HIP")
+  if A.dtype != dtypes.half or B.dtype != dtypes.half: return _reject(f"dtype must be half: dtype {A.dtype} {B.dtype} not half")
+  if A.ndim < 2 or B.ndim != 2: return _reject(f"ndim 2: {A.ndim} < 2 or {B.ndim} != 2")
+  K, K2 = A.shape[-1], B.shape[0]
+  if K != K2: return _reject(f"wrong K?: {K} != {K2}")
+  if K % KT != 0 or K < KT * 3: return _reject(f"K must be divisible by {KT}: {K}")
   return True
 
 def _ceildiv(a, b): return -(-a // b)
