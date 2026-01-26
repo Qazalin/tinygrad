@@ -5,6 +5,7 @@ os.environ["AMD_AQL"] = "1"
 
 from tinygrad.device import Device
 from tinygrad.runtime.support.compiler_amd import HIPCompiler
+from tinygrad.runtime.support.elf import elf_loader
 from extra.assembly.amd.dsl import Reg, s
 
 NUM_WORKGROUPS = 96
@@ -17,6 +18,17 @@ DIRECTIVE = ".amdhsa_wavefront_size32 1"
 
 assemblyTemplate = (pathlib.Path(__file__).parent / "template.s").read_text()
 assemblyTemplateOld = (pathlib.Path(__file__).parent / "template_old.s").read_text()
+
+def verify_elf_match(lib_old: bytes, lib_new: bytes, inst_name: str):
+  """Verify ELF sections match, excluding symbol/string tables (label names can differ)."""
+  _, secs_old, _ = elf_loader(lib_old)
+  _, secs_new, _ = elf_loader(lib_new)
+  skip = {'.symtab', '.strtab', '.relro_padding'}
+  for sec in secs_old:
+    if sec.name in skip: continue
+    sec_new = next((s for s in secs_new if s.name == sec.name), None)
+    assert sec_new is not None, f"{inst_name}: section {sec.name} missing in new"
+    assert sec.content == sec_new.content, f"{inst_name}: section {sec.name} mismatch"
 
 def build_loop(mma_inst, loop_insts) -> bytes:
   """Build loop body bytes: MMA instructions + loop control (sub, cmp, branch)."""
@@ -59,11 +71,8 @@ def launchBenchmark(instruction, vgprIndices, dense=True, accum=False, **kwargs)
   src_new = src_new.replace("VGPR_COUNT", vgpr_count).replace("DIRECTIVE", DIRECTIVE)
   lib_new = COMPILER.compile(src_new)
 
-  # Verify identical .text section (ELF metadata differs due to labels/mnemonics in old template)
-  from tinygrad.runtime.support.elf import elf_loader
-  text_old = next(sh.content for sh in elf_loader(lib_old)[1] if sh.name == ".text")
-  text_new = next(sh.content for sh in elf_loader(lib_new)[1] if sh.name == ".text")
-  assert text_old == text_new, f".text mismatch for {inst.op_name}"
+  # Verify ELF sections match (excluding symbol/string tables)
+  verify_elf_match(lib_old, lib_new, inst.op_name)
 
   fxn = DEV.runtime("matmul", lib_new)
   elapsed = min([fxn(global_size=(NUM_WORKGROUPS,1,1), local_size=(WAVE_SIZE*NUM_WAVES,1,1), wait=True) for _ in range(2)])
