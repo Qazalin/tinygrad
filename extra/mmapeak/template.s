@@ -3,8 +3,7 @@
     .p2align 8
     .type matmul,@function
 matmul:
-PREAMBLE
-LOOP
+KERNEL
 
 .rodata
 .p2align 6

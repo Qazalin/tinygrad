@@ -436,9 +436,50 @@ class Inst:
 # todo: unify this with asm_matmuls
 class Kernel:
   def __init__(self):
-    self.instructions = []
+    self.instructions: list[Inst] = []
 
-  def emit(self, inst): self.instructions.append(inst); return inst
+  def emit(self, inst: Inst) -> Inst: self.instructions.append(inst); return inst
 
-  def emit_range(self, *insts, counter, n):
-    raise Exception("todo!")
+  def emit_range(self, inst: Inst, n: int, loop_count: int, counter: Reg = s[1], zero: Reg = s[2]):
+    """Emit inst n times in a loop that runs loop_count iterations. Automatically selects arch-specific instructions."""
+    # detect arch from instruction module
+    mod = type(inst).__module__
+    is_rdna4 = 'rdna4' in mod
+    is_cdna = 'cdna' in mod
+
+    # import arch-specific instructions
+    if is_rdna4:
+      from extra.assembly.amd.autogen.rdna4.ins import s_mov_b32, s_sub_co_u32, s_cmp_lg_i32, s_cbranch_scc1, s_endpgm
+      s_sub = s_sub_co_u32
+    elif is_cdna:
+      from extra.assembly.amd.autogen.cdna.ins import s_mov_b32, s_sub_u32, s_cmp_lg_i32, s_cbranch_scc1, s_endpgm
+      s_sub = s_sub_u32
+    else:  # rdna3
+      from extra.assembly.amd.autogen.rdna3.ins import s_mov_b32, s_sub_u32, s_cmp_lg_i32, s_cbranch_scc1, s_endpgm
+      s_sub = s_sub_u32
+
+    # preamble: set up loop counter
+    self.emit(s_mov_b32(counter, loop_count))
+    self.emit(s_mov_b32(zero, 0))
+
+    # loop body: emit inst n times
+    for _ in range(n):
+      self.emit(inst)
+
+    # loop control: decrement, compare, branch back
+    sub_inst = s_sub(counter, counter, 1)
+    cmp_inst = s_cmp_lg_i32(counter, zero)
+    # calculate branch offset: target is start of loop body (after preamble)
+    # simm16 is signed offset in dwords from PC+4 (after branch instruction)
+    loop_body_size = n * inst.size() + sub_inst.size() + cmp_inst.size() + 4  # +4 for branch itself
+    branch_offset = -(loop_body_size // 4)
+    branch_inst = s_cbranch_scc1(simm16=branch_offset & 0xFFFF)
+
+    self.emit(sub_inst)
+    self.emit(cmp_inst)
+    self.emit(branch_inst)
+    self.emit(s_endpgm())
+
+  def to_bytes(self) -> bytes:
+    """Convert all instructions to bytes."""
+    return b"".join(inst.to_bytes() for inst in self.instructions)
