@@ -432,3 +432,13 @@ class Inst:
     parts = [(repr(v := getattr(self, n)), v == f.default) for n, f in self._fields if n != 'op' and not isinstance(f, FixedBitField)]
     while parts and parts[-1][1]: parts.pop()
     return f"{name}({', '.join(p[0] for p in parts)})"
+ 
+# todo: unify this with asm_matmuls
+class Kernel:
+  def __init__(self):
+    self.instructions = []
+
+  def emit(self, inst): self.instructions.append(inst); return inst
+
+  def emit_range(self, *insts, counter, n):
+    raise Exception("todo!")
