@@ -56,6 +56,7 @@ if __name__=="__main__":
     from extra.assembly.amd.autogen.rdna4.ins import *
     NUM_WORKGROUPS = 64
     launchBenchmark(v_wmma_bf16_16x16x16_bf16, (3,4,7))
+    """
     launchBenchmark(v_wmma_f16_16x16x16_f16, (3,4,7))
     launchBenchmark(v_wmma_f32_16x16x16_bf16, (7,8,11))
     launchBenchmark(v_wmma_f32_16x16x16_f16, (7,8,11))
@@ -79,6 +80,7 @@ if __name__=="__main__":
     launchBenchmark(v_swmmac_f32_16x16x32_bf8_bf8, (7,8,9,10,13,14), False)
     FLOPS_PER_MATMUL = 16*16*64*2
     launchBenchmark(v_swmmac_i32_16x16x64_iu4, (7,8,9,10,13,14), False)
+    """
   elif arch == 'gfx950':
     from extra.assembly.amd.autogen.cdna.ins import *
     DIRECTIVE = ".amdhsa_accum_offset 4"
