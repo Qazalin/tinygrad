@@ -68,9 +68,9 @@ def get_rewrites(t:RewriteTrace) -> list[dict]:
   for i,(k,v) in enumerate(zip(t.keys, t.rewrites)):
     steps = [create_step(s.name, ("/graph-rewrites", i, j), loc=s.loc, match_count=len(s.matches), code_line=printable(s.loc),
                          trace=k.tb if j==0 else None, depth=s.depth) for j,s in enumerate(v)]
-    if isinstance(k.ret, ProgramSpec):
-      steps.append(create_step("View UOp List", ("/uops", i, len(steps)), k.ret))
-      steps.append(create_step("View Program", ("/code", i, len(steps)), k.ret))
+    if isinstance(k.ret, tuple) and len(k.ret) == 2 and isinstance(k.ret[0], ProgramSpec):
+      steps.append(create_step("View UOp List", ("/uops", i, len(steps)), k.ret[0]))
+      steps.append(create_step("View Program", ("/code", i, len(steps)), k.ret[0]))
       steps.append(create_step("View Disassembly", ("/asm", i, len(steps)), k.ret))
     for key in k.keys: ref_map[key] = i
     ret.append({"name":k.display_name, "steps":steps})
@@ -380,7 +380,6 @@ def get_profile(profile:list[ProfileEvent], sort_fn:Callable[[str], Any]=device_
   for ev in profile:
     if isinstance(ev, ProfileDeviceEvent):
       device_ts_diffs[ev.device] = (ev.comp_tdiff,ev.copy_tdiff if ev.copy_tdiff is not None else ev.comp_tdiff)
-      if ev.props is not None: device_props[ev.device] = ev.props
       if (d:=ev.device.split(":")[0]) == "AMD": device_decoders[d] = load_counters
   # load device specific counters
   for fxn in device_decoders.values(): fxn(profile)
@@ -430,7 +429,7 @@ def amd_readelf(lib:bytes) -> list[dict]:
           ".group_segment_fixed_size":"LDS size", ".private_segment_fixed_size":"Scratch size"}
   return [{"label":label, "value":v} for k,label in keys.items() if (v:=notes["amdhsa.kernels"][0][k]) > 0]
 
-def amd_decode(target:int, lib:bytes) -> dict[int, Any]: # Any is the Inst class from extra.assembly.amd.dsl
+def amd_decode(target:str, lib:bytes) -> dict[int, Any]: # Any is the Inst class from extra.assembly.amd.dsl
   from tinygrad.runtime.support.elf import elf_loader
   from extra.assembly.amd import detect_format
   from extra.assembly.amd.dsl import Inst
@@ -438,7 +437,7 @@ def amd_decode(target:int, lib:bytes) -> dict[int, Any]: # Any is the Inst class
   text = next((sh for sh in sections if sh.name == ".text"), None)
   assert text is not None, "no .text section found in ELF"
   off, buf = text.header.sh_addr, text.content
-  arch = {11:"rdna3", 12:"rdna4"}.get(target//10000, "cdna")
+  arch = {11:"rdna3", 12:"rdna4"}.get(int(target.replace("gfx", "")[:2]), "cdna")
   addr_table:dict[int, Inst] = {}
   offset = 0
   while offset < len(buf):
@@ -506,9 +505,10 @@ def get_render(query:str) -> dict:
   if fmt == "code": return {"src":data.src, "lang":"cpp"}
   if fmt == "asm":
     ret:dict = {"metadata":[]}
-    if data.device.startswith("AMD") and data.lib is not None:
-      with soft_err(lambda err: ret.update(err)): ret.update(amdgpu_cfg(data.lib, data.renderer.arch))
-      with soft_err(lambda err: ret["metadata"].append(err)): ret["metadata"].append(amd_readelf(data.lib))
+    prg, renderer = data
+    if renderer.device.startswith("AMD") and prg.lib is not None:
+      with soft_err(lambda err: ret.update(err)): ret.update(amdgpu_cfg(prg.lib, renderer.arch))
+      with soft_err(lambda err: ret["metadata"].append(err)): ret["metadata"].append(amd_readelf(prg.lib))
     else: ret["src"] = get_stdout(lambda: (compiler:=Device[data.device].compiler).disassemble(compiler.compile(data.src)))
     return ret
   if fmt == "all-pmc":

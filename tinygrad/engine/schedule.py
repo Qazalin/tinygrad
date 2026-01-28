@@ -133,7 +133,7 @@ pm_post_sched_cache = PatternMatcher([
 ])
 
 schedule_cache: dict[bytes, tuple[list[ExecItem], UOp]] = {}
-@track_rewrites(lambda _,ret: f"Schedule {pluralize('Kernel', len(ret[1]))}")
+@track_rewrites(lambda ret,**_: f"Schedule {pluralize('Kernel', len(ret[1]))}")
 def complete_create_schedule_with_vars(big_sink:UOp) -> tuple[dict[UOp, UOp], list[ExecItem], dict[str, int]]:
   # big_sink srcs are all the Tensors
   st = time.perf_counter()

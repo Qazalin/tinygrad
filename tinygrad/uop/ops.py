@@ -1083,13 +1083,14 @@ def add_trace_group(kt:TracingKey) -> None:
 
 def track_rewrites(name:Callable[..., str|TracingKey]|bool=True, replay:bool=False):
   def _decorator(func):
+    sig = inspect.signature(func)
     def __wrapper(*args, **kwargs):
       fn = key = func.__name__
       if TRACK_MATCH_STATS >= 2: add_trace_group(key:=TracingKey(n:=f"{fn} n{next(_name_cnt.setdefault(fn, itertools.count(1)))}", (n,)))
       with cpu_profile(key, "TINY") as e:
         ret = func(*args, **kwargs)
       if TRACK_MATCH_STATS >= 2 and callable(name):
-        name_ret = name(*args, **kwargs, ret=ret)
+        name_ret = name(**(sig.bind_partial(*args, **kwargs)).arguments, ret=ret)
         assert isinstance(name_ret, (TracingKey, str)), f"name function returned {type(name_ret)}"
         tracked_keys[-1] = k = TracingKey(n:=tracked_keys[-1].display_name.replace(fn, name_ret), (n,)) if isinstance(name_ret, str) else name_ret
         e.name = TracingKey(k.display_name if isinstance(name_ret, str) else f"{fn} for {k.display_name}", k.keys)
