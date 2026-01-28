@@ -114,7 +114,7 @@ class TestViz(BaseTestViz):
 
   # name can also come from a function that returns a TracingKey
   def test_tracing_key(self):
-    @track_rewrites(name=lambda inp,ret: TracingKey("custom_name", (inp,)))
+    @track_rewrites(name=lambda s,ret: TracingKey("custom_name", (s,)))
     def test(s:UOp): return graph_rewrite(s, PatternMatcher([]))
     test(UOp.variable("a", 1, 10)+1)
     lst = get_viz_list()
