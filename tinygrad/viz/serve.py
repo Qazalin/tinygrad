@@ -169,8 +169,6 @@ def option(s:int|None) -> int: return 0 if s is None else s+1
 device_ts_diffs:dict[str, tuple[Decimal, Decimal]] = {}
 def cpu_ts_diff(device:str, thread=0) -> Decimal: return device_ts_diffs.get(device, (Decimal(0),))[thread]
 
-device_props:dict[str, dict] = {}
-
 DevEvent = ProfileRangeEvent|ProfileGraphEntry|ProfilePointEvent
 def flatten_events(profile:list[ProfileEvent]) -> Generator[tuple[Decimal, Decimal, DevEvent], None, None]:
   for e in profile:
@@ -345,7 +343,7 @@ def unpack_sqtt(key:tuple[str, int], data:list, p:ProfileProgramEvent) -> tuple[
   # * init decoder
   from extra.sqtt.roc import decode
   base = unwrap(p.base)
-  addr_table = amd_decode(device_props[p.device]["gfx_target_version"], unwrap(p.lib))
+  addr_table = amd_decode(p.renderer.arch, unwrap(p.lib))
   disasm:dict[int, tuple[str, int]] = {addr+base:(inst.disasm(), inst.size()) for addr, inst in addr_table.items()}
   rctx = decode(data, {p.name:disasm})
   cu_events:dict[str, list[ProfileEvent]] = {}
@@ -509,7 +507,7 @@ def get_render(query:str) -> dict:
   if fmt == "asm":
     ret:dict = {"metadata":[]}
     if data.device.startswith("AMD") and data.lib is not None:
-      with soft_err(lambda err: ret.update(err)): ret.update(amdgpu_cfg(data.lib, device_props[data.device]["gfx_target_version"]))
+      with soft_err(lambda err: ret.update(err)): ret.update(amdgpu_cfg(data.lib, data.renderer.arch))
       with soft_err(lambda err: ret["metadata"].append(err)): ret["metadata"].append(amd_readelf(data.lib))
     else: ret["src"] = get_stdout(lambda: (compiler:=Device[data.device].compiler).disassemble(compiler.compile(data.src)))
     return ret
