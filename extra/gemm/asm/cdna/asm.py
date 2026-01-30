@@ -1,5 +1,18 @@
 from extra.assembly.amd.autogen.cdna.ins import *
 
+# (batch, M, N, K) -> (numWG, iters, total)
+GEMM_ARGS = {
+  (1, 8192, 4096, 4096): (256, 64, 32768),
+  (1, 8192, 1024, 4096): (256, 64, 32768),
+  (1, 8192, 14336, 4096): (256, 64, 114688),
+  (1, 8192, 4096, 14336): (256, 224, 114688),
+  (1, 8192, 128256, 4096): (16032, 64, 1026048),
+  (8, 8192, 1024, 4096): (256, 64, 65536),
+  (1, 8192, 8192, 8192): (256, 128, 131072),
+  (1, 4096, 4096, 4096): (256, 64, 16384),
+}
+ITERS_ARGS = {64: (67108864, 0), 128: (33554432, 0), 224: (613566757, 2147483656)}
+
 class Kernel:
   def __init__(self): self.instructions, self.labels, self.labels_at_pos, self.pos, self._patched = [], {}, {}, 0, False
 
@@ -14,56 +27,76 @@ class Kernel:
     return inst
 
   def _patch(self):
-    if self._patched: return
+    if self._patched: return None
     for inst in self.instructions:
       if inst._target is None: continue
       inst.simm16 = (self.labels[inst._target] - inst._pos - inst.size()) // 4
     self._patched = True
 
-  def to_asm(self) -> bytes:
+  def to_asm(self):
     self._patch()
-    return b"".join(inst.to_bytes() for inst in self.instructions)
+    inst_bytes = b"".join(inst.to_bytes() for inst in self.instructions)
+    body = "\n".join("  .byte " + ",".join(f"0x{b:02x}" for b in inst_bytes[i:i+16]) for i in range(0, len(inst_bytes), 16))
+    hsa = [('group_segment_fixed_size', 133120), ('private_segment_fixed_size', 0), ('kernarg_size', 24),
+           ('next_free_vgpr', 512), ('next_free_sgpr', 96), ('system_sgpr_workgroup_id_x', 1),
+           ('system_sgpr_workgroup_id_y', 1), ('system_sgpr_workgroup_id_z', 1), ('user_sgpr_kernarg_segment_ptr', 1),
+           ('user_sgpr_count', 2), ('user_sgpr_kernarg_preload_length', 0), ('user_sgpr_kernarg_preload_offset', 0),
+           ('accum_offset', 256), ('uses_dynamic_stack', 0), ('tg_split', 0), ('float_round_mode_32', 0),
+           ('float_round_mode_16_64', 0), ('float_denorm_mode_32', 3), ('float_denorm_mode_16_64', 3),
+           ('ieee_mode', 1), ('fp16_overflow', 0), ('dx10_clamp', 1)]
+    args = '\n'.join(f'      - .address_space: generic\n        .name: {n}\n        .offset: {i*8}\n'
+                     f'        .size: 8\n        .value_kind: global_buffer\n        .value_type: {t}'
+                     for i, (n, t) in enumerate([('D', 'bf16'), ('A', 'bf16'), ('B', 'bf16')]))
+    return '\n'.join(['.text', '.section\t.text.', '.global\tgemm', '.p2align\t8', '.type\tgemm,@function', '', 'gemm:',
+      body, '', '.section .rodata,"a",@progbits', '.p2align 6, 0x0', '.amdhsa_kernel gemm',
+      *[f'  .amdhsa_{k} {v}' for k, v in hsa], '.end_amdhsa_kernel', '', '.amdgpu_metadata', '---', 'amdhsa.kernels:',
+      '  - .args:', args, '    .group_segment_fixed_size: 133120', '    .kernarg_segment_align: 8',
+      '    .kernarg_segment_size: 24', '    .max_flat_workgroup_size: 256', '    .name: gemm',
+      '    .private_segment_fixed_size: 0', '    .sgpr_count: 95', '    .sgpr_spill_count: 0', '    .symbol: gemm.kd',
+      '    .vgpr_count: 249', '    .vgpr_spill_count: 0', '    .wavefront_size: 64', 'amdhsa.version:', '  - 1',
+      '  - 1', '...', '.end_amdgpu_metadata', ''])
 
+  # outputs readable source code for this kernel
   def to_text(self) -> str:
     self._patch()
-    lines, pos = ["gemm:"], 0
+    lines, pos = [], 0
     for inst in self.instructions:
-      for lbl in self.labels_at_pos.get(pos, []):
-        lines.append(f"{lbl}:")
-      target = f"  # -> {inst._target}" if inst._target else ""
-      lines.append(f"  {pos:6x}: {inst.disasm()}{target}")
+      for label in self.labels_at_pos.get(pos, []): lines.append(f"{label}:")
+      target = f"  // -> {inst._target}" if inst._target else ""
+      lines.append(f"  {inst.disasm()}{target}")
       pos += inst.size()
     return "\n".join(lines)
 
-def build_kernel():
+def build_kernel(batch, M, N, K):
+  numWG, iters, total = GEMM_ARGS[(batch, M, N, K)]
+  magic, shift = ITERS_ARGS[iters]
   k = Kernel()
+  # load D, A, B pointers
   k.emit(s_load_dwordx2(s[24:25], s[0:1], s[0], 0, 0, 0, 0, 1))
   k.emit(s_load_dwordx2(s[30:31], s[0:1], s[0], 8, 0, 0, 0, 1))
   k.emit(s_load_dwordx2(s[28:29], s[0:1], s[0], 16, 0, 0, 0, 1))
-  k.emit(s_load_dwordx2(s[76:77], s[0:1], s[0], 24, 0, 0, 0, 1))
   k.emit(s_waitcnt(49279))
-  k.emit(s_load_dword(s[69], s[76:77], s[0], 0, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[20], s[76:77], s[0], 4, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[21], s[76:77], s[0], 8, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[22], s[76:77], s[0], 12, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[23], s[76:77], s[0], 16, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[36], s[76:77], s[0], 20, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[37], s[76:77], s[0], 24, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[40], s[76:77], s[0], 28, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[41], s[76:77], s[0], 32, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[42], s[76:77], s[0], 36, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[43], s[76:77], s[0], 40, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[46], s[76:77], s[0], 44, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[47], s[76:77], s[0], 48, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[48], s[76:77], s[0], 52, 0, 0, 0, 1))
-  k.emit(s_load_dword(s[49], s[76:77], s[0], 56, 0, 0, 0, 1))
-  k.emit(s_waitcnt(49279))
+  # params as constants
+  k.emit(s_mov_b32(s[69], numWG))
+  k.emit(s_mov_b32(s[20], N))
+  k.emit(s_mov_b32(s[21], batch * M))
+  k.emit(s_mov_b32(s[22], 1))
+  k.emit(s_mov_b32(s[23], K))
+  k.emit(s_mov_b32(s[36], N))
+  k.emit(s_mov_b32(s[37], 0))
+  k.emit(s_mov_b32(s[40], N))
+  k.emit(s_mov_b32(s[41], 0))
+  k.emit(s_mov_b32(s[42], K))
+  k.emit(s_mov_b32(s[43], 0))
+  k.emit(s_mov_b32(s[46], iters))
+  k.emit(s_mov_b32(s[47], magic))
+  k.emit(s_mov_b32(s[48], shift))
+  k.emit(s_mov_b32(s[49], total))
   k.emit(s_mov_b32(s[62], 0))
   k.emit(s_mov_b32(s[68], 0))
   k.emit(s_mov_b32(s[7], 1073872912))
   k.emit(s_mov_b32(s[51], 256))
   k.emit(s_mov_b32(s[52], 256))
-  k.emit(s_waitcnt(49279))
   k.emit(s_mov_b32(s[38], s[36]))
   k.emit(s_mov_b32(s[39], s[37]))
   k.emit(s_mov_b64(s[26:27], s[24:25]))
