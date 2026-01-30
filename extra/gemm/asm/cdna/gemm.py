@@ -3,20 +3,21 @@ from tinygrad import Tensor, Device, dtypes
 from tinygrad.uop.ops import UOp, Ops, KernelInfo, AxisType
 from tinygrad.renderer import Estimates
 from tinygrad.helpers import getenv, Context, all_same, dedup
-from extra.gemm.asm.cdna.asm import k
+from extra.gemm.asm.cdna.asm import build_kernel
 
 # ** CDNA4 assembly gemm
 
 WORKGROUP_SIZE = 256
 
 def custom_asm_gemm(C:UOp, A:UOp, B:UOp, params:UOp, dname:str, wg:int) -> UOp:
-  M, K = A.shape[0]*A.shape[1], A.shape[2]
+  B, M, K = A.shape
   K2, N = B.shape[(1 if B.ndim == 3 else 0):]
   assert K == K2
   lidx = UOp.special(WORKGROUP_SIZE, "lidx0")
   gidx = UOp.special(wg, "gidx0")
   sink = UOp.sink(C.base, A.base, B.base, params.base, lidx, gidx,
-                  arg=KernelInfo(name="gemm", estimates=Estimates(ops=2*M*N*K, mem=(M*K + K*N + M*N)*2)))
+                  arg=KernelInfo(name="gemm", estimates=Estimates(ops=2*B*M*N*K, mem=(B*M*K + K*N + B*M*N)*2)))
+  k = build_kernel(B, M, N, K)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
                                UOp(Ops.SOURCE, arg=k.to_text()), UOp(Ops.BINARY, arg=k.to_asm())))
 

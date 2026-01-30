@@ -11596,4 +11596,4 @@ def build_kernel():
   k.emit(s_branch(), target='label_PersistentLoopStart')
   k.label('label_KernelEnd')
   k.emit(s_endpgm())
-  return k.to_asm()
+  return k
