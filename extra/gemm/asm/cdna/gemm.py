@@ -18,7 +18,7 @@ def custom_asm_gemm(C:UOp, A:UOp, B:UOp, params:UOp, dname:str, wg:int) -> UOp:
   sink = UOp.sink(C.base, A.base, B.base, params.base, lidx, gidx,
                   arg=KernelInfo(name="gemm", estimates=Estimates(ops=2*M*N*K, mem=(M*K + K*N + M*N)*2)))
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
-                               UOp(Ops.SOURCE, arg=k.to_asm()), UOp(Ops.BINARY, arg=k.to_bytes())))
+                               UOp(Ops.SOURCE, arg=k.to_text()), UOp(Ops.BINARY, arg=k.to_asm())))
 
 # gemm kernel arguments, mapped exactly to the dims, this should be removed the gemm is generic
 # (batch, M, N, K) -> (numWG, iters, total)

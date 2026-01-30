@@ -1,10 +1,11 @@
-import pathlib
 from extra.assembly.amd.autogen.cdna.ins import *
 
 class Kernel:
-  def __init__(self): self.instructions, self.labels, self.pos = [], {}, 0
+  def __init__(self): self.instructions, self.labels, self.labels_at_pos, self.pos, self._patched = [], {}, {}, 0, False
 
-  def label(self, name): self.labels[name] = self.pos
+  def label(self, name):
+    self.labels[name] = self.pos
+    self.labels_at_pos.setdefault(self.pos, []).append(name)
 
   def emit(self, inst, target=None):
     self.instructions.append(inst)
@@ -12,16 +13,27 @@ class Kernel:
     self.pos += inst.size()
     return inst
 
-  def to_asm(self):
+  def _patch(self):
+    if self._patched: return
     for inst in self.instructions:
       if inst._target is None: continue
-      offset_dwords = (self.labels[inst._target] - inst._pos - inst.size()) // 4
-      inst.simm16 = offset_dwords
+      inst.simm16 = (self.labels[inst._target] - inst._pos - inst.size()) // 4
+    self._patched = True
 
-    rodata = (pathlib.Path(__file__).parent/"rodata.s").read_text()
-    inst_bytes = b"".join(inst.to_bytes() for inst in self.instructions)
-    insts_hex = "\n".join("  .byte " + ",".join(f"0x{b:02x}" for b in inst_bytes[i:i+16]) for i in range(0, len(inst_bytes), 16)) + "\n"
-    return rodata.replace('INSTRUCTIONS', insts_hex)
+  def to_asm(self) -> bytes:
+    self._patch()
+    return b"".join(inst.to_bytes() for inst in self.instructions)
+
+  def to_text(self) -> str:
+    self._patch()
+    lines, pos = ["gemm:"], 0
+    for inst in self.instructions:
+      for lbl in self.labels_at_pos.get(pos, []):
+        lines.append(f"{lbl}:")
+      target = f"  # -> {inst._target}" if inst._target else ""
+      lines.append(f"  {pos:6x}: {inst.disasm()}{target}")
+      pos += inst.size()
+    return "\n".join(lines)
 
 def build_kernel():
   k = Kernel()
@@ -11585,25 +11597,3 @@ def build_kernel():
   k.label('label_KernelEnd')
   k.emit(s_endpgm())
   return k.to_asm()
-
-if __name__ == "__main__":
-  from tinygrad.runtime.support.compiler_amd import HIPCompiler
-  from tinygrad.runtime.support.elf import elf_loader
-  cc = HIPCompiler("gfx950")
-
-  rodata = (pathlib.Path(__file__).parent/"rodata.s").read_text()
-  src = rodata.replace("INSTRUCTIONS", (pathlib.Path(__file__).parent/"kernel.s").read_text())
-  lib = cc.compile(src)
-  image, sections, _ = elf_loader(lib)
-  for section in [".text", ".rodata", ".note"]:
-    print(section)
-    text = next(sh for sh in sections if sh.name == section)
-    text_bytes = image[text.header.sh_addr:text.header.sh_addr + text.header.sh_size]
-
-    src2 = build_kernel()
-    lib2 = cc.compile(src2)
-    image2, sections2, _ = elf_loader(lib2)
-    text2 = next(sh for sh in sections2 if sh.name == section)
-    text_bytes2 = image2[text2.header.sh_addr:text2.header.sh_addr + text2.header.sh_size]
-
-    print(f"{section}: {len(text_bytes)} vs {len(text_bytes2)}, match: {text_bytes == text_bytes2}")
