@@ -3,6 +3,7 @@ from tinygrad import Tensor, Device, dtypes
 from tinygrad.uop.ops import UOp, Ops, KernelInfo, AxisType
 from tinygrad.renderer import Estimates
 from tinygrad.helpers import getenv, Context, all_same, dedup
+from extra.gemm.asm.cdna.asm import k
 
 # ** CDNA4 assembly gemm
 
@@ -14,11 +15,10 @@ def custom_asm_gemm(C:UOp, A:UOp, B:UOp, params:UOp, dname:str, wg:int) -> UOp:
   assert K == K2
   lidx = UOp.special(WORKGROUP_SIZE, "lidx0")
   gidx = UOp.special(wg, "gidx0")
-  rodata = (pathlib.Path(__file__).parent/"rodata.s").read_text()
-  src = rodata.replace("INSTRUCTIONS", (pathlib.Path(__file__).parent/"kernel.s").read_text())
   sink = UOp.sink(C.base, A.base, B.base, params.base, lidx, gidx,
                   arg=KernelInfo(name="gemm", estimates=Estimates(ops=2*M*N*K, mem=(M*K + K*N + M*N)*2)))
-  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src)))
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                               UOp(Ops.SOURCE, arg=k.to_asm()), UOp(Ops.BINARY, arg=k.to_bytes())))
 
 # gemm kernel arguments, mapped exactly to the dims, this should be removed the gemm is generic
 # (batch, M, N, K) -> (numWG, iters, total)
