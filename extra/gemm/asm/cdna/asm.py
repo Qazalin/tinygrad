@@ -37,10 +37,6 @@ class Kernel:
     self.emit(s_waitcnt(waitcnt))
 
   def to_binary(self):
-    # patch branches
-    for inst in self.instructions:
-      if inst._target is None: continue
-      inst.simm16 = (self.labels[inst._target] - inst._pos - inst.size()) // 4
     # convert instructions to bytes, pack hsa
     inst_bytes = b"".join(inst.to_bytes() for inst in self.instructions)
     body = "\n".join("  .byte " + ",".join(f"0x{b:02x}" for b in inst_bytes[i:i+16]) for i in range(0, len(inst_bytes), 16))
@@ -52,6 +48,36 @@ class Kernel:
            ('float_round_mode_16_64', 0), ('float_denorm_mode_32', 3), ('float_denorm_mode_16_64', 3),
            ('ieee_mode', 1), ('fp16_overflow', 0), ('dx10_clamp', 1)]
     return pack_hsaco(inst_bytes, dict(hsa))
+
+  def end(self):
+    # patch branches
+    for inst in self.instructions:
+      if inst._target is None: continue
+      inst.simm16 = (self.labels[inst._target] - inst._pos - inst.size()) // 4
+    self.emit(s_endpgm())
+
+  def to_asm(self):
+    # convert instructions to bytes, pack hsa
+    inst_bytes = b"".join(inst.to_bytes() for inst in self.instructions)
+    body = "\n".join("  .byte " + ",".join(f"0x{b:02x}" for b in inst_bytes[i:i+16]) for i in range(0, len(inst_bytes), 16))
+    hsa = [('group_segment_fixed_size', 133120), ('private_segment_fixed_size', 0), ('kernarg_size', 24),
+           ('next_free_vgpr', 512), ('next_free_sgpr', 96), ('system_sgpr_workgroup_id_x', 1),
+           ('system_sgpr_workgroup_id_y', 1), ('system_sgpr_workgroup_id_z', 1), ('user_sgpr_kernarg_segment_ptr', 1),
+           ('user_sgpr_count', 2), ('user_sgpr_kernarg_preload_length', 0), ('user_sgpr_kernarg_preload_offset', 0),
+           ('accum_offset', 256), ('uses_dynamic_stack', 0), ('tg_split', 0), ('float_round_mode_32', 0),
+           ('float_round_mode_16_64', 0), ('float_denorm_mode_32', 3), ('float_denorm_mode_16_64', 3),
+           ('ieee_mode', 1), ('fp16_overflow', 0), ('dx10_clamp', 1)]
+    args = '\n'.join(f'      - .address_space: generic\n        .name: {n}\n        .offset: {i*8}\n'
+                     f'        .size: 8\n        .value_kind: global_buffer' for i,n in enumerate(['C', 'A', 'B']))
+    n = self.name
+    return '\n'.join(['.text', '.section\t.text.', f'.global\t{n}', '.p2align\t8', f'.type\t{n},@function', '', f'{n}:',
+      body, '', '.section .rodata,"a",@progbits', '.p2align 6, 0x0', f'.amdhsa_kernel {n}',
+      *[f'  .amdhsa_{k} {v}' for k, v in hsa], '.end_amdhsa_kernel', '', '.amdgpu_metadata', '---', 'amdhsa.kernels:',
+      '  - .args:', args, '    .group_segment_fixed_size: 133120', '    .kernarg_segment_align: 8',
+      '    .kernarg_segment_size: 24', '    .max_flat_workgroup_size: 256', f'    .name: {n}',
+      '    .private_segment_fixed_size: 0', '    .sgpr_count: 95', '    .sgpr_spill_count: 0', f'    .symbol: {n}.kd',
+      '    .vgpr_count: 249', '    .vgpr_spill_count: 0', '    .wavefront_size: 64', 'amdhsa.version:', '  - 1',
+      '  - 1', '...', '.end_amdgpu_metadata', ''])
 
   # outputs readable source code for this kernel
   def to_text(self) -> str:
@@ -11504,5 +11530,5 @@ def build_kernel(batch, M, N, K, dtype):
   k.emit(s_cbranch_scc1(), target='KernelEnd')
   k.emit(s_branch(), target='PersistentLoopStart')
   k.label('KernelEnd')
-  k.emit(s_endpgm())
+  k.end()
   return k
