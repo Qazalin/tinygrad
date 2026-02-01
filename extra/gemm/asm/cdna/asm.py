@@ -39,15 +39,15 @@ class Kernel:
   def to_binary(self):
     # convert instructions to bytes, pack hsa
     inst_bytes = b"".join(inst.to_bytes() for inst in self.instructions)
-    body = "\n".join("  .byte " + ",".join(f"0x{b:02x}" for b in inst_bytes[i:i+16]) for i in range(0, len(inst_bytes), 16))
+    # EF_AMDGPU_MACH_AMDGCN_GFX950 = 0x4f, XNACK+ = 0x100, SRAMECC+ = 0x400
     hsa = [('group_segment_fixed_size', 133120), ('private_segment_fixed_size', 0), ('kernarg_size', 24),
            ('next_free_vgpr', 512), ('next_free_sgpr', 96), ('system_sgpr_workgroup_id_x', 1),
            ('system_sgpr_workgroup_id_y', 1), ('system_sgpr_workgroup_id_z', 1), ('user_sgpr_kernarg_segment_ptr', 1),
            ('user_sgpr_count', 2), ('user_sgpr_kernarg_preload_length', 0), ('user_sgpr_kernarg_preload_offset', 0),
            ('accum_offset', 256), ('uses_dynamic_stack', 0), ('tg_split', 0), ('float_round_mode_32', 0),
            ('float_round_mode_16_64', 0), ('float_denorm_mode_32', 3), ('float_denorm_mode_16_64', 3),
-           ('ieee_mode', 1), ('fp16_overflow', 0), ('dx10_clamp', 1)]
-    return pack_hsaco(inst_bytes, dict(hsa))
+           ('ieee_mode', 1), ('fp16_overflow', 0), ('dx10_clamp', 1), ('e_flags', 0x54f)]
+    return pack_hsaco(inst_bytes, dict(hsa), name=self.name)
 
   def end(self):
     # patch branches

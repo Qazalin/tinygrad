@@ -22,7 +22,7 @@ def custom_asm_gemm(C:UOp, A:UOp, B:UOp, dname:str, arch:str, wg:int) -> UOp:
   binary = HIPCompiler(arch).compile(k.to_asm())
   binary2 = k.to_binary()
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
-                               UOp(Ops.SOURCE, arg=k.to_text()), UOp(Ops.BINARY, arg=binary)))
+                               UOp(Ops.SOURCE, arg=k.to_text()), UOp(Ops.BINARY, arg=binary2)))
 
 counters = {"used":0, "todos":[]}
 def todo(msg:str) -> bool: counters["todos"].append(msg); return False
