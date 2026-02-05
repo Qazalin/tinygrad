@@ -62,7 +62,7 @@ class Attention:
       xk = self.k_norm(xk)
 
     # cast_float_to_bf16 is expensive in reduction loops, break it out
-    if x.dtype == dtypes.bfloat16: xq, xk = xq.contiguous_backward(), xk.contiguous_backward()
+    if x.dtype == dtypes.bfloat16: xq, xk, xv = xq.contiguous_backward(), xk.contiguous_backward(), xv.contiguous_backward()
 
     xq = xq.reshape(xq.shape[0], xq.shape[1], self.n_heads, self.head_dim)
     xk = xk.reshape(xk.shape[0], xk.shape[1], self.n_kv_heads, self.head_dim)
