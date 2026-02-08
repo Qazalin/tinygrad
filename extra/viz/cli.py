@@ -69,21 +69,22 @@ if __name__ == "__main__":
           a = agg.setdefault(e["name"], [0.0, 0, 0.0])
           a[0] += et
           a[1] += 1
-          # extract flops from fmt to compute total ops for this invocation
-          fmt_line = e['fmt'].split('\n')[0] if e['fmt'] else ""
-          if fmt_line.endswith("GFLOPS"): a[2] += float(fmt_line.split()[0]) * 1e9 * et
-          elif fmt_line.endswith("TFLOPS"): a[2] += float(fmt_line.split()[0]) * 1e12 * et
+          if e["fmt"] is not None and (parts:=e["fmt"].split("\n")):
+            if parts[0].endswith("GFLOPS"): a[2] += float(fmt_line.split()[0]) * 1e9 * et
+            elif parts[0].endswith("TFLOPS"): a[2] += float(fmt_line.split()[0]) * 1e12 * et
           total += et
     if agg and total > 0:
       items = sorted(agg.items(), key=lambda kv:kv[1][0], reverse=True)
       sel = items[:10]
-      table = [[name, time_to_str(t, w=9), c, f"{(t/total*100.0):.2f}%", f"{ops/t*1e-12:.2f}" if ops > 0 else ""] for name,(t,c,ops) in sel]
+      table = [[name, time_to_str(t, w=9), c, f"{(t/total*100.0):.2f}%", f"{t/c*1e3:.2f}", f"{ops/t*1e-12:.2f}" if ops > 0 else ""]
+               for name,(t,c,ops) in sel]
       if (other:=items[len(sel):]):
         other_t = total-sum(t for _, (t, _c, _o) in sel)
+        other_c = sum(c for _,(_t,c,_o) in other)
         other_ops = sum(ops for _,(_t,_c,ops) in other)
-        table.append([f"Other ({len(other)} unique)", time_to_str(other_t, w=9), sum(c for _,(_t,c,_o) in other), f"{other_t/total*100.0:.2f}%",
-                       f"{other_ops/other_t*1e-12:.2f}" if other_ops > 0 else ""])
-      print(tabulate(table, headers=["name", "total", "count", "pct", "avg tflops"], tablefmt="github"))
+        table.append([f"Other ({len(other)} unique)", time_to_str(other_t, w=9), other_c, f"{other_t/total*100.0:.2f}%",
+                       f"{other_t/other_c*1e3:.2f}", f"{other_ops/other_t*1e-12:.2f}" if other_ops > 0 else ""])
+      print(tabulate(table, headers=["name", "total", "count", "pct", "avg ms", "avg tflops"], tablefmt="github"))
     exit(0)
 
   for k in viz.ctxs:
