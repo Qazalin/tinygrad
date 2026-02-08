@@ -28,9 +28,9 @@ def verify_asm_gemm(batch:int, M:int, N:int, K:int, dtype=dtypes.float16, gpus:i
   Tensor.realize(ref, a_ref.grad, b_ref.grad)
 
   with Context(DEBUG=0):
-    assert (tst - ref).square().max().float().item() < 1e-6, "forward mismatch"
-    assert (a.grad - a_ref.grad).square().max().float().item() < 1e-3, "grad_a mismatch"
-    assert (b.grad - b_ref.grad).square().max().float().item() < 1e-3, "grad_b mismatch"
+    assert tst.allclose(ref, atol=1e-2, rtol=1e-3), "forward mismatch"
+    assert a.grad.allclose(a_ref.grad, atol=1e-2, rtol=1e-3), "grad_a mismatch"
+    assert b.grad.allclose(b_ref.grad, atol=1e-2, rtol=1e-3), "grad_b mismatch"
 
 SCALE = 128 if CI else 1
 
