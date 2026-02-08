@@ -17,7 +17,8 @@ def verify_asm_gemm(batch:int, M:int, N:int, K:int, dtype=dtypes.float16, gpus:i
   a, b = Tensor(a_rand.numpy(), requires_grad=True).cast(dtype), Tensor(b_rand.numpy(), requires_grad=True).cast(dtype)
   if multi: a, b = a.shard(devs, axis=0), b.shard(devs, axis=None)
   tst = asm_gemm(a, b)
-  tst.sum().backward()
+  with Context(ASM_GEMM=1):
+    tst.sum().backward()
   Tensor.realize(tst, a.grad, b.grad)
 
   a_ref, b_ref = Tensor(a_rand.numpy(), requires_grad=True).cast(dtype), Tensor(b_rand.numpy(), requires_grad=True).cast(dtype)

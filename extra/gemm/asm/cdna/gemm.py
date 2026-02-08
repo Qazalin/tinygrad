@@ -41,7 +41,7 @@ def can_use_asm_gemm(a:Tensor, b:Tensor) -> bool:
   else: dname = a.device
   arch = getattr(Device[dname].renderer, "arch", "")
   if batch not in {1, 2}: return todo(f"GEMM batch size {batch}")
-  if (key:=(M, N, K)) not in GEMM_ARGS and arch == "gfx950": return todo(f"GEMM shape not supported {key} on {arch}")
+  if (key:=(M, N, K)) not in GEMM_ARGS and arch == "gfx950" and getenv("USE_ASM", 1): return todo(f"GEMM shape not supported {key} on {arch}")
   return True
 
 # ** UOp gemm to test Tensor.custom_kernel multi and backward correctness on non cdna4
