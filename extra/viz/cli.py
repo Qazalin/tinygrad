@@ -66,18 +66,24 @@ if __name__ == "__main__":
             print(f"{name} {ptm}/{(et or 0)*1e3:9.2f}ms  "+e['fmt'].replace('\n', ' | ')+"  ")
             n += 1
         else:
-          a = agg.setdefault(e["name"], [0.0, 0])
+          a = agg.setdefault(e["name"], [0.0, 0, 0.0])
           a[0] += et
           a[1] += 1
+          # extract flops from fmt to compute total ops for this invocation
+          fmt_line = e['fmt'].split('\n')[0] if e['fmt'] else ""
+          if fmt_line.endswith("GFLOPS"): a[2] += float(fmt_line.split()[0]) * 1e9 * et
+          elif fmt_line.endswith("TFLOPS"): a[2] += float(fmt_line.split()[0]) * 1e12 * et
           total += et
     if agg and total > 0:
       items = sorted(agg.items(), key=lambda kv:kv[1][0], reverse=True)
       sel = items[:10]
-      table = [[name, time_to_str(t, w=9), c, f"{(t/total*100.0):.2f}%"] for name,(t,c) in sel]
+      table = [[name, time_to_str(t, w=9), c, f"{(t/total*100.0):.2f}%", f"{ops/t*1e-12:.2f}" if ops > 0 else ""] for name,(t,c,ops) in sel]
       if (other:=items[len(sel):]):
-        other_t = total-sum(t for _, (t, _) in sel)
-        table.append([f"Other ({len(other)} unique)", time_to_str(other_t, w=9), sum(c for _,(_,c) in other), f"{other_t/total*100.0:.2f}%"])
-      print(tabulate(table, headers=["name", "total", "count", "pct"], tablefmt="github"))
+        other_t = total-sum(t for _, (t, _c, _o) in sel)
+        other_ops = sum(ops for _,(_t,_c,ops) in other)
+        table.append([f"Other ({len(other)} unique)", time_to_str(other_t, w=9), sum(c for _,(_t,c,_o) in other), f"{other_t/total*100.0:.2f}%",
+                       f"{other_ops/other_t*1e-12:.2f}" if other_ops > 0 else ""])
+      print(tabulate(table, headers=["name", "total", "count", "pct", "avg tflops"], tablefmt="github"))
     exit(0)
 
   for k in viz.ctxs:
