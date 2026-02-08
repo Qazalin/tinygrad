@@ -41,12 +41,13 @@ def can_use_asm_gemm(a:Tensor, b:Tensor) -> bool:
   else: dname = a.device
   arch = getattr(Device[dname].renderer, "arch", "")
   if batch not in {1, 2}: return todo(f"GEMM batch size {batch}")
-  if (key:=(M, N, K)) not in GEMM_ARGS and arch == "gfx950" and getenv("USE_ASM", 1): return todo(f"GEMM shape not supported {key} on {arch}")
+  if (key:=(M, N, K)) not in GEMM_ARGS and arch == "gfx950" and not UOP_GEMM: return todo(f"GEMM shape not supported {key} on {arch}")
   return True
 
 # ** UOp gemm to test Tensor.custom_kernel multi and backward correctness on non cdna4
 # note: this can be removed after we have GEMM on mixins
 
+UOP_GEMM = getenv("UOP_GEMM")
 def custom_uop_gemm(C:UOp, A:UOp, B:UOp) -> UOp:
   M, K = A.shape[0]*A.shape[1], A.shape[2]
   K2, N = B.shape[(1 if B.ndim == 3 else 0):]
@@ -88,7 +89,7 @@ def asm_gemm(a:Tensor, b:Tensor) -> Tensor:
 
   dname = a.device[0] if is_multi else a.device
   arch = getattr(Device[dname].renderer, "arch", "")
-  if arch.startswith("gfx950") and getenv("USE_ASM", 1):
+  if arch.startswith("gfx950") and not UOP_GEMM:
     numWG = GEMM_ARGS[(M, N, K)][0]
     out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_asm_gemm, dname=dname, wg=numWG, arch=arch), grad_fxn=custom_gemm_bw)[0]
   else:
