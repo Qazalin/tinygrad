@@ -68,7 +68,7 @@ class TestAsmAtn(unittest.TestCase):
     v = base_v.shard(GPUS, axis=0)
 
     out_asm = asm_atn(q, k, v)
-    out_ref = Tensor.scaled_dot_product_attention(base_q, base_k, base_v, is_causal=True)
+    out_ref = Tensor.scaled_dot_product_attention(base_q, base_k, base_v, is_causal=True, enable_gqa=True)
     Tensor.realize(out_asm, out_ref)
 
     atol, rtol = 2e-2, 2e-2
