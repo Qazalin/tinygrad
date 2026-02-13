@@ -11,7 +11,7 @@ class TestAsmAtn(unittest.TestCase):
     if not is_cdna4():
       self.skipTest("ASM ATN only works on CDNA4 (MI350X)")
 
-  def test_sdpa_forward(self):
+  def test_forward(self):
     B, H, S, D = 8, 8, 8192, 128
     Tensor.manual_seed(0)
     q = Tensor.randn(B, H, S, D, dtype=dtypes.bfloat16)
@@ -23,7 +23,7 @@ class TestAsmAtn(unittest.TestCase):
     out_asm = asm_atn(q, k, v)
     Tensor.realize(out_ref, out_asm)
 
-  def test_sdpa_backward(self):
+  def test_backward(self):
     B, H, S, D = 8, 8, 8192, 128
     Tensor.manual_seed(0)
     q = Tensor.randn(B, H, S, D, dtype=dtypes.bfloat16, requires_grad=True)
@@ -50,11 +50,8 @@ class TestAsmAtn(unittest.TestCase):
     np.testing.assert_allclose(dk_asm.numpy(), dk_ref.numpy(), atol=atol, rtol=rtol)
     np.testing.assert_allclose(dv_asm.numpy(), dv_ref.numpy(), atol=atol, rtol=rtol)
 
-
-
   @needs_second_gpu
-  def test_llama8b_gqa_8gpu_forward(self):
-    """Test exact shapes from LLaMA 8B trainer - forward with reference."""
+  def test_forward_multi(self):
     B, S, D = 8, 8192, 128
     H_q, H_kv = 32, 8
     GPUS = tuple(f"{Device.DEFAULT}:{i}" for i in range(B))
@@ -78,7 +75,7 @@ class TestAsmAtn(unittest.TestCase):
     np.testing.assert_allclose(out_asm.numpy(), out_ref.numpy(), atol=atol, rtol=rtol)
 
   @needs_second_gpu
-  def test_llama8b_gqa_8gpu_backward(self):
+  def test_backward_multi(self):
     """Test exact shapes from LLaMA 8B trainer - backward with reference."""
     B, S, D = 8, 8192, 128
     H_q, H_kv = 32, 8

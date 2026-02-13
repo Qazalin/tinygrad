@@ -48,7 +48,6 @@ class FwdArgs(ctypes.Structure):
   ]
 assert ctypes.sizeof(FwdArgs) == 512
 
-
 class BwdOdoArgs(ctypes.Structure):
   _pack_ = 1
   _fields_ = [
@@ -171,7 +170,6 @@ def aiter_fmha_fwd(out:UOp, q:UOp, k:UOp, v:UOp, lse:UOp, dname:str) -> UOp:
   src = f"; prebuilt aiter kernel: {name}"
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
                                UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=binary)))
-
 
 def build_odo_kernargs(B, H, S, D, bufs, var_vals) -> bytes:
   """Build kernargs for the ODO (rowsum(O * dO)) backward kernel."""
@@ -300,7 +298,7 @@ def todo(msg:str) -> bool: counters["todos"].append(msg); return False
 atexit.register(lambda: print(f'asm_atn: {counters["used"]} used, {len(counters["todos"])} not used'))
 
 def can_use_asm_atn(q:Tensor, k:Tensor, v:Tensor, attn_mask:Tensor|None=None, dropout_p:float=0.0, is_causal:bool=False, enable_gqa:bool=False):
-  if isinstance(q.device, tuple): return todo("no multi yet")
+  if isinstance(q.device, tuple) and any(t.uop.axis != 0 for t in [q,k,v]): return todo("only sharding on the batch")
   return True
 
 def asm_atn(q:Tensor, k:Tensor, v:Tensor, **kwargs) -> Tensor:
@@ -308,7 +306,7 @@ def asm_atn(q:Tensor, k:Tensor, v:Tensor, **kwargs) -> Tensor:
   counters["used"] += 1
   B, H, S, D = q.shape
   if DEBUG >= 2: print("[asm_atn]", q.shape, k.shape, v.shape)
-  dname = q.device[0]
+  dname = q.device[0] if isinstance(q.device, tuple) else q.device
   # asm computes with BSHD
   q_perm, k_perm, v_perm = q.permute(0, 2, 1, 3), k.permute(0, 2, 1, 3), v.permute(0, 2, 1, 3)
   out = Tensor.empty_like(q_perm)
