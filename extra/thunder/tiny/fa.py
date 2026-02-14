@@ -410,11 +410,41 @@ def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False
 
   use_asm = ASM_ATN and is_causal and D == 128
   if use_asm:
-    from extra.gemm.asm.cdna.atn import aiter_fmha_fwd
+    from extra.gemm.asm.cdna.atn import aiter_fmha_fwd, aiter_fmha_bwd_odo, aiter_fmha_bwd_main, aiter_fmha_bwd_dq_convert, _zero_kernel
     q,k,v = orig_inputs
     q_perm, k_perm, v_perm = q.permute(0, 2, 1, 3), k.permute(0, 2, 1, 3), v.permute(0, 2, 1, 3)
-    # TODO: remove write_lse
-    attn, l_vec = Tensor.custom_kernel(attn, l_vec, q_perm, k_perm, v_perm, fxn=functools.partial(aiter_fmha_fwd, write_lse=0, dname=single_device), grad_fxn=grad_causal)[:2]
+    # asm uses float32 LSE with shape (B, H, S)
+    if isinstance(xq.device, tuple):
+      lse_shape = (B // num_devices, H, N)
+      lse_asm = Tensor(Tensor.empty(*lse_shape, dtype=dtypes.float32, device=xq.device).uop.multi(0), dtype=dtypes.float32, device=xq.device)
+    else:
+      lse_asm = Tensor.empty((B, H, N), dtype=dtypes.float32, device=single_device)
+    attn_asm = _sharded_empty_like(q_perm, axis=0)
+
+    def grad_asm(gradu:UOp, _) -> tuple[None, None, UOp, UOp, UOp]:
+      dname = single_device
+      B_, S_, H_, D_ = q_perm.shape
+      dout = Tensor(gradu, device=gradu.device).cast(dtypes.bfloat16)
+
+      delta = Tensor.empty((B_, H_, S_), dtype=dtypes.float32, device=dname)
+      delta, *_ = Tensor.custom_kernel(delta, attn_asm, dout, fxn=functools.partial(aiter_fmha_bwd_odo, dname=dname))
+
+      dq_acc = Tensor.empty((1, B_, H_, S_, D_), dtype=dtypes.float32, device=dname)
+      dq_acc = Tensor.custom_kernel(dq_acc, fxn=_zero_kernel)[0]
+
+      dk = Tensor.empty((B_, S_, H_, D_), dtype=dtypes.bfloat16, device=dname)
+      dv = Tensor.empty((B_, S_, H_, D_), dtype=dtypes.bfloat16, device=dname)
+      dq_acc, dk, dv, *_ = Tensor.custom_kernel(dq_acc, dk, dv, q_perm, k_perm, v_perm, dout, lse_asm, delta,
+                                                 fxn=functools.partial(aiter_fmha_bwd_main, dname=dname))
+
+      dq = Tensor.empty((B_, S_, H_, D_), dtype=dtypes.bfloat16, device=dname)
+      dq, *_ = Tensor.custom_kernel(dq, dq_acc, fxn=functools.partial(aiter_fmha_bwd_dq_convert, dname=dname))
+
+      return (None, None, dq.uop, dk.uop, dv.uop)
+
+    attn_asm, lse_asm = Tensor.custom_kernel(attn_asm, lse_asm, q_perm, k_perm, v_perm, fxn=functools.partial(aiter_fmha_fwd, write_lse=1, dname=single_device), grad_fxn=grad_asm)[:2]
+    attn = attn_asm.transpose(1, 2)
+    l_vec = lse_asm
   elif is_causal:
     attn, l_vec = Tensor.custom_kernel(attn, l_vec, xq, xk, xv, fxn=custom_forward_causal, grad_fxn=grad_causal)[:2]
   else:
