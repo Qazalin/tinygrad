@@ -412,7 +412,7 @@ def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False
   if use_asm:
     from extra.gemm.asm.cdna.atn import aiter_fmha_fwd, aiter_fmha_bwd_odo, aiter_fmha_bwd_main, aiter_fmha_bwd_dq_convert, _zero_kernel
     q,k,v = orig_inputs
-    q_perm, k_perm, v_perm = q.permute(0, 2, 1, 3), k.permute(0, 2, 1, 3), v.permute(0, 2, 1, 3)
+    q_perm, k_perm, v_perm = q.permute(0, 2, 1, 3).contiguous(), k.permute(0, 2, 1, 3).contiguous(), v.permute(0, 2, 1, 3).contiguous()
     # asm uses float32 LSE with shape (B, H, S)
     if isinstance(xq.device, tuple):
       lse_shape = (B // num_devices, H, N)
