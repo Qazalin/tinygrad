@@ -144,28 +144,30 @@ def vaddr(b) -> int:
   try: return b.va_addr
   except AttributeError: return 1
 
-def build_fwd_kernargs(B, H, S, D, write_lse, bufs, var_vals) -> bytes:
+def build_fwd_kernargs(B, H, H_KV, S, D, write_lse, bufs, var_vals) -> bytes:
   args = FwdArgs()
   args.R, args.LSE, args.Q, args.K, args.V = vaddr(bufs[0]), vaddr(bufs[1]), vaddr(bufs[2]), vaddr(bufs[3]), vaddr(bufs[4])
   args.ptr_qseq, args.ptr_kseq, args.ptr_qseq_padding, args.ptr_kseq_padding = 0, 0, 0, 0
   args.scalar, args.seq_len, args.kv_seq_len = float_to_u32(1.0 / math.sqrt(D)), S, S
-  args.qk_head_dim, args.v_head_dim, args.q_head_num, args.gqa = D, D, H, 1
+  args.qk_head_dim, args.v_head_dim, args.q_head_num, args.gqa = D, D, H, H // H_KV
   args.msk_opt, args.lse, args.lse_Hs = 5, write_lse, S * 4  # causal mask
   elem_size = 2 # bfloat16
   Seqs_stride, Hs_stride, Bs_stride = H * D * elem_size, D * elem_size, S * H * D * elem_size
+  kv_Seqs_stride, kv_Hs_stride, kv_Bs_stride = H_KV * D * elem_size, D * elem_size, S * H_KV * D * elem_size
   args.Seqs, args.Ts, args.Hs, args.Bs = Seqs_stride, S * D // 2, Hs_stride, Bs_stride
-  args.k_Seqs, args.k_Hs, args.k_Bs = Seqs_stride, Hs_stride, Bs_stride
-  args.v_Seqs, args.v_Hs, args.v_Bs = Seqs_stride, Hs_stride, Bs_stride
+  args.k_Seqs, args.k_Hs, args.k_Bs = kv_Seqs_stride, kv_Hs_stride, kv_Bs_stride
+  args.v_Seqs, args.v_Hs, args.v_Bs = kv_Seqs_stride, kv_Hs_stride, kv_Bs_stride
   args.r_Seqs, args.r_Hs, args.r_Bs = Seqs_stride, Hs_stride, Bs_stride
   return bytes(ctypes.string_at(ctypes.addressof(args), ctypes.sizeof(args)))
 
 def aiter_fmha_fwd(out:UOp, lse:UOp, q:UOp, k:UOp, v:UOp, write_lse:bool, dname:str) -> UOp:
   counters["used"] += 1
   B, S, H, D = out.shape
+  H_KV = k.shape[2]
   binary = (CO_DIR / "fwd_hd128_bf16_causal.co").read_bytes()
   gidx0, gidx1, gidx2 = UOp.special(S // 512, "gidx0"), UOp.special(H, "gidx1"), UOp.special(B, "gidx2")
   lidx0 = UOp.special(512, "lidx0")
-  kernargs_builder = functools.partial(build_fwd_kernargs, B, H, S, D, write_lse)
+  kernargs_builder = functools.partial(build_fwd_kernargs, B, H, H_KV, S, D, write_lse)
   ops, mem = B * H * S * S * D * 2, (out.size + q.size + k.size + v.size + lse.size) * 2
   sink = UOp.sink(out.base, lse.base, q.base, k.base, v.base, gidx0, gidx1, gidx2, lidx0,
                   arg=KernelInfo(name="aiter_fmha_fwd_hd128_bf16_causal", estimates=Estimates(ops=ops, mem=mem), kernargs_builder=kernargs_builder))
@@ -199,7 +201,7 @@ def aiter_fmha_bwd_odo(delta:UOp, out:UOp, dout:UOp, dname:str) -> UOp:
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
                                UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=binary)))
 
-def build_main_kernargs(B, H, S, D, bufs, var_vals) -> bytes:
+def build_main_kernargs(B, H, H_KV, S, D, bufs, var_vals) -> bytes:
   args = BwdMainArgs()
   elem_size = 2
   args.dQ, args.dK, args.dV = vaddr(bufs[0]), vaddr(bufs[1]), vaddr(bufs[2])
@@ -207,14 +209,15 @@ def build_main_kernargs(B, H, S, D, bufs, var_vals) -> bytes:
   args.dO, args.Lse, args.D = vaddr(bufs[6]), vaddr(bufs[7]), vaddr(bufs[8])
   args.scalar, args.log2e = float_to_u32(1.0 / math.sqrt(D)), float_to_u32(math.log2(math.e))
   args.seqlen_q, args.seqlen_k, args.head_dim_q, args.head_dim_k = S, S, D, D
-  args.nhead_q, args.ratio, args.Ts = H, 1, S * D // 2
+  args.nhead_q, args.ratio, args.Ts = H, H // H_KV, S * D // 2
   Seqs_stride, Hs_stride, Bs_stride = H * D * elem_size, D * elem_size, S * H * D * elem_size
+  kv_Seqs_stride, kv_Hs_stride, kv_Bs_stride = H_KV * D * elem_size, D * elem_size, S * H_KV * D * elem_size
   args.Seqs_q, args.Hs_q, args.BAs_q = Seqs_stride, Hs_stride, Bs_stride
-  args.Seqs_k, args.Hs_k, args.BAs_k = Seqs_stride, Hs_stride, Bs_stride
-  args.Seqs_v, args.Hs_v, args.BAs_v = Seqs_stride, Hs_stride, Bs_stride
+  args.Seqs_k, args.Hs_k, args.BAs_k = kv_Seqs_stride, kv_Hs_stride, kv_Bs_stride
+  args.Seqs_v, args.Hs_v, args.BAs_v = kv_Seqs_stride, kv_Hs_stride, kv_Bs_stride
   args.Seqs_do, args.Hs_do, args.BAs_do = Seqs_stride, Hs_stride, Bs_stride
-  args.Seqs_dk, args.Hs_dk, args.BAs_dk = Seqs_stride, Hs_stride, Bs_stride
-  args.Seqs_dv, args.Hs_dv, args.BAs_dv = Seqs_stride, Hs_stride, Bs_stride
+  args.Seqs_dk, args.Hs_dk, args.BAs_dk = kv_Seqs_stride, kv_Hs_stride, kv_Bs_stride
+  args.Seqs_dv, args.Hs_dv, args.BAs_dv = kv_Seqs_stride, kv_Hs_stride, kv_Bs_stride
   args.Hs_lsed = S * 4
   args.ptr_seqstart_q, args.ptr_seqstart_k, args.ptr_seqstart_q_padded, args.ptr_seqstart_k_padded = 0, 0, 0, 0
   args.max_seq_len_dq, args.mask_x, args.mask_y = S, 0, 0
@@ -222,10 +225,11 @@ def build_main_kernargs(B, H, S, D, bufs, var_vals) -> bytes:
 
 def aiter_fmha_bwd_main(dq_acc:UOp, dk:UOp, dv:UOp, q:UOp, k:UOp, v:UOp, dout:UOp, lse:UOp, delta:UOp, dname:str) -> UOp:
   B, S, H, D = q.shape
+  H_KV = k.shape[2]
   binary = (CO_DIR / "bwd_hd128_bf16_causal_br_a32_psskddv.co").read_bytes()
   gidx0, gidx1, gidx2 = UOp.special(S // 512, "gidx0"), UOp.special(H, "gidx1"), UOp.special(B, "gidx2")
   lidx0 = UOp.special(256, "lidx0")
-  kernargs_builder = functools.partial(build_main_kernargs, B, H, S, D)
+  kernargs_builder = functools.partial(build_main_kernargs, B, H, H_KV, S, D)
   name = "aiter_fmha_bwd_hd128_bf16_causal_br_a32_psskddv"
   ops = B * H * S * S * D * 6
   mem = sum(u.size * (4 if u.dtype == dtypes.float32 else 2) for u in [dq_acc, dk, dv, q, k, v, dout, lse, delta])
@@ -261,5 +265,7 @@ def aiter_fmha_bwd_dq_convert(dq:UOp, dq_acc:UOp, dname:str) -> UOp:
                                UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=binary)))
 
 def _zero_kernel(out:UOp) -> UOp:
+  # Create a simple store of zeros - use base dtype (element type) for the constant
   i = UOp.range(out.size, 0)
-  return out.flatten()[i].store(0).end(i).sink(arg=KernelInfo(name="zero"))
+  zero = UOp.const(out.dtype.base, 0)
+  return out.flatten()[i].store(zero).end(i).sink(arg=KernelInfo(name="zero"))

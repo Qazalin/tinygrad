@@ -19,6 +19,7 @@ def _sharded_empty(shape:Tensor, ref:Tensor, axis:int|None, dtype=None) -> Tenso
   shape = tuple(s // len(ref.device) if i == axis else s for i, s in enumerate(shape))
   return Tensor(Tensor.empty(*shape, dtype=dtype, device=ref.device).uop.multi(axis), dtype=dtype, device=ref.device)
 
+
 def _sharded_empty_like(ref:Tensor, axis:int|None=None) -> Tensor:
   return _sharded_empty(ref.shape, ref, axis)
 
@@ -432,8 +433,8 @@ def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False
       dq_acc = _sharded_empty((1, B_, H_, S_, D_), q_perm, axis=1, dtype=dtypes.float32)
       dq_acc = Tensor.custom_kernel(dq_acc, fxn=_zero_kernel)[0]
 
-      dk = _sharded_empty_like(q_perm, axis=0)
-      dv = _sharded_empty_like(q_perm, axis=0)
+      dk = _sharded_empty_like(k_perm, axis=0)
+      dv = _sharded_empty_like(k_perm, axis=0)
       dq_acc, dk, dv, *_ = Tensor.custom_kernel(dq_acc, dk, dv, q_perm, k_perm, v_perm, dout, lse_asm, delta,
                                                  fxn=functools.partial(aiter_fmha_bwd_main, dname=single_device))
 
