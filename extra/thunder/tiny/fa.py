@@ -1,7 +1,7 @@
-import math
+import math, functools
 
 from tinygrad import Tensor, dtypes
-from tinygrad.helpers import DEBUG
+from tinygrad.helpers import DEBUG, ASM_ATN
 from tinygrad.uop.ops import UOp, Ops
 
 from extra.thunder.tiny.tk import WARP_THREADS
@@ -366,7 +366,6 @@ def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False
     return _custom_backward_kv_impl(dku, dvu, dou, qu, ku, vu, masku, l_vecu, delta_vecu)
 
   single_device = xq.device[0] if isinstance(xq.device, tuple) else xq.device
-
   if is_causal:
     if attn_mask is not None: raise RuntimeError("cannot set attn_mask when is_causal=True")
   elif attn_mask is not None:
@@ -407,7 +406,11 @@ def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False
     grad_k, grad_v = Tensor.custom_kernel(grad_k, grad_v, grad, xq, xk, xv, attn_mask, l_vec, delta_vec, fxn=custom_backward_kv_masked)[:2]
     return (None, None, grad_q.uop, grad_k.uop, grad_v.uop, None)
 
-  if is_causal:
+  use_asm = ASM_ATN and is_causal and D == 128
+  if use_asm:
+    from extra.gemm.asm.cdna.atn import aiter_fmha_fwd
+    attn, l_vec = Tensor.custom_kernel(attn, l_vec, xq, xk, xv, fxn=functools.partial(aiter_fmha_fwd, dname=single_device), grad_fxn=grad_causal)[:2]
+  elif is_causal:
     attn, l_vec = Tensor.custom_kernel(attn, l_vec, xq, xk, xv, fxn=custom_forward_causal, grad_fxn=grad_causal)[:2]
   else:
     attn, l_vec = Tensor.custom_kernel(attn, l_vec, xq, xk, xv, attn_mask, fxn=custom_forward_masked, grad_fxn=grad_masked)[:2]
