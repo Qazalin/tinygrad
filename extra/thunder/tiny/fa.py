@@ -12,11 +12,12 @@ NUM_WORKERS = 1
 Q_BLOCK_SIZE = 32
 KV_BLOCK_SIZE = 32
 
-def _sharded_empty(shape:Tensor, ref:Tensor, axis:int|None) -> Tensor:
-  if not isinstance(ref.device, tuple): return Tensor.empty(*shape, dtype=ref.dtype, device=ref.device)
-  shape = tuple(s // len(ref.device) if i == ref.uop.axis else s for i, s in enumerate(shape))
+def _sharded_empty(shape:Tensor, ref:Tensor, axis:int|None, dtype=None) -> Tensor:
+  dtype = dtype if dtype is not None else ref.dtype
+  if not isinstance(ref.device, tuple): return Tensor.empty(*shape, dtype=dtype, device=ref.device)
   axis = ref.uop.axis if axis is None else axis
-  return Tensor(Tensor.empty(*shape, dtype=ref.dtype, device=ref.device).uop.multi(axis), dtype=ref.dtype, device=ref.device)
+  shape = tuple(s // len(ref.device) if i == axis else s for i, s in enumerate(shape))
+  return Tensor(Tensor.empty(*shape, dtype=dtype, device=ref.device).uop.multi(axis), dtype=dtype, device=ref.device)
 
 def _sharded_empty_like(ref:Tensor, axis:int|None=None) -> Tensor:
   return _sharded_empty(ref.shape, ref, axis)
@@ -422,23 +423,22 @@ def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False
     attn_asm = _sharded_empty_like(q_perm, axis=0)
 
     def grad_asm(gradu:UOp, _) -> tuple[None, None, UOp, UOp, UOp]:
-      dname = single_device
       B_, S_, H_, D_ = q_perm.shape
       dout = Tensor(gradu, device=gradu.device).cast(dtypes.bfloat16)
 
-      delta = Tensor.empty((B_, H_, S_), dtype=dtypes.float32, device=dname)
-      delta, *_ = Tensor.custom_kernel(delta, attn_asm, dout, fxn=functools.partial(aiter_fmha_bwd_odo, dname=dname))
+      delta = _sharded_empty((B_, H_, S_), q_perm, axis=0, dtype=dtypes.float32)
+      delta, *_ = Tensor.custom_kernel(delta, attn_asm, dout, fxn=functools.partial(aiter_fmha_bwd_odo, dname=single_device))
 
-      dq_acc = Tensor.empty((1, B_, H_, S_, D_), dtype=dtypes.float32, device=dname)
+      dq_acc = _sharded_empty((1, B_, H_, S_, D_), q_perm, axis=1, dtype=dtypes.float32)
       dq_acc = Tensor.custom_kernel(dq_acc, fxn=_zero_kernel)[0]
 
-      dk = Tensor.empty((B_, S_, H_, D_), dtype=dtypes.bfloat16, device=dname)
-      dv = Tensor.empty((B_, S_, H_, D_), dtype=dtypes.bfloat16, device=dname)
+      dk = _sharded_empty_like(q_perm, axis=0)
+      dv = _sharded_empty_like(q_perm, axis=0)
       dq_acc, dk, dv, *_ = Tensor.custom_kernel(dq_acc, dk, dv, q_perm, k_perm, v_perm, dout, lse_asm, delta,
-                                                 fxn=functools.partial(aiter_fmha_bwd_main, dname=dname))
+                                                 fxn=functools.partial(aiter_fmha_bwd_main, dname=single_device))
 
-      dq = Tensor.empty((B_, S_, H_, D_), dtype=dtypes.bfloat16, device=dname)
-      dq, *_ = Tensor.custom_kernel(dq, dq_acc, fxn=functools.partial(aiter_fmha_bwd_dq_convert, dname=dname))
+      dq = _sharded_empty_like(q_perm, axis=0)
+      dq, *_ = Tensor.custom_kernel(dq, dq_acc, fxn=functools.partial(aiter_fmha_bwd_dq_convert, dname=single_device))
 
       return (None, None, dq.uop, dk.uop, dv.uop)
 
