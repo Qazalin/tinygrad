@@ -23,6 +23,8 @@ def _sharded_empty_like(ref:Tensor, axis:int|None=None) -> Tensor:
 
 def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False):
   if len(xq.shape) == 3: xq, xk, xv = xq.unsqueeze(0), xk.unsqueeze(0), xv.unsqueeze(0)
+  # pre tiny kittens permutations
+  orig_inputs = [xq, xk, xv]
 
   odtype = xq.dtype
   xq, xk, xv = xq.transpose(1, 2).cast(dtypes.bfloat16), xk.transpose(1, 2).cast(dtypes.bfloat16), xv.transpose(1, 2).cast(dtypes.bfloat16)
@@ -409,7 +411,10 @@ def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False
   use_asm = ASM_ATN and is_causal and D == 128
   if use_asm:
     from extra.gemm.asm.cdna.atn import aiter_fmha_fwd
-    attn, l_vec = Tensor.custom_kernel(attn, l_vec, xq, xk, xv, fxn=functools.partial(aiter_fmha_fwd, dname=single_device), grad_fxn=grad_causal)[:2]
+    q,k,v = orig_inputs
+    q_perm, k_perm, v_perm = q.permute(0, 2, 1, 3), k.permute(0, 2, 1, 3), v.permute(0, 2, 1, 3)
+    # TODO: remove write_lse
+    attn, l_vec = Tensor.custom_kernel(attn, l_vec, q_perm, k_perm, v_perm, fxn=functools.partial(aiter_fmha_fwd, write_lse=0, dname=single_device), grad_fxn=grad_causal)[:2]
   elif is_causal:
     attn, l_vec = Tensor.custom_kernel(attn, l_vec, xq, xk, xv, fxn=custom_forward_causal, grad_fxn=grad_causal)[:2]
   else:

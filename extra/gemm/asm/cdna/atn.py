@@ -55,13 +55,13 @@ def vaddr(b) -> int:
   try: return b.va_addr
   except AttributeError: return 1
 
-def build_fwd_kernargs(B, H, S, D, bufs, var_vals) -> bytes:
+def build_fwd_kernargs(B, H, S, D, write_lse, bufs, var_vals) -> bytes:
   args = FwdArgs()
   args.R, args.LSE, args.Q, args.K, args.V = vaddr(bufs[0]), vaddr(bufs[1]), vaddr(bufs[2]), vaddr(bufs[3]), vaddr(bufs[4])
   args.ptr_qseq, args.ptr_kseq, args.ptr_qseq_padding, args.ptr_kseq_padding = 0, 0, 0, 0
   args.scalar, args.seq_len, args.kv_seq_len = float_to_u32(1.0 / math.sqrt(D)), S, S
   args.qk_head_dim, args.v_head_dim, args.q_head_num, args.gqa = D, D, H, 1
-  args.msk_opt, args.lse, args.lse_Hs = 5, 1, S * 4  # causal mask
+  args.msk_opt, args.lse, args.lse_Hs = 5, write_lse, S * 4  # causal mask
   elem_size = 2 # bfloat16
   Seqs_stride, Hs_stride, Bs_stride = H * D * elem_size, D * elem_size, S * H * D * elem_size
   args.Seqs, args.Ts, args.Hs, args.Bs = Seqs_stride, S * D // 2, Hs_stride, Bs_stride
@@ -70,13 +70,13 @@ def build_fwd_kernargs(B, H, S, D, bufs, var_vals) -> bytes:
   args.r_Seqs, args.r_Hs, args.r_Bs = Seqs_stride, Hs_stride, Bs_stride
   return bytes(ctypes.string_at(ctypes.addressof(args), ctypes.sizeof(args)))
 
-def aiter_fmha_fwd(out:UOp, lse:UOp, q:UOp, k:UOp, v:UOp, dname:str) -> UOp:
+def aiter_fmha_fwd(out:UOp, lse:UOp, q:UOp, k:UOp, v:UOp, write_lse:bool, dname:str) -> UOp:
   counters["used"] += 1
   B, S, H, D = out.shape
   binary = (CO_DIR / "fwd_hd128_bf16_causal.co").read_bytes()
   gidx0, gidx1, gidx2 = UOp.special(S // 512, "gidx0"), UOp.special(H, "gidx1"), UOp.special(B, "gidx2")
   lidx0 = UOp.special(512, "lidx0")
-  kernargs_builder = functools.partial(build_fwd_kernargs, B, H, S, D)
+  kernargs_builder = functools.partial(build_fwd_kernargs, B, H, S, D, write_lse)
   ops, mem = B * H * S * S * D * 2, (out.size + q.size + k.size + v.size + lse.size) * 2
   sink = UOp.sink(out.base, lse.base, q.base, k.base, v.base, gidx0, gidx1, gidx2, lidx0,
                   arg=KernelInfo(name="aiter_fmha_fwd_hd128_bf16_causal", estimates=Estimates(ops=ops, mem=mem), kernargs_builder=kernargs_builder))
