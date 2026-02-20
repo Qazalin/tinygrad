@@ -9,6 +9,7 @@ EXAMPLES = [
   "test.backend.test_custom_kernel.TestCustomKernel.test_empty",
   "test.test_tiny.TestTiny.test_plus",
   "test.test_tiny.TestTiny.test_gemm",
+  "test.test_tiny.TestTiny.test_sum",
 ]
 
 if __name__ == "__main__":
