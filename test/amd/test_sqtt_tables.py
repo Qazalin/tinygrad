@@ -2,7 +2,7 @@
 import unittest, struct, ctypes, pickle
 from pathlib import Path
 
-ROCPROF_LIB = Path("/usr/lib/librocprof-trace-decoder.so")
+ROCPROF_LIB = Path("/usr/local/lib/librocprof-trace-decoder.so")
 import tinygrad
 EXAMPLES_DIR = Path(tinygrad.__file__).parent.parent / "extra/sqtt/examples"
 
