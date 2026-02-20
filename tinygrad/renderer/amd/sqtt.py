@@ -343,7 +343,8 @@ class INST_RDNA4(PacketType):  # Layout 4: different delta position and InstOp e
   delta = bits[5:3]
   flag1 = bits[6:6]
   flag2 = bits[7:7]
-  wave = bits[12:8]
+  wave_pair = bits[11:8]
+  flag3 = bits[12:12]
   op = bits[19:13].enum(InstOpRDNA4)
 
 class UTILCTR(PacketType):
@@ -581,6 +582,14 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
   from tinygrad.viz.serve import amd_decode
   pc_map = amd_decode(lib, target)
 
+  def _is_sopp(inst) -> bool: return type(inst).__name__ == "SOPP"
+  def _skip_delay_alu(wave:int) -> Inst:
+    inst = pc_map[wave_pc[wave]]
+    while _is_sopp(inst) and inst.op_name == "S_DELAY_ALU":
+      wave_pc[wave] += inst.size()
+      inst = pc_map[wave_pc[wave]]
+    return inst
+
   wave_pc:dict[int, int] = {}
   # only processing packets on one [CU, SIMD] unit
   def simd_select(p) -> bool: return getattr(p, "cu", 0) == 0 and getattr(p, "simd", 0) == 0
@@ -596,24 +605,31 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
       continue
     # skip OTHER_ instructions, they don't belong to this unit
     if isinstance(p, (INST, INST_RDNA4)) and p.op.name.startswith("OTHER_"): continue
+    # skip INST_RDNA4 UNK_60 which is a non-instruction scheduling event
+    if isinstance(p, INST_RDNA4) and p.op == InstOpRDNA4.UNK_60: continue
     if isinstance(p, IMMEDIATE_MASK):
       # immediate mask may yield multiple times per packet
       for wave in range(16):
         if p.mask & (1 << wave):
           inst = pc_map[pc:=wave_pc[wave]]
-          # can this assert be more strict?
-          assert isinstance(inst, SOPP), f"IMMEDIATE_MASK packet must map to SOPP, got {inst}"
+          assert _is_sopp(inst), f"IMMEDIATE_MASK packet must map to SOPP, got {inst}"
           wave_pc[wave] += inst.size()
           yield (p, InstructionInfo(pc, wave, inst))
       continue
-    if isinstance(p, (VALUINST, INST, INST_RDNA4, IMMEDIATE)):
-      inst = pc_map[pc:=wave_pc[p.wave]]
-      # s_delay_alu doesn't get a packet?
-      if isinstance(inst, SOPP) and inst.op in {SOPPOp.S_DELAY_ALU}:
-        wave_pc[p.wave] += inst.size()
-        inst = pc_map[pc:=wave_pc[p.wave]]
+    if isinstance(p, INST_RDNA4):
+      # INST_RDNA4 wave_pair field (4 bits) addresses wave pairs, flag2 selects even/odd wave
+      wave = p.wave_pair * 2 + p.flag2
+      if wave not in wave_pc: continue
+      inst = _skip_delay_alu(wave)
+      pc = wave_pc[wave]
+      wave_pc[wave] += inst.size()
+      yield (p, InstructionInfo(pc, wave, inst))
+      continue
+    if isinstance(p, (VALUINST, INST, IMMEDIATE)):
+      inst = _skip_delay_alu(p.wave)
+      pc = wave_pc[p.wave]
       # identify a branch instruction, only used for asserts
-      is_branch = isinstance(inst, SOPP) and "BRANCH" in inst.op_name
+      is_branch = _is_sopp(inst) and "BRANCH" in inst.op_name
       if is_branch: assert isinstance(p, INST) and p.op in {InstOp.JUMP_NO, InstOp.JUMP}, f"branch can only be folowed by jump packets, got {p}"
       # JUMP handling
       if isinstance(p, INST) and p.op is InstOp.JUMP:
@@ -621,7 +637,7 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
         x = inst.simm16 & 0xffff
         wave_pc[p.wave] += inst.size() + (x - 0x10000 if x & 0x8000 else x)*4
       else:
-        if is_branch: assert inst.op != SOPPOp.S_BRANCH, f"S_BRANCH must have a JUMP packet, got {p}"
+        if is_branch: assert inst.op_name != "S_BRANCH", f"S_BRANCH must have a JUMP packet, got {p}"
         wave_pc[p.wave] += inst.size()
       yield (p, InstructionInfo(pc, p.wave, inst))
       continue
@@ -642,9 +658,12 @@ PACKET_COLORS = {
 def format_packet(p) -> str:
   from tinygrad.helpers import colored
   name = type(p).__name__
-  if isinstance(p, (INST, INST_RDNA4)):
-    op_name = p.op.name if isinstance(p.op, (InstOp, InstOpRDNA4)) else f"0x{p.op:02x}"
+  if isinstance(p, INST):
+    op_name = p.op.name if isinstance(p.op, InstOp) else f"0x{p.op:02x}"
     fields = f"wave={p.wave} op={op_name}" + (" flag1" if p.flag1 else "") + (" flag2" if p.flag2 else "")
+  elif isinstance(p, INST_RDNA4):
+    op_name = p.op.name if isinstance(p.op, InstOpRDNA4) else f"0x{p.op:02x}"
+    fields = f"wave_pair={p.wave_pair} op={op_name}" + (" flag1" if p.flag1 else "") + (" flag2" if p.flag2 else "") + (" flag3" if p.flag3 else "")
   elif isinstance(p, VALUINST): fields = f"wave={p.wave}" + (" flag" if p.flag else "")
   elif isinstance(p, ALUEXEC): fields = f"src={p.src.name if isinstance(p.src, AluSrc) else p.src}"
   elif isinstance(p, VMEMEXEC): fields = f"src={p.src.name if isinstance(p.src, MemSrc) else p.src}"

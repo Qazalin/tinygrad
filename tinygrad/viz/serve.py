@@ -332,7 +332,7 @@ def load_amd_counters(profile:list[ProfileEvent]) -> None:
     ctxs.append({"name":f"Exec {name}"+(f" n{run_number[k]}" if run_number[k] > 1 else ""), "steps":steps})
 
 def sqtt_timeline(data:bytes, lib:bytes, target:str) -> list[ProfileEvent]:
-  from tinygrad.renderer.amd.sqtt import map_insts, InstructionInfo, PacketType, INST, InstOp, VALUINST, IMMEDIATE, IMMEDIATE_MASK, VMEMEXEC, ALUEXEC
+  from tinygrad.renderer.amd.sqtt import map_insts, InstructionInfo, PacketType, INST, INST_RDNA4, InstOp, InstOpRDNA4, VALUINST, IMMEDIATE, IMMEDIATE_MASK, VMEMEXEC, ALUEXEC
   ret:list[ProfileEvent] = []
   rows:dict[str, None] = {}
   trace:dict[str, set[int]] = {}
@@ -347,6 +347,9 @@ def sqtt_timeline(data:bytes, lib:bytes, target:str) -> list[ProfileEvent]:
       op_name = p.op.name if isinstance(p.op, InstOp) else f"0x{p.op:02x}"
       name, width = (op_name, 10 if "BARRIER" in op_name else 1)
       add(name, p, width=width, idx=int("OTHER" in name), info=info)
+    if isinstance(p, INST_RDNA4):
+      op_name = p.op.name if isinstance(p.op, InstOpRDNA4) else f"0x{p.op:02x}"
+      add(op_name, p, width=1, wave=info.wave if info else None, info=info)
     if isinstance(p, (VALUINST, IMMEDIATE)): add(p.__class__.__name__, p, info=info)
     if isinstance(p, IMMEDIATE_MASK): add("IMMEDIATE", p, wave=unwrap(info.wave), info=info)  # type: ignore[union-attr]
     if isinstance(p, (VMEMEXEC, ALUEXEC)):
