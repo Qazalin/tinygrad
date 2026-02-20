@@ -14,7 +14,7 @@ def rocprof_inst_traces_match(sqtt, prg, target):
   from tinygrad.viz.serve import amd_decode
   from extra.sqtt.roc import decode as roc_decode, InstExec
   addr_table = amd_decode(prg.lib, target)
-  rctx = roc_decode([sqtt], {prg.tag:{addr+prg.base:inst for addr,inst in addr_table.items()}})
+  rctx = roc_decode([sqtt], disasm_map:={prg.tag:{addr+prg.base:inst for addr,inst in addr_table.items()}})
   rwaves = rctx.inst_execs.get((sqtt.kern, sqtt.exec_tag), [])
   rwaves_iter:dict[int, list[Iterator[InstExec]]] = {} # wave unit (0-15) -> list of inst trace iterators for all executions on that unit
   for w in rwaves: rwaves_iter.setdefault(w.wave_id, []).append(w.unpack_insts())
@@ -29,7 +29,7 @@ def rocprof_inst_traces_match(sqtt, prg, target):
     rocprof_inst = next(rwaves_iter[info.wave][0])
     ref_pc = rocprof_inst.pc-prg.base
     # always check pc matches
-    assert ref_pc == info.pc, f"pc mismatch {ref_pc}:{disasm_map[rocprof_inst.pc][0]} != {info.pc}:{disasm(info.inst)}"
+    assert ref_pc == info.pc, f"pc mismatch {ref_pc}:{disasm_map[prg.tag][rocprof_inst.pc]} != {info.pc}:{disasm(info.inst)}"
     # special handling for s_endpgm, it marks the wave completion.
     if info.inst == s_endpgm():
       completed_wave = list(rwaves_iter[info.wave].pop(0))
@@ -62,11 +62,9 @@ class TestSQTTMapBase(unittest.TestCase):
 
   def test_rocprof_inst_traces_match(self):
     for name, (events, kern_events, target) in self.examples.items():
-      if "profile_gemm_run_0" not in name: continue
       for event in events:
         if not event.itrace: continue
         if event.kern not in kern_events: continue
-        if event.kern != 1: continue
         with self.subTest(example=name, kern=event.kern):
           passed_insts, n_waves, n_units = rocprof_inst_traces_match(event, kern_events[event.kern], target)
           if n_waves: print(f"{name}: passed for {passed_insts} instructions across {n_waves} waves scheduled on {n_units} wave units")
