@@ -61,7 +61,10 @@ const drawGraph = (data) => {
   d3.select("#graph-svg").on("click", () => d3.selectAll(".highlight").classed("highlight", false));
   const nodes = d3.select("#nodes").selectAll("g").data(g.nodes().map(id => g.node(id)), d => d).join("g").attr("class", d => d.className ?? "node")
     .attr("transform", d => `translate(${d.x},${d.y})`).classed("clickable", d => d.ref != null).on("click", (e,d) => {
-      if (d.ref != null) return switchCtx(d.ref);
+      if (d.label.startsWith("CALL")) {
+        if (state.callSrcMask.has(d.id)) state.callSrcMask.delete(d.id); else state.callSrcMask.add(d.id);
+        return setState({});
+      }
       const parents = g.predecessors(d.id);
       const children = g.successors(d.id);
       if (parents == null && children == null) return;
@@ -72,7 +75,7 @@ const drawGraph = (data) => {
       d3.select("#edges").selectAll("path.edgePath").attr("class", e => matchEdge(e.v, e.w)+"edgePath");
       d3.select("#edge-labels").selectAll("g.port").attr("class",  (_, i, n) => matchEdge(...n[i].id.split("-"))+"port");
       e.stopPropagation();
-    });
+    }).on("dblclick", d => d.ref != null ? switchCtx(d.ref) : null);
   nodes.selectAll("rect").data(d => [d]).join("rect").attr("width", d => d.width).attr("height", d => d.height).attr("fill", d => d.color)
     .attr("x", d => -d.width/2).attr("y", d => -d.height/2).classed("node", true);
   const STROKE_WIDTH = 1.4, textSpace = g.graph().textSpace;
@@ -702,7 +705,7 @@ const evtSources = [];
 // rewrite: a single UOp transformation
 // step: collection of rewrites
 // context: collection of steps
-const state = {currentCtx:-1, currentStep:0, currentRewrite:0, expandSteps:false};
+const state = {currentCtx:-1, currentStep:0, currentRewrite:0, expandSteps:false, callSrcMask:new Set()};
 function setState(ns) {
   saveToHistory(state);
   const { ctx:prevCtx, step:prevStep } = select(state.currentCtx, state.currentStep);
@@ -900,10 +903,10 @@ async function main() {
   // ** center graph
   const data = ret[currentRewrite];
   const render = (opts) => renderDag({ data, opts }, { recenter:currentRewrite === 0 });
-  const getOpts = () => ({ showIndexing:showIndexing.toggle.checked, showCallSrc:showCallSrc.toggle.checked });
+  const getOpts = () => ({ showIndexing:showIndexing.toggle.checked, showCallSrc:showCallSrc.toggle.checked, callSrcMask:state.callSrcMask });
   render(getOpts());
   showIndexing.toggle.onchange = () => render(getOpts());
-  showCallSrc.toggle.onchange = () => render(getOpts());
+  showCallSrc.toggle.onchange = () => { state.callSrcMask = new Set(); render(getOpts()); };
   // ** right sidebar metadata
   metadata.innerHTML = "";
   if (ckey.includes("rewrites")) metadata.append(showIndexing.label, showCallSrc.label);

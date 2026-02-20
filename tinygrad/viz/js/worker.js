@@ -62,12 +62,12 @@ const layoutUOp = (g, { graph, change }, opts) => {
       if (node.label.includes("dtypes.index")) g.removeNode(n);
     }
   }
-  if (!opts.showCallSrc) {
+  if (!opts.showCallSrc || opts.callSrcMask.size > 0) {
     // remove edges from src[0] to CALL nodes, track affected nodes
     const disconnected = new Set();
     for (const n of g.nodes()) {
       const node = g.node(n);
-      if (node?.label?.startsWith("CALL\n") || node?.label === "CALL") {
+      if (node.label.startsWith("CALL") && (!opts.showCallSrc || opts.callSrcMask.has(n))) {
         for (const pred of (g.predecessors(n) || [])) {
           const edge = g.edge(pred, n);
           if (edge?.label?.text === 0) {
