@@ -582,10 +582,11 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
   from tinygrad.viz.serve import amd_decode
   pc_map = amd_decode(lib, target)
 
+  _SKIP_OPS = {"S_DELAY_ALU", "S_WAIT_ALU"}
   def _is_sopp(inst) -> bool: return type(inst).__name__ == "SOPP"
-  def _skip_delay_alu(wave:int) -> Inst:
+  def _skip_nop_sopp(wave:int) -> Inst:
     inst = pc_map[wave_pc[wave]]
-    while _is_sopp(inst) and inst.op_name == "S_DELAY_ALU":
+    while _is_sopp(inst) and inst.op_name in _SKIP_OPS:
       wave_pc[wave] += inst.size()
       inst = pc_map[wave_pc[wave]]
     return inst
@@ -620,13 +621,20 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
       # INST_RDNA4 wave_pair field (4 bits) addresses wave pairs, flag2 selects even/odd wave
       wave = p.wave_pair * 2 + p.flag2
       if wave not in wave_pc: continue
-      inst = _skip_delay_alu(wave)
+      inst = _skip_nop_sopp(wave)
       pc = wave_pc[wave]
-      wave_pc[wave] += inst.size()
+      is_branch = _is_sopp(inst) and "BRANCH" in inst.op_name
+      # flag3 determines branch direction: flag3=1 → taken (jump to target), flag3=0 → not taken (fall through)
+      if is_branch and p.flag3:
+        x = inst.simm16 & 0xffff
+        wave_pc[wave] += inst.size() + (x - 0x10000 if x & 0x8000 else x)*4
+      else:
+        if is_branch: assert inst.op_name != "S_BRANCH", f"S_BRANCH must have a taken branch packet, got {p}"
+        wave_pc[wave] += inst.size()
       yield (p, InstructionInfo(pc, wave, inst))
       continue
     if isinstance(p, (VALUINST, INST, IMMEDIATE)):
-      inst = _skip_delay_alu(p.wave)
+      inst = _skip_nop_sopp(p.wave)
       pc = wave_pc[p.wave]
       # identify a branch instruction, only used for asserts
       is_branch = _is_sopp(inst) and "BRANCH" in inst.op_name
