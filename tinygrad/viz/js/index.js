@@ -235,9 +235,17 @@ function selectShape(key) {
   return { eventType:track?.eventType, e:track?.shapes[idx] };
 }
 
-const selectMetadata = (cls) => {
+const selectMetadata = (cls, before) => {
   const root = d3.select(metadata), sel = root.select("."+cls);
-  return (sel.empty() ? root.append("div").classed(cls, true) : sel).html("")
+  if (!sel.empty()) return sel.html("");
+  if (before) {
+    const ref = root.select("."+before);
+    return (ref.empty()
+      ? root.append("div")
+      : root.insert("div", "."+before)
+    ).classed(cls, true).html("");
+  }
+  return root.append("div").classed(cls, true).html("");
 }
 
 const Modes = {0:'read', 1:'write', 2:'write+read'};
@@ -468,7 +476,7 @@ async function renderProfiler(path, unit, opts) {
   }
   for (const m of markers) m.label = m.name.split(/(\s+)/).map(st => ({ st, color:m.color, width:ctx.measureText(st).width }));
   if (extData.pc_map != null) {
-    const code = selectMetadata("insts").append("pre").append("code").classed("hljs", true);
+    const code = selectMetadata("insts", "info").append("pre").append("code").classed("hljs", true);
     for (const [k, v] of Object.entries(extData.pc_map)) code.append("span").attr("id", k).text(v+"\n");
   }
   updateProgress(Status.COMPLETE);
