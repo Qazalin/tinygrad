@@ -308,7 +308,8 @@ def load_amd_counters(profile:list[ProfileEvent]) -> None:
   prg_events:dict[int, ProfileProgramEvent] = {}
   arch = ""
   for e in profile:
-    if isinstance(e, (ProfilePMCEvent, ProfileSQTTEvent)): counter_events.setdefault((e.kern, e.exec_tag), {}).setdefault(type(e), []).append(e)
+    if isinstance(e, (ProfilePMCEvent, ProfileSQTTEvent)):
+      counter_events.setdefault((e.kern, e.exec_tag), {}).setdefault(type(e), []).append(e)
     if isinstance(e, ProfileRangeEvent) and e.device.startswith("AMD") and e.en is not None:
       durations.setdefault(str(e.name), []).append(float(e.en-e.st))
     if isinstance(e, ProfileProgramEvent) and e.tag is not None: prg_events[e.tag] = e
