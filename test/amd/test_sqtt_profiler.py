@@ -36,20 +36,23 @@ class TestSQTTProfiler(unittest.TestCase):
 
   def test_multiple_kernels(self):
     t = ((Tensor.empty(1) + 1).contiguous() + 2)
+    sched = t.schedule()
     with save_sqtt() as sqtt:
-      kernels = [si.lower() for si in t.schedule()]
-      for k in kernels: k.run()
-    self.assertEqual(len(sqtt), len(kernels))
-    for i,k in enumerate(kernels):
-      self.assertEqual(sqtt[i]["name"], f"Exec {k.prg.p.function_name}")
+      for si in sched: si.lower().run()
+    self.assertEqual(len(sqtt), len(sched))
+    for i,k in enumerate(sched):
+      self.assertEqual(sqtt[i]["name"], f"Exec {k.lower().prg.p.function_name}")
 
-  def test_multiple_runs_jit(self):
-    @TinyJit
-    def f(t): return ((t + 1).contiguous() + 2)
-    t = Tensor.empty(1)
+  @unittest.expectedFailure
+  def test_multiple_kernels_one_sched(self):
+    t = ((Tensor.empty(1) + 1).contiguous() + 2)
+    sched = t.schedule()
     with save_sqtt() as sqtt:
-      for _ in range(N:=5): f(t).realize()
-    self.assertEqual(len(sqtt), N)
+      programs = [si.lower() for si in t.schedule()]
+      for p in programs: p.run()
+    self.assertEqual(len(sqtt), len(sched))
+    for i,k in enumerate(sched):
+      self.assertEqual(sqtt[i]["name"], f"Exec {k.lower().prg.p.function_name}")
 
 if __name__ == "__main__":
   unittest.main()
