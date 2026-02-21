@@ -468,11 +468,8 @@ async function renderProfiler(path, unit, opts) {
   }
   for (const m of markers) m.label = m.name.split(/(\s+)/).map(st => ({ st, color:m.color, width:ctx.measureText(st).width }));
   if (extData.pc_map != null) {
-    // TODO: style this like a code block
-    const pcDiv = selectMetadata("insts");
-    for (const [k, v] of Object.entries(extData.pc_map)) {
-      pcDiv.append("span").attr("id", k).text(v);
-    }
+    const code = selectMetadata("insts").append("pre").append("code").classed("hljs", true);
+    for (const [k, v] of Object.entries(extData.pc_map)) code.append("span").attr("id", k).text(v+"\n");
   }
   updateProgress(Status.COMPLETE);
   // draw events on a timeline
