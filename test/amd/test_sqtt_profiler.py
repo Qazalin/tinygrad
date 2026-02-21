@@ -1,5 +1,5 @@
 import unittest, contextlib
-from tinygrad import Device, Tensor, Context
+from tinygrad import Device, Tensor, Context, TinyJit
 from tinygrad.viz.serve import load_amd_counters
 
 @contextlib.contextmanager
@@ -33,6 +33,23 @@ class TestSQTTProfiler(unittest.TestCase):
     self.assertEqual(len(sqtt), N)
     for i in range(1, N):
       self.assertEqual(sqtt[i]["name"], f"Exec {ei.prg.p.function_name} n{i+1}")
+
+  def test_multiple_kernels(self):
+    t = ((Tensor.empty(1) + 1).contiguous() + 2)
+    with save_sqtt() as sqtt:
+      kernels = [si.lower() for si in t.schedule()]
+      for k in kernels: k.run()
+    self.assertEqual(len(sqtt), len(kernels))
+    for i,k in enumerate(kernels):
+      self.assertEqual(sqtt[i]["name"], f"Exec {k.prg.p.function_name}")
+
+  def test_multiple_runs_jit(self):
+    @TinyJit
+    def f(t): return ((t + 1).contiguous() + 2)
+    t = Tensor.empty(1)
+    with save_sqtt() as sqtt:
+      for _ in range(N:=5): f(t).realize()
+    self.assertEqual(len(sqtt), N)
 
 if __name__ == "__main__":
   unittest.main()
