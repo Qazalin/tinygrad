@@ -272,7 +272,7 @@ function setFocus(key) {
     d3.selectAll(".insts span").classed("highlight", false);
     const pcInfo = rest.find(r => r.startsWith("PC:"));
     if (pcInfo != null) { const el = document.getElementById(pcInfo.split(":")[1]); if (el) { el.classList.add("highlight"); el.scrollIntoView({ block:"nearest" }); } }
-    //metadata.scrollTop = el.offsetTop - metadata.offsetTop - metadata.clientHeight/2;
+
     if (e.arg.ctx != null) {
       const i = e.arg.ctx; s = e.arg.step;
       html.append("a").text(ctxs[i+1].steps[s].name).on("click", () => switchCtx(i, s));
@@ -329,7 +329,7 @@ async function renderProfiler(path, unit, opts) {
   // color by key (name/device)
   const colorMap = new Map();
   // map shapes by event key
-  const shapeMap = new Map();
+  const shapeMap = new Map(), pcToShape = new Map();
   const heightScale = d3.scaleLinear().domain([0, tracePeak]).range([4,maxheight=100]);
   for (let i=0; i<layoutsLen; i++) {
     const nameLen = view.getUint8(offset, true); offset += 1;
@@ -391,9 +391,7 @@ async function renderProfiler(path, unit, opts) {
         // tiny device events go straight to the rewrite rule
         const key = k.startsWith("TINY") ? null : `${k}-${j}`;
         const labelHTML = label.map(l=>`<span style="color:${l.color}">${l.st}</span>`).join("");
-        if (e.info?.startsWith("PC:")) {
-          const inst = extData.pc_map[e.info.split(":")[1]];
-        }
+        if (e.info?.startsWith("PC:")) pcToShape.set(e.info.split(":")[1], key);
         const arg = { tooltipText:labelHTML+" N:"+shapes.length+"\n"+formatTime(e.dur)+(e.info != null ? "\n"+e.info : ""), bufs:[], key,
                       ctx:shapeRef?.ctx, step:shapeRef?.step };
         if (e.key != null) shapeMap.set(e.key, key);
@@ -481,7 +479,8 @@ async function renderProfiler(path, unit, opts) {
   for (const m of markers) m.label = m.name.split(/(\s+)/).map(st => ({ st, color:m.color, width:ctx.measureText(st).width }));
   if (extData.pc_map != null) {
     const code = selectMetadata("insts", "info").append("pre").append("code").classed("hljs", true);
-    for (const [k, v] of Object.entries(extData.pc_map)) code.append("span").attr("id", k).text(v+"\n");
+    for (const [k, v] of Object.entries(extData.pc_map)) code.append("span").attr("id", k).text(v+"\n")
+      .style("cursor", pcToShape.has(k) ? "pointer" : null).on("click", () => { const key = pcToShape.get(k); if (key) setFocus(key); });
   }
   updateProgress(Status.COMPLETE);
   // draw events on a timeline
