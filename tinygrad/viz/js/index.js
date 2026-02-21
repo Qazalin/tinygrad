@@ -269,6 +269,10 @@ function setFocus(key) {
         setFocus(b.key);
       });
     }
+    d3.selectAll(".insts span").classed("highlight", false);
+    const pcInfo = rest.find(r => r.startsWith("PC:"));
+    if (pcInfo != null) { const el = document.getElementById(pcInfo.split(":")[1]); if (el) { el.classList.add("highlight"); el.scrollIntoView({ block:"nearest" }); } }
+    //metadata.scrollTop = el.offsetTop - metadata.offsetTop - metadata.clientHeight/2;
     if (e.arg.ctx != null) {
       const i = e.arg.ctx; s = e.arg.step;
       html.append("a").text(ctxs[i+1].steps[s].name).on("click", () => switchCtx(i, s));
@@ -812,7 +816,7 @@ async function main() {
       }
       appendSteps(ul, i, steps);
     }
-    return setState({currentCtx: 5, currentStep: 2, currentRewrite: 0, expandSteps: true});
+    return setState({currentCtx: 88, currentStep: 1, currentRewrite: 0, expandSteps: true});
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
