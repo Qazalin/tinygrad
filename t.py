@@ -13,9 +13,9 @@ k.emit(s_load_b128(s[0:3], s[0:1], NULL))
 k.waitcnt(lgkm=0)
 k.emit(v_mov_b32_e32(v[0], 0))
 k.emit(v_mov_b32_e32(v[1], 0))
-k.emit(global_load_b32(v[2], v[0:1], s[2:3]))
+k.emit(global_load_b64(v[2:3], v[0:1], s[2:3]))
 k.waitcnt(lgkm=0, vm=0)
-k.emit(global_store_b32(vaddr=v[0:1], saddr=s[0:1], vsrc=v[2]))
+k.emit(global_store_b64(vaddr=v[0:1], saddr=s[0:1], vsrc=v[2:3]))
 k.emit(s_endpgm())
 
 def fxn(out:UOp, A:UOp) -> UOp:
@@ -23,7 +23,7 @@ def fxn(out:UOp, A:UOp) -> UOp:
   sink = UOp.sink(out, A, lidx, arg=KernelInfo(name="test"))
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in k.finalize()]))))
 
-a = Tensor([1, 1], dtype=dtypes.int32).realize()
+a = Tensor([1, 2], dtype=dtypes.int32).realize()
 out = Tensor.empty_like(a)
 out = Tensor.custom_kernel(out, a, fxn=fxn)[0]
 out.realize()

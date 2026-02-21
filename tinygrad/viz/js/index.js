@@ -235,6 +235,11 @@ function selectShape(key) {
   return { eventType:track?.eventType, e:track?.shapes[idx] };
 }
 
+const selectMetadata = (cls) => {
+  const root = d3.select(metadata), sel = root.select("."+cls);
+  return (sel.empty() ? root.append("div").classed(cls, true) : sel).html("")
+}
+
 const Modes = {0:'read', 1:'write', 2:'write+read'};
 
 function setFocus(key) {
@@ -243,7 +248,7 @@ function setFocus(key) {
     focusedShape = key; d3.select("#timeline").call(canvasZoom.transform, zoomLevel);
   }
   const { eventType, e } = selectShape(key);
-  const html = d3.create("div").classed("info", true);
+  const html = selectMetadata("info");
   if (eventType === EventTypes.EXEC) {
     const [n, _, ...rest] = e.arg.tooltipText.split("\n");
     html.append(() => tabulate([["Name", d3.create("p").html(n).node()], ["Duration", formatTime(e.width)], ["Start Time", formatTime(e.x)]]).node());
@@ -277,7 +282,6 @@ function setFocus(key) {
       if (shape != null) p.style("cursor", "pointer").on("click", () => setFocus(shape));
     }
   }
-  return metadata.replaceChildren(html.node());
 }
 
 const EventTypes = { EXEC:0, BUF:1 };
@@ -301,7 +305,7 @@ async function renderProfiler(path, unit, opts) {
   const optional = (i) => i === 0 ? null : i-1;
   const dur = u32(), tracePeak = u64(), indexLen = u32(), layoutsLen = u32();
   const textDecoder = new TextDecoder("utf-8");
-  const { strings, dtypeSize, markers }  = JSON.parse(textDecoder.decode(new Uint8Array(buf, offset, indexLen))); offset += indexLen;
+  const { strings, dtypeSize, markers, ...extData } = JSON.parse(textDecoder.decode(new Uint8Array(buf, offset, indexLen))); offset += indexLen;
   // place devices on the y axis and set vertical positions
   const [tickSize, padding, baseOffset] = [10, 8, markers.length ? 14 : 0];
   const deviceList = profiler.append("div").attr("id", "device-list").style("padding-top", tickSize+padding+baseOffset+"px");
@@ -375,6 +379,9 @@ async function renderProfiler(path, unit, opts) {
         // tiny device events go straight to the rewrite rule
         const key = k.startsWith("TINY") ? null : `${k}-${j}`;
         const labelHTML = label.map(l=>`<span style="color:${l.color}">${l.st}</span>`).join("");
+        if (e.info?.startsWith("PC:")) {
+          const inst = extData.pc_map[e.info.split(":")[1]];
+        }
         const arg = { tooltipText:labelHTML+" N:"+shapes.length+"\n"+formatTime(e.dur)+(e.info != null ? "\n"+e.info : ""), bufs:[], key,
                       ctx:shapeRef?.ctx, step:shapeRef?.step };
         if (e.key != null) shapeMap.set(e.key, key);
@@ -460,6 +467,13 @@ async function renderProfiler(path, unit, opts) {
     }
   }
   for (const m of markers) m.label = m.name.split(/(\s+)/).map(st => ({ st, color:m.color, width:ctx.measureText(st).width }));
+  if (extData.pc_map != null) {
+    // TODO: style this like a code block
+    const pcDiv = selectMetadata("insts");
+    for (const [k, v] of Object.entries(extData.pc_map)) {
+      pcDiv.append("span").attr("id", k).text(v);
+    }
+  }
   updateProgress(Status.COMPLETE);
   // draw events on a timeline
   const dpr = window.devicePixelRatio || 1;
@@ -793,11 +807,13 @@ async function main() {
       }
       appendSteps(ul, i, steps);
     }
-    return setState({ currentCtx:-1 });
+    return setState({currentCtx: 5, currentStep: 2, currentRewrite: 0, expandSteps: true});
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
   if (currentCtx == -1) return;
+  // always have a new sidebar when view changes
+  metadata.innerHTML = "";
   const ctx = ctxs[currentCtx];
   const step = ctx.steps[currentStep];
   const ckey = step?.query;
@@ -829,7 +845,6 @@ async function main() {
       opts = {heightScale:0.5, hideLabels:true, levelKey:step.name.includes("PKTS") ? (e) => parseInt(e.name.split(" ")[1].split(":")[1]) : null, colorByName:ckey.includes("pkts")};
       return renderProfiler(ckey, "clk", opts);
     }
-    metadata.innerHTML = "";
     ret.metadata?.forEach(m => {
       if (Array.isArray(m)) return metadata.appendChild(tabulate(m.map(({ label, value }) => {
         return [label.trim(), typeof value === "string" ? value : formatUnit(value)];
@@ -905,7 +920,6 @@ async function main() {
   showIndexing.toggle.onchange = () => render(getOpts());
   showCallSrc.toggle.onchange = () => render(getOpts());
   // ** right sidebar metadata
-  metadata.innerHTML = "";
   if (ckey.includes("rewrites")) metadata.append(showIndexing.label, showCallSrc.label);
   if (step.code_line != null) metadata.appendChild(codeBlock(step.code_line, "python", { loc:step.loc, wrap:true }));
   if (step.trace) {
