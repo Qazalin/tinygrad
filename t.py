@@ -47,7 +47,6 @@ def fxn(out:UOp, A:UOp) -> UOp:
 @TinyJit
 def fn(out, a):
   out = Tensor.custom_kernel(out, a, fxn=fxn)[0]
-  out = Tensor.custom_kernel(out, a, fxn=fxn)[0]
   return out
 
 for _ in range(6):

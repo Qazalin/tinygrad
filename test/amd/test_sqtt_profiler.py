@@ -56,11 +56,32 @@ class TestSQTTProfiler(unittest.TestCase):
     t = ((Tensor.empty(1) + 1).contiguous() + 2)
     sched = t.schedule()
     with save_sqtt() as sqtt:
-      programs = [si.lower() for si in sched]
-      for p in programs: p.run()
+      prgs = [si.lower() for si in sched]
+      for p in prgs: p.run()
     self.assertEqual(len(sqtt), len(sched))
-    for i,k in enumerate(sched):
-      self.assertEqual(sqtt[i]["name"], f"Exec {k.lower().prg.p.function_name}")
+    for i,ei in enumerate(prgs):
+      self.assertEqual(sqtt[i]["name"], f"Exec {ei.prg.p.function_name}")
+
+  def test_jit(self):
+    @TinyJit
+    def f(a): return a + 1
+    t = Tensor.empty(1)
+    with save_sqtt() as sqtt:
+      for _ in range(N:=5):
+        f(t).realize()
+    self.assertEqual(len(sqtt), N)
+    kernel_name = sqtt[0]["name"]
+    for i,s in enumerate(sqtt[1:], start=1): self.assertEqual(s["name"], f"{kernel_name} n{i+1}")
+
+  def test_jit_graph(self):
+    @TinyJit
+    def f(a): return ((a + 1).contiguous() + 2)
+    t = Tensor.empty(1)
+    with save_sqtt() as sqtt:
+      for _ in range(N:=3):
+        f(t).realize()
+    # only 4 SQTT events are captured, 2 per kernel before it enters the graph
+    self.assertEqual(len(sqtt), 2*2)
 
 if __name__ == "__main__":
   unittest.main()
