@@ -126,13 +126,17 @@ def decode(sqtt_evs:list[ProfileSQTTEvent], disasms:dict[str, dict[int, Inst]]) 
     raise exc
   return ROCParseCtx
 
-def print_data(data:dict) -> None:
+def print_data(data:dict, raw:bool=False) -> None:
   from tabulate import tabulate
   # plaintext
   if "src" in data: print(data["src"])
   # table format
   elif "cols" in data:
-    print(tabulate([r[:len(data["cols"])] for r in data["rows"]], headers=data["cols"], tablefmt="github"))
+    if raw and "Hits" in data["cols"]:
+      all_rows = [[n[1]+n[4], r[1]] for r in data["rows"] for n in r[-1]["rows"]]
+      print(tabulate(sorted(all_rows, key=lambda x: x[0]), headers=["Time", "Inst"], tablefmt="github"))
+    else:
+      print(tabulate([r[:len(data["cols"])] for r in data["rows"]], headers=data["cols"], tablefmt="github"))
 
 def main() -> None:
   import tinygrad.viz.serve as viz
@@ -143,6 +147,7 @@ def main() -> None:
                       default=pathlib.Path(temp("profile.pkl", append_user=True)))
   parser.add_argument('--kernel', type=str, default=None, metavar="NAME", help='Kernel to focus on (optional name, default: all kernels)')
   parser.add_argument('-n', type=int, default=3, metavar="NUM", help='Max traces to print (optional number, default: 3 traces)')
+  parser.add_argument('--raw', action='store_true', help='Print every packet and timestamp (default: print aggregate view with hit numbers)')
   args = parser.parse_args()
 
   with args.profile.open("rb") as f: profile = pickle.load(f)
@@ -164,7 +169,7 @@ def main() -> None:
     if "PKTS" in s["name"]: continue
     print(s["name"])
     data = viz.get_render(s["query"])
-    print_data(data)
+    print_data(data, raw=args.raw)
     n += 1
     if n > args.n: break
 
