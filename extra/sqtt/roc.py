@@ -161,6 +161,9 @@ def main() -> None:
       for s in c["steps"]: print("  "+s["name"])
     return None
 
+  for p in profile:
+    if type(p).__name__ == "ProfileRangeEvent" and p.device == "AMD" and p.name == args.kernel: print(p)
+
   # Find kernel trace
   trace = next((c for c in viz.ctxs if c["name"] == f"Exec {args.kernel}"), None)
   if not trace: raise RuntimeError(f"no matching trace for {args.kernel}")
