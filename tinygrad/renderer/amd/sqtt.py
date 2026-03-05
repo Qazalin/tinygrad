@@ -558,6 +558,7 @@ def decode_cdna(data: bytes) -> Iterator[PacketType]:
   lookahead: list[tuple[type[PacketType], int, int]] = []  # (pkt_cls, raw, delta) buffer for time patching
   wave_issued: list[list[list[int]|None]] = [[None]*10 for _ in range(4)]  # per-simd per-wave issue time queue, None=inactive
   wave_immed: list[list[list[IMMEDIATE_CDNA]|None]] = [[None]*10 for _ in range(4)]  # per-simd per-wave pending IMMED packets
+  wave_stall: list[list[list[int]|None]] = [[None]*10 for _ in range(4)]  # per-simd per-wave stall start times (for stall calculation)
 
   def _parse_one() -> tuple[type[PacketType], int, int] | None:
     nonlocal pos
@@ -601,25 +602,28 @@ def decode_cdna(data: bytes) -> Iterator[PacketType]:
       if p.cu == target_cu and p.sh == 0 and p.count <= 64:
         wave_issued[p.simd][p.wave] = []
         wave_immed[p.simd][p.wave] = []
+        wave_stall[p.simd][p.wave] = []
       yield p
     elif pkt_cls is WAVEEND_CDNA:
       if p.cu == target_cu and p.sh == 0:
         wave_issued[p.simd][p.wave] = None
         wave_immed[p.simd][p.wave] = None
+        wave_stall[p.simd][p.wave] = None
       yield p
     elif pkt_cls is ISSUE_CDNA:
       for wave_id in range(10):
         status = CDNAIssueStatus(p.wave_status(wave_id))
         if status is CDNAIssueStatus.NULL: continue
         if wave_issued[p.simd][wave_id] is None: continue  # skip inactive waves (matches rocprof empty_wave_check)
-        if status is CDNAIssueStatus.INST: wave_issued[p.simd][wave_id].append(globaltime)  # queue issue time
+        if status is CDNAIssueStatus.STALL: wave_stall[p.simd][wave_id].append(globaltime)  # track stall start
+        elif status is CDNAIssueStatus.INST: wave_issued[p.simd][wave_id].append(globaltime)  # queue issue time
         elif status is CDNAIssueStatus.IMMED:
           new_pkt = IMMEDIATE_CDNA.from_raw(0, globaltime + 4)
           new_pkt.wave, new_pkt.simd = wave_id, p.simd
           wave_immed[p.simd][wave_id].append(new_pkt)  # queue IMMED, don't yield yet
     elif pkt_cls is INST_CDNA: # confirms queued ISSUE
       if p.op.value not in _CDNA_REPLAY_TYPES and wave_issued[p.simd][p.wave]:
-        p._time = wave_issued[p.simd][p.wave].pop(0)
+        p._time = wave_issued[p.simd][p.wave].pop(0)  # use issue time
         # yield any pending IMMED packets with time <= this INST time, then yield the INST
         while wave_immed[p.simd][p.wave] and wave_immed[p.simd][p.wave][0]._time <= p._time:
           yield wave_immed[p.simd][p.wave].pop(0)

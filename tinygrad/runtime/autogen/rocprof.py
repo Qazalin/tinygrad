@@ -1,10 +1,11 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
-import ctypes
+import ctypes, pathlib
 from typing import Annotated, Literal, TypeAlias
 from tinygrad.runtime.support.c import _IO, _IOW, _IOR, _IOWR
 from tinygrad.runtime.support import c
-dll = c.DLL('rocprof', ['rocprof-trace-decoder', p:='/usr/local/lib/rocprof-trace-decoder.so', p.replace('so','dylib')])
+_local = str(pathlib.Path(__file__).parents[3] / "build/rocprof-trace-decoder2/build/lib/librocprof-trace-decoder.so")
+dll = c.DLL('rocprof', [_local, 'rocprof-trace-decoder', p:='/usr/local/lib/rocprof-trace-decoder.so', p.replace('so','dylib')])
 class rocprofiler_thread_trace_decoder_status_t(Annotated[int, ctypes.c_uint32], c.Enum): pass
 ROCPROFILER_THREAD_TRACE_DECODER_STATUS_SUCCESS = rocprofiler_thread_trace_decoder_status_t.define('ROCPROFILER_THREAD_TRACE_DECODER_STATUS_SUCCESS', 0)
 ROCPROFILER_THREAD_TRACE_DECODER_STATUS_ERROR = rocprofiler_thread_trace_decoder_status_t.define('ROCPROFILER_THREAD_TRACE_DECODER_STATUS_ERROR', 1)

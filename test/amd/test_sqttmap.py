@@ -40,7 +40,10 @@ def rocprof_inst_traces_match(sqtt, prg, target, pass_rocprof_err=False):
       assert len(completed_wave) == 0, f"incomplete instructions in wave {info.wave}"
     # otherwise the packet timestamp is time + "stall"
     else:
-      assert pkt._time == rocprof_inst.time+rocprof_inst.stall
+      expected = rocprof_inst.time+rocprof_inst.stall
+      if pkt._time != expected:
+        print(f"TIME MISMATCH at inst {passed_insts}: pkt._time={pkt._time} expected={expected} (rocprof time={rocprof_inst.time} stall={rocprof_inst.stall})")
+      assert pkt._time == expected
     passed_insts += 1
 
   for k,v in rwaves_iter.items():

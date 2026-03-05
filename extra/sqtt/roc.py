@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
-import ctypes, pathlib, argparse, pickle, dataclasses, threading
+import ctypes, pathlib, argparse, pickle, dataclasses, threading, os
 from typing import Generator
-from tinygrad.helpers import temp, unwrap, DEBUG
+from tinygrad.helpers import temp, unwrap, DEBUG, getenv
+
+if getenv("BUILD"):
+  import subprocess
+  src_dir = pathlib.Path(__file__).resolve().parents[2] / "build/rocprof-trace-decoder2"
+  subprocess.run(["cmake", "-B", "build"], cwd=src_dir, check=True)
+  subprocess.run(["cmake", "--build", "build", f"-j{os.cpu_count()}"], cwd=src_dir, check=True)
+
 from tinygrad.runtime.ops_amd import ProfileSQTTEvent
 from tinygrad.runtime.autogen import rocprof
 from tinygrad.renderer.amd.dsl import Inst
@@ -127,6 +134,7 @@ def decode(sqtt_evs:list[ProfileSQTTEvent], disasms:dict[str, dict[int, Inst]]) 
   return ROCParseCtx
 
 def print_data(data:dict) -> None:
+  return
   from tabulate import tabulate
   # plaintext
   if "src" in data: print(data["src"])
