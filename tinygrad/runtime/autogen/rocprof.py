@@ -1,11 +1,12 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
-import ctypes, pathlib, os, subprocess
+import ctypes, pathlib, os, subprocess, sys
 from typing import Annotated, Literal, TypeAlias
 from tinygrad.runtime.support.c import _IO, _IOW, _IOR, _IOWR
 from tinygrad.runtime.support import c
 _src = pathlib.Path(__file__).parents[3] / "build/rocprof-trace-decoder"
-_local = str(_src / "build/lib/librocprof-trace-decoder.so")
+_ext = "dylib" if sys.platform == "darwin" else "so"
+_local = str(_src / f"build/lib/librocprof-trace-decoder.{_ext}")
 if os.environ.get("BUILD") and _src.exists():
   subprocess.run(["cmake", "-B", "build"], cwd=_src, check=True)
   subprocess.run(["cmake", "--build", "build", f"-j{os.cpu_count()}"], cwd=_src, check=True)
