@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import ctypes, pathlib, argparse, pickle, dataclasses, threading
 from typing import Generator
-from tinygrad.helpers import temp, unwrap, DEBUG
+from tinygrad.helpers import temp, unwrap, DEBUG, getenv
 from tinygrad.runtime.ops_amd import ProfileSQTTEvent
 from tinygrad.runtime.autogen import rocprof
 from tinygrad.renderer.amd.dsl import Inst
@@ -91,7 +91,7 @@ def decode(sqtt_evs:list[ProfileSQTTEvent], disasms:dict[str, dict[int, Inst]]) 
       case rocprof.ROCPROFILER_THREAD_TRACE_DECODER_RECORD_WAVE:
         for ev in (rocprof.rocprofiler_thread_trace_decoder_wave_t * n).from_address(events_ptr): ROCParseCtx.on_wave_ev(ev)
       case rocprof.ROCPROFILER_THREAD_TRACE_DECODER_RECORD_REALTIME:
-        if DEBUG >= 5:
+        if DEBUG >= 5 or getenv("PRINT_RT"):
           pairs = [(ev.shader_clock, ev.realtime_clock) for ev in (rocprof.rocprofiler_thread_trace_decoder_realtime_t * n).from_address(events_ptr)]
           print(f"REALTIME {pairs}")
       case _:
