@@ -134,7 +134,6 @@ def decode(sqtt_evs:list[ProfileSQTTEvent], disasms:dict[str, dict[int, Inst]]) 
   return ROCParseCtx
 
 def print_data(data:dict) -> None:
-  return
   from tabulate import tabulate
   # plaintext
   if "src" in data: print(data["src"])
