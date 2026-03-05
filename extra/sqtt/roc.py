@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
-import ctypes, pathlib, argparse, pickle, dataclasses, threading, os
+import ctypes, pathlib, argparse, pickle, dataclasses, threading
 from typing import Generator
-from tinygrad.helpers import temp, unwrap, DEBUG, getenv
-
-if getenv("BUILD"):
-  import subprocess
-  src_dir = pathlib.Path(__file__).resolve().parents[2] / "build/rocprof-trace-decoder2"
-  subprocess.run(["cmake", "-B", "build"], cwd=src_dir, check=True)
-  subprocess.run(["cmake", "--build", "build", f"-j{os.cpu_count()}"], cwd=src_dir, check=True)
-
+from tinygrad.helpers import temp, unwrap, DEBUG
 from tinygrad.runtime.ops_amd import ProfileSQTTEvent
 from tinygrad.runtime.autogen import rocprof
 from tinygrad.renderer.amd.dsl import Inst

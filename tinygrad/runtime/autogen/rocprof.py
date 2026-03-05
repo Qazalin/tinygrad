@@ -1,10 +1,14 @@
 # mypy: disable-error-code="empty-body"
 from __future__ import annotations
-import ctypes, pathlib
+import ctypes, pathlib, os, subprocess
 from typing import Annotated, Literal, TypeAlias
 from tinygrad.runtime.support.c import _IO, _IOW, _IOR, _IOWR
 from tinygrad.runtime.support import c
-_local = str(pathlib.Path(__file__).parents[3] / "build/rocprof-trace-decoder2/build/lib/librocprof-trace-decoder.so")
+_src = pathlib.Path(__file__).parents[3] / "build/rocprof-trace-decoder"
+_local = str(_src / "build/lib/librocprof-trace-decoder.so")
+if os.environ.get("BUILD") and _src.exists():
+  subprocess.run(["cmake", "-B", "build"], cwd=_src, check=True)
+  subprocess.run(["cmake", "--build", "build", f"-j{os.cpu_count()}"], cwd=_src, check=True)
 dll = c.DLL('rocprof', [_local, 'rocprof-trace-decoder', p:='/usr/local/lib/rocprof-trace-decoder.so', p.replace('so','dylib')])
 class rocprofiler_thread_trace_decoder_status_t(Annotated[int, ctypes.c_uint32], c.Enum): pass
 ROCPROFILER_THREAD_TRACE_DECODER_STATUS_SUCCESS = rocprofiler_thread_trace_decoder_status_t.define('ROCPROFILER_THREAD_TRACE_DECODER_STATUS_SUCCESS', 0)
