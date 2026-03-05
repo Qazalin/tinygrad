@@ -141,7 +141,7 @@ class CDNAIssueStatus(Enum): NULL = 0; STALL = 1; INST = 2; IMMED = 3
 class InstOpCDNA(Enum):
   SMEM = 0; SALU_32 = 1; VMEM_RD = 2; VMEM_WR = 3; FLAT_WR = 4; VALU_32 = 5; LDS = 6; PC = 7
   EXPREQ_GDS = 8; EXPREQ_GFX = 9; EXPGNT_PAR_COL = 10; EXPGNT_POS_GDS = 11
-  JUMP = 12; NEXT = 13; FLAT_RD = 14; OTHER_MSG = 15; SMEM_WR = 16; SALU_64 = 17; VALU_64 = 18; VALU_MAI = 28
+  JUMP = 12; NEXT = 13; FLAT_RD = 14; BARRIER = 15; SMEM_WR = 16; SALU_64 = 17; VALU_64 = 18; VALU_MAI = 28
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PACKET TYPE BASE CLASS
@@ -693,6 +693,14 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
 
   is_cdna = target.startswith("gfx9")
   wave_pc:dict[int, int] = {}
+  # CDNA implicit IMMED handling (rocprof gfx9wave.cpp):
+  # - Line 617-618: ISSUE_INST adds instruction with WAVE_NOT_FINISHED category
+  # - Line 189-192: apply_inst confirms instruction, changes category (e.g. BARRIER -> MSG at line 262-263)
+  # - Line 585: IMMED checks `instructions.back().category != WAVE_NOT_FINISHED`
+  # - Line 587-589: if prev is complete, IMMED timing ties to prev instruction (implicit wait)
+  # After s_barrier (BARRIER), category becomes MSG (complete), so next IMMED is implicit wait at s_barrier's PC.
+  wave_prev_pc:dict[int, int] = {}  # track prev PC for implicit IMMEDs (rocprof uses pc_infos, trace_parser.hpp:138)
+  wave_pending_wait:dict[int, bool] = {}  # True after BARRIER (line 262-263 sets MSG, line 585 check passes)
   # only processing packets on one [CU, SIMD] unit
   if is_cdna:
     # TODO: this is copied from decode_cdna
@@ -721,6 +729,19 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
           yield (p, InstructionInfo(pc, wave, inst))
     elif isinstance(p, (VALUINST, INST, INST_RDNA4, IMMEDIATE, INST_CDNA, IMMEDIATE_CDNA)):
       inst = pc_map[pc:=wave_pc[p.wave]]
+      # CDNA IMMED: rocprof gfx9wave.cpp:581-593 handles SQTT_ISSUE_IMMED (line 581)
+      # Line 585: checks `instructions.back().category != WAVE_NOT_FINISHED` to detect implicit waits
+      # Line 587-589: if prev complete, uses prev instruction's timing (implicit wait at prev PC)
+      # Line 593: otherwise adds new IMMED instruction (real SOPP at current PC)
+      if isinstance(p, IMMEDIATE_CDNA):
+        # wave_pending_wait: prev was BARRIER (line 262-263), its category is MSG (complete), line 585 check passes
+        # non-SOPP check: if wave_pc points to non-SOPP, this IMMED can't be for it (must be implicit for prev)
+        is_implicit = wave_pending_wait.get(p.wave, False) or type(inst).__name__ != "SOPP"
+        if is_implicit:
+          prev_pc = wave_prev_pc.get(p.wave, pc)  # use prev PC (rocprof ties to prev via line 587-589)
+          yield (p, InstructionInfo(prev_pc, p.wave, pc_map[prev_pc]))
+          wave_pending_wait[p.wave] = False  # consumed implicit wait
+          continue  # don't advance PC (rocprof line 593 doesn't advance PC for implicit)
       # s_delay_alu and s_wait_alu instructions are skipped (RDNA only)
       while (inst_op:=getattr(inst, 'op_name', '')) in {"S_DELAY_ALU", "S_WAIT_ALU"}:
         wave_pc[p.wave] += inst.size()
@@ -730,11 +751,15 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
       if "BRANCH" in inst_op and not is_branch_pkt:
         raise AssertionError(f"{inst_op} can only be followed by JUMP, got {p}")
       # JUMP handling
+      # rocprof pc_infos (trace_parser.hpp:138) maps inst index->PC; we track prev_pc for implicit IMMED (line 587-589)
+      wave_prev_pc[p.wave] = pc
       if isinstance(p, (INST, INST_RDNA4, INST_CDNA)) and p.op in {InstOp.JUMP, InstOpRDNA4.JUMP, InstOpCDNA.JUMP}:
         x = getattr(inst, 'simm16') & 0xffff
         wave_pc[p.wave] += inst.size() + (x - 0x10000 if x & 0x8000 else x)*4
       else:
         wave_pc[p.wave] += inst.size()
+      # rocprof line 262-263: BARRIER sets category=MSG (complete), so line 585 check passes for next IMMED
+      if isinstance(p, INST_CDNA) and p.op == InstOpCDNA.BARRIER: wave_pending_wait[p.wave] = True
       yield (p, InstructionInfo(pc, p.wave, inst))
     # for all other packets (VMEMEXEC, ALUEXEC, etc.), yield with None
     else: yield (p, None)
