@@ -151,15 +151,12 @@ class SQTTExamplesTestBase(unittest.TestCase):
 
   def test_gemm_has_instructions(self):
     for name, (events, *_) in self.examples.items():
-      # TODO: CDNA gemm second run should also output an inst trace
-      if self.target == "gfx950" and name == "profile_gemm_run_1": continue
       if "gemm" not in name: continue
       with self.subTest(example=name):
         all_packets = [p for e in events for p in decode(e.blob)]
         inst_names = [p.op.name for p in all_packets if isinstance(p, (INST, INST_RDNA4, INST_CDNA))]
         self.assertGreater(len(inst_names), 0, f"no INST packets in {name}")
-        if not self.target.startswith("gfx9"):
-          self.assertGreater(len([n for n in inst_names if n.startswith("JUMP")]), 0, f"no JUMP packets in {name}")
+        self.assertGreater(len([n for n in inst_names if n.startswith("JUMP")]), 0, f"no JUMP packets in {name}")
 
   expected: dict[str, list[int]] = {}  # override in subclasses
   def test_packet_counts(self):
