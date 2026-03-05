@@ -18,6 +18,8 @@ def rocprof_inst_traces_match(sqtt, prg, target, pass_rocprof_err=False):
   disasm_map = {addr+prg.base:inst for addr,inst in addr_table.items()}
   rctx = roc_decode([sqtt], {prg.tag:disasm_map})
   rwaves = rctx.inst_execs.get((sqtt.kern, sqtt.exec_tag), [])
+  # for CDNA, filter by simd=0 to match map_insts filtering; for RDNA, simd field may not exist so default to include all
+  rwaves = [w for w in rwaves if getattr(w, 'simd', 0) == 0]
   rwaves_iter:dict[int, list[Iterator[InstExec]]] = {} # wave unit (0-15) -> list of inst trace iterators for all executions on that unit
   for w in rwaves: rwaves_iter.setdefault(w.wave_id, []).append(w.unpack_insts())
 

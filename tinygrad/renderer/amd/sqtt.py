@@ -557,6 +557,7 @@ def decode_cdna(data: bytes) -> Iterator[PacketType]:
   n, pos, globaltime, base_time = len(data), 8, 0, 0
   lookahead: list[tuple[type[PacketType], int, int]] = []  # (pkt_cls, raw, delta) buffer for time patching
   wave_issued: list[list[list[int]|None]] = [[None]*10 for _ in range(4)]  # per-simd per-wave issue time queue, None=inactive
+  wave_immed: list[list[list[IMMEDIATE_CDNA]|None]] = [[None]*10 for _ in range(4)]  # per-simd per-wave pending IMMED packets
 
   def _parse_one() -> tuple[type[PacketType], int, int] | None:
     nonlocal pos
@@ -599,24 +600,33 @@ def decode_cdna(data: bytes) -> Iterator[PacketType]:
     elif pkt_cls is WAVESTART_CDNA:
       if p.cu == target_cu and p.sh == 0 and p.count <= 64:
         wave_issued[p.simd][p.wave] = []
+        wave_immed[p.simd][p.wave] = []
       yield p
     elif pkt_cls is WAVEEND_CDNA:
       if p.cu == target_cu and p.sh == 0:
         wave_issued[p.simd][p.wave] = None
+        wave_immed[p.simd][p.wave] = None
       yield p
     elif pkt_cls is ISSUE_CDNA:
       for wave_id in range(10):
         status = CDNAIssueStatus(p.wave_status(wave_id))
         if status is CDNAIssueStatus.NULL: continue
+        if wave_issued[p.simd][wave_id] is None: continue  # skip inactive waves (matches rocprof empty_wave_check)
         if status is CDNAIssueStatus.INST: wave_issued[p.simd][wave_id].append(globaltime)  # queue issue time
         elif status is CDNAIssueStatus.IMMED:
           new_pkt = IMMEDIATE_CDNA.from_raw(0, globaltime + 4)
           new_pkt.wave, new_pkt.simd = wave_id, p.simd
-          yield new_pkt
+          wave_immed[p.simd][wave_id].append(new_pkt)  # queue IMMED, don't yield yet
     elif pkt_cls is INST_CDNA: # confirms queued ISSUE
-      if p.op.value not in _CDNA_REPLAY_TYPES:
+      if p.op.value not in _CDNA_REPLAY_TYPES and wave_issued[p.simd][p.wave]:
         p._time = wave_issued[p.simd][p.wave].pop(0)
+        # yield any pending IMMED packets with time <= this INST time, then yield the INST
+        while wave_immed[p.simd][p.wave] and wave_immed[p.simd][p.wave][0]._time <= p._time:
+          yield wave_immed[p.simd][p.wave].pop(0)
         yield p
+        # yield any pending IMMED packets right after INST (for IMMED that came immediately after this INST)
+        while wave_immed[p.simd][p.wave] and not wave_issued[p.simd][p.wave]:
+          yield wave_immed[p.simd][p.wave].pop(0)
     else:
       yield pkt_cls.from_raw(raw, globaltime)
 
@@ -711,8 +721,9 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
       while (inst_op:=getattr(inst, 'op_name', '')) in {"S_DELAY_ALU", "S_WAIT_ALU"}:
         wave_pc[p.wave] += inst.size()
         inst = pc_map[pc:=wave_pc[p.wave]]
-      # assert branch always has a JUMP packet
-      if "BRANCH" in inst_op and not (isinstance(p, (INST, INST_RDNA4, INST_CDNA)) and p.op.name.startswith("JUMP")):
+      # assert branch always has a JUMP packet (CDNA uses NEXT for not-taken branches)
+      is_branch_pkt = isinstance(p, (INST, INST_RDNA4, INST_CDNA)) and (p.op.name.startswith("JUMP") or p.op == InstOpCDNA.NEXT)
+      if "BRANCH" in inst_op and not is_branch_pkt:
         raise AssertionError(f"{inst_op} can only be followed by JUMP, got {p}")
       # JUMP handling
       if isinstance(p, (INST, INST_RDNA4, INST_CDNA)) and p.op in {InstOp.JUMP, InstOpRDNA4.JUMP, InstOpCDNA.JUMP}:
