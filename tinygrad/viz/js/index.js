@@ -323,6 +323,7 @@ function setFocus(key) {
 const EventTypes = { EXEC:0, BUF:1 };
 
 async function renderProfiler(path, unit, opts) {
+  const st = performance.now();
   displaySelection("#profiler");
   // support non realtime x axis units
   formatTime = unit === "realtime" ? formatMicroseconds : formatCycles;
@@ -683,6 +684,7 @@ async function renderProfiler(path, unit, opts) {
     } else tooltip.style.display = "none";
   });
   canvas.addEventListener("mouseleave", () => document.getElementById("tooltip").style.display = "none");
+  console.log(`${performance.now() - st} ms`);
 }
 
 // ** zoom and recentering
