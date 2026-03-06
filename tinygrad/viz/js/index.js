@@ -349,7 +349,8 @@ async function renderProfiler(path, unit, opts) {
   const canvas = profiler.append("canvas").attr("id", "timeline").node();
   // NOTE: scrolling via mouse can only zoom the graph
   canvas.addEventListener("wheel", e => (e.stopPropagation(), e.preventDefault()), { passive:false });
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d"), textWidthCache = new Map();
+  const measureTextWidth = (t) => textWidthCache.get(t) || textWidthCache.set(t, ctx.measureText(t).width).get(t);
   const canvasTop = rect(canvas).top;
   // color by key (name/device)
   const colorMap = new Map();
@@ -395,11 +396,9 @@ async function renderProfiler(path, unit, opts) {
           colorMap.set(colorKey, d3.rgb(color));
         }
         const fillColor = colorMap.get(colorKey).brighter(0.3*depth).toString();
-        const label = parseColors(e.name).flatMap(({ color, st }) => {
-          const parts = [];
-          for (let i=0; i<st.length; i+=4) { const part = st.slice(i, i+4); parts.push({ color, st:part, width:ctx.measureText(part).width }); }
-          return parts;
-        });
+        const label = [];
+        for (const {color, st} of parseColors(e.name)) 
+          for (let i=0; i<st.length; i+=4) { const part = st.slice(i, i+4); label.push({ color, st:part, width:measureTextWidth(part) }); }
         let shapeRef = e.ref;
         if (shapeRef != null) { ref = {ctx:e.ref, step:0}; shapeRef = ref; }
         else if (ref != null) {
@@ -418,11 +417,10 @@ async function renderProfiler(path, unit, opts) {
         }
         // tiny device events go straight to the rewrite rule
         const key = k.startsWith("TINY") ? null : `${k}-${j}`;
-        const labelHTML = label.map(l=>`<span style="color:${l.color}">${l.st}</span>`).join("");
         let info = e.info != null ? "\n"+e.info : "", trace = null
         if (info.startsWith("\nPC:")) { data.pcToShape.set(key, {wave:dnum, pc:parseInt(e.info.split(":")[1]), st:e.st}); info = ""; }
         if (info.startsWith("\nTB:")) { trace = info; info = ""; }
-        const arg = { tooltipText:labelHTML+" N:"+shapes.length+"\n"+formatTime(e.dur)+info, trace, bufs:[], key, ctx:shapeRef?.ctx, step:shapeRef?.step };
+        const arg = { tooltipText:" N:"+shapes.length+"\n"+formatTime(e.dur)+info, label, trace, bufs:[], key, ctx:shapeRef?.ctx, step:shapeRef?.step };
         if (e.key != null) shapeMap.set(e.key, key);
         // offset y by depth
         shapes.push({x:e.st, y:levelHeight*depth, width:e.dur, height:levelHeight, arg, label:opts.hideLabels ? null : label, fillColor });
@@ -514,13 +512,13 @@ async function renderProfiler(path, unit, opts) {
       });
     }
   }
-  for (const m of markers) m.label = m.name.split(/(\s+)/).map(st => ({ st, color:m.color, width:ctx.measureText(st).width }));
+  for (const m of markers) m.label = m.name.split(/(\s+)/).map(st => ({ st, color:m.color, width:measureTextWidth(st) }));
   data.pcToShape = new Map([...data.pcToShape].sort((a, b) => a[1].st - b[1].st));
   if (extData.pcMap != null) data.pcMap = extData.pcMap; setFocus(focusedShape);
   updateProgress(Status.COMPLETE);
   // draw events on a timeline
   const dpr = window.devicePixelRatio || 1;
-  const ellipsisWidth = ctx.measureText("...").width;
+  const ellipsisWidth = measureTextWidth("...");
   const drawText = (ctx, label, lx, ly, maxWidth) => {
     let lw = 0;
     for (let li=0; li<label?.length; li++) {
@@ -601,7 +599,7 @@ async function renderProfiler(path, unit, opts) {
       const label = formatTime(tick, et-st <= 1e3 ? true : false);
       ctx.textBaseline = "top";
       ctx.fillText(label, labelX, tickSize);
-      lastLabelEnd = labelX + ctx.measureText(label).width + 4;
+      lastLabelEnd = labelX + measureTextWidth(label) + 4;
     }
     if (data.axes.y != null) {
       drawLine(ctx, [0, 0], data.axes.y.range);
@@ -676,11 +674,15 @@ async function renderProfiler(path, unit, opts) {
   canvas.addEventListener("mousemove", e => {
     const foundRect = findRectAtPosition(e.clientX, e.clientY);
     if (foundRect?.tooltipText != null) {
-      const tooltip = document.getElementById("tooltip");
+      const tooltip = document.getElementById("tooltip"); tooltip.innerHTML = "";
       tooltip.style.display = "block";
       tooltip.style.left = (e.pageX+10)+"px";
       tooltip.style.top = (e.pageY)+"px";
-      tooltip.innerHTML = foundRect.tooltipText;
+      for (const { st, color } of foundRect.label || []) {
+        const span = tooltip.appendChild(document.createElement("span"));
+        span.innerText = st; span.style.color = color;
+      }
+      tooltip.appendChild(document.createTextNode(foundRect.tooltipText));
     } else tooltip.style.display = "none";
   });
   canvas.addEventListener("mouseleave", () => document.getElementById("tooltip").style.display = "none");
