@@ -324,13 +324,14 @@ class EVENT_BIG(PacketType):
 
 class REG(PacketType):
   encoding = bits[3:0] == 0b1001
-  delta = bits[6:4]
-  slot = bits[9:7]
-  hi_byte = bits[15:8]
-  subop = bits[31:16]
+  tm = bits[6:4]
+  pipe = bits[8:7]
+  me = bits[10:9]
+  rdp = bits[11]
+  context = bits[14:12]
+  cs = bits[15]
+  regaddr = bits[31:16]
   val32 = bits[63:32]
-  @property
-  def is_config(self) -> bool: return bool(self.hi_byte & 0x80)
 
 class SNAPSHOT(PacketType):
   encoding = bits[6:0] == 0b1110001
@@ -658,7 +659,7 @@ def format_packet(p) -> str:
     op_name = p.op.name if isinstance(p.op, (InstOp, InstOpRDNA4)) else f"0x{p.op:02x}"
     fields = f"wave={p.wave} op={op_name}" + ((" flag1" if p.flag1 else "") + (" flag2" if p.flag2 else "") if isinstance(p, INST) else "")
   elif isinstance(p, VALUINST): fields = f"wave={p.wave}" + (" flag" if p.flag else "")
-  elif isinstance(p, REG): fields = f"reg=0x{p.subop:04x} val=0x{p.val32:08x}" + (" [config]" if p.is_config else "")
+  elif isinstance(p, REG): fields = f"regaddr=0x{p.regaddr:04x} val=0x{p.val32:08x}" + (" cs" if p.cs else "")
   elif isinstance(p, ALUEXEC): fields = f"src={p.src.name if isinstance(p.src, AluSrc) else p.src}"
   elif isinstance(p, VMEMEXEC): fields = f"src={p.src.name if isinstance(p.src, MemSrc) else p.src}"
   elif isinstance(p, (WAVESTART, WAVESTART_RDNA4, WAVEEND)): fields = f"wave={p.wave} simd={p.simd} cu={p.cu}"
