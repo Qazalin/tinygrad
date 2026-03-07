@@ -93,7 +93,8 @@ def decode(sqtt_evs:list[ProfileSQTTEvent], disasms:dict[str, dict[int, Inst]]) 
       case rocprof.ROCPROFILER_THREAD_TRACE_DECODER_RECORD_REALTIME:
         if DEBUG >= 5 or getenv("PRINT_RT"):
           pairs = [(ev.shader_clock, ev.realtime_clock) for ev in (rocprof.rocprofiler_thread_trace_decoder_realtime_t * n).from_address(events_ptr)]
-          print(f"REALTIME {pairs}")
+          if ROCParseCtx.active_se == 1:
+            print(pairs)
       case _:
         if DEBUG >= 5: print(rocprof.enum_rocprofiler_thread_trace_decoder_record_type_t.get(record_type), events_ptr, n)
     return rocprof.ROCPROFILER_THREAD_TRACE_DECODER_STATUS_SUCCESS

@@ -197,6 +197,8 @@ class AMDComputeQueue(HWQueue):
     self.sqtt_userdata(sqtt.struct_rgp_sqtt_marker_pipeline_bind(identifier=sqtt.RGP_SQTT_MARKER_IDENTIFIER_BIND_PIPELINE,
                                                                  bind_point=(__BIND_POINT_COMPUTE:=1), api_pso_hash=data64_le(prg.libhash[0])))
     self.sqtt_userdata(sqtt.struct_rgp_sqtt_marker_event(has_thread_dims=1, cmd_id=next(prg.dev.sqtt_next_cmd_id)), *global_size)
+    # TEST: write a recognizable magic value to USERDATA_2 so we can see it as a REG token in sqtt.py
+    #self.wreg(self.gc.regSQ_THREAD_TRACE_USERDATA_2, 0xDEADBEEF)
 
     if SQTT_LIMIT_SE:
       # Calculate number of CUs per SE to enable based on blocks count. 4 is maximum simd per CU, but on rdna we can trace only 1.

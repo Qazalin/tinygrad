@@ -658,6 +658,7 @@ def format_packet(p) -> str:
     op_name = p.op.name if isinstance(p.op, (InstOp, InstOpRDNA4)) else f"0x{p.op:02x}"
     fields = f"wave={p.wave} op={op_name}" + ((" flag1" if p.flag1 else "") + (" flag2" if p.flag2 else "") if isinstance(p, INST) else "")
   elif isinstance(p, VALUINST): fields = f"wave={p.wave}" + (" flag" if p.flag else "")
+  elif isinstance(p, REG): fields = f"reg=0x{p.subop:04x} val=0x{p.val32:08x}" + (" [config]" if p.is_config else "")
   elif isinstance(p, ALUEXEC): fields = f"src={p.src.name if isinstance(p.src, AluSrc) else p.src}"
   elif isinstance(p, VMEMEXEC): fields = f"src={p.src.name if isinstance(p.src, MemSrc) else p.src}"
   elif isinstance(p, (WAVESTART, WAVESTART_RDNA4, WAVEEND)): fields = f"wave={p.wave} simd={p.simd} cu={p.cu}"
@@ -671,7 +672,7 @@ def format_packet(p) -> str:
 def print_packets(packets) -> None:
   from tinygrad.helpers import getenv
   skip = {"NOP", "TS_DELTA_SHORT", "TS_WAVE_STATE", "TS_DELTA_OR_MARK",
-          "TS_DELTA_S5_W2", "TS_DELTA_S5_W3", "TS_DELTA_S8_W3", "REG", "EVENT"} if not getenv("NOSKIP") else {"NOP"}
+          "TS_DELTA_S5_W2", "TS_DELTA_S5_W3", "TS_DELTA_S8_W3", "EVENT"} if not getenv("NOSKIP") else {"NOP"}
   for data in packets:
     p, inst = data if isinstance(data, tuple) else (data, None)
     if type(p).__name__.replace("_RDNA4", "") not in skip: print(format_packet(p), f"inst={inst.inst}" if inst is not None else '')
