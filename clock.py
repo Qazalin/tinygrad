@@ -33,8 +33,58 @@ print(a)
 
 start = read_gpu_clock_64()
 N = 4096
-x = Tensor.arange(N)
-x.realize()
+import unittest
+from tinygrad import Tensor, Device, dtypes
+from tinygrad.uop.ops import UOp, Ops, KernelInfo
+from tinygrad.renderer import Estimates
+
+from tinygrad.runtime.autogen.amd.rdna3.ins import *
+from tinygrad.renderer.amd.dsl import s, v
+from extra.gemm.amd_asm_matmul import Kernel
+
+def custom_add_one(A:UOp) -> UOp:
+  A = A.flatten()
+  assert dtypes.is_float(A.dtype.base), f"buffer dtype must be float32, got {A.dtype}"
+  k = Kernel
+
+  k = Kernel(arch=Device["AMD"].arch)
+
+  # s[0:1] = base pointer to A
+  # s[2]   = size
+  # v[0]   = loop index i
+  # v[1]   = accumulator
+  # v[2]   = byte offset
+  # v[3]   = loaded value
+
+  k.emit(s_load_b64(s[0:1], s[0:1], soffset=NULL))
+  k.emit(s_waitcnt(lgkmcnt=0))
+  k.emit(s_mov_b32(s[2], A.size))
+  k.emit(v_mov_b32_e32(v[0], 0))
+  k.emit(v_mov_b32_e32(v[1], 0.0))
+  k.label("loop")
+  k.emit(v_lshlrev_b32_e32(v[2], 2, v[0]))                   # byte offset = i * 4
+  k.emit(global_load_b32(v[3], v[2], saddr=s[0:1]))
+  k.emit(s_waitcnt(vmcnt=0))
+  k.emit(v_add_f32_e32(v[1], v[1], v[3]))                   # acc += A[i]
+  k.emit(v_add_nc_i32(v[0], v[0], 1))
+  k.emit(v_cmp_gt_u32_e32(s[2], v[0]))
+  k.emit(s_cbranch_vccnz(), target="loop")
+  k.emit(v_mov_b32_e32(v[2], 0))                            # offset 0 => A[0]
+  k.emit(global_store_b32(addr=v[2], data=v[1], saddr=s[0:1]))
+  k.emit(s_endpgm())
+  k.emit(s_code_end())
+  insts = k.finalize()
+  sink = UOp.sink(A.base, arg=KernelInfo(f"custom_add_one_{A.size}", estimates=Estimates(ops=A.size, mem=A.size*4*2)))
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in insts]))))
+
+from tinygrad import dtypes
+import numpy as np
+a = Tensor(np.ones(8192, dtype=np.float32), dtype=dtypes.float).realize()
+a = Tensor.custom_kernel(a, fxn=custom_add_one)[0]
+ei = a.schedule()[-1].lower()
+ei.run()
+print(a.numpy()[0])
+
 end = read_gpu_clock_64()
 
 d._at_profile_finalize()
