@@ -50,6 +50,7 @@ class _ROCParseCtx:
     self.sqtt_evs, self.disasms = iter(sqtt_evs), {k:{k2:(disasm(v2), v2.size()) for k2,v2 in v.items()} for k,v in disasms.items()}
     self.inst_execs:dict[RunKey, list[WaveExec]] = {}
     self.occ_events:dict[RunKey, list[OccEvent]] = {}
+    self.realtime:dict[int, list[tuple[int, int]]] = {}
 
   def next_sqtt(self):
     x = next(self.sqtt_evs, None)
@@ -91,10 +92,10 @@ def decode(sqtt_evs:list[ProfileSQTTEvent], disasms:dict[str, dict[int, Inst]]) 
       case rocprof.ROCPROFILER_THREAD_TRACE_DECODER_RECORD_WAVE:
         for ev in (rocprof.rocprofiler_thread_trace_decoder_wave_t * n).from_address(events_ptr): ROCParseCtx.on_wave_ev(ev)
       case rocprof.ROCPROFILER_THREAD_TRACE_DECODER_RECORD_REALTIME:
+        pairs = [(ev.shader_clock, ev.realtime_clock) for ev in (rocprof.rocprofiler_thread_trace_decoder_realtime_t * n).from_address(events_ptr)]
+        ROCParseCtx.realtime[ROCParseCtx.active_se] = pairs
         if DEBUG >= 5 or getenv("PRINT_RT"):
-          pairs = [(ev.shader_clock, ev.realtime_clock) for ev in (rocprof.rocprofiler_thread_trace_decoder_realtime_t * n).from_address(events_ptr)]
-          if ROCParseCtx.active_se == 1:
-            print(pairs)
+          print(pairs)
       case _:
         if DEBUG >= 5: print(rocprof.enum_rocprofiler_thread_trace_decoder_record_type_t.get(record_type), events_ptr, n)
     return rocprof.ROCPROFILER_THREAD_TRACE_DECODER_STATUS_SUCCESS

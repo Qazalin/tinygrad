@@ -1,18 +1,37 @@
-import os
-os.environ["NULL"] = "1"
-os.environ["EMULATE"] = "AMD_CDNA4"
-os.environ["VIZ"] = "-1"
-from tinygrad import Tensor, dtypes
+def get_freq():
+  from tinygrad.runtime.ops_amd import AMDDevice
+  import tinygrad.runtime.autogen.amd_gpu as gc
+  import time
+  d = AMDDevice('AMD')
+  adev = d.iface.dev_impl
+  #print(adev.drm_dev_info.gpu_counter_freq)
+  rlc32_addr = gc.GC_BASE__INST0_SEG1 + gc.regRLC_GPU_CLOCK_32
 
-grads = [Tensor.empty(256) for _ in range(225)] + [Tensor.empty(4096, dtype=dtypes.bfloat16) for _ in range(65)]
-total_norm = Tensor.stack(*[g.float().square().sum() for g in grads]).sum().sqrt().contiguous()
-total_norm.realize()
+  for _ in range(5):
+    v1 = adev.rreg(rlc32_addr)
+    t1 = time.perf_counter_ns()
+    print(t1)
+    time.sleep(0.05)
+    v2 = adev.rreg(rlc32_addr)
+    t2 = time.perf_counter_ns()
+    print(t2)
+    delta = (v2 - v1) & 0xffffffff
+    freq_khz = round(delta * 1_000_000 / (t2 - t1))
+    print(f'  {freq_khz} KHz')
 
-from tinygrad.uop.ops import tracked_keys, tracked_ctxs, uop_fields, RewriteTrace, UOp
-import functools
-@functools.cache
-def _reconstruct(a:int):
-  op, dtype, src, arg, *rest = uop_fields[a]
-  return UOp(op, dtype, tuple(_reconstruct(s) for s in src), arg, *rest)
+from tinygrad import Tensor, Device
+from tinygrad.viz.serve import amd_decode
+from extra.sqtt.roc import decode
 
-_reconstruct(tracked_ctxs[-1][-1].sink)
+start = read_gpu_clock_64()
+Tensor.empty(32).add(1).realize()
+end = read_gpu_clock_64()
+
+sqtt = [s for s in Device[Device.DEFAULT].profile_events if type(s).__name__ == "ProfileSQTTEvent"]
+disasms = {(s.name, s.tag):amd_decode(s.lib, "gfx11000") for s in Device[Device.DEFAULT].profile_events if type(s).__name__ == "ProfileProgramEvent"}
+for s in sqtt:
+  r = decode([s], disasms)
+  vals = [x[1] for x in r.realtime[s.se]]
+  if vals:
+    print(s.se, min(vals), max(vals), start, end)
+
