@@ -46,7 +46,7 @@ def set_options(action_info, options:bytes):
   return amd_comgr_action_info_set_option_list(action_info, to_char_p_p(options_list:=options.split(b' ')), len(options_list))
 
 # AMD_COMGR_SAVE_TEMPS=1 AMD_COMGR_REDIRECT_LOGS=stdout AMD_COMGR_EMIT_VERBOSE_LOGS=1
-def compile_hip(prg:str, arch="gfx1100", asm=False) -> bytes:
+def compile_hip(prg:str, arch="gfx1100") -> bytes:
   check(comgr.amd_comgr_create_action_info(ctypes.byref(action_info := comgr.amd_comgr_action_info_t())))
   check(comgr.amd_comgr_action_info_set_language(action_info, comgr.AMD_COMGR_LANGUAGE_HIP))
   check(comgr.amd_comgr_action_info_set_isa_name(action_info, b"amdgcn-amd-amdhsa--" + arch.encode()))
@@ -60,28 +60,20 @@ def compile_hip(prg:str, arch="gfx1100", asm=False) -> bytes:
   check(comgr.amd_comgr_create_data(comgr.AMD_COMGR_DATA_KIND_SOURCE, ctypes.byref(data_src := comgr.amd_comgr_data_t())))
   check(comgr.amd_comgr_set_data(data_src, len(rprg := prg.encode()), rprg))
 
-  if asm:
-    check(comgr.amd_comgr_set_data_name(data_src, b"<null>.s"))
-    check(comgr.amd_comgr_data_set_add(data_set_src, data_src))
-    status = comgr.amd_comgr_do_action(comgr.AMD_COMGR_ACTION_ASSEMBLE_SOURCE_TO_RELOCATABLE, action_info, data_set_src, data_set_reloc)
-    if status != 0:
-      print(_get_comgr_data(data_set_reloc, comgr.AMD_COMGR_DATA_KIND_LOG).decode())
-      raise RuntimeError("assemble failed")
-  else:
-    check(comgr.amd_comgr_set_data_name(data_src, b"<null>"))
-    check(comgr.amd_comgr_data_set_add(data_set_src, data_src))
-    # -include hiprtc_runtime.h was removed
-    options = [
-      "-O3", "-mcumode", "--hip-version=6.0.32830", "-DHIP_VERSION_MAJOR=6", "-DHIP_VERSION_MINOR=0", "-DHIP_VERSION_PATCH=32830",
-      "-D__HIPCC_RTC__", "-std=c++14", "-nogpuinc", "-Wno-gnu-line-marker", "-Wno-missing-prototypes", f"--offload-arch={arch}",
-      "-I/opt/rocm/include", "-Xclang -disable-llvm-passes", "-Xclang -aux-triple", "-Xclang x86_64-unknown-linux-gnu"]
-    check(set_options(action_info, ' '.join(options).encode()))
-    status = comgr.amd_comgr_do_action(comgr.AMD_COMGR_ACTION_COMPILE_SOURCE_WITH_DEVICE_LIBS_TO_BC, action_info, data_set_src, data_set_bc)
-    if status != 0:
-      print(_get_comgr_data(data_set_bc, comgr.AMD_COMGR_DATA_KIND_LOG).decode())
-      raise RuntimeError("compile failed")
-    check(set_options(action_info, b"-O3 -mllvm -amdgpu-internalize-symbols"))
-    check(comgr.amd_comgr_do_action(comgr.AMD_COMGR_ACTION_CODEGEN_BC_TO_RELOCATABLE, action_info, data_set_bc, data_set_reloc))
+  check(comgr.amd_comgr_set_data_name(data_src, b"<null>"))
+  check(comgr.amd_comgr_data_set_add(data_set_src, data_src))
+  # -include hiprtc_runtime.h was removed
+  options = [
+    "-O3", "-mcumode", "--hip-version=6.0.32830", "-DHIP_VERSION_MAJOR=6", "-DHIP_VERSION_MINOR=0", "-DHIP_VERSION_PATCH=32830",
+    "-D__HIPCC_RTC__", "-std=c++14", "-nogpuinc", "-Wno-gnu-line-marker", "-Wno-missing-prototypes", f"--offload-arch={arch}",
+    "-I/opt/rocm/include", "-Xclang -disable-llvm-passes", "-Xclang -aux-triple", "-Xclang x86_64-unknown-linux-gnu"]
+  check(set_options(action_info, ' '.join(options).encode()))
+  status = comgr.amd_comgr_do_action(comgr.AMD_COMGR_ACTION_COMPILE_SOURCE_WITH_DEVICE_LIBS_TO_BC, action_info, data_set_src, data_set_bc)
+  if status != 0:
+    print(_get_comgr_data(data_set_bc, comgr.AMD_COMGR_DATA_KIND_LOG).decode())
+    raise RuntimeError("compile failed")
+  check(set_options(action_info, b"-O3 -mllvm -amdgpu-internalize-symbols"))
+  check(comgr.amd_comgr_do_action(comgr.AMD_COMGR_ACTION_CODEGEN_BC_TO_RELOCATABLE, action_info, data_set_bc, data_set_reloc))
 
   check(set_options(action_info, b""))
   check(comgr.amd_comgr_do_action(comgr.AMD_COMGR_ACTION_LINK_RELOCATABLE_TO_EXECUTABLE, action_info, data_set_reloc, data_set_exec))
@@ -96,7 +88,7 @@ class HIPCompiler(Compiler):
     self.arch = arch
     super().__init__(f"compile_hip_{self.arch}")
   def compile(self, src:str) -> bytes:
-    try: return compile_hip(src, self.arch, src.split('\n', 1)[0].strip() == '.text')
+    try: return compile_hip(src, self.arch)
     except RuntimeError as e: raise CompileError(e) from e
   def disassemble(self, lib:bytes): amdgpu_disassemble(lib)
 
