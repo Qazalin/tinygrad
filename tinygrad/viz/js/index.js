@@ -236,7 +236,7 @@ const drawLine = (ctx, x, y, opts) => {
 function tabulate(rows) {
   const root = d3.create("div").style("display", "grid").style("grid-template-columns", `${Math.max(...rows.map(x => x[0].length), 0)}ch 1fr`).style("gap", "0.2em").style("white-space", "nowrap");
   for (const [k,v] of rows) { root.append("div").text(k); root.append("div").node().append(v); }
-  return root;
+  return root.node();
 }
 
 var data, focusedDevice, focusedShape, formatTime, canvasZoom, zoomLevel = d3.zoomIdentity;
@@ -268,7 +268,7 @@ function setFocus(key) {
   const html = d3.select(".info").html("");
   if (eventType === EventTypes.EXEC) {
     const [n, _, ...rest] = e.arg.tooltipText.split("\n");
-    html.append(() => tabulate([["Name", d3.create("p").html(n).node()], ["Duration", formatTime(e.width)], ["Start Time", formatTime(e.x)]]).node());
+    html.append(() => tabulate([["Name", colored(e.arg.label)], ["Duration", formatTime(e.width)], ["Start Time", formatTime(e.x)]]));
     let group = html.append("div").classed("args", true);
     for (const r of rest) group.append("p").text(r);
     group = html.append("div").classed("args", true);
@@ -290,7 +290,7 @@ function setFocus(key) {
     const [dtype, sz, nbytes, dur] = e.arg.tooltipText.split("\n");
     const rows = [["DType", dtype], ["Len", sz], ["Size", nbytes], ["Lifetime", dur]];
     if (e.arg.users != null) rows.push(["Users", e.arg.users.length]);
-    html.append(() => tabulate(rows).node());
+    html.append(() => tabulate(rows));
     const kernels = html.append("div").classed("args", true);
     for (let u=0; u<e.arg.users?.length; u++) {
       const { repr, num, mode, shape } = e.arg.users[u];
@@ -323,10 +323,10 @@ function setFocus(key) {
 
 const EventTypes = { EXEC:0, BUF:1 };
 
-async function renderProfiler(path, unit, opts) {
+async function renderProfiler(path, opts) {
   displaySelection("#profiler");
   // support non realtime x axis units
-  formatTime = unit === "realtime" ? formatMicroseconds : formatCycles;
+  formatTime = opts.unit === "ms" ? formatMicroseconds : formatCycles;
   if (data?.path !== path) { data = {tracks:new Map(), axes:{}, path, first:null, pcToShape:new Map()}; focusedDevice = null; focusedShape = null; }
   setFocus(focusedShape);
   // layout once!
@@ -378,16 +378,12 @@ async function renderProfiler(path, unit, opts) {
       for (let j=0; j<eventsLen; j++) {
         const e = {name:strings[u32()], ref:optional(u32()), key:optional(u32()), st:u32(), dur:f32(), info:strings[u32()] || null};
         // find a free level to put the event
-        let depth = 0;
-        if (opts.levelKey != null) { depth = opts.levelKey(e); levels[depth] = 0; }
-        else {
-          depth = levels.findIndex(levelEt => e.st >= levelEt);
-          const et = e.st+Math.trunc(e.dur);
-          if (depth === -1) {
-            depth = levels.length;
-            levels.push(et);
-          } else levels[depth] = et;
-        }
+        let depth = levels.findIndex(levelEt => e.st >= levelEt);
+        const et = e.st+Math.trunc(e.dur);
+        if (depth === -1) {
+          depth = levels.length;
+          levels.push(et);
+        } else levels[depth] = et;
         if (depth === 0 || opts.colorByName) colorKey = e.name.split(" ")[0];
         if (!colorMap.has(colorKey)) {
           const color = typeof colors === "function" ? colors(colorKey)
@@ -597,7 +593,7 @@ async function renderProfiler(path, unit, opts) {
       const labelX = x+ctx.lineWidth+2;
       if (labelX <= lastLabelEnd) continue;
 
-      const label = formatTime(tick, et-st <= 1e3 ? true : false);
+      const label = formatTime(tick, et-st <= 1e3);
       ctx.textBaseline = "top";
       ctx.fillText(label, labelX, tickSize);
       lastLabelEnd = labelX + ctx.measureText(label).width + 4;
@@ -674,11 +670,9 @@ async function renderProfiler(path, unit, opts) {
 
   canvas.addEventListener("mousemove", e => {
     const foundRect = findRectAtPosition(e.clientX, e.clientY);
+    const tooltip = document.getElementById("tooltip");
     if (foundRect?.tooltipText != null) {
-      const tooltip = document.getElementById("tooltip"), nodes = [];
-      for (const l of foundRect.label||[]) { const s = document.createElement("span"); s.innerText = l.st; s.style.color = l.color; nodes.push(s); }
-      nodes.push(document.createTextNode(foundRect.tooltipText));
-      tooltip.replaceChildren(...nodes);
+      tooltip.replaceChildren(colored(foundRect.label||[]), document.createTextNode(foundRect.tooltipText));
       tooltip.style.display = "block";
       tooltip.style.left = (e.pageX+10)+"px";
       tooltip.style.top = (e.pageY)+"px";
@@ -882,7 +876,7 @@ async function main() {
     if (url.pathname+url.search !== ckey) e.close();
     else if (e.readyState === EventSource.OPEN) activeSrc = e;
   }
-  if (ctx.name === "Profiler") return renderProfiler("/get_profile", "realtime", { width:"132px" });
+  if (ctx.name === "Profiler") return renderProfiler("/get_profile", {unit:"ms", width:"132px"});
   if (workerUrl == null) await initWorker();
   if (ckey in cache) {
     ret = cache[ckey];
@@ -900,11 +894,11 @@ async function main() {
     }
     // timeline with cycles on the x axis
     if (ret instanceof ArrayBuffer) {
-      opts = {heightScale:0.5, hideLabels:true, levelKey:step.name.includes("PKTS") ? (e) => parseInt(e.name.split(" ")[1].split(":")[1]) : null, colorByName:ckey.includes("pkts")};
-      return renderProfiler(ckey, "clk", opts);
+      const pkts = step.name.includes("PKTS");
+      return renderProfiler(ckey, {unit:"clk", heightScale:0.5, hideLabels:true, colorByName:pkts});
     }
     metadata.replaceChildren(...((ret.metadata ?? []).map((m) => {
-      return tabulate(m.map((e) => [e.label.trim(), typeof e.value === "string" ? e.value : formatUnit(e.value)])).node();
+      return tabulate(m.map((e) => [e.label.trim(), typeof e.value === "string" ? e.value : formatUnit(e.value)]));
     })));
     // graph render
     if (ret.data != null) {
