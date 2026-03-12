@@ -252,8 +252,19 @@ function selectShape(key) {
 const timelineScale = () => d3.scaleLinear().domain([data.first, data.dur]).range([0, document.getElementById("timeline").clientWidth])
 
 function timeAtCycle(cycle) {
-  console.log(cycle);
-  return "1ns";
+  const frequency = data.tracks.get("Shader Clock")?.valueMap;
+  if (frequency == null) return null;
+  let freq = null;
+  let firstCycle = null;
+  for (const [k, v] of frequency) {
+    if (firstCycle == null) firstCycle = k;
+    if (k > cycle) break;
+    freq = v;
+  }
+  if (freq == null || firstCycle == null) return null;
+  const ns = (cycle - firstCycle) / freq * 1e9;
+  const remNs = Math.round(ns % 1000);
+  return ns/1000 > 1 ? formatMicroseconds(ns/1000, true) + (remNs ? ` ${remNs}ns` : "") : Math.round(ns, 2)+"ns";
 }
 
 function getZoomIdentity() {
