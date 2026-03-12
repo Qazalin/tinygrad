@@ -251,6 +251,11 @@ function selectShape(key) {
 // scaling function for time to pixels
 const timelineScale = () => d3.scaleLinear().domain([data.first, data.dur]).range([0, document.getElementById("timeline").clientWidth])
 
+function timeAtCycle(cycle) {
+  console.log(cycle);
+  return "1ns";
+}
+
 function getZoomIdentity() {
   // for packets, set zoom to the full range of instruction events
   if (data.path.includes("pkts")) {
@@ -616,8 +621,11 @@ async function renderProfiler(path, opts) {
       drawLine(ctx, [x, x], [0, tickSize]);
       const labelX = x+ctx.lineWidth+2;
       if (labelX <= lastLabelEnd) continue;
-
-      const label = formatTime(tick, et-st <= 1e3);
+      const t = timeAtCycle(tick);
+      let label = formatTime(tick, et-st <= 1e3);
+      if (t != null) {
+        label += ` (${t})`;
+      }
       ctx.textBaseline = "top";
       ctx.fillText(label, labelX, tickSize);
       lastLabelEnd = labelX + ctx.measureText(label).width + 4;
