@@ -252,19 +252,18 @@ function selectShape(key) {
 const timelineScale = () => d3.scaleLinear().domain([data.first, data.dur]).range([0, document.getElementById("timeline").clientWidth])
 
 function timeAtCycle(cycle) {
-  const frequency = data.tracks.get("Shader Clock")?.valueMap;
-  if (frequency == null) return null;
-  let freq = null;
-  let firstCycle = null;
-  for (const [k, v] of frequency) {
+  let freq = null, firstCycle = null;
+  for (const [k, v] of data.tracks.get("Shader Clock").valueMap) {
     if (firstCycle == null) firstCycle = k;
     if (k > cycle) break;
     freq = v;
   }
-  if (freq == null || firstCycle == null) return null;
+  if (!freq || firstCycle == null) return "-";
+  // TODO: not right when the frequency drops very fast in the end
   const ns = (cycle - firstCycle) / freq * 1e9;
   const remNs = Math.round(ns % 1000);
-  return ns/1000 > 1 ? formatMicroseconds(ns/1000, true) + (remNs ? ` ${remNs}ns` : "") : Math.round(ns, 2)+"ns";
+  const ret = ns/1000 > 1 ? formatMicroseconds(ns/1000, true) + (remNs ? ` ${remNs}ns` : "") : Math.round(ns, 2)+"ns";
+  return ret;
 }
 
 function getZoomIdentity() {
@@ -381,7 +380,9 @@ async function renderProfiler(path, opts) {
   const { strings, dtypeSize, markers, ...extData } = JSON.parse(textDecoder.decode(new Uint8Array(buf, offset, indexLen))); offset += indexLen;
   // place devices on the y axis and set vertical positions
   const [tickSize, padding, baseOffset] = [10, 8, markers.length ? 14 : 0];
-  const deviceList = profiler.append("div").attr("id", "device-list").style("padding-top", (tickSize*2)+padding+baseOffset+"px");
+  const axes = [(t, st, et) => formatTime(t, et-st <= 1e3)], axisGap = 24+padding;
+  if (opts.unit == "clk") axes.unshift((t) => timeAtCycle(t));
+  const deviceList = profiler.append("div").attr("id", "device-list").style("padding-top", tickSize*axes.length+axisGap*axes.length+padding+baseOffset+"px");
   const canvas = profiler.append("canvas").attr("id", "timeline").node();
   // NOTE: scrolling via mouse can only zoom the graph
   canvas.addEventListener("wheel", e => (e.stopPropagation(), e.preventDefault()), { passive:false });
@@ -624,23 +625,22 @@ async function renderProfiler(path, opts) {
     }
     // draw axes
     ctx.translate(0, baseOffset);
-    const offsetY = 4;
-    drawLine(ctx, xscale.range(), [offsetY, offsetY]);
-    let lastLabelEnd = -Infinity;
-    for (const tick of xscale.ticks()) {
-      if (!Number.isInteger(tick)) continue;
-      const x = xscale(tick);
-      drawLine(ctx, [x, x], [offsetY, offsetY+tickSize]);
-      const labelX = x+ctx.lineWidth+2;
-      if (labelX <= lastLabelEnd) continue;
-      const t = timeAtCycle(tick);
-      let label = formatTime(tick, et-st <= 1e3);
-      if (t != null) {
-        label += ` (${t})`;
+    const ss = d3.scaleLinear().domain([0, 100]).range([0, 1000]);
+    for (let i=0; i<axes.length; i++) {
+      const y = axisGap*i;
+      drawLine(ctx, xscale.range(), [y, y]);
+      let lastLabelEnd = -Infinity;
+      for (const tick of xscale.ticks()) {
+        if (!Number.isInteger(tick)) continue;
+        const x = xscale(tick);
+        drawLine(ctx, [x, x], [y, y+tickSize]);
+        const labelX = x+ctx.lineWidth+2;
+        if (labelX <= lastLabelEnd) continue;
+        let label = axes[i](tick, st, et);
+        ctx.textBaseline = "top";
+        ctx.fillText(label, labelX, y+tickSize);
+        lastLabelEnd = labelX + ctx.measureText(label).width + 4;
       }
-      ctx.textBaseline = "top";
-      ctx.fillText(label, labelX, offsetY+tickSize);
-      lastLabelEnd = labelX + ctx.measureText(label).width + 4;
     }
     if (data.axes.y != null) {
       drawLine(ctx, [0, 0], data.axes.y.range);
@@ -905,7 +905,7 @@ async function main() {
       }
       appendSteps(ul, i, steps);
     }
-    return setState({currentCtx: 5, currentStep: 2, currentRewrite: 0, expandSteps: true});
+    return setState({ currentCtx:-1 });
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
