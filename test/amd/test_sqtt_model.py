@@ -7,7 +7,7 @@ Each test documents:
 2. The ISA reference quote
 3. The actual test that verifies the behavior
 
-Run with: PROFILE=1 SQTT=1 AMD=1 python -m pytest test/amd/test_sqtt_model.py -v
+Run with: AM_RESET=1 PROFILE=1 SQTT=1 AMD=1 python -m pytest test/amd/test_sqtt_model.py -v
 """
 import unittest
 import os
@@ -1052,6 +1052,250 @@ class TestSQTTModel(unittest.TestCase):
       for op in global_ops:
         self.assertTrue(op.startswith("GLOBAL_"),
           f"Global op should start with GLOBAL_, got {op}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RAW ASSEMBLY TESTS
+# These tests use custom kernels with hand-written assembly to verify specific
+# SQTT packet behavior for known instruction sequences.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from tinygrad.uop.ops import UOp, Ops, KernelInfo
+from tinygrad.renderer import Estimates
+from tinygrad.runtime.autogen.amd.rdna3.ins import s_nop, s_endpgm, v_mov_b32_e32, s_mov_b32, s_waitcnt, global_load_b32, global_store_b32, s_load_b64, v_lshlrev_b32_e32, v_add_f32_e32
+from tinygrad.renderer.amd.dsl import s, v, NULL
+from test.amd.helpers import TARGET_TO_ARCH
+
+def make_custom_kernel(name: str, insts: list, size: int = 1) -> callable:
+  def kernel_fn(A: UOp) -> UOp:
+    A = A.flatten()
+    threads = UOp.special(size, "lidx0")
+    sink = UOp.sink(A.base, threads, arg=KernelInfo(name, estimates=Estimates(ops=size, mem=size*4)))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in insts]))))
+  return kernel_fn
+
+def get_kernel_sqtt(sqtt_events, prg_events, kernel_name: str):
+  """Get the SQTT event for a specific kernel by name."""
+  for event in sqtt_events:
+    # se 1 has the itrace.
+    if not event.itrace or event.se != 1: continue
+    prg = prg_events[event.kern]
+    if kernel_name in prg.name:
+      return event, prg
+  raise AssertionError(f"No SQTT event found for kernel '{kernel_name}'")
+
+@unittest.skipUnless(getenv("AMD") and Device.DEFAULT == "AMD", "AMD only")
+class TestSQTTRawAssembly(unittest.TestCase):
+  """
+  Tests using raw assembly to verify SQTT packet behavior for known instruction sequences.
+  """
+
+  @classmethod
+  def setUpClass(cls):
+    cls.target = get_target()
+    cls.arch = TARGET_TO_ARCH.get(Device["AMD"].arch, "rdna3")
+
+  def setUp(self):
+    Compiled.profile_events.clear()
+
+  def test_raw_asm_nop_endpgm(self):
+    """
+    CLAIM: s_nop instructions produce exactly one IMMEDIATE packet each.
+
+    ISA REFERENCE (Section 16.5 SOPP Instructions - S_NOP):
+    "Do nothing. Repeat NOP 1..8 times based on SIMM16[2:0]."
+
+    OBSERVED: 2 s_nop instructions produce exactly 2 IMMEDIATE packets.
+    """
+    if self.arch != "rdna3": self.skipTest("only rdna3")
+
+    insts = [s_nop(0), s_nop(0), s_endpgm()]
+
+    a = Tensor.empty(1).contiguous().realize()
+    Tensor.custom_kernel(a, fxn=make_custom_kernel("test_nop_endpgm", insts, size=1))[0].realize()
+    Device["AMD"].synchronize()
+
+    sqtt_events, prg_events = get_sqtt_events()
+    event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_nop_endpgm")
+    packets = decode_packets(event.blob)
+    counts = count_packet_types(packets)
+
+    # exactly 1 wave starts and ends
+    wavestart_count = counts.get("WAVESTART", 0) + counts.get("WAVESTART_RDNA4", 0)
+    waveend_count = counts.get("WAVEEND", 0)
+    self.assertEqual(wavestart_count, 1)
+    self.assertEqual(waveend_count, 1)
+
+    # exactly 2 IMMEDIATE packets for 2 s_nop instructions
+    imm_count = counts.get("IMMEDIATE", 0) + counts.get("IMMEDIATE_MASK", 0)
+    self.assertEqual(imm_count, 2, f"Expected 2 IMMEDIATE packets for 2 s_nop, got {imm_count}")
+
+  def test_raw_asm_valu_instruction(self):
+    """
+    CLAIM: v_mov_b32 produces VALUINST packet.
+
+    ISA REFERENCE (Section 7.1 VOP1 Instructions - V_MOV_B32):
+    "D.u = S0.u"
+
+    OBSERVED: 2 v_mov_b32_e32 instructions produce exactly 2 VALUINST packets.
+    """
+    if self.arch != "rdna3": self.skipTest("only rdna3")
+
+    insts = [v_mov_b32_e32(v[0], 0), v_mov_b32_e32(v[1], 1.0), s_endpgm()]
+
+    a = Tensor.empty(1).contiguous().realize()
+    Tensor.custom_kernel(a, fxn=make_custom_kernel("test_valu_mov", insts, size=1))[0].realize()
+    Device["AMD"].synchronize()
+
+    sqtt_events, prg_events = get_sqtt_events()
+    event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_valu_mov")
+    packets = decode_packets(event.blob)
+    counts = count_packet_types(packets)
+
+    # exactly 2 VALUINST packets for 2 v_mov_b32
+    valuinst_count = counts.get("VALUINST", 0)
+    self.assertEqual(valuinst_count, 2, f"Expected 2 VALUINST packets for 2 v_mov, got {valuinst_count}")
+
+    # VALUINST packets have wave field
+    valuinsts = [p for p in packets if isinstance(p, VALUINST)]
+    for p in valuinsts:
+      self.assertTrue(hasattr(p, 'wave'))
+
+  def test_raw_asm_salu_instruction(self):
+    """
+    CLAIM: s_mov_b32 produces INST packet with op=SALU.
+
+    ISA REFERENCE (Section 6.1 SOP1 Instructions - S_MOV_B32):
+    "D.u = S0.u"
+
+    OBSERVED: 2 s_mov_b32 instructions produce exactly 2 INST packets with SALU op.
+    """
+    if self.arch != "rdna3": self.skipTest("only rdna3")
+
+    insts = [s_mov_b32(s[0], 0), s_mov_b32(s[1], 1), s_endpgm()]
+
+    a = Tensor.empty(1).contiguous().realize()
+    Tensor.custom_kernel(a, fxn=make_custom_kernel("test_salu_mov", insts, size=1))[0].realize()
+    Device["AMD"].synchronize()
+
+    sqtt_events, prg_events = get_sqtt_events()
+    event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_salu_mov")
+    packets = decode_packets(event.blob)
+
+    # find INST packets with SALU op
+    salu_insts = [p for p in packets if isinstance(p, (INST, INST_RDNA4)) and
+                  (p.op == InstOp.SALU if isinstance(p.op, InstOp) else p.op == 0)]
+    self.assertEqual(len(salu_insts), 2, f"Expected 2 SALU INST packets, got {len(salu_insts)}")
+
+  def test_raw_asm_global_load_store(self):
+    """
+    CLAIM: global_load/global_store produce INST packets with GLOBAL_* opcodes.
+
+    ISA REFERENCE (Section 11.1.2 Global):
+    "Global instructions transfer data between VGPRs and global memory."
+
+    OBSERVED: 1 global_load_b32 produces GLOBAL_LOAD op, 1 global_store_b32 produces GLOBAL_STORE op.
+    """
+    if self.arch != "rdna3": self.skipTest("only rdna3")
+
+    insts = [
+      s_load_b64(s[0:1], s[0:1], soffset=NULL),
+      s_waitcnt(lgkmcnt=0),
+      v_lshlrev_b32_e32(v[0], 2, v[0]),
+      global_load_b32(v[1], v[0], saddr=s[0:1]),
+      s_waitcnt(vmcnt=0),
+      v_add_f32_e32(v[1], v[1], v[1]),
+      global_store_b32(addr=v[0], data=v[1], saddr=s[0:1]),
+      s_endpgm(),
+    ]
+
+    a = Tensor.empty(4)
+    Tensor.custom_kernel(a, fxn=make_custom_kernel("test_global_load_store", insts, size=4))[0].realize()
+
+    sqtt_events, prg_events = get_sqtt_events()
+    event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_global_load_store")
+    packets = decode_packets(event.blob)
+
+    # find GLOBAL_LOAD and GLOBAL_STORE ops
+    global_loads = [p for p in packets if isinstance(p, (INST, INST_RDNA4)) and
+                    isinstance(p.op, (InstOp, InstOpRDNA4)) and "GLOBAL_LOAD" in p.op.name]
+    global_stores = [p for p in packets if isinstance(p, (INST, INST_RDNA4)) and
+                     isinstance(p.op, (InstOp, InstOpRDNA4)) and "GLOBAL_STORE" in p.op.name]
+
+    self.assertEqual(len(global_loads), 1, f"Expected 1 GLOBAL_LOAD, got {len(global_loads)}")
+    self.assertEqual(len(global_stores), 1, f"Expected 1 GLOBAL_STORE, got {len(global_stores)}")
+
+  def test_raw_asm_waitcnt_visible(self):
+    """
+    CLAIM: s_waitcnt produces IMMEDIATE packet.
+
+    ISA REFERENCE (Section 5.6 Data Dependency Resolution):
+    "S_WAITCNT waits for the values of these counters."
+
+    OBSERVED: 1 s_waitcnt + 1 s_nop produce exactly 2 IMMEDIATE packets.
+    """
+    if self.arch != "rdna3": self.skipTest("only rdna3")
+
+    insts = [s_waitcnt(vmcnt=0, lgkmcnt=0), s_nop(0), s_endpgm()]
+
+    a = Tensor.empty(1).contiguous().realize()
+    Tensor.custom_kernel(a, fxn=make_custom_kernel("test_waitcnt", insts, size=1))[0].realize()
+    Device["AMD"].synchronize()
+
+    sqtt_events, prg_events = get_sqtt_events()
+    event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_waitcnt")
+    packets = decode_packets(event.blob)
+    counts = count_packet_types(packets)
+
+    imm_count = counts.get("IMMEDIATE", 0) + counts.get("IMMEDIATE_MASK", 0)
+    self.assertEqual(imm_count, 2, f"Expected 2 IMMEDIATE packets (waitcnt + nop), got {imm_count}")
+
+  def test_raw_asm_exec_timing_relationship(self):
+    """
+    CLAIM: VALU instructions produce VALUINST packets, followed by ALUEXEC with VALU source.
+
+    ISA REFERENCE (Section 5.7 ALU Instruction Software Scheduling):
+    "The shader program may include instructions to delay ALU instructions."
+
+    OBSERVED: 5 VALU ops produce 5 VALUINST packets. ALUEXEC appears after VALUINST (issue before execute).
+    """
+    if self.arch != "rdna3": self.skipTest("only rdna3")
+
+    insts = [
+      v_mov_b32_e32(v[0], 1.0),
+      v_mov_b32_e32(v[1], 2.0),
+      v_add_f32_e32(v[2], v[0], v[1]),
+      v_add_f32_e32(v[3], v[2], v[0]),
+      v_add_f32_e32(v[4], v[3], v[1]),
+      s_endpgm(),
+    ]
+
+    a = Tensor.empty(1).contiguous().realize()
+    Tensor.custom_kernel(a, fxn=make_custom_kernel("test_exec_timing", insts, size=1))[0].realize()
+    Device["AMD"].synchronize()
+
+    sqtt_events, prg_events = get_sqtt_events()
+    event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_exec_timing")
+    packets = decode_packets(event.blob)
+    counts = count_packet_types(packets)
+
+    # exactly 5 VALUINST packets for 5 VALU ops
+    valuinst_count = counts.get("VALUINST", 0)
+    self.assertEqual(valuinst_count, 5, f"Expected 5 VALUINST packets, got {valuinst_count}")
+
+    # ALUEXEC packets exist
+    aluexec_count = counts.get("ALUEXEC", 0)
+    self.assertGreater(aluexec_count, 0)
+
+    # first VALUINST time <= first ALUEXEC time (issue before execute)
+    first_valuinst = next(p for p in packets if isinstance(p, VALUINST))
+    first_aluexec = next(p for p in packets if isinstance(p, ALUEXEC))
+    self.assertLessEqual(first_valuinst._time, first_aluexec._time)
+
+    # ALUEXEC has VALU source
+    valu_aluexec = [p for p in packets if isinstance(p, ALUEXEC) and (p.src == AluSrc.VALU or p.src == 2)]
+    self.assertGreater(len(valu_aluexec), 0)
+
 
 if __name__ == "__main__":
   unittest.main()
