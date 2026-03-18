@@ -699,9 +699,12 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
     elif isinstance(p, ALUEXEC):
       src = p.src if isinstance(p.src, AluSrc) else AluSrc(p.src)
       info = None
-      if src in {AluSrc.VALU, AluSrc.VALU_SALU} and pending_valu: info = pending_valu.pop(0)
+      if src == AluSrc.VALU_SALU:
+        # Both VALU and SALU executed in same cycle - drain both queues
+        info = pending_valu.pop(0) if pending_valu else None
+        if pending_salu: pending_salu.pop(0)
+      elif src == AluSrc.VALU and pending_valu: info = pending_valu.pop(0)
       elif src == AluSrc.SALU and pending_salu: info = pending_salu.pop(0)
-      elif src == AluSrc.VALU_SALU and pending_salu: info = pending_salu.pop(0)  # VALU_SALU can match SALU too
       yield (p, info)
     elif isinstance(p, VMEMEXEC):
       src = p.src if isinstance(p.src, MemSrc) else MemSrc(p.src)

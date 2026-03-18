@@ -64,9 +64,22 @@ class TestSQTTModel(unittest.TestCase):
     k.emit(v_add_f32_e32(v[0], v[1], v[0]))
     k.emit(s_add_u32(s[0], s[1], s[0]))
     k.emit(v_add_f32_e32(v[2], v[3], v[4]))
+    k.emit(s_sub_u32(s[10], s[1], s[10]))
     k.emit(s_endpgm())
     Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
     mapped = load_sqtt()
+
+    # count issued instructions
+    valu_issued = sum(1 for p, _ in mapped if isinstance(p, VALUINST))
+    salu_issued = sum(1 for p, _ in mapped if isinstance(p, INST) and p.op == InstOp.SALU)
+
+    # count ALUEXEC by source type (VALU_SALU counts as both VALU and SALU)
+    valu_exec = sum(1 for p, _ in mapped if isinstance(p, ALUEXEC) and p.src in {AluSrc.VALU, AluSrc.VALU_SALU})
+    salu_exec = sum(1 for p, _ in mapped if isinstance(p, ALUEXEC) and p.src in {AluSrc.SALU, AluSrc.VALU_SALU})
+
+    # verify all issued instructions have corresponding ALUEXEC
+    assert valu_exec == valu_issued, f"VALU mismatch: {valu_exec} exec vs {valu_issued} issued"
+    assert salu_exec == salu_issued, f"SALU mismatch: {salu_exec} exec vs {salu_issued} issued"
 
 if __name__ == "__main__":
   unittest.main()
