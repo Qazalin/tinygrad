@@ -59,5 +59,14 @@ class TestSQTTModel(unittest.TestCase):
     Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
     mapped = load_sqtt()
 
+  def test_valu_salu(self):
+    k = Kernel(self.arch)
+    k.emit(v_add_f32_e32(v[0], v[1], v[0]))
+    k.emit(s_add_u32(s[0], s[1], s[0]))
+    k.emit(v_add_f32_e32(v[2], v[3], v[4]))
+    k.emit(s_endpgm())
+    Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
+    mapped = load_sqtt()
+
 if __name__ == "__main__":
   unittest.main()
