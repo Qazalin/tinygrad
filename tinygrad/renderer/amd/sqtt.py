@@ -696,7 +696,7 @@ def format_packet(p) -> str:
 
 def print_packets(packets) -> None:
   from tinygrad.helpers import getenv
-  skip = {"NOP", "TS_DELTA_SHORT", "TS_WAVE_STATE", "TS_DELTA_OR_MARK",
+  skip = {"NOP", "TS_DELTA_SHORT", "TS_WAVE_STATE", "TS_DELTA_OR_MARK", "LAYOUT_HEADER", "SNAPSHOT",
           "TS_DELTA_S5_W2", "TS_DELTA_S5_W3", "TS_DELTA_S8_W3", "REG", "EVENT"} if not getenv("NOSKIP") else {"NOP"}
   for data in packets:
     p, inst = data if isinstance(data, tuple) else (data, None)
