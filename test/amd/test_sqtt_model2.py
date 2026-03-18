@@ -81,5 +81,49 @@ class TestSQTTModel(unittest.TestCase):
     assert valu_exec == valu_issued, f"VALU mismatch: {valu_exec} exec vs {valu_issued} issued"
     assert salu_exec == salu_issued, f"SALU mismatch: {salu_exec} exec vs {salu_issued} issued"
 
+  def test_delay_alu(self):
+    """s_delay_alu inserts cycles between dependent VALU instructions."""
+    k = Kernel(self.arch)
+    k.emit(v_mov_b32_e32(v[3], v[0]))           # A
+    k.emit(v_lshlrev_b32_e32(v[30], 1, v[31]))  # B
+    k.emit(v_lshlrev_b32_e32(v[24], 1, v[25]))  # C
+    k.emit(s_delay_alu(0x00A3))                 # instID0=3 (wait 3 VALU back), skip=2, instID1=1
+    k.emit(v_add_f32_e32(v[0], v[1], v[3]))     # D (depends on A, 3 back)
+    k.emit(v_sub_f32_e32(v[11], v[9], v[9]))    # E
+    k.emit(v_mul_f32_e32(v[10], v[13], v[11]))  # F (depends on E, 1 back)
+    k.emit(s_endpgm())
+    Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
+    mapped = load_sqtt()
+
+    # extract VALUINST issue times
+    issues = [(p._time, info.inst if info else None) for p, info in mapped if isinstance(p, VALUINST)]
+    base = issues[0][0]
+    gaps = [issues[i][0] - issues[i-1][0] for i in range(1, len(issues))]
+
+    # with s_delay_alu: gaps before D (index 3) and F (index 5) should be > 1
+    assert gaps[2] > 1, f"expected delay before D, got gap={gaps[2]}"
+    assert gaps[4] > 1, f"expected delay before F, got gap={gaps[4]}"
+
+  def test_no_delay_alu(self):
+    """without s_delay_alu, all VALU instructions issue back-to-back."""
+    k = Kernel(self.arch)
+    k.emit(v_mov_b32_e32(v[3], v[0]))
+    k.emit(v_lshlrev_b32_e32(v[30], 1, v[31]))
+    k.emit(v_lshlrev_b32_e32(v[24], 1, v[25]))
+    # no s_delay_alu here
+    k.emit(v_add_f32_e32(v[0], v[1], v[3]))
+    k.emit(v_sub_f32_e32(v[11], v[9], v[9]))
+    k.emit(v_mul_f32_e32(v[10], v[13], v[11]))
+    k.emit(s_endpgm())
+    Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
+    mapped = load_sqtt()
+
+    # extract VALUINST issue times
+    issues = [(p._time, info.inst if info else None) for p, info in mapped if isinstance(p, VALUINST)]
+    gaps = [issues[i][0] - issues[i-1][0] for i in range(1, len(issues))]
+
+    # without s_delay_alu: all gaps should be 1 (back-to-back issue)
+    assert all(g == 1 for g in gaps), f"expected all gaps=1, got {gaps}"
+
 if __name__ == "__main__":
   unittest.main()
