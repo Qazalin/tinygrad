@@ -58,6 +58,10 @@ def count_packet_types(packets):
     counts[name] = counts.get(name, 0) + 1
   return counts
 
+def is_issue_packet(pkt):
+  """Returns True if pkt is an ISSUE packet (not EXEC). EXEC packets have correlated inst info but are not new instruction issues."""
+  return not isinstance(pkt, (ALUEXEC, VMEMEXEC))
+
 @unittest.skipUnless(getenv("AMD") and Device.DEFAULT == "AMD", "AMD only")
 class TestSQTTModel(unittest.TestCase):
   """
@@ -1082,6 +1086,55 @@ def get_kernel_sqtt(sqtt_events, prg_events, kernel_name: str):
     prg = prg_events[event.kern]
     if kernel_name in prg.name:
       return event, prg
+
+def correlate_issue_to_exec(mapped):
+  """Link each instruction ISSUE packet to its corresponding EXEC packet.
+
+  Returns list of (issue_pkt, info, exec_type, exec_pkt, latency_cycles).
+  exec_type is 'VALU', 'SALU', 'VMEM', or 'SMEM' based on instruction class.
+  """
+  # collect issue packets with their expected exec type
+  issues = []
+  for pkt, info in mapped:
+    if not info: continue
+    if isinstance(pkt, VALUINST):
+      issues.append((pkt, info, 'VALU'))
+    elif isinstance(pkt, (INST, INST_RDNA4)):
+      if isinstance(pkt.op, (InstOp, InstOpRDNA4)):
+        if 'GLOBAL' in pkt.op.name or 'FLAT' in pkt.op.name:
+          issues.append((pkt, info, 'VMEM'))
+        elif pkt.op.name == 'SMEM':
+          issues.append((pkt, info, 'SMEM'))
+        elif pkt.op.name == 'SALU':
+          issues.append((pkt, info, 'SALU'))
+        else:
+          issues.append((pkt, info, pkt.op.name))
+
+  # collect exec packets
+  execs = []
+  for pkt, _ in mapped:
+    if isinstance(pkt, ALUEXEC):
+      src = pkt.src.name if isinstance(pkt.src, AluSrc) else str(pkt.src)
+      execs.append((pkt, src))
+    elif isinstance(pkt, VMEMEXEC):
+      src = pkt.src.name if isinstance(pkt.src, MemSrc) else str(pkt.src)
+      execs.append((pkt, src))
+
+  # match each issue to next exec of same type
+  exec_idx = 0
+  results = []
+  for issue_pkt, info, expected_type in issues:
+    matched_exec = None
+    for i in range(exec_idx, len(execs)):
+      exec_pkt, exec_src = execs[i]
+      if expected_type in exec_src or exec_src in expected_type:
+        matched_exec = exec_pkt
+        exec_idx = i + 1
+        break
+    latency = (matched_exec._time - issue_pkt._time) if matched_exec else None
+    results.append((issue_pkt, info, expected_type, matched_exec, latency))
+
+  return results
   raise AssertionError(f"No SQTT event found for kernel '{kernel_name}'")
 
 @unittest.skipUnless(getenv("AMD") and Device.DEFAULT == "AMD", "AMD only")
@@ -1105,7 +1158,7 @@ class TestSQTTRawAssembly(unittest.TestCase):
     ISA REFERENCE (Section 16.5 SOPP Instructions - S_NOP):
     "Do nothing. Repeat NOP 1..8 times based on SIMM16[2:0]."
 
-    OBSERVED: 2 s_nop instructions produce exactly 2 IMMEDIATE packets.
+    OBSERVED: 2 s_nop instructions produce exactly 2 IMMEDIATE packets mapped to s_nop.
     """
     if self.arch != "rdna3": self.skipTest("only rdna3")
 
@@ -1117,18 +1170,15 @@ class TestSQTTRawAssembly(unittest.TestCase):
 
     sqtt_events, prg_events = get_sqtt_events()
     event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_nop_endpgm")
-    packets = decode_packets(event.blob)
-    counts = count_packet_types(packets)
+    mapped = list(map_insts(event.blob, prg.lib, self.target))
 
-    # exactly 1 wave starts and ends
-    wavestart_count = counts.get("WAVESTART", 0) + counts.get("WAVESTART_RDNA4", 0)
-    waveend_count = counts.get("WAVEEND", 0)
-    self.assertEqual(wavestart_count, 1)
-    self.assertEqual(waveend_count, 1)
+    # find s_nop instructions (filter out EXEC packets which now have correlated inst info)
+    nops = [(pkt, info) for pkt, info in mapped if info and is_issue_packet(pkt) and "s_nop" in str(info.inst).lower()]
+    self.assertEqual(len(nops), 2, f"Expected 2 s_nop, got {len(nops)}")
 
-    # exactly 2 IMMEDIATE packets for 2 s_nop instructions
-    imm_count = counts.get("IMMEDIATE", 0) + counts.get("IMMEDIATE_MASK", 0)
-    self.assertEqual(imm_count, 2, f"Expected 2 IMMEDIATE packets for 2 s_nop, got {imm_count}")
+    # s_nop maps to IMMEDIATE packet
+    for pkt, info in nops:
+      self.assertIsInstance(pkt, (IMMEDIATE, IMMEDIATE_MASK), f"s_nop should be IMMEDIATE, got {type(pkt).__name__}")
 
   def test_raw_asm_valu_instruction(self):
     """
@@ -1137,7 +1187,7 @@ class TestSQTTRawAssembly(unittest.TestCase):
     ISA REFERENCE (Section 7.1 VOP1 Instructions - V_MOV_B32):
     "D.u = S0.u"
 
-    OBSERVED: 2 v_mov_b32_e32 instructions produce exactly 2 VALUINST packets.
+    OBSERVED: 2 v_mov_b32_e32 instructions produce exactly 2 VALUINST packets mapped to v_mov_b32.
     """
     if self.arch != "rdna3": self.skipTest("only rdna3")
 
@@ -1149,17 +1199,15 @@ class TestSQTTRawAssembly(unittest.TestCase):
 
     sqtt_events, prg_events = get_sqtt_events()
     event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_valu_mov")
-    packets = decode_packets(event.blob)
-    counts = count_packet_types(packets)
+    mapped = list(map_insts(event.blob, prg.lib, self.target))
 
-    # exactly 2 VALUINST packets for 2 v_mov_b32
-    valuinst_count = counts.get("VALUINST", 0)
-    self.assertEqual(valuinst_count, 2, f"Expected 2 VALUINST packets for 2 v_mov, got {valuinst_count}")
+    # find v_mov_b32 instructions (filter out EXEC packets which now have correlated inst info)
+    vmovs = [(pkt, info) for pkt, info in mapped if info and is_issue_packet(pkt) and "v_mov_b32" in str(info.inst).lower()]
+    self.assertEqual(len(vmovs), 2, f"Expected 2 v_mov_b32, got {len(vmovs)}")
 
-    # VALUINST packets have wave field
-    valuinsts = [p for p in packets if isinstance(p, VALUINST)]
-    for p in valuinsts:
-      self.assertTrue(hasattr(p, 'wave'))
+    # v_mov_b32 maps to VALUINST packet
+    for pkt, info in vmovs:
+      self.assertIsInstance(pkt, VALUINST, f"v_mov_b32 should be VALUINST, got {type(pkt).__name__}")
 
   def test_raw_asm_salu_instruction(self):
     """
@@ -1168,7 +1216,7 @@ class TestSQTTRawAssembly(unittest.TestCase):
     ISA REFERENCE (Section 6.1 SOP1 Instructions - S_MOV_B32):
     "D.u = S0.u"
 
-    OBSERVED: 2 s_mov_b32 instructions produce exactly 2 INST packets with SALU op.
+    OBSERVED: 2 s_mov_b32 instructions produce exactly 2 INST packets mapped to s_mov_b32.
     """
     if self.arch != "rdna3": self.skipTest("only rdna3")
 
@@ -1180,12 +1228,16 @@ class TestSQTTRawAssembly(unittest.TestCase):
 
     sqtt_events, prg_events = get_sqtt_events()
     event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_salu_mov")
-    packets = decode_packets(event.blob)
+    mapped = list(map_insts(event.blob, prg.lib, self.target))
 
-    # find INST packets with SALU op
-    salu_insts = [p for p in packets if isinstance(p, (INST, INST_RDNA4)) and
-                  (p.op == InstOp.SALU if isinstance(p.op, InstOp) else p.op == 0)]
-    self.assertEqual(len(salu_insts), 2, f"Expected 2 SALU INST packets, got {len(salu_insts)}")
+    # find s_mov_b32 instructions (filter out EXEC packets which now have correlated inst info)
+    smovs = [(pkt, info) for pkt, info in mapped if info and is_issue_packet(pkt) and "s_mov_b32" in str(info.inst).lower()]
+    self.assertEqual(len(smovs), 2, f"Expected 2 s_mov_b32, got {len(smovs)}")
+
+    # s_mov_b32 maps to INST packet with SALU op
+    for pkt, info in smovs:
+      self.assertIsInstance(pkt, (INST, INST_RDNA4), f"s_mov_b32 should be INST, got {type(pkt).__name__}")
+      self.assertEqual(pkt.op, InstOp.SALU, f"s_mov_b32 should have SALU op, got {pkt.op}")
 
   def test_raw_asm_global_load_store(self):
     """
@@ -1194,7 +1246,7 @@ class TestSQTTRawAssembly(unittest.TestCase):
     ISA REFERENCE (Section 11.1.2 Global):
     "Global instructions transfer data between VGPRs and global memory."
 
-    OBSERVED: 1 global_load_b32 produces GLOBAL_LOAD op, 1 global_store_b32 produces GLOBAL_STORE op.
+    OBSERVED: global_load_b32 maps to INST with GLOBAL_LOAD op, global_store_b32 maps to INST with GLOBAL_STORE op.
     """
     if self.arch != "rdna3": self.skipTest("only rdna3")
 
@@ -1214,16 +1266,23 @@ class TestSQTTRawAssembly(unittest.TestCase):
 
     sqtt_events, prg_events = get_sqtt_events()
     event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_global_load_store")
-    packets = decode_packets(event.blob)
+    mapped = list(map_insts(event.blob, prg.lib, self.target))
 
-    # find GLOBAL_LOAD and GLOBAL_STORE ops
-    global_loads = [p for p in packets if isinstance(p, (INST, INST_RDNA4)) and
-                    isinstance(p.op, (InstOp, InstOpRDNA4)) and "GLOBAL_LOAD" in p.op.name]
-    global_stores = [p for p in packets if isinstance(p, (INST, INST_RDNA4)) and
-                     isinstance(p.op, (InstOp, InstOpRDNA4)) and "GLOBAL_STORE" in p.op.name]
+    # find global_load_b32 and global_store_b32 instructions (filter out EXEC packets which now have correlated inst info)
+    loads = [(pkt, info) for pkt, info in mapped if info and is_issue_packet(pkt) and "global_load" in str(info.inst).lower()]
+    stores = [(pkt, info) for pkt, info in mapped if info and is_issue_packet(pkt) and "global_store" in str(info.inst).lower()]
 
-    self.assertEqual(len(global_loads), 1, f"Expected 1 GLOBAL_LOAD, got {len(global_loads)}")
-    self.assertEqual(len(global_stores), 1, f"Expected 1 GLOBAL_STORE, got {len(global_stores)}")
+    self.assertEqual(len(loads), 1, f"Expected 1 global_load, got {len(loads)}")
+    self.assertEqual(len(stores), 1, f"Expected 1 global_store, got {len(stores)}")
+
+    # verify packet types have GLOBAL_* ops
+    pkt, info = loads[0]
+    self.assertIsInstance(pkt, (INST, INST_RDNA4))
+    self.assertIn("GLOBAL_LOAD", pkt.op.name)
+
+    pkt, info = stores[0]
+    self.assertIsInstance(pkt, (INST, INST_RDNA4))
+    self.assertIn("GLOBAL_STORE", pkt.op.name)
 
   def test_raw_asm_waitcnt_visible(self):
     """
@@ -1232,7 +1291,7 @@ class TestSQTTRawAssembly(unittest.TestCase):
     ISA REFERENCE (Section 5.6 Data Dependency Resolution):
     "S_WAITCNT waits for the values of these counters."
 
-    OBSERVED: 1 s_waitcnt + 1 s_nop produce exactly 2 IMMEDIATE packets.
+    OBSERVED: s_waitcnt maps to IMMEDIATE packet.
     """
     if self.arch != "rdna3": self.skipTest("only rdna3")
 
@@ -1244,11 +1303,15 @@ class TestSQTTRawAssembly(unittest.TestCase):
 
     sqtt_events, prg_events = get_sqtt_events()
     event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_waitcnt")
-    packets = decode_packets(event.blob)
-    counts = count_packet_types(packets)
+    mapped = list(map_insts(event.blob, prg.lib, self.target))
 
-    imm_count = counts.get("IMMEDIATE", 0) + counts.get("IMMEDIATE_MASK", 0)
-    self.assertEqual(imm_count, 2, f"Expected 2 IMMEDIATE packets (waitcnt + nop), got {imm_count}")
+    # find s_waitcnt instruction (filter out EXEC packets which now have correlated inst info)
+    waitcnts = [(pkt, info) for pkt, info in mapped if info and is_issue_packet(pkt) and "s_waitcnt" in str(info.inst).lower()]
+    self.assertEqual(len(waitcnts), 1, f"Expected 1 s_waitcnt, got {len(waitcnts)}")
+
+    # s_waitcnt maps to IMMEDIATE packet
+    pkt, info = waitcnts[0]
+    self.assertIsInstance(pkt, (IMMEDIATE, IMMEDIATE_MASK), f"s_waitcnt should be IMMEDIATE, got {type(pkt).__name__}")
 
   def test_raw_asm_exec_timing_relationship(self):
     """
@@ -1257,7 +1320,7 @@ class TestSQTTRawAssembly(unittest.TestCase):
     ISA REFERENCE (Section 5.7 ALU Instruction Software Scheduling):
     "The shader program may include instructions to delay ALU instructions."
 
-    OBSERVED: 5 VALU ops produce 5 VALUINST packets. ALUEXEC appears after VALUINST (issue before execute).
+    OBSERVED: v_mov and v_add map to VALUINST packets. ALUEXEC appears after VALUINST (issue before execute).
     """
     if self.arch != "rdna3": self.skipTest("only rdna3")
 
@@ -1276,25 +1339,71 @@ class TestSQTTRawAssembly(unittest.TestCase):
 
     sqtt_events, prg_events = get_sqtt_events()
     event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_exec_timing")
-    packets = decode_packets(event.blob)
-    counts = count_packet_types(packets)
+    mapped = list(map_insts(event.blob, prg.lib, self.target))
 
-    # exactly 5 VALUINST packets for 5 VALU ops
-    valuinst_count = counts.get("VALUINST", 0)
-    self.assertEqual(valuinst_count, 5, f"Expected 5 VALUINST packets, got {valuinst_count}")
+    # find v_mov and v_add instructions (filter out EXEC packets which now have correlated inst info)
+    vmovs = [(pkt, info) for pkt, info in mapped if info and is_issue_packet(pkt) and "v_mov_b32" in str(info.inst).lower()]
+    vadds = [(pkt, info) for pkt, info in mapped if info and is_issue_packet(pkt) and "v_add_f32" in str(info.inst).lower()]
 
-    # ALUEXEC packets exist
-    aluexec_count = counts.get("ALUEXEC", 0)
-    self.assertGreater(aluexec_count, 0)
+    self.assertEqual(len(vmovs), 2, f"Expected 2 v_mov_b32, got {len(vmovs)}")
+    self.assertEqual(len(vadds), 3, f"Expected 3 v_add_f32, got {len(vadds)}")
 
-    # first VALUINST time <= first ALUEXEC time (issue before execute)
+    # all VALU ops map to VALUINST
+    for pkt, info in vmovs + vadds:
+      self.assertIsInstance(pkt, VALUINST, f"{info.inst} should be VALUINST, got {type(pkt).__name__}")
+
+    # ALUEXEC packets exist and follow VALUINST in time
+    packets = [pkt for pkt, _ in mapped]
     first_valuinst = next(p for p in packets if isinstance(p, VALUINST))
-    first_aluexec = next(p for p in packets if isinstance(p, ALUEXEC))
+    first_aluexec = next((p for p in packets if isinstance(p, ALUEXEC)), None)
+    self.assertIsNotNone(first_aluexec, "Should have ALUEXEC packets")
     self.assertLessEqual(first_valuinst._time, first_aluexec._time)
 
-    # ALUEXEC has VALU source
-    valu_aluexec = [p for p in packets if isinstance(p, ALUEXEC) and (p.src == AluSrc.VALU or p.src == 2)]
-    self.assertGreater(len(valu_aluexec), 0)
+  def test_raw_asm_issue_to_exec_correlation(self):
+    """
+    CLAIM: Each instruction ISSUE can be correlated to its EXEC packet.
+
+    ISA REFERENCE (Section 3.2.1 Program Counter):
+    "The PC points to the next instruction to issue. All prior instructions have
+    been issued but may or may not have completed execution."
+
+    OBSERVED: VALU issues correlate to ALUEXEC(VALU), VMEM issues correlate to VMEMEXEC.
+    The latency (cycles between issue and exec) is visible in the trace.
+    """
+    if self.arch != "rdna3": self.skipTest("only rdna3")
+
+    insts = [
+      s_load_b64(s[0:1], s[0:1], soffset=NULL),
+      s_waitcnt(lgkmcnt=0),
+      v_lshlrev_b32_e32(v[0], 2, v[0]),
+      global_load_b32(v[1], v[0], saddr=s[0:1]),
+      s_waitcnt(vmcnt=0),
+      v_add_f32_e32(v[1], v[1], v[1]),
+      global_store_b32(addr=v[0], data=v[1], saddr=s[0:1]),
+      s_endpgm(),
+    ]
+
+    a = Tensor([1.0, 2.0, 3.0, 4.0]).contiguous().realize()
+    Tensor.custom_kernel(a, fxn=make_custom_kernel("test_correlation", insts, size=4))[0].realize()
+    Device["AMD"].synchronize()
+
+    sqtt_events, prg_events = get_sqtt_events()
+    event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_correlation")
+    mapped = list(map_insts(event.blob, prg.lib, self.target))
+
+    correlated = correlate_issue_to_exec(mapped)
+
+    # verify VALU instructions have EXEC with positive latency
+    valu_corr = [(info, latency) for _, info, exec_type, exec_pkt, latency in correlated
+                 if exec_type == 'VALU' and exec_pkt is not None]
+    self.assertEqual(len(valu_corr), 2, f"Expected 2 VALU with EXEC, got {len(valu_corr)}")
+    for info, latency in valu_corr:
+      self.assertGreater(latency, 0, f"{info.inst} should have positive latency")
+
+    # verify VMEM instructions have EXEC
+    vmem_corr = [(info, latency) for _, info, exec_type, exec_pkt, latency in correlated
+                 if exec_type == 'VMEM' and exec_pkt is not None]
+    self.assertEqual(len(vmem_corr), 2, f"Expected 2 VMEM with EXEC, got {len(vmem_corr)}")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ import unittest, pickle
 from typing import Iterator
 from pathlib import Path
 from tinygrad.helpers import DEBUG, getenv, temp
-from tinygrad.renderer.amd.sqtt import print_packets, map_insts
+from tinygrad.renderer.amd.sqtt import print_packets, map_insts, ALUEXEC, VMEMEXEC
 from tinygrad.runtime.autogen.amd.rdna3.ins import s_endpgm
 from tinygrad.viz.serve import sqtt_timeline
 from test.amd.disasm import disasm
@@ -27,6 +27,8 @@ def rocprof_inst_traces_match(sqtt, prg, target):
   for pkt, info in map_insts(sqtt.blob, prg.lib, target):
     if DEBUG >= 2: print_packets([(pkt, info)])
     if info is None: continue
+    # skip EXEC packets - they have correlated instruction info but aren't new instruction issues
+    if isinstance(pkt, (ALUEXEC, VMEMEXEC)): continue
     if DEBUG >= 2: print(f"{' '*29}{disasm(info.inst)}")
     rocprof_inst = next(rwaves_iter[info.wave][0])
     ref_pc = rocprof_inst.pc-prg.base

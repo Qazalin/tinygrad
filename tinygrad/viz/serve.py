@@ -374,10 +374,10 @@ def sqtt_timeline(data:bytes, lib:bytes, target:str) -> list[ProfileEvent]:
     if isinstance(p, (VMEMEXEC, ALUEXEC)):
       name = str(p.src).split('.')[1]
       if name == "VALU_SALU":
-        add("VALU", p)
-        add("SALU", p)
+        add("VALU", p, info=info)
+        add("SALU", p, info=info)
       else:
-        add(name.replace("_ALT", ""), p, op=name)
+        add(name.replace("_ALT", ""), p, op=name, info=info)
   pc_map = {addr:str(inst) for addr,inst in amd_decode(lib, target).items()}
   return [ProfilePointEvent(r, "JSON", "pcMap", pc_map, ts=Decimal(0)) for r in row_ends]+ret
 

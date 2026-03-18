@@ -620,12 +620,27 @@ class InstructionInfo:
   wave: int
   inst: Inst
 
+def _classify_exec_type(p:PacketType, info:InstructionInfo|None) -> str|None:
+  """Classify which type of EXEC packet this instruction will produce."""
+  if isinstance(p, VALUINST): return "VALU"
+  if isinstance(p, (INST, INST_RDNA4)) and isinstance(p.op, (InstOp, InstOpRDNA4)):
+    op_name = p.op.name
+    if op_name == "SALU": return "SALU"
+    if "GLOBAL" in op_name or "FLAT" in op_name: return "VMEM"
+    if op_name == "SMEM": return "SMEM"  # SMEM may not produce EXEC packets
+    if op_name.startswith("VALU"): return "VALU"  # VALU_TRANS, VALU_64, etc.
+  return None
+
 def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, InstructionInfo|None]]:
   """maps SQTT packets to instructions, yields (packet, instruction_info or None)"""
   # map pcs to insts
   from tinygrad.viz.serve import amd_decode
   pc_map = amd_decode(lib, target)
   wave_pc:dict[int, int] = {}
+  # queues for matching ISSUE packets to their EXEC packets
+  pending_valu:list[InstructionInfo] = []
+  pending_salu:list[InstructionInfo] = []
+  pending_vmem:list[InstructionInfo] = []
   # only processing packets on one [CU, SIMD] unit
   def simd_select(p) -> bool: return getattr(p, "cu", 0) == 0 and getattr(p, "simd", 0) == 0
   for p in decode(data):
@@ -662,8 +677,27 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
         wave_pc[p.wave] += inst.size() + (x - 0x10000 if x & 0x8000 else x)*4
       else:
         wave_pc[p.wave] += inst.size()
-      yield (p, InstructionInfo(pc, p.wave, inst))
-    # for all other packets (VMEMEXEC, ALUEXEC, etc.), yield with None
+      info = InstructionInfo(pc, p.wave, inst)
+      # track pending instructions for EXEC correlation
+      if (exec_type := _classify_exec_type(p, info)) is not None:
+        if exec_type == "VALU": pending_valu.append(info)
+        elif exec_type == "SALU": pending_salu.append(info)
+        elif exec_type == "VMEM": pending_vmem.append(info)
+      yield (p, info)
+    # correlate EXEC packets with their corresponding instructions
+    elif isinstance(p, ALUEXEC):
+      src = p.src if isinstance(p.src, AluSrc) else AluSrc(p.src)
+      info = None
+      if src in {AluSrc.VALU, AluSrc.VALU_SALU} and pending_valu: info = pending_valu.pop(0)
+      elif src == AluSrc.SALU and pending_salu: info = pending_salu.pop(0)
+      elif src == AluSrc.VALU_SALU and pending_salu: info = pending_salu.pop(0)  # VALU_SALU can match SALU too
+      yield (p, info)
+    elif isinstance(p, VMEMEXEC):
+      src = p.src if isinstance(p.src, MemSrc) else MemSrc(p.src)
+      info = None
+      if src in {MemSrc.VMEM, MemSrc.VMEM_ALT} and pending_vmem: info = pending_vmem.pop(0)
+      yield (p, info)
+    # for all other packets, yield with None
     else: yield (p, None)
 
 # ═══════════════════════════════════════════════════════════════════════════════
