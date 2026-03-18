@@ -29,7 +29,7 @@ ICache Warmup:
   - Use WARMUP=10 iterations to discard cold data
 """
 import os
-os.environ["VIZ"] = "-2"
+os.environ["VIZ"] = os.environ.get("VIZ", "-2")
 import unittest, functools
 from extra.gemm.amd_asm_matmul import Kernel
 from tinygrad.runtime.autogen.amd.rdna3.ins import *
