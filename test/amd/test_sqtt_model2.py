@@ -5,10 +5,12 @@ from extra.gemm.amd_asm_matmul import Kernel
 from tinygrad.runtime.autogen.amd.rdna3.ins import *
 from tinygrad.uop.ops import UOp, Ops, KernelInfo
 from tinygrad import Tensor, Device
-from tinygrad.helpers import DEBUG
+from tinygrad.helpers import DEBUG, getenv
 from tinygrad.renderer.amd.sqtt import *
 
-def asm_fxn(*args:tuple[UOp, ...], k:Kernel, lx=1, gx=1, name:str="asm_fxn") -> UOp:
+def asm_fxn(*args:tuple[UOp, ...], k:Kernel, lx=None, gx=None, name:str="asm_fxn") -> UOp:
+  if lx is None: lx = getenv("LX", 1)
+  if gx is None: gx = getenv("GX", 1)
   lidx = UOp.special(lx, "lidx0")
   gidx = UOp.special(gx, "gidx0")
   sink = UOp.sink(*[t.base for t in args], lidx, gidx, arg=KernelInfo(name=name))
@@ -37,12 +39,25 @@ class TestSQTTModel(unittest.TestCase):
     k = Kernel(self.arch)
     k.emit(s_nop(0))
     k.emit(s_endpgm())
-    a = Tensor.empty(1)
-    a = a.custom_kernel(a, fxn=functools.partial(asm_fxn, k=k))[0]
+    Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
     a.realize()
     mapped = load_sqtt()
     assert len(mapped) == 2
     assert {type(p) for p,_ in mapped} == {IMMEDIATE, WAVEEND}
+
+  def test_salu(self):
+    k = Kernel(self.arch)
+    k.emit(s_add_u32(s[0], s[1], s[0]))
+    k.emit(s_endpgm())
+    Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
+    mapped = load_sqtt()
+
+  def test_valu(self):
+    k = Kernel(self.arch)
+    k.emit(v_add_f32_e32(v[0], v[1], v[0]))
+    k.emit(s_endpgm())
+    Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
+    mapped = load_sqtt()
 
 if __name__ == "__main__":
   unittest.main()
