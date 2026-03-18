@@ -1066,8 +1066,10 @@ class TestSQTTModel(unittest.TestCase):
 
 from tinygrad.uop.ops import UOp, Ops, KernelInfo
 from tinygrad.renderer import Estimates
-from tinygrad.runtime.autogen.amd.rdna3.ins import s_nop, s_endpgm, v_mov_b32_e32, s_mov_b32, s_waitcnt, global_load_b32, global_store_b32, s_load_b64, v_lshlrev_b32_e32, v_add_f32_e32
-from tinygrad.renderer.amd.dsl import s, v, NULL
+from tinygrad.runtime.autogen.amd.rdna3.ins import (s_nop, s_endpgm, v_mov_b32_e32, s_mov_b32, s_mov_b64, s_waitcnt,
+  global_load_b32, global_store_b32, s_load_b64, v_lshlrev_b32_e32, v_add_f32_e32,
+  v_readlane_b32, v_readfirstlane_b32_e32, v_writelane_b32)
+from tinygrad.renderer.amd.dsl import s, v, NULL, EXEC
 from test.amd.helpers import TARGET_TO_ARCH
 
 def make_custom_kernel(name: str, insts: list, size: int = 1) -> callable:
@@ -1404,6 +1406,101 @@ class TestSQTTRawAssembly(unittest.TestCase):
     vmem_corr = [(info, latency) for _, info, exec_type, exec_pkt, latency in correlated
                  if exec_type == 'VMEM' and exec_pkt is not None]
     self.assertEqual(len(vmem_corr), 2, f"Expected 2 VMEM with EXEC, got {len(vmem_corr)}")
+
+  def test_raw_asm_exec_zero_skipping(self):
+    """
+    CLAIM: VALU instructions with EXEC=0 are skipped and produce IMMEDIATE packets (not VALUINST).
+
+    ISA REFERENCE (Section 3.2.3 Instruction Skipping):
+    "The shader hardware may skip vector instructions when EXEC==0."
+    "VALU - skip if EXEC == 0"
+
+    OBSERVED: When EXEC=0, VALU instructions produce IMMEDIATE packets instead of VALUINST,
+    and no corresponding ALUEXEC packet is generated.
+    """
+    if self.arch != "rdna3": self.skipTest("only rdna3")
+
+    insts = [
+      v_mov_b32_e32(v[0], 42),           # VALU with EXEC=all ones -> VALUINST + ALUEXEC
+      s_mov_b64(s[2:3], EXEC),           # save EXEC -> INST(SALU) + ALUEXEC(SALU)
+      s_mov_b64(EXEC, 0),                # set EXEC=0 -> INST(SALU_SAVEEXEC) + ALUEXEC(SALU)
+      v_mov_b32_e32(v[1], 99),           # VALU with EXEC=0 -> IMMEDIATE (skipped, no ALUEXEC)
+      v_mov_b32_e32(v[2], 100),          # another skipped VALU -> IMMEDIATE
+      s_mov_b64(EXEC, s[2:3]),           # restore EXEC -> INST(SALU_SAVEEXEC) + ALUEXEC(SALU)
+      v_mov_b32_e32(v[3], 200),          # VALU with EXEC restored -> VALUINST + ALUEXEC
+      s_endpgm(),
+    ]
+
+    a = Tensor.empty(1).contiguous().realize()
+    Tensor.custom_kernel(a, fxn=make_custom_kernel("test_exec_zero", insts, size=1))[0].realize()
+    Device["AMD"].synchronize()
+
+    sqtt_events, prg_events = get_sqtt_events()
+    event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_exec_zero")
+    mapped = list(map_insts(event.blob, prg.lib, self.target))
+
+    # Count VALUINST packets - should only be 2 (first and last v_mov, not the skipped ones)
+    valuinsts = [(pkt, info) for pkt, info in mapped if isinstance(pkt, VALUINST)]
+    self.assertEqual(len(valuinsts), 2, f"Expected 2 VALUINST (skipped VALUs don't produce VALUINST), got {len(valuinsts)}")
+
+    # Count IMMEDIATE packets with v_mov instructions - should be 2 (the skipped ones)
+    skipped_vmovs = [(pkt, info) for pkt, info in mapped
+                    if isinstance(pkt, IMMEDIATE) and info and "v_mov" in str(info.inst).lower()]
+    self.assertEqual(len(skipped_vmovs), 2, f"Expected 2 skipped v_mov as IMMEDIATE, got {len(skipped_vmovs)}")
+
+    # Count ALUEXEC packets - 2 VALU + 3 SALU = 5 total
+    aluexecs = [(pkt, info) for pkt, info in mapped if isinstance(pkt, ALUEXEC)]
+    self.assertEqual(len(aluexecs), 5, f"Expected 5 ALUEXEC (2 VALU + 3 SALU), got {len(aluexecs)}")
+
+    # Verify all ALUEXEC are correlated (no None info)
+    uncorrelated = [pkt for pkt, info in aluexecs if info is None]
+    self.assertEqual(len(uncorrelated), 0, f"All ALUEXEC should be correlated, got {len(uncorrelated)} uncorrelated")
+
+  def test_raw_asm_readlane_writelane(self):
+    """
+    CLAIM: v_readlane, v_readfirstlane, v_writelane produce VALUINST + ALUEXEC despite writing to SGPRs.
+
+    ISA REFERENCE (Section 3.2.3 Instruction Skipping):
+    "These are not skipped regardless of EXEC mask value, and are issued only once in wave64:
+     V_NOP, V_PIPEFLUSH, V_READLANE, V_READFIRSTLANE, V_WRITELANE"
+
+    OBSERVED: These lane instructions produce VALUINST packets and corresponding ALUEXEC(VALU) packets.
+    """
+    if self.arch != "rdna3": self.skipTest("only rdna3")
+
+    insts = [
+      v_mov_b32_e32(v[0], 42),                 # regular VALU
+      v_readlane_b32(s[0], v[0], 0),           # readlane: VGPR -> SGPR
+      v_readfirstlane_b32_e32(s[1], v[0]),     # readfirstlane: VGPR -> SGPR
+      v_writelane_b32(v[1], s[0], 0),          # writelane: SGPR -> one lane of VGPR
+      v_mov_b32_e32(v[2], 99),                 # regular VALU
+      s_endpgm(),
+    ]
+
+    a = Tensor.empty(1).contiguous().realize()
+    Tensor.custom_kernel(a, fxn=make_custom_kernel("test_lane_ops", insts, size=1))[0].realize()
+    Device["AMD"].synchronize()
+
+    sqtt_events, prg_events = get_sqtt_events()
+    event, prg = get_kernel_sqtt(sqtt_events, prg_events, "test_lane_ops")
+    mapped = list(map_insts(event.blob, prg.lib, self.target))
+
+    # All 5 V_ instructions should produce VALUINST
+    valuinsts = [(pkt, info) for pkt, info in mapped if isinstance(pkt, VALUINST)]
+    self.assertEqual(len(valuinsts), 5, f"Expected 5 VALUINST, got {len(valuinsts)}")
+
+    # All 5 should have corresponding ALUEXEC(VALU)
+    aluexecs = [(pkt, info) for pkt, info in mapped if isinstance(pkt, ALUEXEC)]
+    valu_execs = [(pkt, info) for pkt, info in aluexecs if pkt.src == AluSrc.VALU]
+    self.assertEqual(len(valu_execs), 5, f"Expected 5 ALUEXEC(VALU), got {len(valu_execs)}")
+
+    # Verify lane ops are correctly mapped - check both VALUINST and ALUEXEC have the lane instructions
+    lane_valuinsts = [(pkt, info) for pkt, info in mapped
+                      if isinstance(pkt, VALUINST) and info and "lane" in str(info.inst).lower()]
+    lane_aluexecs = [(pkt, info) for pkt, info in mapped
+                     if isinstance(pkt, ALUEXEC) and info and "lane" in str(info.inst).lower()]
+    self.assertEqual(len(lane_valuinsts), 3, f"Expected 3 lane VALUINST, got {len(lane_valuinsts)}")
+    self.assertEqual(len(lane_aluexecs), 3, f"Expected 3 lane ALUEXEC (correlated), got {len(lane_aluexecs)}")
 
 
 if __name__ == "__main__":

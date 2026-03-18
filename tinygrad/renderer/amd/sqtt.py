@@ -621,14 +621,23 @@ class InstructionInfo:
   inst: Inst
 
 def _classify_exec_type(p:PacketType, info:InstructionInfo|None) -> str|None:
-  """Classify which type of EXEC packet this instruction will produce."""
+  """Classify which type of EXEC packet this instruction will produce.
+
+  Note: VALU instructions skipped due to EXEC=0 produce IMMEDIATE packets (not VALUINST),
+  so they won't be added to pending queues and won't produce ALUEXEC packets.
+  """
   if isinstance(p, VALUINST): return "VALU"
   if isinstance(p, (INST, INST_RDNA4)) and isinstance(p.op, (InstOp, InstOpRDNA4)):
     op_name = p.op.name
-    if op_name == "SALU": return "SALU"
+    # SALU variants: SALU, SALU_SAVEEXEC, SALU_FLOAT3, SALU_2, SALU_5, etc.
+    if "SALU" in op_name: return "SALU"
+    # VMEM: GLOBAL_*, FLAT_* -> VMEMEXEC with VMEM source
     if "GLOBAL" in op_name or "FLAT" in op_name: return "VMEM"
+    # LDS: LDS_* -> VMEMEXEC with LDS source
+    if "LDS" in op_name: return "LDS"
     if op_name == "SMEM": return "SMEM"  # SMEM may not produce EXEC packets
-    if op_name.startswith("VALU"): return "VALU"  # VALU_TRANS, VALU_64, etc.
+    # VALU variants via INST packet: VALU_TRANS, VALU_64, VALU_CMPX, VALU_B2, etc.
+    if "VALU" in op_name: return "VALU"
   return None
 
 def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, InstructionInfo|None]]:
@@ -641,6 +650,7 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
   pending_valu:list[InstructionInfo] = []
   pending_salu:list[InstructionInfo] = []
   pending_vmem:list[InstructionInfo] = []
+  pending_lds:list[InstructionInfo] = []
   # only processing packets on one [CU, SIMD] unit
   def simd_select(p) -> bool: return getattr(p, "cu", 0) == 0 and getattr(p, "simd", 0) == 0
   for p in decode(data):
@@ -683,6 +693,7 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
         if exec_type == "VALU": pending_valu.append(info)
         elif exec_type == "SALU": pending_salu.append(info)
         elif exec_type == "VMEM": pending_vmem.append(info)
+        elif exec_type == "LDS": pending_lds.append(info)
       yield (p, info)
     # correlate EXEC packets with their corresponding instructions
     elif isinstance(p, ALUEXEC):
@@ -696,6 +707,7 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
       src = p.src if isinstance(p.src, MemSrc) else MemSrc(p.src)
       info = None
       if src in {MemSrc.VMEM, MemSrc.VMEM_ALT} and pending_vmem: info = pending_vmem.pop(0)
+      elif src in {MemSrc.LDS, MemSrc.LDS_ALT} and pending_lds: info = pending_lds.pop(0)
       yield (p, info)
     # for all other packets, yield with None
     else: yield (p, None)
