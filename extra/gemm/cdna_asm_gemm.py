@@ -2634,7 +2634,7 @@ atexit.register(_asm_gemm_report)
 
 def can_use_asm_gemm(a:Tensor, b:Tensor) -> bool:
   if a.dtype != b.dtype: return todo(f"dtypes must match {a.dtype} != {b.dtype}")
-  if a.dtype not in {dtypes.bfloat16, dtypes.float16}: return todo(f"only bfloat16/float16, got {a.dtype}")
+  if a.dtype not in {dtypes.bfloat16, dtypes.float16, dtypes.fp8e4m3, dtypes.fp8e5m2}: return todo(f"only bfloat16/float16/fp8, got {a.dtype}")
   batch, M, K = (1, *a.shape) if a.ndim == 2 else a.shape
   N = b.shape[1]
   if isinstance(a.device, tuple):
@@ -2713,6 +2713,14 @@ def asm_gemm(a:Tensor, b:Tensor) -> Tensor:
 
   renderer = Device[a.device[0] if is_multi else a.device].renderer
   dname, arch = renderer.device, getattr(renderer, "arch", "")
+  # TODO: multi
+  if arch.startswith("gfx950") and a.dtype in {dtypes.fp8e4m3, dtypes.fp8e5m2} and not is_multi:
+    from extra.thunder.amd.gemm import hk_fp8_gemm
+    ret = hk_fp8_gemm(a, b)
+    if ret is not None:
+      out = ret.squeeze(0) if squeeze else ret
+      if unfold_batch: out = out.reshape(orig_batch, -1, out.shape[-1])
+      return out
   if arch.startswith("gfx950") and getenv("USE_ASM", 1):
     out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_asm_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
   else:
