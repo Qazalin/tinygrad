@@ -69,21 +69,19 @@ class TestInstructionTables(unittest.TestCase):
     k = Kernel(self.arch)
     ITERATIONS = 20
 
-    # Loop counter in s10
     k.emit(s_mov_b32(s[10], ITERATIONS))
 
-    # Loop body: v_add_f32, then decrement and branch
+    k.label('LOOP')
     k.emit(v_add_f32_e32(v[0], v[0], v[1]))
     k.emit(s_sub_u32(s[10], s[10], 1))
-    k.emit(s_cmpk_lg_u32(s[10], 0))  # SCC = (s[10] != 0)
-    k.emit(s_cbranch_scc1(-4))  # branch back 4 instructions if SCC=1 (counter != 0)
+    k.emit(s_cmpk_lg_u32(s[10], 0))
+    k.emit(s_cbranch_scc1(), target='LOOP')
 
     k.emit(s_endpgm())
 
     Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
     mapped = load_sqtt()
 
-    # Count VALUINST packets - should be ITERATIONS
     valuinsts = [p._time for p, _ in mapped if isinstance(p, VALUINST)]
     print(f"\nLoop iterations detected: {len(valuinsts)} (expected {ITERATIONS})")
 
@@ -96,10 +94,13 @@ class TestInstructionTables(unittest.TestCase):
     WARMUP = 10
 
     k.emit(s_mov_b32(s[10], ITERATIONS))
+
+    k.label('LOOP')
     k.emit(v_add_f32_e32(v[0], v[0], v[1]))
     k.emit(s_sub_u32(s[10], s[10], 1))
-    k.emit(s_cmpk_lg_u32(s[10], 0))  # SCC = (s[10] != 0)
-    k.emit(s_cbranch_scc1(-4))
+    k.emit(s_cmpk_lg_u32(s[10], 0))
+    k.emit(s_cbranch_scc1(), target='LOOP')
+
     k.emit(s_endpgm())
 
     Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
@@ -130,12 +131,14 @@ class TestInstructionTables(unittest.TestCase):
     ITERATIONS = 50
     WARMUP = 10
 
-    # Use s_nop as the "marker" we can count - it does nothing but is traceable
     k.emit(s_mov_b32(s[10], ITERATIONS))
+
+    k.label('LOOP')
     k.emit(s_nop(0))  # marker instruction
     k.emit(s_sub_u32(s[10], s[10], 1))
     k.emit(s_cmpk_lg_u32(s[10], 0))
-    k.emit(s_cbranch_scc1(-4))
+    k.emit(s_cbranch_scc1(), target='LOOP')
+
     k.emit(s_endpgm())
 
     Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
@@ -168,13 +171,15 @@ class TestInstructionTables(unittest.TestCase):
 
     k.emit(s_mov_b32(s[10], ITERATIONS))
 
+    k.label('LOOP')
     # 4 dependent v_add_f32 instructions (all use v0 as both src and dst)
     for _ in range(CHAIN_LENGTH):
       k.emit(v_add_f32_e32(v[0], v[0], v[1]))
 
     k.emit(s_sub_u32(s[10], s[10], 1))
     k.emit(s_cmpk_lg_u32(s[10], 0))
-    k.emit(s_cbranch_scc1(-CHAIN_LENGTH - 3))
+    k.emit(s_cbranch_scc1(), target='LOOP')
+
     k.emit(s_endpgm())
 
     Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
@@ -221,6 +226,7 @@ class TestInstructionTables(unittest.TestCase):
 
     k.emit(s_mov_b32(s[10], ITERATIONS))
 
+    k.label('LOOP')
     # 4 independent v_add_f32 using different destination registers (different banks)
     # v0 = v8 + v16 (bank0 = bank0 + bank0)
     # v1 = v9 + v17 (bank1 = bank1 + bank1)
@@ -233,7 +239,8 @@ class TestInstructionTables(unittest.TestCase):
 
     k.emit(s_sub_u32(s[10], s[10], 1))
     k.emit(s_cmpk_lg_u32(s[10], 0))
-    k.emit(s_cbranch_scc1(-NUM_INDEP - 3))
+    k.emit(s_cbranch_scc1(), target='LOOP')
+
     k.emit(s_endpgm())
 
     Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
@@ -269,10 +276,13 @@ class TestInstructionTables(unittest.TestCase):
     WARMUP = 10
 
     k.emit(s_mov_b32(s[10], ITERATIONS))
+
+    k.label('LOOP')
     k.emit(v_add_f32_e32(v[0], v[0], v[1]))
     k.emit(s_sub_u32(s[10], s[10], 1))
     k.emit(s_cmpk_lg_u32(s[10], 0))
-    k.emit(s_cbranch_scc1(-4))
+    k.emit(s_cbranch_scc1(), target='LOOP')
+
     k.emit(s_endpgm())
 
     Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
@@ -314,10 +324,13 @@ class TestInstructionTables(unittest.TestCase):
     WARMUP = 10
 
     k.emit(s_mov_b32(s[10], ITERATIONS))
+
+    k.label('LOOP')
     k.emit(s_add_u32(s[0], s[0], s[1]))  # SALU instruction we want to measure
     k.emit(s_sub_u32(s[10], s[10], 1))
     k.emit(s_cmpk_lg_u32(s[10], 0))
-    k.emit(s_cbranch_scc1(-4))
+    k.emit(s_cbranch_scc1(), target='LOOP')
+
     k.emit(s_endpgm())
 
     Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
@@ -355,10 +368,13 @@ class TestInstructionTables(unittest.TestCase):
     WARMUP = 10
 
     k.emit(s_mov_b32(s[10], ITERATIONS))
+
+    k.label('LOOP')
     k.emit(v_rcp_f32_e32(v[0], v[1]))  # TRANS instruction
     k.emit(s_sub_u32(s[10], s[10], 1))
     k.emit(s_cmpk_lg_u32(s[10], 0))
-    k.emit(s_cbranch_scc1(-4))
+    k.emit(s_cbranch_scc1(), target='LOOP')
+
     k.emit(s_endpgm())
 
     Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
@@ -398,12 +414,9 @@ class TestInstructionTables(unittest.TestCase):
     ITERATIONS = 50
     WARMUP = 10
 
-    # Simple test: measure gap with VALU_DEP_1 (immediate dependency)
-    # v0 = v0 + v1
-    # s_delay_alu(VALU_DEP_1)  // wait for v0 to be ready
-    # v2 = v0 + v3             // uses v0
     k.emit(s_mov_b32(s[10], ITERATIONS))
 
+    k.label('LOOP')
     # With VALU_DEP_1: wait for immediate previous VALU
     k.emit(v_add_f32_e32(v[0], v[0], v[1]))    # producer of v0
     k.emit(s_delay_alu(0x01))                   # VALU_DEP_1
@@ -411,7 +424,8 @@ class TestInstructionTables(unittest.TestCase):
 
     k.emit(s_sub_u32(s[10], s[10], 1))
     k.emit(s_cmpk_lg_u32(s[10], 0))
-    k.emit(s_cbranch_scc1(-5))
+    k.emit(s_cbranch_scc1(), target='LOOP')
+
     k.emit(s_endpgm())
 
     Tensor.empty(1).custom_kernel(fxn=functools.partial(asm_fxn, k=k))[0].realize()
