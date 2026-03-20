@@ -328,7 +328,7 @@ class Compiled:
 
 # TODO: move this to each Device
 # this only tracks if the dtype is natively supported, it may be supported in the frontend using decomps
-def is_dtype_supported(dtype:DType, device:str|None=None) -> bool:
+def is_dtype_supported(dtype:DType, device:str|None=None, arch:str|None=None) -> bool:
   if device is None: device = Device.DEFAULT
   if dtype == dtypes.bfloat16:
     if device == "METAL": return not CI or BENCHMARKS
@@ -340,8 +340,9 @@ def is_dtype_supported(dtype:DType, device:str|None=None) -> bool:
     if device == "CUDA": return (not CI or BENCHMARKS) and not CUDA_PTX
     if device == "NV": return (not CI or BENCHMARKS) and not NV_PTX and not NV_NAK
     if device == "AMD":
-      # TODO: this will be fixed once arch is in the device string
-      with Context(ALLOW_DEVICE_USAGE=1): return (not CI or BENCHMARKS) and "gfx950" in getattr(Device[device].renderer, "arch", "")
+      # TODO: open the device to get arch of device, will be fixed after triple is in the device string
+      if arch is None: arch = getattr(Device[device].renderer, "arch", "")
+      return (not CI or BENCHMARKS) and arch == "gfx950"
     return device in {"PYTHON", "NULL"}
   if dtype in dtypes.fp8_fnuz: return device in {"PYTHON", "NULL"}
   if device == "WEBGPU": return dtype in [dtypes.bool, dtypes.char, dtypes.uchar, dtypes.short,
