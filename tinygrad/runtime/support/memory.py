@@ -231,7 +231,16 @@ class MemoryManager:
     assert cls.va_allocator is not None, "must be set"
     return cls.va_allocator.alloc(size, max((1 << (size.bit_length() - 1)), align))
 
+  @functools.cache  # pylint: disable=method-cache-max-size-none
+  def identity_va(self, uncached:bool) -> int:
+    self.map_range(va:=self.alloc_vaddr(self.vram_size, self.vram_size), self.vram_size, [(0, self.vram_size)], AddrSpace.PHYS, uncached=uncached)
+    return va
+
   def valloc(self, size:int, align=0x1000, uncached=False, contiguous=False) -> VirtMapping:
+    if not getenv("GMMU", 1):
+      paddr = self.palloc(size:=round_up(size, 0x1000), align, zero=False)
+      return VirtMapping(self.identity_va(uncached) + paddr, size, [(paddr, size)], aspace=AddrSpace.PHYS, uncached=uncached)
+
     # Alloc physical memory and map it to the virtual address
     va = self.alloc_vaddr(size:=round_up(size, 0x1000), align)
 
@@ -247,18 +256,20 @@ class MemoryManager:
           # Move to a smaller size and try again.
           nxt_range += 1
           if nxt_range == len(self.palloc_ranges):
-            for paddr, _ in paddrs: self.pa_allocator.free(paddr)
-            raise MemoryError(f"Failed to allocate memory. (total allocation size={size:#x}, current try={self.palloc_ranges[nxt_range-1]})")
+            for paddr, _ in paddrs: self.pfree(paddr)
+            raise MemoryError(f"Failed to allocate memory (OOM). Request size={size:#x} ({self.palloc_ranges[nxt_range-1]})")
           continue
         rem_size -= self.palloc_ranges[nxt_range][0]
 
     return self.map_range(va, size, paddrs, aspace=AddrSpace.PHYS, uncached=uncached)
 
   def vfree(self, vm:VirtMapping):
+    if not getenv("GMMU", 1): return self.pfree(vm.paddrs[0][0])
+
     assert self.va_allocator is not None, "must be set"
     self.unmap_range(vm.va_addr, vm.size)
     self.va_allocator.free(vm.va_addr)
-    for paddr, _ in vm.paddrs: self.pa_allocator.free(paddr)
+    for paddr, _ in vm.paddrs: self.pfree(paddr)
 
   def palloc(self, size:int, align:int=0x1000, zero=True, boot=False, ptable=False) -> int:
     assert self.dev.is_booting == boot, "During booting, only boot memory can be allocated"

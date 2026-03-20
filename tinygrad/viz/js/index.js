@@ -193,7 +193,7 @@ function formatCycles(cycles) {
 const formatUnit = (d, unit="") => d3.format(".3~s")(d)+unit;
 
 const WAVE_COLORS = {VALU:"#ffffc0", SALU:"#cef263", LOAD:"#ffc0c0", STORE:"#4fa3cc", IMMEDIATE:"#f3b44a", BARRIER:"#d00000", JUMP:"#ffb703",
-  JUMP_NO:"#fb8500", MESSAGE:"#90dbf4", VMEM:"#b2b7c9", LDS:"#9fb4a6"};
+  JUMP_NO:"#fb8500", MESSAGE:"#90dbf4", VMEM:"#b2b7c9", LDS:"#9fb4a6", WAVERDY:"#1a2a2a"};
 const waveColor = (op) => {
   const cat = op.includes("VALU") || op === "VINTERP" ? "VALU" : op.includes("SALU") ? "SALU" : op.includes("VMEM") ? "VMEM"
             : op.includes("LOAD") || op === "SMEM" ? "LOAD" : op.includes("STORE") ? "STORE" : op;
@@ -296,11 +296,16 @@ function setFocus(key) {
   }
   const { eventType, e } = selectShape(key);
   if (metadata.querySelector(".info") == null) d3.select(metadata).html("").append("div").classed("info", true);
-  const html = d3.select(".info").html("");
+    const html = d3.select(".info").html("");
   if (eventType === EventTypes.EXEC) {
     const [n, _, ...rest] = e.arg.tooltipText.split("\n");
     const tableData = [["Name", colored(e.arg.label)], ["Duration", formatTime(e.width)]];
-    data.instSt != null ? tableData.push(["Cycle", e.x-data.instSt], ["Time", timeAtCycle(e.x)], ["SE Time", formatTime(e.x)]) : tableData.push(["Start Time", formatTime(e.x)]);
+    if (data.instSt != null) {
+      const p = d3.create("p");
+      p.append("span").text(timeAtCycle(e.x));
+      p.append("span").style("margin-left", "8px").style("color", "#f0f0f566").text(formatTime(e.x));
+      tableData.push(["Cycle", formatTime(e.x-data.instSt)], ["Time", p.node()]);
+    } else tableData.push(["Start Time", formatTime(e.x)]);
     html.append(() => tabulate(tableData));
     let group = html.append("div").classed("args", true);
     for (const r of rest) group.append("p").text(r);
