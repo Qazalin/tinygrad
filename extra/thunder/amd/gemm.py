@@ -61,7 +61,7 @@ def hk_fp8_gemm(a:Tensor, b:Tensor) -> Tensor:
   b_t = b.T.contiguous()
   a_flat = a.reshape(BM, K) if batch > 1 else a.squeeze(0)
 
-  out = Tensor.empty(BM, N, dtype=dtypes.bfloat16, device=a.device)
+  out = Tensor.invalid(BM, N, dtype=dtypes.bfloat16, device=a.device)
   out = Tensor.custom_kernel(out, a_flat, b_t, fxn=functools.partial(custom_hk_fp8_gemm, device=device, arch=arch, M=BM, N=N, K=K, four_wave=HK_4WAVE))[0]
   if batch > 1: out = out.reshape(batch, M, N)
   if squeeze: out = out.squeeze(0)
