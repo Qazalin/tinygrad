@@ -2715,12 +2715,28 @@ def asm_gemm(a:Tensor, b:Tensor) -> Tensor:
 
   renderer = Device[a.device[0] if is_multi else a.device].renderer
   dname, arch = renderer.device, getattr(renderer, "arch", "")
-  # TODO: multi
-  if arch.startswith("gfx950") and a.dtype in {dtypes.fp8e4m3, dtypes.fp8e5m2} and not is_multi:
-    from extra.thunder.amd.gemm import hk_fp8_gemm
-    ret = hk_fp8_gemm(a, b)
-    if ret is not None:
-      out = ret.squeeze(0) if squeeze else ret
+  if arch.startswith("gfx950") and a.dtype in {dtypes.fp8e4m3, dtypes.fp8e5m2}:
+    from extra.thunder.amd.gemm import can_use_hk_gemm, custom_hk_fp8_gemm, HK_4WAVE
+    # fold batch into M for the HK kernel
+    BM = batch * M
+    if can_use_hk_gemm(BM, N, K):
+      b_t = b.T.contiguous()
+      a_flat = a.reshape(BM, K) if batch > 1 else a.squeeze(0)
+      out_dtype = dtypes.bfloat16
+      if is_multi:
+        if n_sharded:
+          out = Tensor(Tensor.empty(BM, N//len(a.device), dtype=out_dtype, device=a.device).uop.multi(1), device=a.device)
+        elif m_sharded:
+          out = Tensor(Tensor.empty(BM, N, dtype=out_dtype, device=a.device).uop.multi(0), device=a.device)
+        else:
+          out = Tensor(Tensor.empty(BM//len(a.device) if a.uop.axis==0 else BM, N, dtype=out_dtype, device=a.device).uop.multi(0), device=a.device)
+      else:
+        out = Tensor.empty(BM, N, dtype=out_dtype, device=a.device)
+      out = Tensor.custom_kernel(out, a_flat, b_t, fxn=functools.partial(custom_hk_fp8_gemm, device=dname, arch=arch, M=BM, N=N, K=K, four_wave=HK_4WAVE))[0]
+      if k_sharded: out = out.sum(0)
+      # unfold back to (batch, M, N) if needed
+      if batch > 1: out = out.reshape(batch, M, N)
+      out = out.squeeze(0) if squeeze else out
       if unfold_batch: out = out.reshape(orig_batch, -1, out.shape[-1])
       return out
   if arch.startswith("gfx950") and getenv("USE_ASM", 1):

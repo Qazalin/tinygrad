@@ -44,22 +44,25 @@ def hk_fp8_gemm(a:Tensor, b:Tensor) -> Tensor:
   squeeze = a.ndim == 2
   if squeeze: a = a.unsqueeze(0)
   batch, M, K = a.shape
-  assert batch == 1, f"only batch=1 supported, got {batch}"
   # b is (K, N) from tinygrad's dot convention
   K2, N = b.shape[-2], b.shape[-1]
   assert K == K2, f"K mismatch: {K} vs {K2}"
 
+  # fold batch into M
+  BM = batch * M
   device = a.device[0] if isinstance(a.device, tuple) else a.device
   arch = Device[device].renderer.arch
 
-  if not can_use_hk_gemm(M, N, K):
-    if DEBUG >= 1: print(f"hk_fp8_gemm: shape ({M},{N},{K}) not supported, falling back")
+  if not can_use_hk_gemm(BM, N, K):
+    if DEBUG >= 1: print(f"hk_fp8_gemm: shape ({BM},{N},{K}) not supported, falling back")
     return None
 
   # HK kernel expects B as (N, K) — transpose and make contiguous
   b_t = b.T.contiguous()
+  a_flat = a.reshape(BM, K) if batch > 1 else a.squeeze(0)
 
-  out = Tensor.empty(1, M, N, dtype=dtypes.bfloat16, device=a.device)
-  out = Tensor.custom_kernel(out, a, b_t, fxn=functools.partial(custom_hk_fp8_gemm, device=device, arch=arch, M=M, N=N, K=K, four_wave=HK_4WAVE))[0]
+  out = Tensor.empty(BM, N, dtype=dtypes.bfloat16, device=a.device)
+  out = Tensor.custom_kernel(out, a_flat, b_t, fxn=functools.partial(custom_hk_fp8_gemm, device=device, arch=arch, M=BM, N=N, K=K, four_wave=HK_4WAVE))[0]
+  if batch > 1: out = out.reshape(batch, M, N)
   if squeeze: out = out.squeeze(0)
   return out
