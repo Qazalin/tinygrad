@@ -373,9 +373,17 @@ def sqtt_timeline(data:bytes, lib:bytes, target:str) -> list[ProfileEvent]:
       exec_pending.setdefault(exec_type, []).append(f"{row}-{idx}")
     if isinstance(p, ALUEXEC):
       dispatch:list[str] = []
-      if p.src is AluSrc.VALU_SALU: dispatch += [exec_pending["SALU"].pop(0), exec_pending["VALU"].pop(0)]
-      elif p.src is AluSrc.VALU: dispatch += [exec_pending["VALU"].pop(0)]
-      elif p.src is AluSrc.SALU: dispatch += [exec_pending["SALU"].pop(0)]
+      if p.src is AluSrc.VALU_SALU:
+        if exec_pending["VALU"]:
+          dispatch += [exec_pending["VALU"].pop(0)]
+        if exec_pending["SALU"]:
+          dispatch += [exec_pending["SALU"].pop(0)]
+      elif p.src is AluSrc.VALU:
+        if exec_pending["VALU"]:
+          dispatch += [exec_pending["VALU"].pop(0)]
+      elif p.src is AluSrc.SALU:
+        if exec_pending["SALU"]:
+          dispatch += [exec_pending["SALU"].pop(0)]
       assert isinstance(e.name, TracingKey), f"ALUEXEC op key was {e.name}"
       e.name = TracingKey(e.name.display_name, ret=f"LINK:{','.join(dispatch)}")
     # TODO: add vmem
