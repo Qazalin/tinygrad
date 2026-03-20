@@ -97,5 +97,30 @@ class TestHKFP8Gemm(unittest.TestCase):
   def test_batch_fold_8(self): verify_asm_gemm(8, 1024, 4096, 4096)
   def test_batch_fold_16(self): verify_asm_gemm(16, 512, 4096, 4096)
 
+  # real training shape that caused fault
+  def test_training_shape_m65536_n6144_k4096(self): verify_asm_gemm(8, 65536, 6144, 4096, gpus=8)
+
+  # sharding tests (require multiple GPUs)
+  @needs_second_gpu
+  def test_gemm_k_sharded(self): verify_asm_gemm_k_sharded(256, 256, 512, gpus=2)
+  @needs_second_gpu
+  def test_gemm_m_sharded(self): verify_asm_gemm_m_sharded(512, 256, 256, gpus=2)
+  @needs_second_gpu
+  def test_gemm_n_sharded(self): verify_asm_gemm_n_sharded(1, 256, 512, 256, gpus=2)
+  @needs_second_gpu
+  def test_gemm_n_sharded_2d(self): verify_asm_gemm_n_sharded_2d(256, 512, 256, gpus=2)
+  @needs_second_gpu
+  def test_gemm_k_sharded_3d(self): verify_asm_gemm_k_sharded_3d(1, 256, 256, 512, gpus=2)
+
+  # larger sharding tests
+  @needs_second_gpu
+  def test_k_sharded_1(self): verify_asm_gemm_k_sharded(4096, 4096, 2048, gpus=2)
+  @needs_second_gpu
+  def test_k_sharded_2(self): verify_asm_gemm_k_sharded(4096, 4096, 2048, gpus=2)
+  @needs_second_gpu
+  def test_m_sharded_1(self): verify_asm_gemm_m_sharded(2048, 4096, 4096, gpus=2)
+  @needs_second_gpu
+  def test_n_sharded_2d_1(self): verify_asm_gemm_n_sharded_2d(4096, 2048, 4096, gpus=2)
+
 if __name__ == "__main__":
   unittest.main()
