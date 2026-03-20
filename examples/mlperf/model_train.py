@@ -1348,12 +1348,12 @@ def train_llama3():
   model = FlatTransformer(**model_params, max_context=SEQLEN)
 
   params = get_parameters(model)
-  # weights are all bfloat16 for now
-  assert params and all(p.dtype == dtypes.bfloat16 for p in params)
+  # weights are bfloat16 or fp8 (when FP8=1)
+  assert params and all(p.dtype in {dtypes.bfloat16, dtypes.fp8e4m3} for p in params)
 
   if getenv("FAKEDATA"):
     for v in get_parameters(model):
-      v = v.assign(Tensor.empty(v.shape))
+      v = v.assign(Tensor.empty(v.shape, dtype=v.dtype))
 
   is_dp = (DP := getenv("DP", 1)) > 1
   is_mp = (MP := getenv("MP", 1)) > 1
