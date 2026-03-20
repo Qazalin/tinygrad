@@ -2732,20 +2732,21 @@ def asm_gemm(a:Tensor, b:Tensor) -> Tensor:
           out = Tensor(Tensor.invalid(BM//len(a.device) if a.uop.axis==0 else BM, N, dtype=out_dtype, device=a.device).uop.multi(0), device=a.device)
       else:
         out = Tensor.invalid(BM, N, dtype=out_dtype, device=a.device)
-      # backward: b_t is (N,K), so grad_a = g @ b_t, grad_b_t = a.T @ g
+      # backward: kernel args are (out, a_flat, b_t) where b_t is (N,K)
+      # grad_a = g @ b_t => (BM,N) @ (N,K) = (BM,K), grad_b_t = g.T @ a_flat => (N,BM) @ (BM,K) = (N,K)
       def _hk_gemm_bw(gradient, kernel):
         out, a_f, b_tr = kernel.src[1:]
         a_t, b_tt, g_t = Tensor(a_f, device=a_f.device), Tensor(b_tr, device=b_tr.device), Tensor(gradient, device=gradient.device)
         g_t = g_t[:a_f.shape[0]]
-        grad_a = (g_t.cast(b_tr.dtype) @ b_tt).cast(a_f.dtype).uop  # (BM,N) @ (N,K) = (BM,K), cast to a's dtype
-        grad_b = (a_t.T @ g_t.cast(a_f.dtype)).cast(b_tr.dtype).uop  # (K,BM) @ (BM,N) = (K,N), cast to b's dtype
+        grad_a = (g_t.float() @ b_tt.float()).cast(a_f.dtype).uop  # (BM,N) @ (N,K) = (BM,K), cast to match a
+        grad_b = (g_t.float().T @ a_t.float()).cast(b_tr.dtype).uop  # (N,BM) @ (BM,K) = (N,K), cast to match b_t
         return (None, grad_a, grad_b)
       out = Tensor.custom_kernel(out, a_flat, b_t, fxn=functools.partial(custom_hk_fp8_gemm, device=dname, arch=arch, M=BM, N=N, K=K, four_wave=HK_4WAVE),
                                grad_fxn=_hk_gemm_bw)[0]
       out = out.cast(a.dtype)  # match input dtype (fp8) — matmul() applies scale after
       if k_sharded: out = out.sum(0)
-      # unfold back to (batch, M, N) if needed
-      if batch > 1: out = out.reshape(batch, M, N)
+      # unfold back to original shape
+      if not squeeze: out = out.reshape(batch, M, N)
       out = out.squeeze(0) if squeeze else out
       if unfold_batch: out = out.reshape(orig_batch, -1, out.shape[-1])
       return out
