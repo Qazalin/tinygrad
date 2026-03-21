@@ -233,14 +233,13 @@ const drawLine = (ctx, x, y, opts) => {
   ctx.stroke();
 }
 
-const drawArrow = (ctx, from, to, color) => {
-  if (from == null || to == null) return; // TODO: handle out of range
-  // ai code, mostly correct
-  const fromLeft = from.x0;
-  const fromRight = from.x1;
+const drawLink = (ctx, from, to, color, canvasWidth) => {
+  const clamp = (x) => Math.max(0, Math.min(canvasWidth, x));
+  const fromLeft = clamp(from.x0);
+  const fromRight = clamp(from.x1);
   const fromY = (from.y0+from.y1)/2;
-  const toLeft = to.x0;
-  const toRight = to.x1;
+  const toLeft = clamp(to.x0);
+  const toRight = clamp(to.x1);
   const toY = (to.y0+to.y1)/2;
   const startX = fromRight <= toLeft ? fromRight : fromLeft;
   const endX = fromRight <= toLeft ? toLeft : toRight;
@@ -252,13 +251,6 @@ const drawArrow = (ctx, from, to, color) => {
   ctx.bezierCurveTo(startX+bend*dir, fromY, endX-bend*dir, toY, endX, toY);
   ctx.strokeStyle = color;
   ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(endX, toY);
-  ctx.lineTo(endX-6*dir, toY-4);
-  ctx.lineTo(endX-6*dir, toY+4);
-  ctx.closePath();
-  ctx.fillStyle = color;
-  ctx.fill();
 }
 
 function tabulate(rows) {
@@ -649,16 +641,22 @@ async function renderProfiler(path, opts) {
           // walk the path back and fill the complete shape
           else { for (let i=x.length-1; i>=0; i--) ctx.lineTo(x[i], offsetY+e.y0[i]); ctx.closePath(); ctx.fillStyle = e.fillColor; ctx.fill(); }
         } else { // contiguous rect
-          if (e.x>et || e.x+e.width<st) continue;
           const x = xscale(e.x);
           const y = offsetY+e.y;
           const width = xscale(e.x+e.width)-x;
+          // only compute bounds for shapes involved in arrow pairs
+          for (const [a, b] of arrowPairs) {
+            if (a === e.arg.key || b === e.arg.key) {
+              shapeBounds.set(e.arg.key, { x0:x, x1:x+width, y0:y, y1:y+e.height });
+              break;
+            }
+          }
+          if (e.x>et || e.x+e.width<st) continue;
           ctx.beginPath();
           ctx.rect(x, y, width, e.height);
           visible.push({ y0:y, y1:y+e.height, x0:x, x1:x+width, arg:e.arg });
           ctx.fillStyle = e.fillColor; ctx.fill();
           addBorder?.(width);
-          shapeBounds.set(e.arg.key, { x0:x, x1:x+width, y0:y, y1:y+e.height });
           // add label
           drawText(ctx, e.label, x+2, y+e.height/2, width);
         }
@@ -672,7 +670,10 @@ async function renderProfiler(path, opts) {
       }
     }
     // draw arrows
-    for (const [a, b] of arrowPairs) drawArrow(ctx, shapeBounds.get(a), shapeBounds.get(b), "#c888b0");
+    for (const [a, b] of arrowPairs) {
+      const from = shapeBounds.get(a), to = shapeBounds.get(b);
+      if (from != null && to != null) drawLink(ctx, from, to, "#c888b0", canvasWidth);
+    }
     // draw axes
     ctx.translate(0, baseOffset);
     const y = secondaryTick != null ? tickSize+padding : 0;
