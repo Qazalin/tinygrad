@@ -2685,15 +2685,19 @@ def custom_gemm_bw(gradient:UOp, kernel:UOp, b_transposed:bool=False):
   a_t, b_t, g_t = Tensor(a, device=a.device), Tensor(b, device=a.device), Tensor(gradient, device=a.device)
   # TODO: this needs to be cleaned up and done properly, the batch dim of grad and a multi need to align
   g_t = g_t[:a.shape[0]]
+  # FP8 matmul accumulates in float32 and outputs bfloat16, but we need to cast gradients
+  # to match the dtype of what they're gradients of (a.dtype for grad_a, b.dtype for grad_b)
+  is_fp8 = a.dtype in {dtypes.fp8e4m3, dtypes.fp8e5m2}
+  grad_dtype = dtypes.bfloat16 if is_fp8 else a.dtype
   if b_transposed:
     # B was passed as (N, K) — the GEMM computed C = A @ B^T
     # grad_A = G @ B (no transpose needed), grad_B = G^T @ A (gradient w.r.t. transposed B)
-    grad_a = (g_t @ b_t).uop
-    grad_b = (g_t.permute(2, 0, 1).reshape(g_t.shape[2], -1) @ a_t.reshape(-1, a_t.shape[-1])).uop
+    grad_a = (g_t @ b_t).cast(grad_dtype).uop
+    grad_b = (g_t.permute(2, 0, 1).reshape(g_t.shape[2], -1) @ a_t.reshape(-1, a_t.shape[-1])).cast(b.dtype).uop
   else:
     # B is (K, N) — the GEMM computed C = A @ B
-    grad_a = (g_t @ b_t.T).uop
-    grad_b = (a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1) @ g_t.reshape(-1, g_t.shape[-1])).uop
+    grad_a = (g_t @ b_t.T).cast(grad_dtype).uop
+    grad_b = (a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1) @ g_t.reshape(-1, g_t.shape[-1])).cast(b.dtype).uop
   return (None, grad_a, grad_b)
 
 # ** main gemm function
