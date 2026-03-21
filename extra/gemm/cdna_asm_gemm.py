@@ -2651,7 +2651,13 @@ def can_use_asm_gemm(a:Tensor, b:Tensor) -> bool:
   # blacklist slow matmul
   # TODO: why is this slow?
   if (M,N,K) == (8192, 2304, 16384): return todo("blacklisted slow matmul")
-  if (M % TILE_M != 0 or N % TILE_N != 0 or K % TILE_K != 0) and arch == "gfx950":
+  is_fp8 = a.dtype in {dtypes.fp8e4m3, dtypes.fp8e5m2}
+  if is_fp8 and arch.startswith("gfx950"):
+    # HK FP8 kernel: 256x256 tiles, K must be multiple of 128 and >= 256
+    HK_BLOCK, HK_BLOCK_K = 256, 128
+    if (batch*M) % HK_BLOCK != 0 or N % HK_BLOCK != 0 or K % HK_BLOCK_K != 0 or K < 2*HK_BLOCK_K:
+      return todo(f"FP8 GEMM shape ({batch*M},{N},{K}) not supported (need M%256==0, N%256==0, K%128==0, K>=256)")
+  elif (M % TILE_M != 0 or N % TILE_N != 0 or K % TILE_K != 0) and arch == "gfx950":
     return todo(f"GEMM shape ({M},{N},{K}) not a multiple of ({TILE_M},{TILE_N},{TILE_K})")
   return True
 
@@ -2673,14 +2679,21 @@ def custom_uop_gemm(C:UOp, A:UOp, B:UOp) -> UOp:
 
 # ** backward gemm, might use the asm gemm
 
-def custom_gemm_bw(gradient:UOp, kernel:UOp):
+def custom_gemm_bw(gradient:UOp, kernel:UOp, b_transposed:bool=False):
   out, a, b = kernel.src[1:]
   assert all_same([gradient.device, a.device, b.device, out.device])
   a_t, b_t, g_t = Tensor(a, device=a.device), Tensor(b, device=a.device), Tensor(gradient, device=a.device)
   # TODO: this needs to be cleaned up and done properly, the batch dim of grad and a multi need to align
   g_t = g_t[:a.shape[0]]
-  grad_a = (g_t @ b_t.T).uop
-  grad_b = (a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1) @ g_t.reshape(-1, g_t.shape[-1])).uop
+  if b_transposed:
+    # B was passed as (N, K) — the GEMM computed C = A @ B^T
+    # grad_A = G @ B (no transpose needed), grad_B = G^T @ A (gradient w.r.t. transposed B)
+    grad_a = (g_t @ b_t).uop
+    grad_b = (g_t.permute(2, 0, 1).reshape(g_t.shape[2], -1) @ a_t.reshape(-1, a_t.shape[-1])).uop
+  else:
+    # B is (K, N) — the GEMM computed C = A @ B
+    grad_a = (g_t @ b_t.T).uop
+    grad_b = (a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1) @ g_t.reshape(-1, g_t.shape[-1])).uop
   return (None, grad_a, grad_b)
 
 # ** main gemm function
@@ -2701,79 +2714,40 @@ def asm_gemm(a:Tensor, b:Tensor) -> Tensor:
   if (k_sharded:=is_multi and a.uop.axis == 2): K //= len(a.device)
   if (m_sharded:=is_multi and a.uop.axis == 1): M //= len(a.device)
   n_sharded = is_multi and b.uop.axis == 1
+  is_fp8 = a.dtype in {dtypes.fp8e4m3, dtypes.fp8e5m2}
+
+  # FP8 HK kernel outputs bf16 (accumulates in f32, writes bf16)
+  out_dtype = dtypes.bfloat16 if is_fp8 else a.dtype
 
   if is_multi:
     if n_sharded:
-      out = Tensor(Tensor.invalid(batch, M, N//len(a.device), dtype=a.dtype, device=a.device).uop.multi(2), device=a.device)
+      out = Tensor(Tensor.invalid(batch, M, N//len(a.device), dtype=out_dtype, device=a.device).uop.multi(2), device=a.device)
     elif m_sharded:
-      out = Tensor(Tensor.invalid(batch, M, N, dtype=a.dtype, device=a.device).uop.multi(1), device=a.device)
+      out = Tensor(Tensor.invalid(batch, M, N, dtype=out_dtype, device=a.device).uop.multi(1), device=a.device)
     else:
-      out = Tensor(Tensor.invalid(batch//len(a.device) if a.uop.axis==0 else batch, M, N, dtype=a.dtype, device=a.device).uop.multi(0),
+      out = Tensor(Tensor.invalid(batch//len(a.device) if a.uop.axis==0 else batch, M, N, dtype=out_dtype, device=a.device).uop.multi(0),
                    device=a.device)
   else:
-    out = Tensor.invalid(batch, M, N, dtype=a.dtype, device=a.device)
+    out = Tensor.invalid(batch, M, N, dtype=out_dtype, device=a.device)
 
   renderer = Device[a.device[0] if is_multi else a.device].renderer
   dname, arch = renderer.device, getattr(renderer, "arch", "")
-  if arch.startswith("gfx950") and a.dtype in {dtypes.fp8e4m3, dtypes.fp8e5m2}:
-    from extra.thunder.amd.gemm import can_use_hk_gemm, custom_hk_fp8_gemm, HK_4WAVE
-    # fold batch into M for the HK kernel
-    BM = batch * M
-    # For N-sharded, check if the per-device shape is valid
-    N_check = N // len(a.device) if n_sharded else N
-    if can_use_hk_gemm(BM, N_check, K):
-      b_t = b.T.contiguous()
-      a_flat = a.reshape(BM, K) if batch > 1 else a.squeeze(0)
-      out_dtype = dtypes.bfloat16
-      if is_multi:
-        if n_sharded:
-          out = Tensor(Tensor.invalid(BM, N//len(a.device), dtype=out_dtype, device=a.device).uop.multi(1), device=a.device)
-        elif m_sharded:
-          out = Tensor(Tensor.invalid(BM, N, dtype=out_dtype, device=a.device).uop.multi(0), device=a.device)
-        else:
-          out = Tensor(Tensor.invalid(BM//len(a.device) if a.uop.axis==0 else BM, N, dtype=out_dtype, device=a.device).uop.multi(0), device=a.device)
-      else:
-        out = Tensor.invalid(BM, N, dtype=out_dtype, device=a.device)
-      # backward: kernel args are (out, a_flat, b_t) where b_t is (N,K)
-      # grad_a = g @ b_t => (BM,N) @ (N,K) = (BM,K), grad_b_t = g.T @ a_flat => (N,BM) @ (BM,K) = (N,K)
-      def _hk_gemm_bw(gradient, kernel):
-        out, a_f, b_tr = kernel.src[1:]
-        a_t, b_tt, g_t = Tensor(a_f, device=a_f.device), Tensor(b_tr, device=b_tr.device), Tensor(gradient, device=gradient.device)
-        g_t = g_t[:a_f.shape[0]]
-        grad_a = (g_t.float() @ b_tt.float()).cast(a_f.dtype).uop  # (BM,N) @ (N,K) = (BM,K), cast to match a
-        grad_b = (g_t.float().T @ a_t.float()).cast(b_tr.dtype).uop  # (N,BM) @ (BM,K) = (N,K), cast to match b_t
-        return (None, grad_a, grad_b)
-      
-      # For multi-device N-sharded, we need per-device kernels with proper offsets
-      if is_multi and n_sharded:
-        num_devices = len(a.device)
-        # Capture device list and information at definition time
-        device_list = list(a.device)
-        # Create a multi-device kernel that handles each device with its own offset
-        def _hk_gemm_multi(out_uop, a_uop, b_uop):
-          # For multi-device, we need to create a PROGRAM that will be executed on each device
-          # The actual device handling is done by tinygrad's multi-device execution
-          # We just need to create the kernel with the right parameters
-          # Since this is called per-device during execution, we use the device from context
-          return custom_hk_fp8_gemm(out_uop, a_uop, b_uop, device=device_list[0], arch=arch, M=BM, N=N, K=K, 
-                                     four_wave=HK_4WAVE, num_devices=num_devices, device_idx=0)
-        out = Tensor.custom_kernel(out, a_flat, b_t, fxn=_hk_gemm_multi, grad_fxn=_hk_gemm_bw)[0]
-      else:
-        out = Tensor.custom_kernel(out, a_flat, b_t, 
-                                   fxn=functools.partial(custom_hk_fp8_gemm, device=dname, arch=arch, M=BM, N=N, K=K, 
-                                                      four_wave=HK_4WAVE, num_devices=1, device_idx=0),
-                                   grad_fxn=_hk_gemm_bw)[0]
-      out = out.cast(a.dtype)  # match input dtype (fp8) — matmul() applies scale after
-      if k_sharded: out = out.sum(0)
-      # unfold back to original shape
-      if not squeeze: out = out.reshape(batch, M, N)
-      out = out.squeeze(0) if squeeze else out
-      if unfold_batch: out = out.reshape(orig_batch, -1, out.shape[-1])
-      return out
-  if arch.startswith("gfx950") and getenv("USE_ASM", 1):
-    out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_asm_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
+
+  # select kernel fxn and backward
+  if arch.startswith("gfx950") and is_fp8:
+    from extra.thunder.amd.gemm import custom_hk_fp8_gemm
+    b = b.T.contiguous()  # HK FP8 kernel expects B as (N,K) — it computes C = A @ B^T via mma_ABt
+    fxn = functools.partial(custom_hk_fp8_gemm, dname=dname, arch=arch)
+    bw = functools.partial(custom_gemm_bw, b_transposed=True)
+  elif arch.startswith("gfx950") and getenv("USE_ASM", 1):
+    fxn = functools.partial(custom_asm_gemm, dname=dname)
+    bw = custom_gemm_bw
   else:
-    out = Tensor.custom_kernel(out, a, b, fxn=custom_uop_gemm, grad_fxn=custom_gemm_bw)[0]
+    fxn = custom_uop_gemm
+    bw = custom_gemm_bw
+
+  out = Tensor.custom_kernel(out, a, b, fxn=fxn, grad_fxn=bw)[0]
+  if out.dtype != a.dtype: out = out.cast(a.dtype)
   if k_sharded: out = out.sum(0)
   out = out.squeeze(0) if squeeze else out
   if unfold_batch: out = out.reshape(orig_batch, -1, out.shape[-1])

@@ -185,6 +185,22 @@ class TestGemmLlama(unittest.TestCase):
 @unittest.skipUnless(is_dtype_supported(dtypes.fp8e4m3), "fp8 not supported")
 class TestGemmFP8(TestGemmLlama):
   dtype = dtypes.fp8e4m3
+  # FP8 HK kernel requires K%128==0 and K>=256 — these K values are too small
+  def test_shape_k64(self):
+    with self.assertRaises(AssertionError): verify_asm_gemm(1, 256, 256, 64, dtype=self.dtype)
+  def test_shape_k128(self):
+    with self.assertRaises(AssertionError): verify_asm_gemm(1, 256, 256, 128, dtype=self.dtype)
+  def test_shape_k192(self):
+    with self.assertRaises(AssertionError): verify_asm_gemm(1, 256, 256, 192, dtype=self.dtype)
+  # FP8 error message differs from bf16
+  def test_unsupported_k(self):
+    with self.assertRaises(AssertionError): verify_asm_gemm(1, 1024, 1024, 100, dtype=self.dtype)
+  def test_unsupported_m(self):
+    with self.assertRaises(AssertionError): verify_asm_gemm(1, 1000, 256, 256, dtype=self.dtype)
+  def test_unsupported_n(self):
+    with self.assertRaises(AssertionError): verify_asm_gemm(1, 256, 1000, 256, dtype=self.dtype)
+  # batch=3 is valid for FP8 (3*256=768, 768%256==0)
+  def test_unsupported_batch(self): verify_asm_gemm(3, 256, 256, 256, dtype=self.dtype)
 
 class TestMagicGu(unittest.TestCase):
   def test_magicgu_matches_old(self):
