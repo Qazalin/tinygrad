@@ -641,22 +641,16 @@ async function renderProfiler(path, opts) {
           // walk the path back and fill the complete shape
           else { for (let i=x.length-1; i>=0; i--) ctx.lineTo(x[i], offsetY+e.y0[i]); ctx.closePath(); ctx.fillStyle = e.fillColor; ctx.fill(); }
         } else { // contiguous rect
+          if (e.x>et || e.x+e.width<st) continue;
           const x = xscale(e.x);
           const y = offsetY+e.y;
           const width = xscale(e.x+e.width)-x;
-          // only compute bounds for shapes involved in arrow pairs
-          for (const [a, b] of arrowPairs) {
-            if (a === e.arg.key || b === e.arg.key) {
-              shapeBounds.set(e.arg.key, { x0:x, x1:x+width, y0:y, y1:y+e.height });
-              break;
-            }
-          }
-          if (e.x>et || e.x+e.width<st) continue;
           ctx.beginPath();
           ctx.rect(x, y, width, e.height);
           visible.push({ y0:y, y1:y+e.height, x0:x, x1:x+width, arg:e.arg });
           ctx.fillStyle = e.fillColor; ctx.fill();
           addBorder?.(width);
+          shapeBounds.set(e.arg.key, { x0:x, x1:x+width, y0:y, y1:y+e.height });
           // add label
           drawText(ctx, e.label, x+2, y+e.height/2, width);
         }
@@ -669,9 +663,25 @@ async function renderProfiler(path, opts) {
         drawLine(ctx, [0, canvasWidth], [y, y], { color:rowBorderColor });
       }
     }
-    // draw arrows
+    // draw links between arrow pairs (compute bounds for out-of-bounds shapes)
     for (const [a, b] of arrowPairs) {
-      const from = shapeBounds.get(a), to = shapeBounds.get(b);
+      let from = shapeBounds.get(a), to = shapeBounds.get(b);
+      if (from == null) {
+        const { e } = selectShape(a);
+        if (e != null) {
+          const t = data.tracks.get(a.split("-")[0]);
+          const x = xscale(e.x), y = t.offsetY+e.y, width = xscale(e.x+e.width)-x;
+          from = { x0:x, x1:x+width, y0:y, y1:y+e.height };
+        }
+      }
+      if (to == null) {
+        const { e } = selectShape(b);
+        if (e != null) {
+          const t = data.tracks.get(b.split("-")[0]);
+          const x = xscale(e.x), y = t.offsetY+e.y, width = xscale(e.x+e.width)-x;
+          to = { x0:x, x1:x+width, y0:y, y1:y+e.height };
+        }
+      }
       if (from != null && to != null) drawLink(ctx, from, to, "#c888b0", canvasWidth);
     }
     // draw axes
