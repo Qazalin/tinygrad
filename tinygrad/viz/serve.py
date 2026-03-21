@@ -388,12 +388,11 @@ def sqtt_timeline(data:bytes, lib:bytes, target:str) -> list[ProfileEvent]:
       e.name = TracingKey(e.name.display_name, ret=f"LINK:{','.join(dispatch)}")
     if isinstance(p, VMEMEXEC):
       dispatch:list[str] = []
-      if p.src in {MemSrc.VMEM, MemSrc.VMEM_ALT}:
+      if p.src is MemSrc.VMEM:
         if exec_pending.get("VMEM"):
           dispatch += [exec_pending["VMEM"].pop(0)]
-      elif p.src in {MemSrc.LDS, MemSrc.LDS_ALT}:
-        if exec_pending.get("LDS"):
-          dispatch += [exec_pending["LDS"].pop(0)]
+      elif p.src is MemSrc.LDS:
+        dispatch += [exec_pending["LDS"].pop(0)]
       assert isinstance(e.name, TracingKey), f"VMEMEXEC op key was {e.name}"
       e.name = TracingKey(e.name.display_name, ret=f"LINK:{','.join(dispatch)}")
   for p, info in map_insts(data, lib, target):
