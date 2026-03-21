@@ -2627,7 +2627,7 @@ counters = {"used":0, "todos":[]}
 def todo(msg:str) -> bool: counters["todos"].append(msg); return False
 def _asm_gemm_report():
   print(f'asm_gemm: {counters["used"]} used, {len(counters["todos"])} not used')
-  if DEBUG >= 2 and counters["todos"]:
+  if (DEBUG >= 2 or getenv("PRINT_TODOS")) and counters["todos"]:
     from collections import Counter
     for msg, cnt in Counter(counters["todos"]).most_common(): print(f'  {cnt:3d}x {msg}')
 atexit.register(_asm_gemm_report)
