@@ -34,7 +34,7 @@ def run_asm_gemm(a_shape, b_shape, dtype=dtypes.float16, a_shard=None, b_shard=N
 
   # no validation on the NULL device
   if a_rand.device.startswith("NULL"): return None
-  atol, rtol = (1e-2, 1e-3)
+  atol, rtol = (1.0, 1e-1) if dtype in {dtypes.fp8e4m3, dtypes.fp8e5m2} else (1e-2, 1e-3)
   with Context(DEBUG=0):
     assert tst.allclose(ref, atol=atol, rtol=rtol), "forward mismatch"
     assert a.grad.allclose(a_ref.grad, atol=atol, rtol=rtol), "grad_a mismatch"
@@ -105,79 +105,86 @@ class TestAsmGEMM(unittest.TestCase):
 
 # test the Asm GEMM with Llama shapes, only run on the real machine for speed
 class TestGemmLlama(unittest.TestCase):
+  dtype = dtypes.half
+
   def setUp(self):
     if not is_cdna4() or getenv("MOCKGPU"):
       self.skipTest("very slow on non mi350x")
 
   @Context(ASM_GEMM=1)
-  def test_empty(self): (Tensor.empty(N:=getenv("N", 4096), N, dtype=dtypes.half)@Tensor.empty(N, N, dtype=dtypes.half)).realize()
+  def test_empty(self): (Tensor.empty(N:=getenv("N", 4096), N, dtype=self.dtype)@Tensor.empty(N, N, dtype=self.dtype)).realize()
 
-  def test_simple(self): verify_asm_gemm(1, N:=getenv("N", 4096), N, N, dtype=dtypes.half)
-  def test_gemm(self): verify_asm_gemm(1, 8192, 4096, 14336)
-  def test_gemm_batched(self): verify_asm_gemm(2, 8192, 4096, 4096)
+  def test_simple(self): verify_asm_gemm(1, N:=getenv("N", 4096), N, N, dtype=self.dtype)
+  def test_gemm(self): verify_asm_gemm(1, 8192, 4096, 14336, dtype=self.dtype)
+  def test_gemm_batched(self): verify_asm_gemm(2, 8192, 4096, 4096, dtype=self.dtype)
 
-  def test_gemm1(self): verify_asm_gemm(8, 8192, 4096, 14336, dtype=dtypes.bfloat16, gpus=8)
+  def test_gemm1(self): verify_asm_gemm(8, 8192, 4096, 14336, dtype=self.dtype, gpus=8)
   @unittest.skip("disabled, asm in this shape is slower than tinygrad")
-  def test_gemm2(self): verify_asm_gemm(8, 8192, 128256, 4096, dtype=dtypes.bfloat16, gpus=8)
-  def test_gemm3(self): verify_asm_gemm(8, 8192, 14336, 4096, dtype=dtypes.bfloat16, gpus=8)
-  def test_gemm4(self): verify_asm_gemm(8, 4096, 14336, 4096, dtype=dtypes.bfloat16, gpus=8)
-  def test_gemm5(self): verify_asm_gemm(8, 4096, 4096, 14336, dtype=dtypes.bfloat16, gpus=8)
-  def test_gemm6(self): verify_asm_gemm(16, 4096, 4096, 14336, dtype=dtypes.bfloat16, gpus=8)
+  def test_gemm2(self): verify_asm_gemm(8, 8192, 128256, 4096, dtype=self.dtype, gpus=8)
+  def test_gemm3(self): verify_asm_gemm(8, 8192, 14336, 4096, dtype=self.dtype, gpus=8)
+  def test_gemm4(self): verify_asm_gemm(8, 4096, 14336, 4096, dtype=self.dtype, gpus=8)
+  def test_gemm5(self): verify_asm_gemm(8, 4096, 4096, 14336, dtype=self.dtype, gpus=8)
+  def test_gemm6(self): verify_asm_gemm(16, 4096, 4096, 14336, dtype=self.dtype, gpus=8)
   @unittest.skip("disabled, asm in this shape is slower than tinygrad")
-  def test_gemm7(self): verify_asm_gemm(1, 8192, 128256, 4096)
-  def test_gemm8(self): verify_asm_gemm(1, 4096, 14336, 8192)
-  def test_gemm9(self): verify_asm_gemm(8, 4096, 14336, 8192, dtype=dtypes.bfloat16, gpus=8)
-  def test_gemm10(self): verify_asm_gemm(1, 4096, 8192, 4096)
-  def test_k_sharded_1(self): verify_asm_gemm_k_sharded(14336, 4096, 8*8192, gpus=8)
-  def test_k_sharded_2(self): verify_asm_gemm_k_sharded(4096, 14336, 8*8192, gpus=8)
-  def test_k_sharded_3(self): verify_asm_gemm_k_sharded(4096, 4096, 8*8192, gpus=8)
+  def test_gemm7(self): verify_asm_gemm(1, 8192, 128256, 4096, dtype=self.dtype)
+  def test_gemm8(self): verify_asm_gemm(1, 4096, 14336, 8192, dtype=self.dtype)
+  def test_gemm9(self): verify_asm_gemm(8, 4096, 14336, 8192, dtype=self.dtype, gpus=8)
+  def test_gemm10(self): verify_asm_gemm(1, 4096, 8192, 4096, dtype=self.dtype)
+  def test_k_sharded_1(self): verify_asm_gemm_k_sharded(14336, 4096, 8*8192, dtype=self.dtype, gpus=8)
+  def test_k_sharded_2(self): verify_asm_gemm_k_sharded(4096, 14336, 8*8192, dtype=self.dtype, gpus=8)
+  def test_k_sharded_3(self): verify_asm_gemm_k_sharded(4096, 4096, 8*8192, dtype=self.dtype, gpus=8)
   def test_unsupported_k(self):
     with self.assertRaisesRegex(AssertionError, "not a multiple"):
-      verify_asm_gemm(1, 1024, 1024, 100)
+      verify_asm_gemm(1, 1024, 1024, 100, dtype=self.dtype)
   def test_unsupported_m(self):
     with self.assertRaisesRegex(AssertionError, "not a multiple"):
-      verify_asm_gemm(1, 1000, 256, 256)
+      verify_asm_gemm(1, 1000, 256, 256, dtype=self.dtype)
   def test_unsupported_n(self):
     with self.assertRaisesRegex(AssertionError, "not a multiple"):
-      verify_asm_gemm(1, 256, 1000, 256)
+      verify_asm_gemm(1, 256, 1000, 256, dtype=self.dtype)
   def test_unsupported_batch(self):
     with self.assertRaisesRegex(AssertionError, "batch size"):
-      verify_asm_gemm(3, 256, 256, 256)
-  def test_gemm_previously_unsupported(self): verify_asm_gemm(8, 1024, 1024, 4096, gpus=8)
+      verify_asm_gemm(3, 256, 256, 256, dtype=self.dtype)
+  def test_gemm_previously_unsupported(self): verify_asm_gemm(8, 1024, 1024, 4096, dtype=self.dtype, gpus=8)
 
   # M-sharded 2D
-  def test_m_sharded_1(self): verify_asm_gemm_m_sharded(8*8192, 4096, 4096, dtype=dtypes.bfloat16, gpus=8)
-  def test_m_sharded_2(self): verify_asm_gemm_m_sharded(8*4096, 14336, 4096, dtype=dtypes.bfloat16, gpus=8)
+  def test_m_sharded_1(self): verify_asm_gemm_m_sharded(8*8192, 4096, 4096, dtype=self.dtype, gpus=8)
+  def test_m_sharded_2(self): verify_asm_gemm_m_sharded(8*4096, 14336, 4096, dtype=self.dtype, gpus=8)
 
   # N-sharded 2D
-  def test_n_sharded_2d_1(self): verify_asm_gemm_n_sharded_2d(8192, 8*4096, 4096, dtype=dtypes.bfloat16, gpus=8)
-  def test_n_sharded_2d_2(self): verify_asm_gemm_n_sharded_2d(4096, 8*14336, 4096, dtype=dtypes.bfloat16, gpus=8)
+  def test_n_sharded_2d_1(self): verify_asm_gemm_n_sharded_2d(8192, 8*4096, 4096, dtype=self.dtype, gpus=8)
+  def test_n_sharded_2d_2(self): verify_asm_gemm_n_sharded_2d(4096, 8*14336, 4096, dtype=self.dtype, gpus=8)
 
   # tensor parallel shapes (Llama 8B, MP=8)
-  def test_tp_n_sharded_wq(self): verify_asm_gemm_n_sharded(1, 8192, 4096, 4096, dtype=dtypes.bfloat16, gpus=8)
-  def test_tp_n_sharded_w1(self): verify_asm_gemm_n_sharded(1, 8192, 14336, 4096, dtype=dtypes.bfloat16, gpus=8)
-  def test_tp_k_sharded_wo(self): verify_asm_gemm_k_sharded_3d(1, 8192, 4096, 4096, dtype=dtypes.bfloat16, gpus=8)
-  def test_tp_k_sharded_w2(self): verify_asm_gemm_k_sharded_3d(1, 8192, 4096, 14336, dtype=dtypes.bfloat16, gpus=8)
+  def test_tp_n_sharded_wq(self): verify_asm_gemm_n_sharded(1, 8192, 4096, 4096, dtype=self.dtype, gpus=8)
+  def test_tp_n_sharded_w1(self): verify_asm_gemm_n_sharded(1, 8192, 14336, 4096, dtype=self.dtype, gpus=8)
+  def test_tp_k_sharded_wo(self): verify_asm_gemm_k_sharded_3d(1, 8192, 4096, 4096, dtype=self.dtype, gpus=8)
+  def test_tp_k_sharded_w2(self): verify_asm_gemm_k_sharded_3d(1, 8192, 4096, 14336, dtype=self.dtype, gpus=8)
 
   # more shapes: vary M, N, K independently
-  def test_shape_small_square(self): verify_asm_gemm(1, 256, 256, 256)
-  def test_shape_small_rect_m(self): verify_asm_gemm(1, 512, 256, 256)
-  def test_shape_small_rect_n(self): verify_asm_gemm(1, 256, 512, 256)
-  def test_shape_small_rect_k(self): verify_asm_gemm(1, 256, 256, 512)
-  def test_shape_tall(self): verify_asm_gemm(1, 2048, 256, 256)
-  def test_shape_wide(self): verify_asm_gemm(1, 256, 2048, 256)
-  def test_shape_deep(self): verify_asm_gemm(1, 256, 256, 4096)
-  def test_shape_non_square(self): verify_asm_gemm(1, 1024, 2048, 512)
-  def test_shape_batched_small(self): verify_asm_gemm(2, 256, 256, 256)
-  def test_shape_batched_rect(self): verify_asm_gemm(2, 512, 1024, 256)
+  def test_shape_small_square(self): verify_asm_gemm(1, 256, 256, 256, dtype=self.dtype)
+  def test_shape_small_rect_m(self): verify_asm_gemm(1, 512, 256, 256, dtype=self.dtype)
+  def test_shape_small_rect_n(self): verify_asm_gemm(1, 256, 512, 256, dtype=self.dtype)
+  def test_shape_small_rect_k(self): verify_asm_gemm(1, 256, 256, 512, dtype=self.dtype)
+  def test_shape_tall(self): verify_asm_gemm(1, 2048, 256, 256, dtype=self.dtype)
+  def test_shape_wide(self): verify_asm_gemm(1, 256, 2048, 256, dtype=self.dtype)
+  def test_shape_deep(self): verify_asm_gemm(1, 256, 256, 4096, dtype=self.dtype)
+  def test_shape_non_square(self): verify_asm_gemm(1, 1024, 2048, 512, dtype=self.dtype)
+  def test_shape_batched_small(self): verify_asm_gemm(2, 256, 256, 256, dtype=self.dtype)
+  def test_shape_batched_rect(self): verify_asm_gemm(2, 512, 1024, 256, dtype=self.dtype)
   # K edge cases: iters=1,2,3 exercise different loop paths
-  def test_shape_k64(self): verify_asm_gemm(1, 256, 256, 64)
-  def test_shape_k128(self): verify_asm_gemm(1, 256, 256, 128)
-  def test_shape_k192(self): verify_asm_gemm(1, 256, 256, 192)
+  def test_shape_k64(self): verify_asm_gemm(1, 256, 256, 64, dtype=self.dtype)
+  def test_shape_k128(self): verify_asm_gemm(1, 256, 256, 128, dtype=self.dtype)
+  def test_shape_k192(self): verify_asm_gemm(1, 256, 256, 192, dtype=self.dtype)
 
-  def test_llama3_out1(self): verify_asm_gemm(1, 8192, 128256, 4096)
-  def test_llama3_out2(self): verify_asm_gemm(1, 8192, 4096, 128256)
-  def test_llama3_out3(self): verify_asm_gemm(1, 4096, 128256, 8192)
+  def test_llama3_out1(self): verify_asm_gemm(1, 8192, 128256, 4096, dtype=self.dtype)
+  def test_llama3_out2(self): verify_asm_gemm(1, 8192, 4096, 128256, dtype=self.dtype)
+  def test_llama3_out3(self): verify_asm_gemm(1, 4096, 128256, 8192, dtype=self.dtype)
+
+# FP8 GEMM — inherits all TestGemmLlama tests with fp8e4m3
+@unittest.skipUnless(is_dtype_supported(dtypes.fp8e4m3), "fp8 not supported")
+class TestGemmFP8(TestGemmLlama):
+  dtype = dtypes.fp8e4m3
 
 class TestMagicGu(unittest.TestCase):
   def test_magicgu_matches_old(self):
