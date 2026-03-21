@@ -2692,12 +2692,13 @@ def custom_gemm_bw(gradient:UOp, kernel:UOp, b_transposed:bool=False):
   if b_transposed:
     # B was passed as (N, K) — the GEMM computed C = A @ B^T
     # grad_A = G @ B (no transpose needed), grad_B = G^T @ A (gradient w.r.t. transposed B)
-    grad_a = (g_t @ b_t).cast(grad_dtype).uop
-    grad_b = (g_t.permute(2, 0, 1).reshape(g_t.shape[2], -1) @ a_t.reshape(-1, a_t.shape[-1])).cast(b.dtype).uop
+    # Cast inputs to matching dtypes for asm_gemm, then cast output to expected dtype
+    grad_a = (g_t @ b_t.cast(g_t.dtype)).cast(grad_dtype).uop
+    grad_b = (g_t.permute(2, 0, 1).reshape(g_t.shape[2], -1) @ a_t.reshape(-1, a_t.shape[-1]).cast(g_t.dtype)).cast(b.dtype).uop
   else:
     # B is (K, N) — the GEMM computed C = A @ B
-    grad_a = (g_t @ b_t.T).cast(grad_dtype).uop
-    grad_b = (a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1) @ g_t.reshape(-1, g_t.shape[-1])).cast(b.dtype).uop
+    grad_a = (g_t @ b_t.T.cast(g_t.dtype)).cast(grad_dtype).uop
+    grad_b = (a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1).cast(g_t.dtype) @ g_t.reshape(-1, g_t.shape[-1])).cast(b.dtype).uop
   return (None, grad_a, grad_b)
 
 # ** main gemm function
