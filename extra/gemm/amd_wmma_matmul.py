@@ -1,11 +1,3 @@
-# RDNA3 WMMA-based GEMM kernel for float16
-# Achieves >100 TFLOPS on gfx1100 (7900XTX)
-#
-# v_wmma_f32_16x16x16_f16: D[16,16] = A[16,16] @ B[16,16] + C[16,16]
-#   A input: lane i (0-15) holds row i, vgpr j holds packed (k=2j, k=2j+1)
-#   B input: lane j (0-15) holds col j, vgpr j holds packed k values
-#   D output: lane = n + (m&1)*16, vgpr = m>>1
-
 from tinygrad import Tensor, Device, Context, GlobalCounters
 from tinygrad.uop.ops import UOp, Ops, KernelInfo
 from tinygrad.helpers import getenv, colored
