@@ -458,11 +458,11 @@ def get_asm_fxn():
     return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in insts]))))
   return asm_kernel
 
-def test_matmul(asm_kernel):
+def test_matmul(asm_kernel, dtype=dtypes.float):
   rng = np.random.default_rng(42)
-  a = Tensor(rng.random((N, N), dtype=np.float32) - 0.5)
-  b = Tensor(rng.random((N, N), dtype=np.float32) - 0.5)
-  c = Tensor.empty(N, N)
+  a = Tensor(rng.random((N, N), dtype=np.float32) - 0.5, dtype=dtype)
+  b = Tensor(rng.random((N, N), dtype=np.float32) - 0.5, dtype=dtype)
+  c = Tensor.empty(N, N, dtype=dtype)
   Tensor.realize(a, b, c)
 
   c = Tensor.custom_kernel(a, b, c, fxn=asm_kernel)[2]
@@ -475,10 +475,10 @@ def test_matmul(asm_kernel):
 
   if getenv("VERIFY", 1):
     GlobalCounters.reset()
-    with Context(DEBUG=2): tc = (a @ b).realize()
-    with Context(DEBUG=0): err = (c - tc).square().mean().item()
+    with Context(DEBUG=2): tc = (a.cast(dtypes.float) @ b.cast(dtypes.float)).cast(dtype).realize()
+    with Context(DEBUG=0): err = (c.cast(dtypes.float) - tc.cast(dtypes.float)).square().mean().item()
     print(f"mean squared error {err}")
-    if err != err or err > 1e-06:
+    if err != err or err > (1e-06 if dtype == dtypes.float else 1e-02):
       c_np, tc_np = c.numpy(), tc.numpy()
       for bi in range(N // 128):
         for bj in range(N // 128):
