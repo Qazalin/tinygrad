@@ -439,17 +439,11 @@ N = getenv("N", 4096)
 BLOCK_M, BLOCK_N = 128, 128
 THREADS = 128
 
-def test_matmul():
+def get_asm_fxn():
   dev = Device[Device.DEFAULT]
   print(f"Device arch: {dev.renderer.arch}")
 
   insts = build_kernel(N, dev.renderer.arch)
-
-  rng = np.random.default_rng(42)
-  a = Tensor(rng.random((N, N), dtype=np.float32) - 0.5)
-  b = Tensor(rng.random((N, N), dtype=np.float32) - 0.5)
-  c = Tensor.empty(N, N)
-  Tensor.realize(a, b, c)
 
   grid, local = (N // BLOCK_N, N // BLOCK_M, 1), (THREADS, 1, 1)
   print(f"Grid: {grid}, Local: {local}")
@@ -462,6 +456,15 @@ def test_matmul():
     sink = UOp.sink(A.base, B.base, C.base, lds, *gidxs, *lidxs, arg=KernelInfo(name=colored("kernel", "cyan"),
                                                                                   estimates=Estimates(ops=N*N*N*2, mem=N*N*4*3)))
     return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in insts]))))
+  return asm_kernel
+
+def test_matmul(asm_kernel):
+  rng = np.random.default_rng(42)
+  a = Tensor(rng.random((N, N), dtype=np.float32) - 0.5)
+  b = Tensor(rng.random((N, N), dtype=np.float32) - 0.5)
+  c = Tensor.empty(N, N)
+  Tensor.realize(a, b, c)
+
   c = Tensor.custom_kernel(a, b, c, fxn=asm_kernel)[2]
   ei = c.schedule()[0].lower()
 
@@ -494,4 +497,4 @@ def test_matmul():
       raise RuntimeError("matmul is wrong!")
 
 if __name__ == "__main__":
-  test_matmul()
+  test_matmul(get_asm_fxn())
