@@ -306,6 +306,10 @@ class Inst:
       elif name in kwargs: vals[name] = kwargs[name]
       else: vals[name] = next(args_iter, None)
     assert not (remaining := list(args_iter)), f"too many positional args: {remaining}"
+    # Check for invalid kwargs
+    valid_field_names = [name for name, field in self._fields if not isinstance(field, FixedBitField)]
+    invalid_fields = set(kwargs.keys()) - set(valid_field_names)
+    assert not invalid_fields, f"invalid fields for {self.__class__.__name__}: {invalid_fields}. valid fields are: {valid_field_names}"
     # Extract modifiers from Reg objects and merge into neg/abs/opsel
     neg_bits, abs_bits, opsel_bits = 0, 0, 0
     for name, bit in [('src0', 0), ('src1', 1), ('src2', 2)]:
