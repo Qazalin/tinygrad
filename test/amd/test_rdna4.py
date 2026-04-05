@@ -29,15 +29,15 @@ class TestCustomKernel(unittest.TestCase):
     def test(B:UOp, A:UOp) -> UOp:
       threads = UOp.special(A.size, "lidx0")
       k = Kernel(ARCH); e = k.emit
-      # Load kernel args: A pointer at offset 0, B pointer at offset 8
-      e(s_load_b64(sdata=s[4:5], sbase=s[0:1], offset=0x0, soffset=NULL))  # A
-      e(s_load_b64(sdata=s[6:7], sbase=s[0:1], offset=0x8, soffset=NULL))  # B
+      # Kernel arg layout: B (dest) at ioffset 0, A (source) at ioffset 8
+      e(s_load_b64(sdata=s[4:5], sbase=s[0:1], ioffset=0x0, soffset=NULL))  # B
+      e(s_load_b64(sdata=s[6:7], sbase=s[0:1], ioffset=0x8, soffset=NULL))  # A
       e(s_wait_kmcnt(simm16=0))
-      # Load from A using buffer descriptor
-      e(global_load_b32(vdst=v[10], vaddr=v[0:1], saddr=s[4:5]))  # v[0:1] = tid*0 = 0
+      # Load from A (source)
+      e(global_load_b32(vdst=v[10], vaddr=v[0:1], saddr=s[6:7]))
       e(s_wait_loadcnt(simm16=0))
-      # Store to B
-      e(global_store_b32(vaddr=v[0:1], vsrc=v[10], saddr=s[6:7]))
+      # Store to B (dest)
+      e(global_store_b32(vaddr=v[0:1], vsrc=v[10], saddr=s[4:5]))
       e(s_wait_storecnt(simm16=0))
       e(s_endpgm())
       sink = UOp.sink(B.base, A.base, threads, arg=KernelInfo("test_copy"))
