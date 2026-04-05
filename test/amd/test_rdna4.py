@@ -201,8 +201,8 @@ class TestCustomKernel(unittest.TestCase):
     matrix_flat = values.T.copy().reshape(-1)  # Transpose to column-major, then flatten
     matrix_in = Tensor(matrix_flat, dtype=dtypes.float16).realize()
 
-    # Output buffer: 32 lanes × 4 VGPRs per lane × 4 bytes = 512 bytes = 128 floats
-    vgpr_data = Tensor(np.zeros(128, dtype=np.float32), dtype=dtypes.float32).realize()
+    # Output buffer: 32 lanes × 4 VGPRs per lane × 4 bytes = 512 bytes = 256 halfs
+    vgpr_data = Tensor(np.zeros(256, dtype=np.float16), dtype=dtypes.float16).realize()
 
     # Run kernel
     vgpr_data = Tensor.custom_kernel(vgpr_data, matrix_in, fxn=test)[0].realize()
@@ -211,47 +211,38 @@ class TestCustomKernel(unittest.TestCase):
     # Verify VGPR layout matches WMMA B-matrix specification
     # From actual hardware (RDNA4 ISA spec 7.12.2, B-matrix 16x16 16-bit wave32):
     #
-    # Each lane holds 8 FP16 elements: 2 rows × 4 consecutive columns
-    # VGPR0: [row0_col0, row8_col0]
-    # VGPR1: [row0_col1, row8_col1]
-    # VGPR2: [row0_col2, row8_col2]
-    # VGPR3: [row0_col3, row8_col3]
+    # Each lane holds 8 FP16 elements: 2 rows × 4 consecutive columns (cols 0-3)
+    # VGPR0: [rowN_col0, rowN+8_col0]
+    # VGPR1: [rowN_col1, rowN+8_col1]
+    # VGPR2: [rowN_col2, rowN+8_col2]
+    # VGPR3: [rowN_col3, rowN+8_col3]
     #
-    # Lane assignment: lane = {row[2], col[3:0]} where col[3:0] is actually column group (0,4,8,12)
-    #   - Lane 0: cols 0-3, rows with row[2]=0 → rows 0,1,2,3,8,9,10,11
-    #   - Lane 1: cols 0-3, rows with row[2]=1 → rows 4,5,6,7,12,13,14,15
-    #   - Lane 2: cols 4-7, rows with row[2]=0
-    #   - etc.
+    # Lane N handles rows N and N+8 for columns 0-3 (where N = 0..7)
+    # Lane 0: rows 0,8; Lane 1: rows 1,9; Lane 2: rows 2,10; etc.
 
-    lane0 = result[0:4].view(np.float16)    # Lane 0: rows 0,8 of cols 0,1,2,3
-    lane1 = result[16:20].view(np.float16)  # Lane 1: rows 4,12 of cols 0,1,2,3
-    lane2 = result[32:36].view(np.float16)  # Lane 2: rows 0,8 of cols 4,5,6,7
+    lane0 = result[0:8]     # Lane 0: rows 0,8 of cols 0,1,2,3
+    lane1 = result[8:16]    # Lane 1: rows 1,9 of cols 0,1,2,3
+    lane4 = result[32:40]   # Lane 4: rows 4,12 of cols 0,1,2,3
 
-    # Lane 0 VGPR layout:
-    # VGPR0: [row0_col0, row8_col0] = [0, 128]
-    # VGPR1: [row0_col1, row8_col1] = [1, 129]
-    # VGPR2: [row0_col2, row8_col2] = [2, 130]
-    # VGPR3: [row0_col3, row8_col3] = [3, 131]
+    # Lane 0: rows 0,8 of cols 0,1,2,3
     self.assertEqual(lane0[0], values[0, 0], f"lane0 VGPR0[0] = row0 col0")
     self.assertEqual(lane0[1], values[8, 0], f"lane0 VGPR0[1] = row8 col0")
     self.assertEqual(lane0[2], values[0, 1], f"lane0 VGPR1[0] = row0 col1")
     self.assertEqual(lane0[3], values[8, 1], f"lane0 VGPR1[1] = row8 col1")
+    self.assertEqual(lane0[4], values[0, 2], f"lane0 VGPR2[0] = row0 col2")
+    self.assertEqual(lane0[5], values[8, 2], f"lane0 VGPR2[1] = row8 col2")
 
-    # Lane 1 VGPR layout:
-    # VGPR0: [row4_col0, row12_col0] = [64, 192]
-    # VGPR1: [row4_col1, row12_col1] = [65, 193]
-    self.assertEqual(lane1[0], values[4, 0], f"lane1 VGPR0[0] = row4 col0")
-    self.assertEqual(lane1[1], values[12, 0], f"lane1 VGPR0[1] = row12 col0")
-    self.assertEqual(lane1[2], values[4, 1], f"lane1 VGPR1[0] = row4 col1")
-    self.assertEqual(lane1[3], values[12, 1], f"lane1 VGPR1[1] = row12 col1")
+    # Lane 1: rows 1,9 of cols 0,1,2,3
+    self.assertEqual(lane1[0], values[1, 0], f"lane1 VGPR0[0] = row1 col0")
+    self.assertEqual(lane1[1], values[9, 0], f"lane1 VGPR0[1] = row9 col0")
+    self.assertEqual(lane1[2], values[1, 1], f"lane1 VGPR1[0] = row1 col1")
+    self.assertEqual(lane1[3], values[9, 1], f"lane1 VGPR1[1] = row9 col1")
 
-    # Lane 2 VGPR layout:
-    # VGPR0: [row0_col4, row8_col4] = [4, 132]
-    # VGPR1: [row0_col5, row8_col5] = [5, 133]
-    self.assertEqual(lane2[0], values[0, 4], f"lane2 VGPR0[0] = row0 col4")
-    self.assertEqual(lane2[1], values[8, 4], f"lane2 VGPR0[1] = row8 col4")
-    self.assertEqual(lane2[2], values[0, 5], f"lane2 VGPR1[0] = row0 col5")
-    self.assertEqual(lane2[3], values[8, 5], f"lane2 VGPR1[1] = row8 col5")
+    # Lane 4: rows 4,12 of cols 0,1,2,3
+    self.assertEqual(lane4[0], values[4, 0], f"lane4 VGPR0[0] = row4 col0")
+    self.assertEqual(lane4[1], values[12, 0], f"lane4 VGPR0[1] = row12 col0")
+    self.assertEqual(lane4[2], values[4, 1], f"lane4 VGPR1[0] = row4 col1")
+    self.assertEqual(lane4[3], values[12, 1], f"lane4 VGPR1[1] = row12 col1")
 
 if __name__ == "__main__":
   unittest.main()
