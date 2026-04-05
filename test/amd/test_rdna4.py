@@ -152,23 +152,6 @@ class TestCustomKernel(unittest.TestCase):
     np.testing.assert_equal(c.numpy(), [7])
 
   def test_global_load_tr_b128_layout(self):
-    """Test GLOBAL_LOAD_TR_B128 produces WMMA-compatible VGPR layout for 16x16 FP16 B-matrix.
-
-    From RDNA4 ISA spec 7.12.2 and 11.6:
-    - B-matrix 16x16 of 16-bit data uses 4 VGPRs per lane in wave32 mode
-    - Layout: lane = {row[2], col[3:0]}, vgpr = {row[3], row[1]}, startPosn = row[0]
-    - Each lane holds 8 elements: 4 columns × 2 rows (packed as 2x16-bit per VGPR)
-
-    Input matrix (column-major memory, unique values for verification):
-      Row 0: [  0,  16,  32,  48,  64,  80,  96, 112, 128, 144, 160, 176, 192, 208, 224, 240]
-      Row 1: [  1,  17,  33,  49,  65,  81,  97, 113, 129, 145, 161, 177, 193, 209, 225, 241]
-      ...
-
-    Expected VGPR layout after transpose (Wave32, lane 0 which handles rows 0,4,8,12):
-      VGPR0 = [mem[0], mem[16]]   = [0, 16]   (row0,col0 and row0,col1)
-      VGPR1 = [mem[32], mem[48]]  = [32, 48]  (row0,col2 and row0,col3)
-      etc.
-    """
     def test(VGPR_data:UOp, Matrix_in:UOp) -> UOp:
       VGPR_data = VGPR_data.flatten().base
       Matrix_in = Matrix_in.flatten().base
@@ -180,27 +163,35 @@ class TestCustomKernel(unittest.TestCase):
       e(s_wait_kmcnt(simm16=0))
       # Get lane ID (threadIdx.x determines which rows this lane handles)
       e(dims.thread_idx(v[lane_id:=0]))
-      # Compute address: each lane loads 16 bytes (8 x 16-bit elements from its column group)
-      # Address = base + lane_id * 16 (each lane handles 8 contiguous elements in column-major)
+      # Compute address: each lane loads 16 bytes (8 x 16-bit elements)
+      # Address = base + lane_id * 16
       e(v_lshlrev_b32_e32(vdst=v[addr:=1], src0=4, vsrc1=v[lane_id]))  # addr = lane_id << 4 = lane_id * 16
-      # Load with transpose: 16x16 FP16 matrix transposed from column-major to row-major layout
+      # Load with transpose: 16x16 FP16 matrix transposed from row-major to column-major layout
       # Writes 4 VGPRs (128 bits) per lane
       e(global_load_tr_b128(vdst=v[10:13], vaddr=v[addr:addr+1], saddr=s[in_ptr:in_ptr+1]))
       e(s_wait_loadcnt(simm16=0))
-      # Store VGPRs back to verify layout: output is 32 lanes × 4 VGPRs × 4 bytes = 512 bytes
-      # Output address = base + lane_id * 16 (each lane writes 4 VGPRs = 16 bytes)
+      # Store VGPRs back: output is 32 lanes × 4 VGPRs × 4 bytes = 512 bytes
+      # Output address = base + lane_id * 16
       e(v_lshlrev_b32_e32(vdst=v[out_addr:=2], src0=4, vsrc1=v[lane_id]))
       e(global_store_b128(vaddr=v[out_addr:out_addr+1], vsrc=v[10:13], saddr=s[out_ptr:out_ptr+1]))
       e(s_wait_storecnt(simm16=0))
       e(s_endpgm())
       sink = UOp.sink(VGPR_data.base, Matrix_in.base, threads, arg=KernelInfo("test_global_load_tr_b128_layout"))
       return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in k.finalize()]))))
+
+    # Input: 16x16 row-major matrix
     matrix_in = Tensor(np.arange(256, dtype=np.float16).reshape(16, 16), dtype=dtypes.float16).contiguous().realize()
+    # Output: 32 lanes x 8 halfs (256 elements)
     vgpr_data = Tensor(np.zeros(256, dtype=np.float16).reshape(16, 16), dtype=dtypes.float16).contiguous().realize()
+
+    # Run kernel
     vgpr_data = Tensor.custom_kernel(vgpr_data, matrix_in, fxn=test)[0].realize()
+
     result = vgpr_data.numpy()
-    # TODO: do the right sequence of movement ops
+
+    # GLOBAL_LOAD_TR_B128 on row-major input produces the transpose (column-major)
     tinygrad_ref = matrix_in.permute(1, 0)
+
     np.testing.assert_allclose(result, tinygrad_ref.numpy(), atol=1e-2, rtol=1e-2)
 
 if __name__ == "__main__":
