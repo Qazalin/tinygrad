@@ -27,9 +27,9 @@ FP8_MAX = 448.0
 def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
   if amax_state is not None:
     scale = FP8_MAX / (amax_state + 1e-8)
-    amax_state.assign(x.abs().max().detach())
+    amax_state.assign(x.flatten().abs().max().detach())
   else:
-    scale = FP8_MAX / (x.abs().max().detach() + 1e-8)
+    scale = FP8_MAX / (x.flatten().abs().max().detach() + 1e-8)
   x_scaled = x * scale
   x_clamped = x_scaled + (x_scaled.detach().clamp(-FP8_MAX, FP8_MAX) - x_scaled.detach())  # STE
   return x_clamped.cast(FP8_DTYPE), scale.float().reciprocal()
@@ -128,9 +128,9 @@ class FlatTransformer:
 
   def feed_forward(self, x:Tensor, ffn_norm:Tensor, w1:Tensor, w2:Tensor, w3:Tensor,
                    amax_x1=None, amax_w1=None, amax_x2=None, amax_w2=None, amax_x3=None, amax_w3=None):
-    x = rmsnorm(x, self.norm_eps) * ffn_norm
+    x = (rmsnorm(x, self.norm_eps) * ffn_norm).contiguous()
     x_w1 = matmul(x, w1, amax_x=amax_x1, amax_w=amax_w1).silu().contiguous()
-    x_w3 = matmul(x.contiguous_backward(), w3, amax_x=amax_x3, amax_w=amax_w3)
+    x_w3 = matmul(x.contiguous_backward(), w3, amax_x=amax_x3, amax_w=amax_w3).contiguous()
     return matmul((x_w1 * x_w3).contiguous(), w2, amax_x=amax_x2, amax_w=amax_w2)
 
   @function(precompile=True, precompile_backward=True)
