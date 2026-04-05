@@ -151,5 +151,107 @@ class TestCustomKernel(unittest.TestCase):
     c = Tensor.custom_kernel(c, b, a, fxn=test)[0].realize()
     np.testing.assert_equal(c.numpy(), [7])
 
+  def test_global_load_tr_b128_layout(self):
+    """Test GLOBAL_LOAD_TR_B128 produces WMMA-compatible VGPR layout for 16x16 FP16 B-matrix.
+
+    From RDNA4 ISA spec 7.12.2 and 11.6:
+    - B-matrix 16x16 of 16-bit data uses 4 VGPRs per lane in wave32 mode
+    - Layout: lane = {row[2], col[3:0]}, vgpr = {row[3], row[1]}, startPosn = row[0]
+    - Each lane holds 8 elements: 4 columns × 2 rows (packed as 2x16-bit per VGPR)
+
+    Input matrix (column-major memory, unique values for verification):
+      Row 0: [  0,  16,  32,  48,  64,  80,  96, 112, 128, 144, 160, 176, 192, 208, 224, 240]
+      Row 1: [  1,  17,  33,  49,  65,  81,  97, 113, 129, 145, 161, 177, 193, 209, 225, 241]
+      ...
+
+    Expected VGPR layout after transpose (Wave32, lane 0 which handles rows 0,4,8,12):
+      VGPR0 = [mem[0], mem[16]]   = [0, 16]   (row0,col0 and row0,col1)
+      VGPR1 = [mem[32], mem[48]]  = [32, 48]  (row0,col2 and row0,col3)
+      etc.
+    """
+    def test(VGPR_data:UOp, Matrix_in:UOp) -> UOp:
+      threads = UOp.special(32, "lidx0")  # One wave (32 threads) handles entire 16x16 tile
+      k = Kernel(ARCH); e = k.emit
+      # Load buffer descriptors
+      e(s_load_b64(sdata=s[(out_ptr:=4):out_ptr+1], sbase=s_kernarg, ioffset=ptr_offset(VGPR_data), soffset=NULL))
+      e(s_load_b64(sdata=s[(in_ptr:=6):in_ptr+1], sbase=s_kernarg, ioffset=ptr_offset(Matrix_in), soffset=NULL))
+      e(s_wait_kmcnt(simm16=0))
+      # Get lane ID (threadIdx.x determines which rows this lane handles)
+      e(dims.thread_idx(v[lane_id:=0]))
+      # Compute address: each lane loads 16 bytes (8 x 16-bit elements from its column group)
+      # Address = base + lane_id * 16 (each lane handles 8 contiguous elements in column-major)
+      e(v_lshlrev_b32_e32(vdst=v[addr:=1], src0=4, vsrc1=v[lane_id]))  # addr = lane_id << 4 = lane_id * 16
+      # Load with transpose: 16x16 FP16 matrix transposed from column-major to row-major layout
+      # Writes 4 VGPRs (128 bits) per lane
+      e(global_load_tr_b128(vdst=v[10:13], vaddr=v[addr:addr+1], saddr=s[in_ptr:in_ptr+1]))
+      e(s_wait_loadcnt(simm16=0))
+      # Store VGPRs back to verify layout: output is 32 lanes × 4 VGPRs × 4 bytes = 512 bytes
+      # Output address = base + lane_id * 16 (each lane writes 4 VGPRs = 16 bytes)
+      e(v_lshlrev_b32_e32(vdst=v[out_addr:=2], src0=4, vsrc1=v[lane_id]))
+      e(global_store_b128(vaddr=v[out_addr:out_addr+1], vsrc=v[10:13], saddr=s[out_ptr:out_ptr+1]))
+      e(s_wait_storecnt(simm16=0))
+      e(s_endpgm())
+      sink = UOp.sink(VGPR_data.base, Matrix_in.base, threads, arg=KernelInfo("test_global_load_tr_b128_layout"))
+      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in k.finalize()]))))
+
+    # Create 16x16 FP16 test matrix in column-major order with unique values
+    # Value at (row, col) = row * 16 + col (stored column-major, so linear index = col * 16 + r)
+    # Flatten to 1D for Tensor (256 elements)
+    values = np.arange(256, dtype=np.float16).reshape(16, 16)  # row-major numpy
+    matrix_flat = values.T.copy().reshape(-1)  # Transpose to column-major, then flatten
+    matrix_in = Tensor(matrix_flat, dtype=dtypes.float16).realize()
+
+    # Output buffer: 32 lanes × 4 VGPRs per lane × 4 bytes = 512 bytes = 128 floats
+    vgpr_data = Tensor(np.zeros(128, dtype=np.float32), dtype=dtypes.float32).realize()
+
+    # Run kernel
+    vgpr_data = Tensor.custom_kernel(vgpr_data, matrix_in, fxn=test)[0].realize()
+    result = vgpr_data.numpy()
+
+    # Verify VGPR layout matches WMMA B-matrix specification
+    # From actual hardware (RDNA4 ISA spec 7.12.2, B-matrix 16x16 16-bit wave32):
+    #
+    # Each lane holds 8 FP16 elements: 2 rows × 4 consecutive columns
+    # VGPR0: [row0_col0, row8_col0]
+    # VGPR1: [row0_col1, row8_col1]
+    # VGPR2: [row0_col2, row8_col2]
+    # VGPR3: [row0_col3, row8_col3]
+    #
+    # Lane assignment: lane = {row[2], col[3:0]} where col[3:0] is actually column group (0,4,8,12)
+    #   - Lane 0: cols 0-3, rows with row[2]=0 → rows 0,1,2,3,8,9,10,11
+    #   - Lane 1: cols 0-3, rows with row[2]=1 → rows 4,5,6,7,12,13,14,15
+    #   - Lane 2: cols 4-7, rows with row[2]=0
+    #   - etc.
+
+    lane0 = result[0:4].view(np.float16)    # Lane 0: rows 0,8 of cols 0,1,2,3
+    lane1 = result[16:20].view(np.float16)  # Lane 1: rows 4,12 of cols 0,1,2,3
+    lane2 = result[32:36].view(np.float16)  # Lane 2: rows 0,8 of cols 4,5,6,7
+
+    # Lane 0 VGPR layout:
+    # VGPR0: [row0_col0, row8_col0] = [0, 128]
+    # VGPR1: [row0_col1, row8_col1] = [1, 129]
+    # VGPR2: [row0_col2, row8_col2] = [2, 130]
+    # VGPR3: [row0_col3, row8_col3] = [3, 131]
+    self.assertEqual(lane0[0], values[0, 0], f"lane0 VGPR0[0] = row0 col0")
+    self.assertEqual(lane0[1], values[8, 0], f"lane0 VGPR0[1] = row8 col0")
+    self.assertEqual(lane0[2], values[0, 1], f"lane0 VGPR1[0] = row0 col1")
+    self.assertEqual(lane0[3], values[8, 1], f"lane0 VGPR1[1] = row8 col1")
+
+    # Lane 1 VGPR layout:
+    # VGPR0: [row4_col0, row12_col0] = [64, 192]
+    # VGPR1: [row4_col1, row12_col1] = [65, 193]
+    self.assertEqual(lane1[0], values[4, 0], f"lane1 VGPR0[0] = row4 col0")
+    self.assertEqual(lane1[1], values[12, 0], f"lane1 VGPR0[1] = row12 col0")
+    self.assertEqual(lane1[2], values[4, 1], f"lane1 VGPR1[0] = row4 col1")
+    self.assertEqual(lane1[3], values[12, 1], f"lane1 VGPR1[1] = row12 col1")
+
+    # Lane 2 VGPR layout:
+    # VGPR0: [row0_col4, row8_col4] = [4, 132]
+    # VGPR1: [row0_col5, row8_col5] = [5, 133]
+    self.assertEqual(lane2[0], values[0, 4], f"lane2 VGPR0[0] = row0 col4")
+    self.assertEqual(lane2[1], values[8, 4], f"lane2 VGPR0[1] = row8 col4")
+    self.assertEqual(lane2[2], values[0, 5], f"lane2 VGPR1[0] = row0 col5")
+    self.assertEqual(lane2[3], values[8, 5], f"lane2 VGPR1[1] = row8 col5")
+
 if __name__ == "__main__":
   unittest.main()
