@@ -11,6 +11,19 @@ from extra.gemm.amd_asm_matmul import Kernel
 
 ARCH = "gfx1201"
 
+def ptr_offset(param: UOp) -> int:
+  """
+  Returns the SMEM ioffset for loading param's buffer descriptor.
+
+  Kernel arg buffer layout:
+    param 0: offset 0
+    param 1: offset 8
+    param 2: offset 16
+    ...
+  """
+  assert param.op is Ops.PARAM, f"ptr_offset only valid for PARAM, got {param.op}"
+  return param.arg * 8
+
 @unittest.skipUnless(Device.DEFAULT == "AMD", "requires AMD device")
 class TestCustomKernel(unittest.TestCase):
   def test_nop(self):
