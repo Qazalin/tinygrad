@@ -151,7 +151,7 @@ def build_kernel(N, K=None, arch='gfx1100'):
   k.waitcnt(lgkm=0)
   k.emit(s_barrier())
 
-  # Prefetch next iteration
+  # Prefetch next iteration FIRST - start global loads as early as possible
   k.emit(s_add_i32(s[S_LOOP_CTR], s[S_LOOP_CTR], 1))
   k.emit(s_cmp_lt_i32(s[S_LOOP_CTR], s[S_LOOP_BOUND]))
   k.emit(s_cbranch_scc0(), target='SKIP_PREFETCH')
@@ -167,7 +167,7 @@ def build_kernel(N, K=None, arch='gfx1100'):
   k.label('SKIP_PREFETCH')
   k.emit(s_sub_i32(s[S_LOOP_CTR], s[S_LOOP_CTR], 1))
 
-  # Load WMMA tiles from LDS
+  # Start LDS loads (global prefetch now in flight)
   for wmma_m in range(4):
     for reg4 in range(2):
       off = wmma_m * 16 * 32 + reg4 * 16
@@ -178,6 +178,8 @@ def build_kernel(N, K=None, arch='gfx1100'):
       off = wmma_n * 16 * 32 + reg4 * 16
       k.emit(ds_load_b128(vdst=v[V_B_TILE + wmma_n*8 + reg4*4 : V_B_TILE + wmma_n*8 + reg4*4 + 3],
                           addr=v[V_LDS_B_LOAD], offset0=off & 0xFF, offset1=off >> 8))
+
+  # Wait for LDS loads
   k.waitcnt(lgkm=0)
 
   # Execute 16 WMMAs (4x4 grid)
