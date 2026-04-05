@@ -187,12 +187,23 @@ class TestCustomKernel(unittest.TestCase):
     # Run kernel
     vgpr_data = Tensor.custom_kernel(vgpr_data, matrix_in, fxn=test)[0].realize()
 
-    result = vgpr_data.numpy()
+    # Kernel output: 256 halfs in lane-major layout (32 lanes x 8 halfs)
+    result = vgpr_data.numpy().reshape(32, 8)
 
-    # GLOBAL_LOAD_TR_B128 on row-major input produces the transpose (column-major)
-    tinygrad_ref = matrix_in.permute(1, 0)
+    # Compute expected kernel output from transpose
+    # GLOBAL_LOAD_TR_B128 on row-major input produces transpose in lane-major format
+    # Expected layout: lane N at position K stores transposed[ci + offset, 4*rb + j]
+    # where rb = N >> 3, ci = N & 7, j = K // 2, offset = K & 1
+    transposed = matrix_in.permute(1, 0).numpy()  # 16x16 column-major
+    expected = np.zeros((32, 8), dtype=np.float16)
+    for lane in range(32):
+      rb = lane >> 3
+      ci = lane & 7
+      for j in range(4):
+        expected[lane, 2*j + 0] = transposed[ci + 0, 4*rb + j]
+        expected[lane, 2*j + 1] = transposed[ci + 8, 4*rb + j]
 
-    np.testing.assert_allclose(result, tinygrad_ref.numpy(), atol=1e-2, rtol=1e-2)
+    np.testing.assert_allclose(result, expected, atol=1e-2, rtol=1e-2)
 
 if __name__ == "__main__":
   unittest.main()
