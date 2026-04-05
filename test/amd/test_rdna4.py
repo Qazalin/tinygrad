@@ -6,7 +6,6 @@ from tinygrad.renderer import Estimates
 from tinygrad.dtype import AddrSpace
 from tinygrad.runtime.autogen.amd.rdna4.ins import *
 from tinygrad.renderer.amd.dsl import s, v, ttmp, Inst
-from test.amd.helpers import TARGET_TO_ARCH
 
 ARCH = "gfx1201"
 
@@ -104,15 +103,17 @@ class TestCustomKernel(unittest.TestCase):
     def test(B:UOp, A:UOp) -> UOp:
       threads = UOp.special(A.size, "lidx0")
       k = Kernel(ARCH); e = k.emit
-      # Load buffer descriptors using ptr_offset
-      e(s_load_b64(sdata=s[4:5], sbase=s[0:1], ioffset=ptr_offset(B), soffset=NULL))  # B (dest)
-      e(s_load_b64(sdata=s[6:7], sbase=s[0:1], ioffset=ptr_offset(A), soffset=NULL))  # A (source)
+      # Load buffer descriptors
+      e(s_load_b64(sdata=s[(b_ptr:=4):b_ptr+1], sbase=s_kernarg, ioffset=ptr_offset(B), soffset=NULL))  # B (dest)
+      e(s_load_b64(sdata=s[(a_ptr:=6):a_ptr+1], sbase=s_kernarg, ioffset=ptr_offset(A), soffset=NULL))  # A (source)
       e(s_wait_kmcnt(simm16=0))
+      # Extract threadIdx.x for offset
+      e(dims.thread_idx(v[tid:=0]))
       # Load from A (source)
-      e(global_load_b32(vdst=v[10], vaddr=v[0:1], saddr=s[6:7]))
+      e(global_load_b32(vdst=v[10], vaddr=v[tid:tid+1], saddr=s[a_ptr:a_ptr+1]))
       e(s_wait_loadcnt(simm16=0))
       # Store to B (dest)
-      e(global_store_b32(vaddr=v[0:1], vsrc=v[10], saddr=s[4:5]))
+      e(global_store_b32(vaddr=v[tid:tid+1], vsrc=v[10], saddr=s[b_ptr:b_ptr+1]))
       e(s_wait_storecnt(simm16=0))
       e(s_endpgm())
       sink = UOp.sink(B.base, A.base, threads, arg=KernelInfo("test_copy"))
