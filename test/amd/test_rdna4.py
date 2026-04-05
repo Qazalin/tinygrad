@@ -25,5 +25,18 @@ class TestCustomKernel(unittest.TestCase):
     a = Tensor.custom_kernel(a, fxn=test)[0].realize()
     np.testing.assert_equal(a.numpy(), [1])
 
+  def test_copy(self):
+    def test(B:UOp, A:UOp) -> UOp:
+      threads = UOp.special(A.size, "lidx0")
+      k = Kernel(ARCH); e = k.emit
+      # your turn!
+      e(s_endpgm())
+      sink = UOp.sink(A.base, threads, arg=KernelInfo("test_copy"))
+      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in k.finalize()]))))
+    a = Tensor([10]).realize()
+    b = Tensor([0]).realize()
+    b = Tensor.custom_kernel(b, a, fxn=test)[0].realize()
+    np.testing.assert_equal(b.numpy(), [10])
+
 if __name__ == "__main__":
   unittest.main()
