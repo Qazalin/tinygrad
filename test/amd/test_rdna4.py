@@ -170,6 +170,8 @@ class TestCustomKernel(unittest.TestCase):
       etc.
     """
     def test(VGPR_data:UOp, Matrix_in:UOp) -> UOp:
+      VGPR_data = VGPR_data.flatten().base
+      Matrix_in = Matrix_in.flatten().base
       threads = UOp.special(32, "lidx0")  # One wave (32 threads) handles entire 16x16 tile
       k = Kernel(ARCH); e = k.emit
       # Load buffer descriptors
@@ -193,56 +195,13 @@ class TestCustomKernel(unittest.TestCase):
       e(s_endpgm())
       sink = UOp.sink(VGPR_data.base, Matrix_in.base, threads, arg=KernelInfo("test_global_load_tr_b128_layout"))
       return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in k.finalize()]))))
-
-    # Create 16x16 FP16 test matrix in column-major order with unique values
-    # Value at (row, col) = row * 16 + col (stored column-major, so linear index = col * 16 + r)
-    # Flatten to 1D for Tensor (256 elements)
-    values = np.arange(256, dtype=np.float16).reshape(16, 16)  # row-major numpy
-    matrix_flat = values.T.copy().reshape(-1)  # Transpose to column-major, then flatten
-    matrix_in = Tensor(matrix_flat, dtype=dtypes.float16).realize()
-
-    # Output buffer: 32 lanes × 4 VGPRs per lane × 4 bytes = 512 bytes = 256 halfs
-    vgpr_data = Tensor(np.zeros(256, dtype=np.float16), dtype=dtypes.float16).realize()
-
-    # Run kernel
+    matrix_in = Tensor(np.arange(256, dtype=np.float16).reshape(16, 16), dtype=dtypes.float16).contiguous().realize()
+    vgpr_data = Tensor(np.zeros(256, dtype=np.float16).reshape(16, 16), dtype=dtypes.float16).contiguous().realize()
     vgpr_data = Tensor.custom_kernel(vgpr_data, matrix_in, fxn=test)[0].realize()
     result = vgpr_data.numpy()
-
-    # Verify VGPR layout matches WMMA B-matrix specification
-    # From actual hardware (RDNA4 ISA spec 7.12.2, B-matrix 16x16 16-bit wave32):
-    #
-    # Each lane holds 8 FP16 elements: 2 rows × 4 consecutive columns (cols 0-3)
-    # VGPR0: [rowN_col0, rowN+8_col0]
-    # VGPR1: [rowN_col1, rowN+8_col1]
-    # VGPR2: [rowN_col2, rowN+8_col2]
-    # VGPR3: [rowN_col3, rowN+8_col3]
-    #
-    # Lane N handles rows N and N+8 for columns 0-3 (where N = 0..7)
-    # Lane 0: rows 0,8; Lane 1: rows 1,9; Lane 2: rows 2,10; etc.
-
-    lane0 = result[0:8]     # Lane 0: rows 0,8 of cols 0,1,2,3
-    lane1 = result[8:16]    # Lane 1: rows 1,9 of cols 0,1,2,3
-    lane4 = result[32:40]   # Lane 4: rows 4,12 of cols 0,1,2,3
-
-    # Lane 0: rows 0,8 of cols 0,1,2,3
-    self.assertEqual(lane0[0], values[0, 0], f"lane0 VGPR0[0] = row0 col0")
-    self.assertEqual(lane0[1], values[8, 0], f"lane0 VGPR0[1] = row8 col0")
-    self.assertEqual(lane0[2], values[0, 1], f"lane0 VGPR1[0] = row0 col1")
-    self.assertEqual(lane0[3], values[8, 1], f"lane0 VGPR1[1] = row8 col1")
-    self.assertEqual(lane0[4], values[0, 2], f"lane0 VGPR2[0] = row0 col2")
-    self.assertEqual(lane0[5], values[8, 2], f"lane0 VGPR2[1] = row8 col2")
-
-    # Lane 1: rows 1,9 of cols 0,1,2,3
-    self.assertEqual(lane1[0], values[1, 0], f"lane1 VGPR0[0] = row1 col0")
-    self.assertEqual(lane1[1], values[9, 0], f"lane1 VGPR0[1] = row9 col0")
-    self.assertEqual(lane1[2], values[1, 1], f"lane1 VGPR1[0] = row1 col1")
-    self.assertEqual(lane1[3], values[9, 1], f"lane1 VGPR1[1] = row9 col1")
-
-    # Lane 4: rows 4,12 of cols 0,1,2,3
-    self.assertEqual(lane4[0], values[4, 0], f"lane4 VGPR0[0] = row4 col0")
-    self.assertEqual(lane4[1], values[12, 0], f"lane4 VGPR0[1] = row12 col0")
-    self.assertEqual(lane4[2], values[4, 1], f"lane4 VGPR1[0] = row4 col1")
-    self.assertEqual(lane4[3], values[12, 1], f"lane4 VGPR1[1] = row12 col1")
+    # TODO: do the right sequence of movement ops
+    tinygrad_ref = matrix_in.permute(1, 0)
+    np.testing.assert_allclose(result, tinygrad_ref.numpy(), atol=1e-2, rtol=1e-2)
 
 if __name__ == "__main__":
   unittest.main()
