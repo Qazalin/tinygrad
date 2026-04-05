@@ -42,9 +42,9 @@ class TestCustomKernel(unittest.TestCase):
     def test(B:UOp, A:UOp) -> UOp:
       threads = UOp.special(A.size, "lidx0")
       k = Kernel(ARCH); e = k.emit
-      # Kernel arg layout: B (dest) at ioffset 0, A (source) at ioffset 8
-      e(s_load_b64(sdata=s[4:5], sbase=s[0:1], ioffset=0x0, soffset=NULL))  # B
-      e(s_load_b64(sdata=s[6:7], sbase=s[0:1], ioffset=0x8, soffset=NULL))  # A
+      # Load buffer descriptors using ptr_offset
+      e(s_load_b64(sdata=s[4:5], sbase=s[0:1], ioffset=ptr_offset(B), soffset=NULL))  # B (dest)
+      e(s_load_b64(sdata=s[6:7], sbase=s[0:1], ioffset=ptr_offset(A), soffset=NULL))  # A (source)
       e(s_wait_kmcnt(simm16=0))
       # Load from A (source)
       e(global_load_b32(vdst=v[10], vaddr=v[0:1], saddr=s[6:7]))
