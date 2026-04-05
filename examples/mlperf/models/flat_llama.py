@@ -129,9 +129,9 @@ class FlatTransformer:
   def feed_forward(self, x:Tensor, ffn_norm:Tensor, w1:Tensor, w2:Tensor, w3:Tensor,
                    amax_x1=None, amax_w1=None, amax_x2=None, amax_w2=None, amax_x3=None, amax_w3=None):
     x = rmsnorm(x, self.norm_eps) * ffn_norm
-    x_w1 = matmul(x, w1, amax_x=amax_x1, amax_w=amax_w1).silu()
+    x_w1 = matmul(x, w1, amax_x=amax_x1, amax_w=amax_w1).silu().contiguous()
     x_w3 = matmul(x.contiguous_backward(), w3, amax_x=amax_x3, amax_w=amax_w3)
-    return matmul(x_w1 * x_w3, w2, amax_x=amax_x2, amax_w=amax_w2)
+    return matmul((x_w1 * x_w3).contiguous(), w2, amax_x=amax_x2, amax_w=amax_w2)
 
   @function(precompile=True, precompile_backward=True)
   def run_layer(self, x:Tensor, freqs_cis:Tensor,
