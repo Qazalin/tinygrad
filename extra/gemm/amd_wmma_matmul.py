@@ -232,8 +232,8 @@ def build_kernel(N, K=None, arch='gfx1100'):
 # =============================================================================
 def get_asm_fxn():
   dev = Device[Device.DEFAULT]
-  print(f"Device arch: {dev.renderer.arch}")
-  insts = build_kernel(N, N, dev.renderer.arch)
+  print(f"Device arch: {dev.renderer.target.arch}")
+  insts = build_kernel(N, N, dev.renderer.target.arch)
   grid, local = (N // BLOCK_N, N // BLOCK_M, 1), (THREADS, 1, 1)
   print(f"Grid: {grid}, Local: {local}")
 
