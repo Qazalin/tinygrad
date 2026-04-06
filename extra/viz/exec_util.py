@@ -2,7 +2,7 @@
 # custom processor for the viz cli output
 import sys, itertools, signal
 if hasattr(signal, "SIGPIPE"): signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-from tinygrad.helpers import ansistrip
+from tinygrad.helpers import ansistrip, colored
 
 def main() -> int:
   packets:list[str] = []
@@ -25,7 +25,15 @@ def main() -> int:
       for t,util in active.items():
         if not pending_dispatch.get(t):
           arrived.append(t)
-          print(t, util)
+          pipes = {"VALU":0, "SALU":0, "VMEM":0, "LDS":0}
+          for packet_idx in util:
+            p = packets[packet_idx]
+            for k in pipes:
+              if k in p: pipes[k] += 1
+          util_str = [f"{t:<12}"]
+          for p,util in pipes.items():
+            util_str.append(colored(p, "GREEN" if util > 0 else None))
+          print(" ".join(util_str))
       for t in arrived: del active[t]
 
 if __name__ == "__main__":
