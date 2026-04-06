@@ -322,9 +322,9 @@ class TestCustomKernel(unittest.TestCase):
       return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"),
                    UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in k.finalize()]))))
 
-    # Test: All-ones matrices -> each C[i,j] = sum(1*1) = 16
-    a_np = np.ones((16, 16), dtype=np.float16)
-    b_np = np.ones((16, 16), dtype=np.float16)
+    # Test with arange matrices
+    a_np = np.arange(256, dtype=np.float16).reshape(16, 16)
+    b_np = np.arange(256, 512, dtype=np.float16).reshape(16, 16)
     matrix_a = Tensor(a_np, dtype=dtypes.float16).contiguous().realize()
     matrix_b = Tensor(b_np, dtype=dtypes.float16).contiguous().realize()
     c_data = Tensor(np.zeros(256, dtype=np.float32), dtype=dtypes.float32).contiguous().realize()
@@ -332,11 +332,12 @@ class TestCustomKernel(unittest.TestCase):
     c_data = Tensor.custom_kernel(c_data, matrix_a, matrix_b, fxn=test)[0].realize()
     result = c_data.numpy().reshape(16, 16)
 
-    print("WMMA result (first 4x4):")
-    print(result[:4, :4])
+    expected = a_np.astype(np.float32) @ b_np.astype(np.float32)
 
-    expected = np.full((16, 16), 16.0, dtype=np.float32)
-    np.testing.assert_allclose(result, expected, atol=1e-1, rtol=1e-1)
+    print(f"Result[0,0] = {result[0,0]:.4f}, Expected = {expected[0,0]:.4f}")
+    print(f"Max abs error: {np.max(np.abs(result - expected)):.4f}")
+
+    np.testing.assert_allclose(result, expected, atol=1e-2, rtol=1e-2)
 
 if __name__ == "__main__":
   unittest.main()
