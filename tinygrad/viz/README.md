@@ -7,10 +7,15 @@ VIZ is a tool for:
 
 ## Usage
 
-1. Run with `VIZ=1` (or VIZ=2 to enable SQTT)
+1. Run with `VIZ=1` (other modes available too, see table below)
 2. That's it!
 
-Use `VIZ=-1` or `VIZ=-2` to capture data without launching the UI.
+| VIZ | Behavior |
+| --- | --- |
+| `1` | Collect a trace and launch the web UI |
+| `2` | Collect a trace with SQTT and launch the web UI |
+| `-1` | Collect a trace without launching the web UI |
+| `-2` | Collect a trace with SQTT without launching the web UI |
 
 ### Viewing Traces
 
