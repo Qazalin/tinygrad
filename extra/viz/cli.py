@@ -86,7 +86,7 @@ def main(args) -> None:
         op_name, info = e.name.display_name, e.name.ret or ""
         color = next((v for k,v in viz.wave_colors.items() if k in op_name), None)
         op_str = hex_colored(op_name, color) if color and not args.no_color else op_name
-        phase, delay = None, 0
+        phase, delay = None, None
         idx = next(pkt_idxs.setdefault(e.device, itertools.count()))
         if e.device.startswith("WAVE") or e.device == "OTHER_SIMD":
           inst = f"0x{(pc:=int(info.replace('PC:', ''))):05x} {pc_map[pc]}" if info else f"{'':7} {op_name}"
@@ -97,7 +97,8 @@ def main(args) -> None:
           phase, delay = "EXEC", int(e.st) - dispatch_st
         if inst and phase: info = f"{phase:<8} {inst}"
         unit = e.device.replace(" ", "-")
-        print(f"{int(e.st)-inst_st:<12} {unit:<20} {op_str}{' '*(22-ansilen(op_str))} {int(unwrap(e.en)-e.st):<4} {str(delay or ''):<4} {info}")
+        print(f"{int(e.st)-inst_st:<12} {unit:<20} {op_str}{' '*(22-ansilen(op_str))} {int(unwrap(e.en)-e.st):<4}"+
+              f"{str(delay if delay is not None else ''):<4} {info}")
       return None
 
     # ** Profiler printer
