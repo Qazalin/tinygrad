@@ -9,46 +9,30 @@ from tinygrad.helpers import PROFILE, colored, ansistrip, flatten, TracingKey, P
 from tinygrad.helpers import VIZ, cpu_profile, ProfilePointEvent
 from tinygrad.device import Buffer
 
+from tinygrad.uop.ops import tracked_keys, tracked_ctxs, uop_fields, active_rewrites, active_group, _name_cnt, RewriteTrace
+from tinygrad.viz.serve import get_rewrites, get_full_rewrite, uop_to_json
+
 @track_rewrites(name=True)
 def exec_rewrite(sink:UOp, pm_lst:list[PatternMatcher], names:None|list[str]=None) -> UOp:
   for i,pm in enumerate(pm_lst):
     sink = graph_rewrite(sink, TrackedPatternMatcher(pm.patterns), name=names[i] if names else None)
   return sink
 
-# real VIZ=1 loads the trace from a file, we just keep it in memory for tests
-from tinygrad.uop.ops import tracked_keys, tracked_ctxs, uop_fields, active_rewrites, active_group, _name_cnt, RewriteTrace
-from tinygrad.viz import serve
-serve.trace = RewriteTrace(tracked_keys, tracked_ctxs, uop_fields)
-from tinygrad.viz.serve import get_rewrites, get_full_rewrite, uop_to_json
-def get_viz_list(): return get_rewrites(serve.trace)
+@contextlib... # see the test_profiler stuff
+def save_viz()
+# it should return a viz class with list_items and get_details methof
+
 def get_viz_details(rewrite_idx:int, step:int) -> Generator[dict, None, None]:
   lst = get_viz_list()
   assert len(lst) > rewrite_idx, "only loaded {len(lst)} traces, expecting at least {idx}"
   return get_full_rewrite(tracked_ctxs[rewrite_idx][step])
 
-@unittest.skip("TODO: flaky")
-class BaseTestViz(unittest.TestCase):
-  def setUp(self):
-    # clear the global context
-    for lst in [tracked_keys, tracked_ctxs, active_rewrites, active_group, _name_cnt]: lst.clear()
-    Buffer.profile_events.clear()
-    cpu_events.clear()
-    self.tms = TRACK_MATCH_STATS.value
-    self.profile = PROFILE.value
-    self.viz = VIZ.value
-    TRACK_MATCH_STATS.value = 2
-    PROFILE.value = 1
-    VIZ.value = 1
-  def tearDown(self):
-    TRACK_MATCH_STATS.value = self.tms
-    PROFILE.value = self.profile
-    VIZ.value = self.viz
-
-class TestViz(BaseTestViz):
+class TestViz(unittest.TestCase):
   def test_simple(self):
-    a = UOp.variable("a", 0, 10)
-    exec_rewrite((a+0)*1, [sym])
-    lst = get_viz_list()
+    with save_viz() as viz:
+      a = UOp.variable("a", 0, 10)
+      exec_rewrite((a+0)*1, [sym])
+    lst = viz.list_items()
     # VIZ displays rewrites in groups of tracked functions
     self.assertEqual(len(lst), 1)
     # each group has a list of steps
@@ -240,7 +224,7 @@ def root_rewrite(root:UOp):
   return root.replace(src=new_src)
 root = TrackedPatternMatcher([(UPat(Ops.SINK, src=UPat(Ops.ADD), name="root"), root_rewrite),])
 
-class TestVizTree(BaseTestViz):
+class TestVizTree(unittest.TestCase):
   def assertStepEqual(self, step:dict, want:dict):
     for k,v in want.items():
       self.assertEqual(step[k], v, f"failed at '{k}': {v} != {step[k]}\n{step=}")
@@ -270,7 +254,7 @@ def bufs_allocated() -> int:
   gc.collect()
   return sum([type(x).__name__ == "Buffer" and type(x).__module__ == "tinygrad.device" for x in gc.get_objects()])
 
-class TestVizGC(BaseTestViz):
+class TestVizGC(unittest.TestCase):
   def test_gc(self):
     init = bufs_allocated()
     a = UOp.new_buffer("NULL", 10, dtypes.char)
@@ -297,7 +281,7 @@ class TestVizGC(BaseTestViz):
 from tinygrad import Tensor, Device
 from tinygrad.engine.realize import get_program
 
-class TestVizIntegration(BaseTestViz):
+class TestVizIntegration(unittest.TestCase):
   # codegen supports rendering of code blocks
   def test_codegen_tracing(self):
     ast = Tensor.schedule(Tensor.empty(4)+Tensor.empty(4))[0].ast
@@ -382,7 +366,7 @@ from extra.viz.cli import decode_profile
 
 def load_profile(lst:list[ProfileEvent]) -> dict: return decode_profile(get_profile(lst))
 
-class TestVizProfiler(BaseTestViz):
+class TestVizProfiler(unittest.TestCase):
   def test_transfer_uses_copy_device(self):
     a = Tensor.ones(1, device="NULL").contiguous().realize()
     a.to("NULL:1").realize()
@@ -577,7 +561,7 @@ def _alloc(b:int):
   a.uop.buffer.allocate()
   return a
 
-class TestVizMemoryLayout(BaseTestViz):
+class TestVizMemoryLayout(unittest.TestCase):
   def test_double_alloc(self):
     a = _alloc(1)
     _b = _alloc(1)
