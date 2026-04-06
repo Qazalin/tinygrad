@@ -32,7 +32,8 @@ def main() -> int:
               if k in p: pipes[k] += 1
           util_str = [f"{t:<12}"]
           for p,util in pipes.items():
-            util_str.append(colored(p, "GREEN" if util > 0 else None))
+            #util_str.append(colored(p, "GREEN" if util > 0 else None))
+            util_str.append("·" if util == 0 else "█")
           print(" ".join(util_str))
       for t in arrived: del active[t]
 
