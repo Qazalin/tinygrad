@@ -205,5 +205,138 @@ class TestCustomKernel(unittest.TestCase):
 
     np.testing.assert_allclose(result, expected, atol=1e-2, rtol=1e-2)
 
+  def test_global_load_a_and_b(self):
+    """Test loading A (row-major) and B (row-major with transpose) together.
+
+    This simulates the GEMM input setup:
+    - A-matrix: loaded with GLOBAL_LOAD_B128 (already in correct row-major for WMMA)
+    - B-matrix: loaded with GLOBAL_LOAD_TR_B128 (transposed from row-major to column-major)
+    """
+    def test(A_data:UOp, B_data:UOp, Matrix_a:UOp, Matrix_b:UOp) -> UOp:
+      A_data = A_data.flatten().base
+      B_data = B_data.flatten().base
+      Matrix_a = Matrix_a.flatten().base
+      Matrix_b = Matrix_b.flatten().base
+      threads = UOp.special(32, "lidx0")
+      k = Kernel(ARCH); e = k.emit
+      # Load buffer descriptors
+      e(s_load_b64(sdata=s[(a_out_ptr:=4):a_out_ptr+1], sbase=s_kernarg, ioffset=ptr_offset(A_data), soffset=NULL))
+      e(s_load_b64(sdata=s[(b_out_ptr:=6):b_out_ptr+1], sbase=s_kernarg, ioffset=ptr_offset(B_data), soffset=NULL))
+      e(s_load_b64(sdata=s[(a_in_ptr:=8):a_in_ptr+1], sbase=s_kernarg, ioffset=ptr_offset(Matrix_a), soffset=NULL))
+      e(s_load_b64(sdata=s[(b_in_ptr:=10):b_in_ptr+1], sbase=s_kernarg, ioffset=ptr_offset(Matrix_b), soffset=NULL))
+      e(s_wait_kmcnt(simm16=0))
+      # Get lane ID
+      e(dims.thread_idx(v[lane_id:=0]))
+      # Compute address: lane_id * 16
+      e(v_lshlrev_b32_e32(vdst=v[addr:=1], src0=4, vsrc1=v[lane_id]))
+      # Load A with GLOBAL_LOAD_B128 (no transpose)
+      e(global_load_b128(vdst=v[10:13], vaddr=v[addr:addr+1], saddr=s[a_in_ptr:a_in_ptr+1]))
+      # Load B with GLOBAL_LOAD_TR_B128 (with transpose)
+      e(global_load_tr_b128(vdst=v[20:23], vaddr=v[addr:addr+1], saddr=s[b_in_ptr:b_in_ptr+1]))
+      e(s_wait_loadcnt(simm16=0))
+      # Store outputs
+      e(v_lshlrev_b32_e32(vdst=v[out_addr_a:=2], src0=4, vsrc1=v[lane_id]))
+      e(v_lshlrev_b32_e32(vdst=v[out_addr_b:=3], src0=4, vsrc1=v[lane_id]))
+      e(global_store_b128(vaddr=v[out_addr_a:out_addr_a+1], vsrc=v[10:13], saddr=s[a_out_ptr:a_out_ptr+1]))
+      e(global_store_b128(vaddr=v[out_addr_b:out_addr_b+1], vsrc=v[20:23], saddr=s[b_out_ptr:b_out_ptr+1]))
+      e(s_wait_storecnt(simm16=0))
+      e(s_endpgm())
+      sink = UOp.sink(A_data.base, B_data.base, Matrix_a.base, Matrix_b.base, threads,
+                      arg=KernelInfo("test_global_load_a_and_b"))
+      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"),
+                   UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in k.finalize()]))))
+
+    # Input: both row-major
+    matrix_a = Tensor(np.arange(256, dtype=np.float16).reshape(16, 16), dtype=dtypes.float16).contiguous().realize()
+    matrix_b = Tensor(np.arange(256, 512, dtype=np.float16).reshape(16, 16), dtype=dtypes.float16).contiguous().realize()
+    a_data = Tensor(np.zeros(256, dtype=np.float16), dtype=dtypes.float16).contiguous().realize()
+    b_data = Tensor(np.zeros(256, dtype=np.float16), dtype=dtypes.float16).contiguous().realize()
+
+    # Run kernel
+    a_data, b_data = Tensor.custom_kernel(a_data, b_data, matrix_a, matrix_b, fxn=test)[:2]
+    a_data, b_data = a_data.realize(), b_data.realize()
+
+    a_result = a_data.numpy().reshape(32, 8)
+    b_result = b_data.numpy().reshape(32, 8)
+
+    # Expected A: loaded directly (contiguous 16 bytes per lane)
+    a_expected = np.zeros((32, 8), dtype=np.float16)
+    flat_a = matrix_a.numpy().reshape(-1)
+    for lane in range(32):
+      for j in range(8):
+        a_expected[lane, j] = flat_a[lane * 8 + j]
+
+    # Expected B: transposed to lane-major
+    transposed_b = matrix_b.permute(1, 0).numpy()
+    b_expected = np.zeros((32, 8), dtype=np.float16)
+    for lane in range(32):
+      rb, ci = lane >> 3, lane & 7
+      for j in range(4):
+        b_expected[lane, 2*j + 0] = transposed_b[ci + 0, 4*rb + j]
+        b_expected[lane, 2*j + 1] = transposed_b[ci + 8, 4*rb + j]
+
+    np.testing.assert_allclose(a_result, a_expected, atol=1e-2, rtol=1e-2)
+    np.testing.assert_allclose(b_result, b_expected, atol=1e-2, rtol=1e-2)
+
+  def test_wmma_f32_16x16x16_f16(self):
+    """Test V_WMMA_F32_16X16X16_F16 with correct load instructions.
+
+    Per RDNA4 ISA spec 11.6 table:
+    - A-matrix (row-major in VGPRs): GLOBAL_LOAD_B128
+    - B-matrix (column-major in VGPRs): GLOBAL_LOAD_TR_B128
+    
+    C = A @ B where:
+    - A: 16x16 row-major FP16 in memory, loaded to row-major VGPRs
+    - B: 16x16 row-major FP16 in memory, loaded to column-major VGPRs
+    - C: 16x16 FP32 accumulator
+    """
+    def test(C_data:UOp, Matrix_a:UOp, Matrix_b:UOp) -> UOp:
+      C_data = C_data.flatten().base
+      Matrix_a = Matrix_a.flatten().base
+      Matrix_b = Matrix_b.flatten().base
+      threads = UOp.special(32, "lidx0")
+      k = Kernel(ARCH); e = k.emit
+      e(s_load_b64(sdata=s[(c_ptr:=4):c_ptr+1], sbase=s_kernarg, ioffset=ptr_offset(C_data), soffset=NULL))
+      e(s_load_b64(sdata=s[(a_ptr:=6):a_ptr+1], sbase=s_kernarg, ioffset=ptr_offset(Matrix_a), soffset=NULL))
+      e(s_load_b64(sdata=s[(b_ptr:=8):b_ptr+1], sbase=s_kernarg, ioffset=ptr_offset(Matrix_b), soffset=NULL))
+      e(s_wait_kmcnt(simm16=0))
+      e(dims.thread_idx(v[lane_id:=0]))
+      # Each lane loads 16 bytes (8 FP16 values) from its slice
+      e(v_lshlrev_b32_e32(vdst=v[addr_a:=1], src0=4, vsrc1=v[lane_id]))
+      e(v_lshlrev_b32_e32(vdst=v[addr_b:=2], src0=4, vsrc1=v[lane_id]))
+      # Load A with GLOBAL_LOAD_B128 -> row-major VGPRs
+      e(global_load_b128(vdst=v[10:13], vaddr=v[addr_a:addr_a+1], saddr=s[a_ptr:a_ptr+1]))
+      # Load B with GLOBAL_LOAD_TR_B128 -> column-major VGPRs
+      e(global_load_tr_b128(vdst=v[20:23], vaddr=v[addr_b:addr_b+1], saddr=s[b_ptr:b_ptr+1]))
+      e(s_wait_loadcnt(simm16=0))
+      for i in range(8):
+        e(v_mov_b32_e32(vdst=v[30+i], src0=0))
+      e(v_wmma_f32_16x16x16_f16(vdst=v[30:37], src0=v[10:13], src1=v[20:23], src2=v[30:37]))
+      e(v_lshlrev_b32_e32(vdst=v[out_addr:=3], src0=5, vsrc1=v[lane_id]))
+      e(global_store_b128(vaddr=v[out_addr:out_addr+1], vsrc=v[30:33], saddr=s[c_ptr:c_ptr+1]))
+      e(global_store_b128(vaddr=v[out_addr:out_addr+1], vsrc=v[34:37], saddr=s[c_ptr:c_ptr+1], ioffset=16))
+      e(s_wait_storecnt(simm16=0))
+      e(s_endpgm())
+      sink = UOp.sink(C_data.base, Matrix_a.base, Matrix_b.base, threads,
+                      arg=KernelInfo("test_wmma_f32_16x16x16_f16"))
+      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"),
+                   UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in k.finalize()]))))
+
+    # Test: All-ones matrices -> each C[i,j] = sum(1*1) = 16
+    a_np = np.ones((16, 16), dtype=np.float16)
+    b_np = np.ones((16, 16), dtype=np.float16)
+    matrix_a = Tensor(a_np, dtype=dtypes.float16).contiguous().realize()
+    matrix_b = Tensor(b_np, dtype=dtypes.float16).contiguous().realize()
+    c_data = Tensor(np.zeros(256, dtype=np.float32), dtype=dtypes.float32).contiguous().realize()
+
+    c_data = Tensor.custom_kernel(c_data, matrix_a, matrix_b, fxn=test)[0].realize()
+    result = c_data.numpy().reshape(16, 16)
+
+    print("WMMA result (first 4x4):")
+    print(result[:4, :4])
+
+    expected = np.full((16, 16), 16.0, dtype=np.float32)
+    np.testing.assert_allclose(result, expected, atol=1e-1, rtol=1e-1)
+
 if __name__ == "__main__":
   unittest.main()
