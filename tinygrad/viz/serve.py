@@ -167,6 +167,7 @@ def get_full_rewrite(ctx:TrackedGraphRewrite) -> Generator[GraphRewriteDetails, 
            "diff":list(difflib.unified_diff(pystr(u0).splitlines(), pystr(u1).splitlines())), "upat":(upat_loc, match_repr)}
     if not ctx.bottom_up: next_sink = new_sink
 
+@functools.cache
 def get_prg_uop(i:int) -> UOp|None:
   s = next((s for s in trace.rewrites[i] if s.name == "View Program"), None)
   return _reconstruct(s.sink, depth=1) if s is not None else None
@@ -187,21 +188,43 @@ def rel_ts(ts:int|Decimal, start_ts:int, ctx:str="") -> int:
 
 # Profiler API
 
+_0 = Decimal(0)
 device_ts_diffs:dict[str, Decimal] = {}
-def cpu_ts_diff(device:str) -> Decimal: return device_ts_diffs.get(device, Decimal(0))
+def cpu_ts_diff(device:str) -> Decimal: return device_ts_diffs.get(device, _0)
 
 DevEvent = ProfileRangeEvent|ProfileGraphEntry|ProfilePointEvent
 def flatten_events(profile:list[ProfileEvent]) -> Generator[tuple[Decimal, Decimal, DevEvent], None, None]:
+  # Cache ts_diff lookups locally to avoid repeated dict.get calls
+  _ts_diffs:dict[str, Decimal] = {}
   for e in profile:
-    if isinstance(e, ProfileRangeEvent): yield (e.st+(diff:=cpu_ts_diff(e.device)), (e.en if e.en is not None else e.st)+diff, e)
-    elif isinstance(e, ProfilePointEvent): yield (e.ts, e.ts, e)
-    elif isinstance(e, ProfileGraphEvent):
+    # Use type() for faster dispatch on hot path (ProfileRangeEvent is most common)
+    t = type(e)
+    if t is ProfileRangeEvent:
+      if (d:=e.device) not in _ts_diffs: _ts_diffs[d] = device_ts_diffs.get(d, _0)
+      yield (e.st+(diff:=_ts_diffs[d]), (e.en if e.en is not None else e.st)+diff, e)
+    elif t is ProfilePointEvent: yield (e.ts, e.ts, e)
+    elif t is ProfileGraphEvent:
       cpu_ts = []
-      for ent in e.ents: cpu_ts += [e.sigs[ent.st_id]+(diff:=cpu_ts_diff(ent.device)), e.sigs[ent.en_id]+diff]
+      for ent in e.ents:
+        if (d:=ent.device) not in _ts_diffs: _ts_diffs[d] = device_ts_diffs.get(d, _0)
+        cpu_ts += [e.sigs[ent.st_id]+_ts_diffs[d], e.sigs[ent.en_id]+_ts_diffs[d]]
       yield (st:=min(cpu_ts)), (et:=max(cpu_ts)), ProfileRangeEvent(f"{e.ents[0].device.split(':')[0]} Graph", f"batched {len(e.ents)}", st, et)
       for i,ent in enumerate(e.ents): yield (cpu_ts[i*2], cpu_ts[i*2+1], ent)
 
 # normalize event timestamps and attach kernel metadata
+# Precompute name->(ref, ctx_name) and TracingKey keys->ref mappings to avoid repeated lookups
+_name_to_ctx:dict[str, tuple[int|None,str|None]] = {}
+_tk_keys_to_ref:dict[tuple, int|None] = {}
+def _get_name_ctx(name:str) -> tuple[int|None,str|None]:
+  if (ret:=_name_to_ctx.get(name)) is None and name not in _name_to_ctx:
+    ref = ref_map.get(name)
+    _name_to_ctx[name] = ret = (ref, ctxs[ref]["name"] if ref is not None and ctxs else None)
+  return ret
+def _get_tk_ref(keys:tuple) -> int|None:
+  if keys not in _tk_keys_to_ref:
+    _tk_keys_to_ref[keys] = next((v for k in keys if (v:=ref_map.get(k)) is not None), None)
+  return _tk_keys_to_ref[keys]
+
 def timeline_layout(dev_events:list[tuple[int, int, float, DevEvent]], start_ts:int, scache:dict[str, int]) -> bytes|None:
   events:list[bytes] = []
   exec_points:dict[str, ProfilePointEvent] = {}
@@ -209,8 +232,9 @@ def timeline_layout(dev_events:list[tuple[int, int, float, DevEvent]], start_ts:
     if isinstance(e, ProfilePointEvent) and e.name == "exec": exec_points[e.arg["name"]] = e
     if dur == 0: continue
     name, fmt, key = e.name, [], None
-    if (ref:=ref_map.get(name)) is not None and ctxs:
-      name = ctxs[ref]["name"]
+    ref, ctx_name = _get_name_ctx(name) if isinstance(name, str) else (None, None)
+    if ref is not None:
+      name = ctx_name
       if (p:=get_prg_uop(ref)) is not None and (ei:=exec_points.get(p.src[0].arg.name)) is not None:
         flops = sym_infer((estimates:=p.src[0].arg.estimates).ops, var_vals:=ei.arg['var_vals'])/(t:=dur*1e-6)
         membw, ldsbw = sym_infer(estimates.mem, var_vals)/t, sym_infer(estimates.lds, var_vals)/t
@@ -222,7 +246,7 @@ def timeline_layout(dev_events:list[tuple[int, int, float, DevEvent]], start_ts:
         key = ei.key
     elif isinstance(e.name, TracingKey):
       name = e.name.display_name
-      ref = next((v for k in e.name.keys if (v:=ref_map.get(k)) is not None), None)
+      ref = _get_tk_ref(e.name.keys)
       if isinstance(e.name.ret, str): fmt.append(e.name.ret)
       elif isinstance(e.name.ret, int):
         membw = e.name.ret / (dur * 1e-6)
