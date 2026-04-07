@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import multiprocessing, pickle, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, functools, codecs, io, struct, re
+import multiprocessing, pickle, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, functools, codecs, io, ctypes, re
 import pathlib, traceback, itertools, socketserver
 from contextlib import redirect_stdout, redirect_stderr, contextmanager
 from decimal import Decimal
@@ -173,6 +173,39 @@ def get_prg_uop(i:int) -> UOp|None:
 
 # encoder helpers
 
+class TimelineEvent(ctypes.LittleEndianStructure):
+  _pack_ = 1
+  _fields_ = [("name", ctypes.c_uint32), ("ref", ctypes.c_uint32), ("key", ctypes.c_uint32),
+              ("ts", ctypes.c_uint32), ("dur", ctypes.c_float), ("fmt", ctypes.c_uint32)]
+
+class TimelineHeader(ctypes.LittleEndianStructure):
+  _pack_ = 1
+  _fields_ = [("type", ctypes.c_uint8), ("count", ctypes.c_uint32)]
+
+class MemFreeHeader(ctypes.LittleEndianStructure):
+  _pack_ = 1
+  _fields_ = [("type", ctypes.c_uint8), ("ts", ctypes.c_uint32), ("key", ctypes.c_uint32), ("count", ctypes.c_uint32)]
+
+class MemFreeEntry(ctypes.LittleEndianStructure):
+  _pack_ = 1
+  _fields_ = [("run_id", ctypes.c_uint32), ("display_name", ctypes.c_uint32), ("buf_num", ctypes.c_uint32), ("mode", ctypes.c_uint8)]
+
+class GraphHeader(ctypes.LittleEndianStructure):
+  _pack_ = 1
+  _fields_ = [("type", ctypes.c_uint8), ("count", ctypes.c_uint32), ("is_line", ctypes.c_uint8), ("peak", ctypes.c_uint64)]
+
+class GraphLinePoint(ctypes.LittleEndianStructure):
+  _pack_ = 1
+  _fields_ = [("x", ctypes.c_uint32), ("y", ctypes.c_uint64)]
+
+class AllocEvent(ctypes.LittleEndianStructure):
+  _pack_ = 1
+  _fields_ = [("type", ctypes.c_uint8), ("ts", ctypes.c_uint32), ("key", ctypes.c_uint32), ("dtype", ctypes.c_uint32), ("sz", ctypes.c_uint64)]
+
+class ProfileHeader(ctypes.LittleEndianStructure):
+  _pack_ = 1
+  _fields_ = [("end_ts", ctypes.c_uint32), ("peak", ctypes.c_uint64), ("index_len", ctypes.c_uint32), ("row_count", ctypes.c_uint32)]
+
 def enum_str(s, cache:dict[str, int]) -> int:
   if (cret:=cache.get(s)) is not None: return cret
   cache[s] = ret = len(cache)
@@ -228,9 +261,9 @@ def timeline_layout(dev_events:list[tuple[int, int, float, DevEvent]], start_ts:
         membw = e.name.ret / (dur * 1e-6)
         fmt.append(f"{membw*1e-9:.0f} GB/s" if membw < 1e13 else f"{membw*1e-12:.0f} TB/s")
       elif e.name.tb: fmt.append("TB:"+json.dumps(e.name.tb))
-    events.append(struct.pack("<IIIIfI", enum_str(name, scache), option(ref), option(key), rel_ts(st,start_ts, f"'{name}' on {e.device}"),
-                              dur, enum_str("\n".join(fmt),scache)))
-  return struct.pack("<BI", 0, len(events))+b"".join(events) if events else None
+    events.append(bytes(TimelineEvent(enum_str(name, scache), option(ref), option(key), rel_ts(st,start_ts, f"'{name}' on {e.device}"),
+                                      dur, enum_str("\n".join(fmt),scache))))
+  return bytes(TimelineHeader(0, len(events)))+b"".join(events) if events else None
 
 def encode_mem_free(key:int, ts:int, execs:list[ProfilePointEvent], scache:dict) -> bytes:
   ei_encoding:list[tuple[int, int, int, int]] = [] # <[u32, u32, u32, u8] [run id, display name, buffer number and mode (2 = r/w, 1 = w, 0 = r)]
@@ -238,14 +271,14 @@ def encode_mem_free(key:int, ts:int, execs:list[ProfilePointEvent], scache:dict)
     num = next(i for i,k in enumerate(e.arg["bufs"]) if k == key)
     mode = 2 if (num in e.arg["inputs"] and num in e.arg["outputs"]) else 1 if (num in e.arg["outputs"]) else 0
     ei_encoding.append((e.key, enum_str(e.arg["name"], scache), num, mode))
-  return struct.pack("<BIII", 0, ts, key, len(ei_encoding))+b"".join(struct.pack("<IIIB", *t) for t in ei_encoding)
+  return bytes(MemFreeHeader(0, ts, key, len(ei_encoding)))+b"".join(bytes(MemFreeEntry(*t)) for t in ei_encoding)
 
 def graph_layout(k:str, dev_events:list[tuple[int, int, float, DevEvent]], start_ts:int, end_ts:int, peaks:list[int], dtype_size:dict[str, int],
                  scache:dict[str, int]) -> tuple[str, bytes|None]:
   if k.startswith("LINE:"):
     xy = [(rel_ts(e.ts, start_ts, f"line '{k}' on {e.device}"), e.key) for st,_,_,e in dev_events if isinstance(e, ProfilePointEvent)]
     peaks.append(peak:=max([y for _,y in xy]))
-    return k.replace("LINE:", ""), struct.pack("<BIBQ", 1, len(xy), 1, peak)+b"".join(struct.pack("<IQ", x, y) for x,y in xy)
+    return k.replace("LINE:", ""), bytes(GraphHeader(1, len(xy), 1, peak))+b"".join(bytes(GraphLinePoint(x, y)) for x,y in xy)
   peak, mem = 0, 0
   temp:dict[int, int] = {}
   events:list[bytes] = []
@@ -254,7 +287,7 @@ def graph_layout(k:str, dev_events:list[tuple[int, int, float, DevEvent]], start
     if not isinstance(e, ProfilePointEvent): continue
     if e.name == "alloc":
       safe_sz = min(1_000_000_000_000, e.arg["sz"])
-      events.append(struct.pack("<BIIIQ", 1, rel_ts(e.ts, start_ts, f"alloc on {e.device}"), e.key, enum_str(e.arg["dtype"].name, scache), safe_sz))
+      events.append(bytes(AllocEvent(1, rel_ts(e.ts, start_ts, f"alloc on {e.device}"), e.key, enum_str(e.arg["dtype"].name, scache), safe_sz)))
       dtype_size.setdefault(e.arg["dtype"].name, e.arg["dtype"].itemsize)
       temp[e.key] = nbytes = safe_sz*e.arg["dtype"].itemsize
       mem += nbytes
@@ -266,7 +299,7 @@ def graph_layout(k:str, dev_events:list[tuple[int, int, float, DevEvent]], start
       mem -= temp.pop(e.key)
   for t in temp: events.append(encode_mem_free(t, rel_ts(end_ts, start_ts, f"end_ts for {k}"), buf_ei.pop(t, []), scache))
   peaks.append(peak)
-  return f"{k} Memory", struct.pack("<BIBQ", 1, len(events), 0, peak)+b"".join(events) if events else None
+  return f"{k} Memory", bytes(GraphHeader(1, len(events), 0, peak))+b"".join(events) if events else None
 
 # by default, VIZ does not start when there is an error
 # use this to instead display the traceback to the user
@@ -490,11 +523,11 @@ def get_profile(profile:list[ProfileEvent], sort_fn:Callable[[str], Any]=device_
     layout[k] = timeline_layout(v, start_ts, scache)
     layout.update([graph_layout(k, v, start_ts, unwrap(end_ts), peaks, dtype_size, scache)])
   sorted_layout = sorted([k for k,v in layout.items() if v is not None], key=sort_fn)
-  ret = [b"".join([struct.pack("<B", len(k)), k.encode(), unwrap(layout[k])]) for k in sorted_layout]
+  ret = [b"".join([bytes(ctypes.c_uint8(len(k))), k.encode(), unwrap(layout[k])]) for k in sorted_layout]
   index = json.dumps({"strings":list(scache), "dtypeSize":dtype_size,
                       "markers":[{"ts":rel_ts(e.ts, start_ts, f"marker '{e.arg.get('name','?')}'"), **e.arg} for e in markers],
                       **ext_data}).encode()
-  return struct.pack("<IQII", rel_ts(unwrap(end_ts), start_ts, "end_ts"), max(peaks,default=0), len(index), len(ret))+index+b"".join(ret)
+  return bytes(ProfileHeader(rel_ts(unwrap(end_ts), start_ts, "end_ts"), max(peaks,default=0), len(index), len(ret)))+index+b"".join(ret)
 
 # ** PMA counters
 
