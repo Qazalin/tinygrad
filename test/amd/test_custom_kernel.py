@@ -8,7 +8,7 @@ from tinygrad.dtype import AddrSpace
 from tinygrad.runtime.autogen.amd.rdna3.ins import *
 import tinygrad.runtime.autogen.amd.rdna3.ins as r3
 import tinygrad.runtime.autogen.amd.rdna4.ins as r4
-from tinygrad.renderer.amd.dsl import s, v
+from tinygrad.renderer.amd.dsl import s, v, EXEC_LO
 from test.amd.helpers import TARGET_TO_ARCH
 from extra.gemm.amd_asm_matmul import Kernel
 
@@ -146,6 +146,27 @@ def custom_data_deps(A:UOp, arch:str) -> UOp:
   sink = UOp.sink(A.base, threads, arg=KernelInfo("custom_data_deps"))
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in insts]))))
 
+WAVE_SIZE = 32
+def custom_runtime_noops(A:UOp, arch:str):
+  threads = UOp.special(WAVE_SIZE*4, "lidx0")
+  k = Kernel()
+  k.emit(v_lshrrev_b32_e32(v[1], 5, v[0]))     # v1 = warp_id
+  k.emit(v_and_b32_e32(v[1], 1, v[1]))         # v1 = warp_id & 1
+  k.emit(v_cmp_eq_u32_e32(0, v[1]))
+  k.emit(s_cbranch_vccz(), target="odd")
+  k.emit(v_mul_lo_u32(v[2], v[3], v[4]))
+  k.emit(s_branch(), target="done")
+  k.label("odd")
+  k.emit(v_add_f32_e32(v[2], v[3], v[4]))
+  k.label("done")
+  k.emit(r4.s_barrier_signal(ssrc0=-1))
+  k.emit(r4.s_barrier_wait(simm16=-1))
+  k.emit(s_mov_b32(EXEC_LO, 0))
+  k.emit(s_endpgm())
+  insts = k.finalize()
+  sink = UOp.sink(A.base, threads, arg=KernelInfo("custom_runtime_noops"))
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in insts]))))
+
 @unittest.skipUnless(Device.DEFAULT == "AMD", "requires AMD device")
 class TestCustomKernel(unittest.TestCase):
   def setUp(self): self.arch = TARGET_TO_ARCH[Device["AMD"].arch]
@@ -191,6 +212,12 @@ class TestCustomKernel(unittest.TestCase):
     a = Tensor.custom_kernel(a, fxn=functools.partial(custom_data_deps, arch=self.arch))[0]
     a.realize()
     self.assertTrue((a.numpy() == 6.0).all())
+
+  def test_runtime_noops(self):
+    if self.arch != "rdna4": self.skipTest("only on rdna4")
+    a = Tensor.empty(1)
+    a = Tensor.custom_kernel(a, fxn=functools.partial(custom_runtime_noops, arch=self.arch))[0]
+    a.realize()
 
 if __name__ == "__main__":
   unittest.main()
