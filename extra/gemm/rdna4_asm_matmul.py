@@ -41,17 +41,11 @@ def build_kernel(N, arch='gfx1200'):
 
   e(v_lshlrev_b32_e32(v[4], 5, v[0]))
   # B store: transposed layout for stride-32 reads. addr = LDS_B_OFF + (tid%8)*512 + (tid/8)*32
-  e(v_and_b32_e32(v[48], 7, v[0])); e(v_lshlrev_b32_e32(v[5], 9, v[48]))   # (tid%8)*512
-  e(v_lshrrev_b32_e32(v[48], 3, v[0])); e(v_lshlrev_b32_e32(v[48], 5, v[48]))  # (tid/8)*32
-  e(v_add_nc_u32_e32(v[5], v[5], v[48])); e(v_add_nc_u32_e32(v[5], LDS_B_OFF, v[5]))
+  #e(v_and_b32_e32(v[48], 7, v[0])); e(v_lshlrev_b32_e32(v[5], 9, v[48]))   # (tid%8)*512
+  #e(v_lshrrev_b32_e32(v[48], 3, v[0])); e(v_lshlrev_b32_e32(v[48], 5, v[48]))  # (tid/8)*32
+  #e(v_add_nc_u32_e32(v[5], v[5], v[48])); e(v_add_nc_u32_e32(v[5], LDS_B_OFF, v[5]))
 
-  e(v_add_nc_u32_e32(v[48], s[11], v[0]))
-  e(v_mul_lo_u32(v[6], v[48], N*ELEM)); e(v_mov_b32_e32(v[7], 0))
-  e(v_lshrrev_b32_e32(v[48], 3, v[0])); e(v_mul_lo_u32(v[8], v[48], N*ELEM))
-  e(v_and_b32_e32(v[48], 7, v[0])); e(v_lshlrev_b32_e32(v[48], 5, v[48]))
-  e(v_add_nc_u32_e32(v[8], v[8], v[48]))
-  e(s_mul_i32(s[15], s[10], ELEM)); e(v_add_nc_u32_e32(v[8], s[15], v[8]))
-  e(v_mov_b32_e32(v[9], 0))
+  e(v_add_nc_u32_e32(v[5], LDS_B_OFF, v[4]))
 
   # LDS read addrs with padded strides (eliminates bank conflicts)
   # A: (lane%16)*LDS_A_ROW + (lane/16)*16 + wave_m*64*LDS_A_ROW
