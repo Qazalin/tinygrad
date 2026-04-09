@@ -10,6 +10,7 @@ p1=$!
 DEV=AMD python test/test_tiny.py TestTiny.test_plus
 
 # note: this seems to take the machine down.
-sudo lsof /tmp/am_0000:83:00.0.lock &
+sleep 5
+sudo lsof /tmp/am_0000:83:00.0.lock
 
 wait "$p1"
