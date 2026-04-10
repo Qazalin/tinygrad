@@ -16,11 +16,10 @@ def _fp8_quantize_grad(shape, device):
   """STE gradient for fp8 quantization: dx = dout * scale"""
   def grad(dou:UOp, ker:UOp) -> tuple[None, None, None, UOp, None]:
     # dou is gradient w.r.t. first output (out_fp8)
-    # ker.src[1] is out_inv_scale after the kernel runs
+    # ker.src[1] = out_fp8, ker.src[2] = out_inv_scale, etc.
     dout = Tensor(dou, device=dou.device)
-    inv_scale = Tensor(ker.src[1].after(ker), device=ker.src[1].device)
+    inv_scale = Tensor(ker.src[2].after(ker), device=ker.src[2].device)
     # STE: gradient flows through as dx = dout * scale = dout / inv_scale
-    # cast dout to float, scale, then cast back to bf16
     scale = 1.0 / inv_scale
     dx = (dout.float() * scale).cast(dtypes.bfloat16).reshape(shape)
     return None, None, None, dx.uop, None
