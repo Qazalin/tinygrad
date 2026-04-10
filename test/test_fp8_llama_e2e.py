@@ -4,7 +4,7 @@ import os, unittest
 os.environ["ASM_GEMM"] = "1"
 
 from tinygrad import Tensor, dtypes, Context, getenv
-from examples.mlperf.models.flat_llama import matmul as ref_matmul
+from examples.mlperf.models.flat_llama import matmul as ref_matmul, quantize_fp8 as flat_fp8_quantize
 
 FP8 = getenv("FP8", 0)
 FP8_DTYPE = dtypes.fp8e4m3
@@ -32,6 +32,22 @@ def new_matmul(x:Tensor, w:Tensor, fp8=FP8, amax_x:Tensor|None=None, amax_w:Tens
 
 
 class TestFP8Flat(unittest.TestCase):
+  def test_quantize_fp8_simple(self):
+    Tensor.manual_seed(0)
+    x = Tensor.randn(1, 256, 512, dtype=dtypes.bfloat16).contiguous()
+    amax_state = Tensor.full((), FP8_MAX, dtype=dtypes.float, device=x.device).contiguous().requires_grad_(False)
+    with Context(DEBUG=0):
+      Tensor.realize(x, amax_state)
+
+    q_new, s_new, a_new = quantize_fp8(x, amax_state=amax_state)
+    q_ref, s_ref, a_ref = flat_fp8_quantize(x, amax_state=amax_state)
+    with Context(DEBUG=0):
+      Tensor.realize(q_new, s_new, a_new, q_ref, s_ref, a_ref)
+
+    assert q_new.allclose(q_ref, atol=0, rtol=0), "quantized fp8 mismatch"
+    assert s_new.allclose(s_ref, atol=0, rtol=0), "inverse scale mismatch"
+    assert a_new.allclose(a_ref, atol=0, rtol=0), "new_amax mismatch"
+
   def test_gemm(self):
     Tensor.manual_seed(0)
     x_rand = Tensor.randn(1, 8192, 14336, dtype=dtypes.bfloat16).contiguous()
