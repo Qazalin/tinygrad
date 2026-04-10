@@ -6,9 +6,11 @@ from examples.mlperf.models.flat_llama import matmul
 
 if __name__ == "__main__":
   Tensor.manual_seed(0)
-  x = Tensor.randn(1, 8192, 14336, dtype=dtypes.bfloat16)
-  w = Tensor.randn(4096, 14336, dtype=dtypes.bfloat16)
+  x = Tensor.randn(1, 8192, 14336, dtype=dtypes.bfloat16, requires_grad=True)
+  w = Tensor.randn(4096, 14336, dtype=dtypes.bfloat16, requires_grad=True)
   with Context(DEBUG=0):
     Tensor.realize(x, w)
   y, x_amax, w_amax = matmul(x, w, fp8=True)
-  Tensor.realize(y, x_amax, w_amax)
+  loss = y.float().sum()
+  loss.backward()
+  Tensor.realize(loss, x.grad, w.grad)
