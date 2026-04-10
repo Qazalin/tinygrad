@@ -2645,6 +2645,23 @@ def custom_hk_fp8_gemm(C:UOp, A:UOp, B:UOp, S:UOp, dname:str) -> UOp:
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
                                UOp(Ops.BINARY, arg=lib)))
 
+@functools.cache
+def custom_hk_fp8_fused_gemm(C:UOp, A:UOp, B:UOp, S:UOp, dname:str) -> UOp:
+  M, K = A.shape[0]*A.shape[1], A.shape[2]
+  N, K2 = B.shape[(1 if B.ndim == 3 else 0):]
+  assert K == K2, f"{A.shape} {B.shape}"
+  block_size = 256
+  threads = UOp.special(64 * 8, "lidx0")
+  workgroups = UOp.special((M // block_size) * (N // block_size), "gidx0")
+  sink = UOp.sink(C.base, A.base, B.base, S.base, threads, workgroups,
+                  arg=KernelInfo(f"hk_fp8_fused_gemm_{M}_{N}_{K}", estimates=Estimates(ops=2*M*N*K, mem=(M*K+N*K)*A.dtype.itemsize+M*N*C.dtype.itemsize)))
+  kittens_path = pathlib.Path(__file__).parent.parent/"thunder"/"amd"
+  src = (kittens_path/"gemm_fp8.cpp").read_text()
+  lib = HIPCCCompiler("gfx950", [f"-I{(kittens_path/'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math",
+                                 "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DGEMM_M={M}", f"-DGEMM_N={N}", f"-DGEMM_K={K}"]).compile_cached(src)
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
+                               UOp(Ops.BINARY, arg=lib)))
+
 counters = {"used":0, "todos":[]}
 def todo(msg:str) -> bool: counters["todos"].append(msg); return False
 def _asm_gemm_report():
@@ -2696,8 +2713,10 @@ def custom_uop_gemm(C:UOp, A:UOp, B:UOp) -> UOp:
 
 # ** backward gemm, might use the asm gemm
 
-def custom_gemm_bw(gradient:UOp, kernel:UOp):
+def custom_gemm_bw(gradient:UOp, kernel:UOp, fused:bool=False):
   inputs = kernel.src[1:]
+  kname = kernel.arg.name if isinstance(kernel.arg, KernelInfo) else ""
+  fused = fused or ("hk_fp8_fused_gemm" in kname)
   # fp8 scaled gemm has 4 inputs (out, a, b, scale), others have 3 (out, a, b)
   if len(inputs) == 4:
     out, a, b, scale = inputs
@@ -2707,9 +2726,9 @@ def custom_gemm_bw(gradient:UOp, kernel:UOp):
     g_fp8, g_scale, _ = quantize_fp8(g_t)
     bw_scale = g_scale * s_t
     # dgrad: g_fp8 @ weight (asm_gemm computes a@b)
-    grad_a = asm_gemm(g_fp8, b_t, combined_scale=bw_scale)
+    grad_a = asm_gemm(g_fp8, b_t, combined_scale=bw_scale, fused=fused)
     # wgrad: g_fp8.T @ activation = (N, batch*seq) @ (batch*seq, K) → use permute to preserve sharding
-    grad_b = asm_gemm(g_fp8.permute(2, 0, 1).reshape(g_t.shape[-1], -1), a_t.reshape(-1, a_t.shape[-1]), combined_scale=bw_scale)
+    grad_b = asm_gemm(g_fp8.permute(2, 0, 1).reshape(g_t.shape[-1], -1), a_t.reshape(-1, a_t.shape[-1]), combined_scale=bw_scale, fused=fused)
     return (None, grad_a.uop, grad_b.uop, None)
   else:
     out, a, b = inputs
@@ -2725,7 +2744,7 @@ def custom_gemm_bw(gradient:UOp, kernel:UOp):
 
 # ** main gemm function
 
-def asm_gemm(a:Tensor, b:Tensor, combined_scale:Tensor|None=None) -> Tensor:
+def asm_gemm(a:Tensor, b:Tensor, combined_scale:Tensor|None=None, fused:bool=False) -> Tensor:
   assert can_use_asm_gemm(a, b), f"{counters['todos'][-1]}"
   counters["used"] += 1
   unfold_batch = a.ndim == 3 and isinstance(a.device, tuple) and a.uop.axis == 2 and b.uop.axis == 0
@@ -2760,7 +2779,8 @@ def asm_gemm(a:Tensor, b:Tensor, combined_scale:Tensor|None=None) -> Tensor:
     # fp8 gemm computes a@b.T, with optional combined scale applied inside kernel before bf16 store
     if a.dtype == FP8_DTYPE:
       scale = combined_scale if combined_scale is not None else Tensor(1.0, dtype=dtypes.float, device=a.device)
-      out = Tensor.custom_kernel(out, a, b.T, scale, fxn=functools.partial(custom_hk_fp8_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
+      fxn = custom_hk_fp8_fused_gemm if fused else custom_hk_fp8_gemm
+      out = Tensor.custom_kernel(out, a, b.T, scale, fxn=functools.partial(fxn, dname=dname), grad_fxn=functools.partial(custom_gemm_bw, fused=fused))[0]
     else:
       out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_asm_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
   else:
@@ -2769,3 +2789,11 @@ def asm_gemm(a:Tensor, b:Tensor, combined_scale:Tensor|None=None) -> Tensor:
   out = out.squeeze(0) if squeeze else out
   if unfold_batch: out = out.reshape(orig_batch, -1, out.shape[-1])
   return out
+
+def asm_gemm_fused(a:Tensor, b:Tensor, amax_a:Tensor|None=None, amax_b:Tensor|None=None) -> tuple[Tensor, Tensor, Tensor]:
+  # fp8 matmul contract-compatible helper: (a[M,K], b[N,K]) -> (y[M,N], new_amax_a, new_amax_b)
+  assert can_use_asm_gemm(a, b.T), f"{counters['todos'][-1]}"
+  a_fp8, a_scale, a_new_amax = quantize_fp8(a, amax_state=amax_a)
+  b_fp8, b_scale, b_new_amax = quantize_fp8(b, amax_state=amax_b)
+  y = asm_gemm(a_fp8, b_fp8.T, combined_scale=a_scale*b_scale, fused=True)
+  return y, a_new_amax, b_new_amax
