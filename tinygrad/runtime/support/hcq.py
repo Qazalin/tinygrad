@@ -286,7 +286,7 @@ class HCQSignal(Generic[HCQDeviceType]):
       value: The value to wait for.
       timeout: Maximum time to wait in milliseconds. Defaults to 30s.
     """
-    timeout = timeout or getenv("HCQDEV_WAIT_TIMEOUT_MS", 30000)
+    timeout = timeout or getenv("HCQDEV_WAIT_TIMEOUT_MS", 5000)
     start_time = int(time.perf_counter() * 1000)
     while (not_passed:=(prev_value:=self.value) < value) and (cur_time:=int(time.perf_counter() * 1000)) - start_time < timeout:
       self._sleep(cur_time - start_time)
