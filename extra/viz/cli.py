@@ -178,10 +178,12 @@ def get_arg_parser() -> argparse.ArgumentParser:
   return parser
 
 if __name__ == "__main__":
-  args = get_arg_parser().parse_args()
-  if not args.profile and not args.rewrites:
-    get_arg_parser().print_help()
-    sys.exit(0)
+  from tinygrad.helpers import Timing
+  with Timing("viz cli response: "):
+    args = get_arg_parser().parse_args()
+    if not args.profile and not args.rewrites:
+      get_arg_parser().print_help()
+      sys.exit(0)
 
-  try: main(args)
-  except KeyboardInterrupt: pass
+    try: main(args)
+    except KeyboardInterrupt: pass

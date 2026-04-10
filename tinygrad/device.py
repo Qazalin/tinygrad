@@ -26,13 +26,15 @@ class _Device:
     return self.__get_canonicalized_item(ix)
   @functools.cache  # this class is a singleton, pylint: disable=method-cache-max-size-none
   def __get_canonicalized_item(self, ix:str) -> Compiled:
-    base = (__package__ or __name__).split('.')[0]  # tinygrad
-    x = ix.split(":")[0].lower()
-    ret = [cls for cname, cls in inspect.getmembers(importlib.import_module(f'{base}.runtime.ops_{x}')) \
-           if (cname.lower() == x + "device")][0](ix)
-    if DEBUG >= 1: print(f"opened device {ix} from pid:{os.getpid()}")
-    self._opened_devices.add(ix)
-    return ret
+    from tinygrad.helpers import Timing
+    with Timing(f"init device {ix}: "):
+      base = (__package__ or __name__).split('.')[0]  # tinygrad
+      x = ix.split(":")[0].lower()
+      ret = [cls for cname, cls in inspect.getmembers(importlib.import_module(f'{base}.runtime.ops_{x}')) \
+             if (cname.lower() == x + "device")][0](ix)
+      if DEBUG >= 1: print(f"opened device {ix} from pid:{os.getpid()}")
+      self._opened_devices.add(ix)
+      return ret
   @property
   def default(self) -> Compiled: return self[self.DEFAULT]
   def get_available_devices(self) -> Iterator[str]:
@@ -354,11 +356,14 @@ def is_dtype_supported(dtype:DType, target:Target|None=None) -> bool:
 if PROFILE:
   @atexit.register
   def finalize_profile():
-    devs = [Device[d] for d in Device._opened_devices]
-    for dev in devs: dev.synchronize()
-    for dev in devs: dev._at_profile_finalize()
+    from tinygrad.helpers import Timing
+    with Timing("finalize devs: "):
+      devs = [Device[d] for d in Device._opened_devices]
+      for dev in devs: dev.synchronize()
+      for dev in devs: dev._at_profile_finalize()
 
-    with open(fn:=temp("profile.pkl", append_user=True), "wb") as f: pickle.dump(cpu_events+Compiled.profile_events+Buffer.profile_events, f)
+    with Timing("viz save pickles: "):
+      with open(fn:=temp("profile.pkl", append_user=True), "wb") as f: pickle.dump(cpu_events+Compiled.profile_events+Buffer.profile_events, f)
 
     if VIZ:
       from tinygrad.uop.ops import launch_viz

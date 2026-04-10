@@ -1300,10 +1300,12 @@ if TRACK_MATCH_STATS or PROFILE:
   import atexit
   @atexit.register
   def print_match_stats():
-    if TRACK_MATCH_STATS >= 2:
-      with open(fn:=temp("rewrites.pkl", append_user=True), "wb") as f:
-        print(f"rewrote {len(tracked_ctxs)} graphs and matched {sum(len(r.matches) for x in tracked_ctxs for r in x)} times, saved to {fn}")
-        pickle.dump(RewriteTrace(tracked_keys, tracked_ctxs, uop_fields), f)
+    from tinygrad.helpers import Timing
+    with Timing("viz save rewrites.pkl: "):
+      if TRACK_MATCH_STATS >= 2:
+        with open(fn:=temp("rewrites.pkl", append_user=True), "wb") as f:
+          print(f"rewrote {len(tracked_ctxs)} graphs and matched {sum(len(r.matches) for x in tracked_ctxs for r in x)} times, saved to {fn}")
+          pickle.dump(RewriteTrace(tracked_keys, tracked_ctxs, uop_fields), f)
     if VIZ > 0: return launch_viz("VIZ", temp("rewrites.pkl", append_user=True))
     if getenv("PRINT_MATCH_STATS", TRACK_MATCH_STATS.value and VIZ.value>=0):
       ret = [0,0,0.0,0.0]
