@@ -41,4 +41,23 @@ if [ -z "$FULL_LAYERS" ]; then
   export LLAMA_LAYERS=2
 fi
 
+# Optional ftrace for kernel tracing
+if [ "${FTRACE:-0}" = "1" ]; then
+  echo "Enabling ftrace..."
+  sudo sh -c 'echo 0 > /sys/kernel/debug/tracing/tracing_on'
+  sudo sh -c 'echo > /sys/kernel/debug/tracing/trace'
+  sudo sh -c 'echo function > /sys/kernel/debug/tracing/current_tracer'
+  sudo sh -c 'echo "zap_pte_range remap_pfn_range unmap_page_range" > /sys/kernel/debug/tracing/set_ftrace_filter'
+  sudo sh -c 'echo 1 > /sys/kernel/debug/tracing/tracing_on'
+fi
+
+export _SHELL_START=$(python3 -c "import time; print(time.time_ns())")
 python3 examples/mlperf/model_train.py
+_EXIT_TIME=$(python3 -c "import os,time; print(f'{(time.time_ns() - int(os.environ[\"_SHELL_START\"]))*1e-6:6.2f} ms')")
+echo "python exit: $_EXIT_TIME"
+
+if [ "${FTRACE:-0}" = "1" ]; then
+  sudo sh -c 'echo 0 > /sys/kernel/debug/tracing/tracing_on'
+  echo "=== Ftrace output (python3 only, last 200 lines) ==="
+  sudo cat /sys/kernel/debug/tracing/trace | grep python3 | tail -200
+fi

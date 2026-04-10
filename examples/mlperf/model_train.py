@@ -1,9 +1,17 @@
-import os, time, math, functools, random, contextlib
+import time, os, atexit
+_import_start = time.perf_counter_ns()
+_python_start = time.time_ns()
+if (shell_start := os.environ.get("_SHELL_START")):
+  print(f"python startup: {(_python_start - int(shell_start))*1e-6:6.2f} ms")
+  @atexit.register
+  def _print_total_python():
+    print(f"total python: {(time.time_ns() - int(os.environ['_SHELL_START']))*1e-6:6.2f} ms")
+import math, functools, random, contextlib
 from pathlib import Path
 import multiprocessing
 
 from tinygrad import Device, GlobalCounters, Tensor, TinyJit, dtypes
-from tinygrad.helpers import getenv, BEAM, WINO, round_up, diskcache_clear, Profiling, profile_marker, DEBUG
+from tinygrad.helpers import getenv, BEAM, WINO, round_up, diskcache_clear, Profiling, profile_marker, DEBUG, Timing
 from tinygrad.nn.state import get_parameters, get_state_dict, load_state_dict, safe_load, safe_save
 from tinygrad.nn.optim import LAMB, LARS, SGD, OptimizerGroup, Adam, AdamW
 
@@ -1282,10 +1290,11 @@ def train_bert():
         previous_step = i
 
 def train_llama3():
-  from examples.mlperf.models.flat_llama import FlatTransformer, apply_grad, FP8
-  from examples.llama3 import MODEL_PARAMS
-  from examples.mlperf.lr_schedulers import CosineAnnealingLRWithWarmup
-  from examples.mlperf.optim import GradAccClipAdamW
+  with Timing("llama imports: "):
+    from examples.mlperf.models.flat_llama import FlatTransformer, apply_grad, FP8
+    from examples.llama3 import MODEL_PARAMS
+    from examples.mlperf.lr_schedulers import CosineAnnealingLRWithWarmup
+    from examples.mlperf.optim import GradAccClipAdamW
 
   INITMLPERF = getenv("INITMLPERF")
   RUNMLPERF = getenv("RUNMLPERF")
@@ -1391,13 +1400,16 @@ def train_llama3():
   if (MP := getenv("MP", 1)) > 1: model_params['vocab_size'] = round_up(model_params['vocab_size'], 256 * MP)
   vocab_mask:Tensor = Tensor.arange(model_params['vocab_size']).reshape(1, 1, -1) >= real_vocab_size
 
-  model = FlatTransformer(**model_params, max_context=SEQLEN)
+  with Timing("create model: "):
+    model = FlatTransformer(**model_params, max_context=SEQLEN)
 
-  params = get_parameters(model)
+  with Timing("get params: "):
+    params = get_parameters(model)
 
   if getenv("FAKEDATA"):
-    for v in get_parameters(model):
-      v = v.assign(Tensor.empty(v.shape, dtype=v.dtype))
+    with Timing("fakedata assign: "):
+      for v in get_parameters(model):
+        v = v.assign(Tensor.empty(v.shape, dtype=v.dtype))
 
   is_dp = (DP := getenv("DP", 1)) > 1
   is_mp = (MP := getenv("MP", 1)) > 1
@@ -1405,21 +1417,25 @@ def train_llama3():
   device_count = max(DP, MP)
   device = tuple(f"{Device.DEFAULT}:{i}" for i in range(device_count))
 
-  model.shard(device, is_mp)
+  with Timing("shard model: "):
+    model.shard(device, is_mp)
 
-  if is_dp: vocab_mask.shard_(device, axis=None).realize()
-  if is_mp: vocab_mask.shard_(device, axis=2).realize()
+  with Timing("shard vocab_mask: "):
+    if is_dp: vocab_mask.shard_(device, axis=None).realize()
+    if is_mp: vocab_mask.shard_(device, axis=2).realize()
 
   is_offload_optim = bool(getenv("OFFLOAD_OPTIM"))
   is_fake_offload = Device.DEFAULT == "NULL"
   optim_device = ("CPU" if not is_fake_offload else "NULL:99") if is_offload_optim else None
-  optim = GradAccClipAdamW(params, lr=0.0, b1=opt_adamw_beta_1, b2=opt_adamw_beta_2,
-                           eps=opt_adamw_epsilon, weight_decay=opt_adamw_weight_decay, grad_acc=grad_acc, device=optim_device)
+  with Timing("create optimizer: "):
+    optim = GradAccClipAdamW(params, lr=0.0, b1=opt_adamw_beta_1, b2=opt_adamw_beta_2,
+                             eps=opt_adamw_epsilon, weight_decay=opt_adamw_weight_decay, grad_acc=grad_acc, device=optim_device)
 
   # init grads
-  for p in optim.params:
-    p.grad = Tensor.zeros(p.shape, dtype=p.dtype, device=p.device).contiguous()
-  grads = [p.grad for p in optim.params]
+  with Timing("init grads: "):
+    for p in optim.params:
+      p.grad = Tensor.zeros(p.shape, dtype=p.dtype, device=p.device).contiguous()
+    grads = [p.grad for p in optim.params]
 
   scheduler = CosineAnnealingLRWithWarmup(optim, opt_base_learning_rate, opt_end_learning_rate, opt_learning_rate_warmup_steps, opt_learning_rate_decay_steps)
 
@@ -1770,6 +1786,8 @@ def train_stable_diffusion():
     t6 = time.perf_counter()
 
 if __name__ == "__main__":
+  print(f"imports: {(time.perf_counter_ns() - _import_start)*1e-6:6.2f} ms")
+  _main_start = time.perf_counter_ns()
   multiprocessing.set_start_method('spawn')
 
   if getenv("INITMLPERF"): bench_log_manager = WallTimeEvent(BenchEvent.MLPERF_INIT)
@@ -1783,3 +1801,4 @@ if __name__ == "__main__":
         print(f"training {m}")
         with bench_log_manager:
           with Profiling(enabled=getenv("PYPROFILE")): globals()[nm]()
+  print(f"main: {(time.perf_counter_ns() - _main_start)*1e-6:6.2f} ms")

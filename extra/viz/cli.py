@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+import time, os
+_import_start = time.perf_counter_ns()
+if (shell_start := os.environ.get("_SHELL_START")):
+  print(f"viz python startup: {(time.time_ns() - int(shell_start))*1e-6:6.2f} ms")
 import argparse, pathlib, signal, sys, struct, json, itertools
 if hasattr(signal, "SIGPIPE"): signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 from typing import Iterator
@@ -178,6 +182,7 @@ def get_arg_parser() -> argparse.ArgumentParser:
   return parser
 
 if __name__ == "__main__":
+  print(f"viz cli imports: {(time.perf_counter_ns() - _import_start)*1e-6:6.2f} ms")
   from tinygrad.helpers import Timing
   with Timing("viz cli response: "):
     args = get_arg_parser().parse_args()

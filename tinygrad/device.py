@@ -54,7 +54,11 @@ class _Device:
       return device
     except StopIteration as exc: raise RuntimeError("no usable devices") from exc
 Device: _Device = _Device()
-atexit.register(lambda: [Device[dn].finalize() for dn in Device._opened_devices])
+def _finalize_devices():
+  from tinygrad.helpers import Timing
+  with Timing("finalize devices: "):
+    for dn in Device._opened_devices: Device[dn].finalize()
+atexit.register(_finalize_devices)
 
 # **************** Profile ****************
 
