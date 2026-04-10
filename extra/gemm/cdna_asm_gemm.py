@@ -1,5 +1,4 @@
 import atexit, functools, pathlib
-from dataclasses import dataclass
 from tinygrad import Tensor, Device, dtypes
 from tinygrad.dtype import AddrSpace
 from tinygrad.uop.ops import UOp, Ops, KernelInfo, AxisType
@@ -272,45 +271,34 @@ def shift_vector_components(k, glvw):
       for i in range(glvw):
         k.emit(v_accvgpr_write(v[base_dst + i * 4], v[25 + i]))
 
-@dataclass(frozen=True)
-class KernelTemplate:
-  insts: tuple
-  patches: dict[str, int]
-
-def _emit_shape_sgpr(k:Kernel, patches:dict[str, int], sgpr:int, key:str):
-  patches[key] = len(k.instructions)
-  k.emit(s_mov_b32(s[sgpr], 0))
-
-@functools.cache
-def build_kernel_template(dtype):
+def build_kernel(batch, M, N, K, dtype):
+  numWG, iters, total, magic, shift = compute_gemm_args(M, N, K, batch)
+  total *= batch
   v_mfma_16x16x32 = {dtypes.half:v_mfma_f32_16x16x32_f16, dtypes.bfloat16:v_mfma_f32_16x16x32_bf16}[dtype]
   v_cvt_pk = {dtypes.half:v_cvt_pk_f16_f32, dtypes.bfloat16:v_cvt_pk_bf16_f32}[dtype]
   v_cvt = {dtypes.half:v_cvt_f32_f16_e32, dtypes.bfloat16:v_cvt_f32_bf16_e32}[dtype]
-
   k = Kernel()
-  patches = {}
-
   # load D, A, B pointers
   k.emit(s_load_dwordx2(s[24:25], s[0:1], s[0], 0, 0, 0, 0, 1))
   k.emit(s_load_dwordx2(s[30:31], s[0:1], s[0], 8, 0, 0, 0, 1))
   k.emit(s_load_dwordx2(s[28:29], s[0:1], s[0], 16, 0, 0, 0, 1))
   k.waitcnt(lgkm=0)
-  # params as complile time variables
-  k.emit(s_mov_b32(s[69], NUM_WG))
-  _emit_shape_sgpr(k, patches, 20, "N")
-  _emit_shape_sgpr(k, patches, 21, "batchM")
+  # params as constants
+  k.emit(s_mov_b32(s[69], numWG))
+  k.emit(s_mov_b32(s[20], N))
+  k.emit(s_mov_b32(s[21], batch * M))
   k.emit(s_mov_b32(s[22], 1))
-  _emit_shape_sgpr(k, patches, 23, "K")
-  _emit_shape_sgpr(k, patches, 36, "N_36")
+  k.emit(s_mov_b32(s[23], K))
+  k.emit(s_mov_b32(s[36], N))
   k.emit(s_mov_b32(s[37], 0))
-  _emit_shape_sgpr(k, patches, 40, "N_40")
+  k.emit(s_mov_b32(s[40], N))
   k.emit(s_mov_b32(s[41], 0))
-  _emit_shape_sgpr(k, patches, 42, "K_42")
+  k.emit(s_mov_b32(s[42], K))
   k.emit(s_mov_b32(s[43], 0))
-  _emit_shape_sgpr(k, patches, 46, "iters")
-  _emit_shape_sgpr(k, patches, 47, "magic")
-  _emit_shape_sgpr(k, patches, 48, "shift")
-  _emit_shape_sgpr(k, patches, 49, "total")
+  k.emit(s_mov_b32(s[46], iters))
+  k.emit(s_mov_b32(s[47], magic))
+  k.emit(s_mov_b32(s[48], shift))
+  k.emit(s_mov_b32(s[49], total))
   k.emit(s_mov_b32(s[62], 0))
   k.emit(s_mov_b32(s[68], 0))
   # kernel size is 256x256
@@ -2619,34 +2607,7 @@ def build_kernel_template(dtype):
   k.emit(s_branch(), target='PersistentLoopStart')
   k.label('KernelEnd')
   k.emit(s_endpgm())
-  return KernelTemplate(tuple(k.finalize()), patches)
-
-def _patch_s_mov_b32_imm(inst, value:int): return s_mov_b32(inst.sdst, value)
-
-def build_kernel(batch, M, N, K, dtype):
-  numWG, iters, total, magic, shift = compute_gemm_args(M, N, K, batch)
-  total *= batch
-
-  tmpl = build_kernel_template(dtype)
-  insts = list(tmpl.insts)
-
-  values = {
-    "N": N,
-    "batchM": batch * M,
-    "K": K,
-    "N_36": N,
-    "N_40": N,
-    "K_42": K,
-    "iters": iters,
-    "magic": magic,
-    "shift": shift,
-    "total": total,
-  }
-
-  for key, idx in tmpl.patches.items():
-    insts[idx] = _patch_s_mov_b32_imm(insts[idx], values[key])
-
-  return insts
+  return k.finalize()
 
 # ** ASM_GEMM custom kernel
 
