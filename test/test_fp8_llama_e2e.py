@@ -40,13 +40,17 @@ class TestFP8Flat(unittest.TestCase):
       Tensor.realize(x, amax_state)
 
     q_new, s_new, a_new = quantize_fp8(x, amax_state=amax_state)
-    q_ref, s_ref, a_ref = flat_fp8_quantize(x, amax_state=amax_state)
-    with Context(DEBUG=0):
-      Tensor.realize(q_new, s_new, a_new, q_ref, s_ref, a_ref)
+    print("** q_new")
+    Tensor.realize(q_new, s_new, a_new)
 
-    assert q_new.allclose(q_ref, atol=0, rtol=0), "quantized fp8 mismatch"
-    assert s_new.allclose(s_ref, atol=0, rtol=0), "inverse scale mismatch"
-    assert a_new.allclose(a_ref, atol=0, rtol=0), "new_amax mismatch"
+    q_ref, s_ref, a_ref = flat_fp8_quantize(x, amax_state=amax_state)
+    print("** q_ref")
+    Tensor.realize(q_ref, s_ref, a_ref)
+
+    with Context(DEBUG=0):
+      assert q_new.allclose(q_ref, atol=0, rtol=0), "quantized fp8 mismatch"
+      assert s_new.allclose(s_ref, atol=0, rtol=0), "inverse scale mismatch"
+      assert a_new.allclose(a_ref, atol=0, rtol=0), "new_amax mismatch"
 
   def test_gemm(self):
     Tensor.manual_seed(0)
