@@ -11,6 +11,7 @@ FP8_DTYPE = dtypes.fp8e4m3
 FP8_MAX = 448.0
 
 
+# note: you can replace this function's body with a custom kernel!
 def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
   new_amax = x.abs().max().detach()
   scale = FP8_MAX / ((amax_state if amax_state is not None else new_amax) + 1e-8)
