@@ -12,13 +12,7 @@ FP8_MAX = 448.0
 
 
 # note: you can replace this function's body with a custom kernel!
-def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
-  new_amax = x.abs().max().detach()
-  scale = FP8_MAX / ((amax_state if amax_state is not None else new_amax) + 1e-8)
-  x_scaled = x * scale
-  x_scaled_det = x_scaled.detach()
-  x_clamped = x_scaled + (x_scaled_det.clamp(-FP8_MAX, FP8_MAX) - x_scaled_det)
-  return x_clamped.cast(FP8_DTYPE), scale.float().reciprocal(), new_amax
+from extra.thunder.amd.fp8_quantize import quantize_fp8
 
 
 def new_matmul(x:Tensor, w:Tensor, fp8=FP8, amax_x:Tensor|None=None, amax_w:Tensor|None=None) -> tuple[Tensor, ...]:
