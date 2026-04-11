@@ -81,6 +81,7 @@ class TestFp8QuantForwardValues(unittest.TestCase):
     # compare fp8 outputs bitwise by casting back to bf16 (cast-back is lossy but deterministic)
     Tensor.realize(cst_fp8, cst_scale, cst_amax)
     Tensor.realize(ref_fp8, ref_scale, ref_amax)
+    if Device.DEFAULT == "NULL": return None
     with Context(DEBUG=0):
       ref_bf16 = ref_fp8.cast(dtypes.bfloat16)
       cst_bf16 = cst_fp8.cast(dtypes.bfloat16)
