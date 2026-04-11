@@ -19,17 +19,24 @@ from extra.models.llama import apply_rotary_emb, precompute_freqs_cis
 
 FP8 = getenv("FP8", 0)
 WQKV = getenv("WQKV", 0)
+CUSTOM_FP8_QUANTIZE = getenv("CUSTOM_FP8_QUANTIZE", 0)
 
 FP8_DTYPE = dtypes.fp8e4m3
 FP8_GRAD_DTYPE = dtypes.fp8e5m2
 FP8_MAX = 448.0
 
-def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
+def _quantize_fp8_default(x:Tensor, amax_state:Tensor|None=None):
   new_amax = x.abs().max().detach()
   scale = FP8_MAX / ((amax_state if amax_state is not None else new_amax) + 1e-8)
   x_scaled = x * scale
   x_clamped = x_scaled + (x_scaled.detach().clamp(-FP8_MAX, FP8_MAX) - x_scaled.detach())  # STE
   return x_clamped.cast(FP8_DTYPE), scale.float().reciprocal(), new_amax
+
+def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
+  if CUSTOM_FP8_QUANTIZE:
+    from extra.thunder.amd.fp8_quantize import quantize_fp8 as hk_quantize_fp8
+    return hk_quantize_fp8(x, amax_state)
+  return _quantize_fp8_default(x, amax_state)
 
 def matmul(x:Tensor, w:Tensor, fp8=FP8, amax_x:Tensor|None=None, amax_w:Tensor|None=None) -> tuple[Tensor,...]:
   if not fp8:

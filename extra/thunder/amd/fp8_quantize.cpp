@@ -49,9 +49,11 @@ void hk_fp8_quantize(unsigned char* __restrict__ out_fp8,
     const float inv_amax = 1.0f / (amax_state + EPS);  // tinygrad computes 1/(amax+eps) first
     const float inv_scale = 1.0f / (inv_amax * FP8_MAX);  // then multiplies by FP8_MAX
 
-    // write inv_scale once (first thread of first block)
+    // write inv_scale and initialize out_new_amax once (first thread of first block)
     if (blockIdx.x == 0 && tid == 0) {
         *out_inv_scale = inv_scale;
+        *out_new_amax = 0.0f;  // initialize for atomic max
+        __threadfence();  // ensure initialization is visible to other blocks
     }
 
     // shared memory for block-level max reduction
