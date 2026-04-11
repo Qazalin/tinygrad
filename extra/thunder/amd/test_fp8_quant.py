@@ -10,7 +10,7 @@ Run on real hardware (MI350X):
 """
 import unittest
 from tinygrad import Tensor, dtypes, Device
-from tinygrad.helpers import Context
+from tinygrad.helpers import Context, getenv
 
 FP8_DTYPE = dtypes.fp8e4m3
 FP8_MAX = 448.0
@@ -118,8 +118,8 @@ class TestFp8QuantForwardValues(unittest.TestCase):
                        f"new_amax value mismatch [{ctx}]: ref={ref_amax_v} cst={cst_amax_v} "
                        f"diff={cst_amax_v - ref_amax_v}")
 
-  def test_fwd_no_amax_state_small(self):
-    x = Tensor.randn(64, 128, dtype=dtypes.bfloat16)
+  def test_simple(self):
+    x = Tensor.randn(getenv("A", 64), getenv("B", 128), dtype=dtypes.bfloat16)
     self._cmp_fwd(x, amax_state=None)
 
   def test_fwd_with_amax_state_small(self):
