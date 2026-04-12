@@ -35,11 +35,11 @@ KITTENS_PATH = Path(__file__).parent  # extra/thunder/amd
 TILE_R, TILE_C = 16, 32
 ELEMS_PER_TILE = TILE_R * TILE_C  # 512
 
-def _compile_kitten(name:str, n_elems:int):
+def _compile_kitten(name:str, n_elems:int, use_kittens:bool=True):
   src = (REPO_ROOT / f"{name}.cpp").read_text()
-  return src, HIPCCCompiler(Device[Device.DEFAULT].renderer.target.arch,
-    [f"-I{(KITTENS_PATH/'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math",
-     "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DPARAM_N={n_elems}"]).compile_cached(src)
+  flags = ["-std=c++20", f"-DPARAM_N={n_elems}"]
+  if use_kittens: flags += [f"-I{(KITTENS_PATH/'include').as_posix()}", "-DKITTENS_CDNA4", "-ffast-math", "-DHIP_ENABLE_WARP_SYNC_BUILTINS"]
+  return src, HIPCCCompiler(Device[Device.DEFAULT].renderer.target.arch, flags).compile_cached(src)
 
 def _build_amax_runner(n_elems:int):
   num_tiles = n_elems // ELEMS_PER_TILE
@@ -53,7 +53,7 @@ def _build_amax_runner(n_elems:int):
 
 def _build_cast_runner(n_elems:int):
   num_tiles = n_elems // ELEMS_PER_TILE
-  src, lib = _compile_kitten("kitten_cast", n_elems)
+  src, lib = _compile_kitten("kitten_cast", n_elems, use_kittens=False)
   def runner(out_fp8:UOp, inv_scale:UOp, x_bf16:UOp, amax_f32:UOp):
     sink = UOp.sink(UOp.special(num_tiles, "gidx0"), UOp.special(64, "lidx0"), out_fp8, inv_scale, x_bf16, amax_f32,
                     arg=KernelInfo(name="kitten_cast"))
