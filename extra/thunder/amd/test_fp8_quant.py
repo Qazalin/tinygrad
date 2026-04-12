@@ -36,12 +36,14 @@ KITTENS_PATH = Path(__file__).parent  # extra/thunder/amd
 TILE_R, TILE_C = 16, 32
 ELEMS_PER_TILE = TILE_R * TILE_C  # 512
 
-def _compile_kitten(name:str, n_elems:int, use_kittens:bool=True, extra_defs:dict[str, int]|None=None):
+def _compile_kitten(name:str, n_elems:int, use_kittens:bool=True, extra_defs:dict[str, int]|None=None, kittens_fast_math:bool=True):
   src = (REPO_ROOT / f"{name}.cpp").read_text()
   flags = ["-std=c++20", f"-DPARAM_N={n_elems}"]
   if extra_defs is not None:
     flags += [f"-D{k}={v}" for k, v in extra_defs.items()]
-  if use_kittens: flags += [f"-I{(KITTENS_PATH/'include').as_posix()}", "-DKITTENS_CDNA4", "-ffast-math", "-DHIP_ENABLE_WARP_SYNC_BUILTINS"]
+  if use_kittens:
+    flags += [f"-I{(KITTENS_PATH/'include').as_posix()}", "-DKITTENS_CDNA4", "-DHIP_ENABLE_WARP_SYNC_BUILTINS"]
+    if kittens_fast_math: flags += ["-ffast-math"]
   return src, HIPCCCompiler(Device[Device.DEFAULT].renderer.target.arch, flags).compile_cached(src)
 
 def _sharded_empty(shape, ref:Tensor, dtype=None, axis=None):
@@ -91,7 +93,7 @@ def _build_amax_reduce_runner(num_partials_padded:int, num_partials_valid:int):
 
 def _build_cast_runner(n_elems:int):
   num_tiles = n_elems // ELEMS_PER_TILE
-  src, lib = _compile_kitten("kitten_cast", n_elems, use_kittens=False)
+  src, lib = _compile_kitten("kitten_cast", n_elems, use_kittens=True, kittens_fast_math=False)
   name = f"kitten_cast_{n_elems}"
   # read n_elems bf16 + 1 float amax, write n_elems fp8 + 1 float inv_scale. ops: 2 per element (mul + clamp)
   est = Estimates(ops=2*n_elems, lds=n_elems*2+4+n_elems+4, mem=n_elems*2+4+n_elems+4)

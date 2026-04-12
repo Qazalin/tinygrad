@@ -4,8 +4,8 @@
 //   step = bf16(float(rcp) * float(val))
 //   scaled = bf16(float(step) * float(bf16(448)))
 //   out  = f32_to_fp8(float(scaled))    -- with STE clamp logic
-#include <hip/hip_runtime.h>
-#include <hip/hip_bf16.h>
+#include "kittens.cuh"
+using namespace kittens;
 
 constexpr unsigned int TILE_ELEMS = 512; // 16*32
 
@@ -16,7 +16,7 @@ static __device__ __forceinline__ unsigned char f32_to_fp8(float v) {
 }
 
 extern "C" __global__ void kitten_cast(unsigned char *out_fp8, float *inv_scale,
-                                       const __hip_bfloat16 *x, const float *amax) {
+                                       const bf16 *x, const float *amax) {
   float amax_f = __bfloat162float(__float2bfloat16(*amax));
   float eps_f = __bfloat162float(__float2bfloat16(1e-8f));
   __hip_bfloat16 sum_bf = __float2bfloat16(amax_f + eps_f);
@@ -27,7 +27,7 @@ extern "C" __global__ void kitten_cast(unsigned char *out_fp8, float *inv_scale,
   int base = blockIdx.x * TILE_ELEMS;
   int tid = threadIdx.x;
   for (int i = tid; i < TILE_ELEMS; i += 64) {
-    float val_f = __bfloat162float(x[base + i]);
+    float val_f = __bfloat162float((__hip_bfloat16)x[base + i]);
     float step_f = __bfloat162float(__float2bfloat16(rcp_f * val_f));
     float scaled = __bfloat162float(__float2bfloat16(step_f * fp8_max_f));
     out_fp8[base + i] = f32_to_fp8(scaled);
