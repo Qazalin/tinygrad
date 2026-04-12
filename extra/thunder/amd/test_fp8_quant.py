@@ -643,6 +643,23 @@ class TestFp8QuantBenchCastAmaxFusedOnly(unittest.TestCase):
       for tile in self.TILE_CANDS:
         self._bench_fused(n, tile)
 
+  def test_trace_fused_58720256(self):
+    if not getenv("RUN_BENCH", 0): self.skipTest("set RUN_BENCH=1")
+    n_local = 58720256
+    tile = getenv("HK_FP8_CAST_AMAX_TILE", 16384)
+    assert n_local % tile == 0
+    x = Tensor.randn(n_local, dtype=dtypes.bfloat16)
+    amax_in = Tensor(3.0, dtype=dtypes.float32)
+    out = Tensor.invalid(n_local, dtype=FP8_DTYPE, device=x.device)
+    inv = Tensor.zeros(1, dtype=dtypes.float32, device=x.device)
+    amax_out = Tensor.zeros(1, dtype=dtypes.float32, device=x.device)
+    fxn = _build_cast_amax_fused_runner(n_local, tile_elems=tile)
+    with Context(DEBUG=0):
+      Tensor.realize(x, amax_in, inv)
+      amax_out = amax_out.assign(0.0).realize()
+      o, s, a, _, _ = Tensor.custom_kernel(out, inv, amax_out, x, amax_in, fxn=fxn)
+      Tensor.realize(o, s, a)
+
 
 @unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 to run cast kernel benchmarks")
 class TestFp8QuantBenchCastOnly(unittest.TestCase):
