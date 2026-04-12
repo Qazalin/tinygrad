@@ -35,9 +35,11 @@ KITTENS_PATH = Path(__file__).parent  # extra/thunder/amd
 TILE_R, TILE_C = 16, 32
 ELEMS_PER_TILE = TILE_R * TILE_C  # 512
 
-def _compile_kitten(name:str, n_elems:int, use_kittens:bool=True):
+def _compile_kitten(name:str, n_elems:int, use_kittens:bool=True, extra_defs:dict[str, int]|None=None):
   src = (REPO_ROOT / f"{name}.cpp").read_text()
   flags = ["-std=c++20", f"-DPARAM_N={n_elems}"]
+  if extra_defs is not None:
+    flags += [f"-D{k}={v}" for k, v in extra_defs.items()]
   if use_kittens: flags += [f"-I{(KITTENS_PATH/'include').as_posix()}", "-DKITTENS_CDNA4", "-ffast-math", "-DHIP_ENABLE_WARP_SYNC_BUILTINS"]
   return src, HIPCCCompiler(Device[Device.DEFAULT].renderer.target.arch, flags).compile_cached(src)
 
@@ -63,6 +65,26 @@ def _build_amax_runner(n_elems:int):
                                  UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
   return runner
 
+def _build_amax_partial_runner(n_elems:int, num_partials:int):
+  src, lib = _compile_kitten("kitten_amax_partial", n_elems, extra_defs={"PARAM_GRID":num_partials})
+  est = Estimates(ops=2*n_elems, lds=n_elems*2+num_partials*4, mem=n_elems*2+num_partials*4)
+  def runner(partials_f32:UOp, x_bf16:UOp):
+    sink = UOp.sink(UOp.special(num_partials, "gidx0"), UOp.special(64, "lidx0"), partials_f32, x_bf16,
+                    arg=KernelInfo(name="kitten_amax_partial", estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+  return runner
+
+def _build_amax_reduce_runner(num_partials:int):
+  src, lib = _compile_kitten("kitten_amax_reduce", num_partials, use_kittens=False)
+  est = Estimates(ops=2*num_partials, lds=num_partials*4+4, mem=num_partials*4+4)
+  def runner(amax_f32:UOp, partials_f32:UOp):
+    sink = UOp.sink(UOp.special(1, "gidx0"), UOp.special(256, "lidx0"), amax_f32, partials_f32,
+                    arg=KernelInfo(name="kitten_amax_reduce", estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+  return runner
+
 def _build_cast_runner(n_elems:int):
   num_tiles = n_elems // ELEMS_PER_TILE
   src, lib = _compile_kitten("kitten_cast", n_elems, use_kittens=False)
@@ -80,6 +102,9 @@ def _build_cast_runner(n_elems:int):
 def _amax_grad(gradient:UOp, kernel:UOp):
   return (None, gradient)
 
+def _amax_reduce_grad(gradient:UOp, kernel:UOp):
+  return (None, None)
+
 def _cast_grad(gradient:UOp, kernel:UOp):
   # STE backward: grad_x = upstream * scale (straight-through, ignoring clamp)
   # kernel args order: out_fp8, inv_scale, x, amax
@@ -92,6 +117,7 @@ def _cast_grad(gradient:UOp, kernel:UOp):
 # --- main entry point ---
 
 def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
+  hk_mode = getenv("HK_FP8_QUANTIZE", 1)
   n_elems = 1
   for s in x.shape: n_elems *= s
   assert n_elems % ELEMS_PER_TILE == 0, f"n_elems={n_elems} must be divisible by {ELEMS_PER_TILE}"
@@ -100,13 +126,21 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   n_local = n_elems // len(x.device) if is_sharded else n_elems
   single_device = x.device[0] if is_multi else x.device
 
-  # kernel 1: amax reduction (amax_f32 must be zero-initialized for atomicMax)
-  def _zero_kernel(out:UOp) -> UOp:
-    i = UOp.range(out.size, 0)
-    return out.flatten()[i].store(0).end(i).sink(arg=KernelInfo(name="zero", estimates=Estimates(ops=0, lds=4, mem=4)))
-  amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
-  amax_f32 = amax_f32.custom_kernel(fxn=_zero_kernel)[0]
-  amax_f32, _ = Tensor.custom_kernel(amax_f32, x, fxn=_build_amax_runner(n_local), grad_fxn=_amax_grad)
+  # kernel 1: amax reduction
+  if hk_mode >= 2:
+    num_partials = min(getenv("HK_FP8_AMAX_PARTIALS", 16384), n_local // ELEMS_PER_TILE)
+    partials = Tensor.invalid(num_partials, dtype=dtypes.float32, device=x.device)
+    partials, _ = Tensor.custom_kernel(partials, x, fxn=_build_amax_partial_runner(n_local, num_partials), grad_fxn=_amax_grad)
+    amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+    amax_f32, _ = Tensor.custom_kernel(amax_f32, partials, fxn=_build_amax_reduce_runner(num_partials), grad_fxn=_amax_reduce_grad)
+  else:
+    # one-pass atomic path
+    def _zero_kernel(out:UOp) -> UOp:
+      i = UOp.range(out.size, 0)
+      return out.flatten()[i].store(0).end(i).sink(arg=KernelInfo(name="zero", estimates=Estimates(ops=0, lds=4, mem=4)))
+    amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+    amax_f32 = amax_f32.custom_kernel(fxn=_zero_kernel)[0]
+    amax_f32, _ = Tensor.custom_kernel(amax_f32, x, fxn=_build_amax_runner(n_local), grad_fxn=_amax_grad)
 
   # kernel 2: scale + clamp + cast
   amax_input = amax_state.cast(dtypes.float32) if amax_state is not None else amax_f32
