@@ -9,6 +9,7 @@ constexpr unsigned int ELEMS_PER_TILE = TILE_R * TILE_C; // 512
 constexpr unsigned int GRID = PARAM_GRID;
 
 using ST = st_bf<TILE_R, TILE_C, st_16x32_s>;
+using RT = rt_bf<TILE_R, TILE_C, row_l, rt_16x32_s>;
 using G  = group<1>;
 
 extern "C" __global__ void kitten_amax_partial(float *partials_out, const bf16 *x) {
@@ -17,19 +18,22 @@ extern "C" __global__ void kitten_amax_partial(float *partials_out, const bf16 *
   gl<bf16, 1, 1, -1, -1> X{const_cast<bf16*>(x), nullptr, nullptr, (size_t)(N / TILE_C), (size_t)TILE_C};
 
   __shared__ ST smem;
+  RT reg;
+  typename RT::col_vec row_max_vec;
   float block_max = 0.0f;
 
   for (unsigned int tile_idx = blockIdx.x; tile_idx < NUM_TILES; tile_idx += GRID) {
     G::load(smem, X, {0, 0, (int)tile_idx, 0});
     __builtin_amdgcn_s_waitcnt(0);
     __syncthreads();
-    if (laneid() == 0) {
-      float tile_max = 0.0f;
-      #pragma unroll
-      for (int i = 0; i < ELEMS_PER_TILE; i++) tile_max = fmaxf(tile_max, fabsf((float)smem.data[i]));
-      block_max = fmaxf(block_max, tile_max);
-    }
-    __syncthreads();
+
+    load(reg, smem);
+    abs(reg, reg);
+    row_max(row_max_vec, reg);
+
+    bf16 tile_max_bf = bf16(0.0f);
+    max(tile_max_bf, row_max_vec);
+    block_max = fmaxf(block_max, (float)tile_max_bf);
   }
 
   if (laneid() == 0) partials_out[blockIdx.x] = block_max;

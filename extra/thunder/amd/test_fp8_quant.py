@@ -9,6 +9,7 @@ Run on real hardware (MI350X):
   AMD=1 PYTHONPATH=. python extra/thunder/amd/test_fp8_quant.py
 """
 import unittest
+import time
 from pathlib import Path
 from tinygrad import Tensor, dtypes, Device
 from tinygrad.helpers import Context, getenv
@@ -78,11 +79,11 @@ def _build_amax_partial_runner(n_elems:int, num_partials:int):
   return runner
 
 def _build_amax_reduce_runner(num_partials_padded:int, num_partials_valid:int):
-  src, lib = _compile_kitten("kitten_amax_reduce", num_partials_padded, use_kittens=True, extra_defs={"PARAM_VALID":num_partials_valid})
+  src, lib = _compile_kitten("kitten_amax_reduce", num_partials_padded, use_kittens=False, extra_defs={"PARAM_VALID":num_partials_valid})
   name = f"kitten_amax_reduce_{num_partials_padded}_{num_partials_valid}"
   est = Estimates(ops=2*num_partials_valid, lds=num_partials_padded*4+4, mem=num_partials_padded*4+4)
   def runner(amax_f32:UOp, partials_f32:UOp):
-    sink = UOp.sink(UOp.special(1, "gidx0"), UOp.special(64, "lidx0"), amax_f32, partials_f32,
+    sink = UOp.sink(UOp.special(1, "gidx0"), UOp.special(256, "lidx0"), amax_f32, partials_f32,
                     arg=KernelInfo(name=name, estimates=est))
     return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
                                  UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
@@ -267,6 +268,12 @@ class TestFp8QuantForwardValues(unittest.TestCase):
     amax = Tensor(3.0, dtype=dtypes.bfloat16)
     self._cmp_fwd(x, amax_state=amax)
 
+  def test_fwd_hot_amax_shapes(self):
+    # exercise large shapes that trigger the hottest amax kernels in profile traces
+    for a, b in [(8192, 14336), (4096, 14336), (4096, 8192)]:
+      x = Tensor.randn(a, b, dtype=dtypes.bfloat16)
+      self._cmp_fwd(x, amax_state=None)
+
 
 class TestFp8QuantForwardSharded(unittest.TestCase):
   """Forward equivalence with DP sharding matching profile.sh (8 devices, axis=0)."""
@@ -429,6 +436,41 @@ class TestFp8QuantBackwardSharded(unittest.TestCase):
           f"{n_mismatch}/{n_total} elements differ "
           f"({100.0 * n_mismatch / n_total:.3f}%)"
         )
+
+
+@unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 to run large-shape benchmarks")
+class TestFp8QuantBenchLargeShapes(unittest.TestCase):
+  """Benchmarks the largest fp8 quant shapes seen in profile traces."""
+
+  HOT_SHAPES = [
+    (8192, 14336),  # 117,440,512
+    (4096, 14336),  # 58,720,256
+    (4096, 8192),   # 33,554,432
+    (12288, 4096),  # 50,331,648
+  ]
+
+  def _bench_one(self, shape:tuple[int, int], iters:int=5):
+    x = Tensor.randn(*shape, dtype=dtypes.bfloat16)
+    with Context(DEBUG=0):
+      Tensor.realize(x)
+
+    # warmup
+    y, s, a = custom_quantize_fp8(x)
+    Tensor.realize(y, s, a)
+
+    times = []
+    for _ in range(iters):
+      st = time.perf_counter()
+      y, s, a = custom_quantize_fp8(x)
+      Tensor.realize(y, s, a)
+      times.append((time.perf_counter()-st)*1e3)
+
+    best, avg = min(times), sum(times)/len(times)
+    print(f"bench shape={shape} elems={shape[0]*shape[1]} best_ms={best:.3f} avg_ms={avg:.3f}")
+
+  def test_bench_hot_shapes(self):
+    for shp in self.HOT_SHAPES:
+      self._bench_one(shp)
 
 
 if __name__ == "__main__":
