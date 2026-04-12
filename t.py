@@ -12,8 +12,12 @@ def kitten_copy(C:UOp, A:UOp, B:UOp):
   num_wg = (N // TILE) * (N // TILE)
   threads = UOp.special(num_threads, "lidx0")
   workgroups = UOp.special(num_wg, "gidx0")
+  # estimates: read A (N*N*2 bytes) + write C (N*N*2 bytes)
+  # lds = total bytes loaded + stored = 2 * N*N*2
+  # mem = unique bytes touched = A + C = 2 * N*N*2 (each buffer counted once)
+  nbytes = N * N * 2  # bf16 = 2 bytes per element
   sink = UOp.sink(C.base, A.base, B.base, threads, workgroups,
-                  arg=KernelInfo("kitten", estimates=Estimates()))
+                  arg=KernelInfo("kitten", estimates=Estimates(ops=0, lds=2*nbytes, mem=2*nbytes)))
   src = Path("kitten.cpp").read_text()
   kittens_path = Path("extra")/"thunder"/"amd"
   lib = HIPCCCompiler("gfx950", [f"-I{(kittens_path/'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math",
@@ -31,15 +35,18 @@ if __name__ == "__main__":
   with Context(DEBUG=0):
     Tensor.realize(a_rand, b_rand)
 
-  c_custom = Tensor.empty(N, N, dtype=dtype)
-  c_custom = Tensor.custom_kernel(c_custom, a_rand, b_rand, fxn=kitten_copy)[0].realize()
+  # baseline: tinygrad copy via cast round-trip to force a real load+store
+  print("--- tinygrad baseline copy ---")
+  with Context(DEBUG=2):
+    c_baseline = a_rand.cast(dtypes.float).cast(dtype).realize()
 
-  # verify: the kernel just copies A -> C, so C should equal A
+  # kitten copy
+  print("--- kitten copy ---")
+  c_custom = Tensor.empty(N, N, dtype=dtype)
+  with Context(DEBUG=2):
+    c_custom = Tensor.custom_kernel(c_custom, a_rand, b_rand, fxn=kitten_copy)[0].realize()
+
+  # verify
   a_np = a_rand.numpy()
   c_np = c_custom.numpy()
-  print(f"A[:4,:4]:\n{a_np[:4,:4]}")
-  print(f"C[:4,:4]:\n{c_np[:4,:4]}")
   print(f"match: {np.allclose(a_np, c_np, atol=0, rtol=0)}")
-  if not np.allclose(a_np, c_np, atol=0, rtol=0):
-    diff = np.abs(a_np.astype(np.float32) - c_np.astype(np.float32))
-    print(f"max diff: {diff.max()}, num nonzero: {np.count_nonzero(diff)}/{diff.size}")
