@@ -49,4 +49,11 @@ if __name__ == "__main__":
   # verify
   a_np = a_rand.numpy()
   c_np = c_custom.numpy()
+  a_np = a_rand.numpy()
+  c_np = c_custom.numpy()
+  print(f"A[:4,:4]:\n{a_np[:4,:4]}")
+  print(f"C[:4,:4]:\n{c_np[:4,:4]}")
   print(f"match: {np.allclose(a_np, c_np, atol=0, rtol=0)}")
+  if not np.allclose(a_np, c_np, atol=0, rtol=0):
+    diff = np.abs(a_np.astype(np.float32) - c_np.astype(np.float32))
+    raise Exception(f"max diff: {diff.max()}, num nonzero: {np.count_nonzero(diff)}/{diff.size}")
