@@ -22,7 +22,7 @@ FP8_DTYPE = dtypes.fp8e4m3
 FP8_GRAD_DTYPE = dtypes.fp8e5m2
 FP8_MAX = 448.0
 
-if getenv("HK_FP8_QUANTIZE"):
+if getenv("HK_FP8_QUANTIZE", 2):
   from extra.thunder.amd.test_fp8_quant import custom_quantize_fp8 as quantize_fp8
 else:
   def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
