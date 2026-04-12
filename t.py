@@ -1,6 +1,7 @@
 from pathlib import Path
 from tinygrad import Tensor, dtypes, Context, Device
 from tinygrad.uop.ops import UOp, KernelInfo, Ops
+from tinygrad.helpers import getenv
 from tinygrad.renderer import Estimates
 from tinygrad.runtime.support.compiler_amd import HIPCCCompiler
 import numpy as np
@@ -22,6 +23,9 @@ def kitten_copy(C:UOp, A:UOp, B:UOp):
   kittens_path = Path("extra")/"thunder"/"amd"
   lib = HIPCCCompiler("gfx950", [f"-I{(kittens_path/'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math",
                                  "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DGEMM_N={N}",]).compile_cached(src)
+  if getenv("DISASM"):
+    from tinygrad.runtime.support.compiler_amd import amdgpu_disassemble
+    amdgpu_disassemble(lib)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
                                UOp(Ops.BINARY, arg=lib)))
 
