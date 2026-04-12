@@ -187,8 +187,6 @@ def train_resnet():
     return x.shard(GPUS, axis=0).realize(), Tensor(y, requires_grad=False).shard(GPUS, axis=0), y, cookie
 
   # ** epoch loop **
-  import time
-  print(time.time())
   step_times = []
   for e in range(start_epoch, epochs):
     # ** train loop **
@@ -1547,6 +1545,8 @@ def train_llama3():
       mem_gb = GlobalCounters.mem_used / 1e9
       gflops = GlobalCounters.global_ops / 1e9 / dev_time
       mfu = ((6 * num_params * SEQLEN * GBS) / (dev_time * device_count * (4.6e15 if FP8 else 2.3e15))) * 100
+      import time as time2
+      print(tim2.time())
       tqdm.write(
           f"{i:5} {step_time:.3f} s step, {gbs_time:.3f} s gbs, {optim_time:.3f} s optim, {data_time:.3f} s data, {loss:.4f} loss, " \
           f"{lr:.12f} LR, {grad_norm:.6f} grad_norm, {mem_gb:.2f} GB used, {gflops:9.2f} GFLOPS, {mfu:5.2f}% MFU")
