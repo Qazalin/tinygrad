@@ -178,8 +178,6 @@ def get_arg_parser() -> argparse.ArgumentParser:
   return parser
 
 if __name__ == "__main__":
-  import time
-  print(time.time())
   args = get_arg_parser().parse_args()
   if not args.profile and not args.rewrites:
     get_arg_parser().print_help()
