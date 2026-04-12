@@ -36,6 +36,7 @@ KITTENS_PATH = Path(__file__).parent  # extra/thunder/amd
 TILE_R, TILE_C = 16, 32
 ELEMS_PER_TILE = TILE_R * TILE_C  # 512
 CAST_ELEMS_PER_WG = getenv("HK_FP8_CAST_TILE", 2048)
+FUSED_CAST_ELEMS_PER_WG = getenv("HK_FP8_CAST_AMAX_TILE", 16384)
 
 def _get_fp8_tolerances() -> tuple[float, float]:
   hk_mode = getenv("HK_FP8_QUANTIZE", 1)
@@ -132,10 +133,15 @@ def _build_cast_runner(n_elems:int):
                                  UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
   return runner
 
-def _build_cast_amax_fused_runner(n_elems:int):
-  assert n_elems % CAST_ELEMS_PER_WG == 0, f"n_elems={n_elems} must be divisible by {CAST_ELEMS_PER_WG}"
-  num_tiles = n_elems // CAST_ELEMS_PER_WG
-  src, lib = _compile_kitten("kitten_cast_amax_fused", n_elems, use_kittens=True, kittens_fast_math=True, extra_defs={"PARAM_TILE":CAST_ELEMS_PER_WG})
+def _build_cast_amax_fused_runner(n_elems:int, tile_elems:int=FUSED_CAST_ELEMS_PER_WG):
+  if n_elems % tile_elems != 0:
+    for cand in (16384, 8192, 4096, 2048, 1024, 512):
+      if cand <= n_elems and n_elems % cand == 0:
+        tile_elems = cand
+        break
+  assert n_elems % tile_elems == 0, f"n_elems={n_elems} must be divisible by {tile_elems}"
+  num_tiles = n_elems // tile_elems
+  src, lib = _compile_kitten("kitten_cast_amax_fused", n_elems, use_kittens=True, kittens_fast_math=True, extra_defs={"PARAM_TILE":tile_elems})
   name = f"kitten_cast_amax_fused_{n_elems}"
   est = Estimates(ops=4*n_elems, lds=n_elems*2+n_elems+8, mem=n_elems*2+n_elems+8)
   def runner(out_fp8:UOp, inv_scale:UOp, out_amax:UOp, x_bf16:UOp, amax_in:UOp):
@@ -341,6 +347,12 @@ class TestFp8QuantForwardValues(unittest.TestCase):
 
   def test_fwd_with_amax_state_small(self):
     x = Tensor.randn(64, 128, dtype=dtypes.bfloat16)
+    amax = Tensor(2.5, dtype=dtypes.bfloat16)
+    self._cmp_fwd(x, amax_state=amax)
+
+  @unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 for hot-shape amax_state test")
+  def test_fwd_with_amax_state_hot(self):
+    x = Tensor.randn(8192, 14336, dtype=dtypes.bfloat16)
     amax = Tensor(2.5, dtype=dtypes.bfloat16)
     self._cmp_fwd(x, amax_state=amax)
 
@@ -594,6 +606,42 @@ class TestFp8QuantBenchWithAmaxState(unittest.TestCase):
   def test_bench_hot_shapes_with_amax(self):
     for shp in self.HOT_SHAPES:
       self._bench_one(shp)
+
+
+@unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 to run fused-kernel benchmarks")
+class TestFp8QuantBenchCastAmaxFusedOnly(unittest.TestCase):
+  HOT_ELEMS = [117440512, 58720256, 33554432]
+  TILE_CANDS = [2048, 4096, 8192, 16384]
+
+  def _bench_fused(self, n_local:int, tile:int, iters:int=20):
+    if n_local % tile != 0: return
+    x = Tensor.randn(n_local, dtype=dtypes.bfloat16)
+    amax_in = Tensor(3.0, dtype=dtypes.float32)
+    out = Tensor.invalid(n_local, dtype=FP8_DTYPE, device=x.device)
+    inv = Tensor.zeros(1, dtype=dtypes.float32, device=x.device)
+    amax_out = Tensor.zeros(1, dtype=dtypes.float32, device=x.device)
+    fxn = _build_cast_amax_fused_runner(n_local, tile_elems=tile)
+
+    with Context(DEBUG=0):
+      Tensor.realize(x, amax_in)
+      o, s, a, _, _ = Tensor.custom_kernel(out, inv, amax_out, x, amax_in, fxn=fxn)
+      Tensor.realize(o, s, a)
+
+    times = []
+    for _ in range(iters):
+      with Context(DEBUG=0):
+        amax_out = amax_out.assign(0.0).realize()
+        st = time.perf_counter()
+        o, s, a, _, _ = Tensor.custom_kernel(out, inv, amax_out, x, amax_in, fxn=fxn)
+        Tensor.realize(o, s, a)
+        times.append((time.perf_counter()-st)*1e6)
+    best, avg = min(times), sum(times)/len(times)
+    print(f"bench_cast_amax_fused elems={n_local} tile={tile} best_us={best:.2f} avg_us={avg:.2f}")
+
+  def test_bench_fused_hot_sizes(self):
+    for n in self.HOT_ELEMS:
+      for tile in self.TILE_CANDS:
+        self._bench_fused(n, tile)
 
 
 @unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 to run cast kernel benchmarks")
