@@ -517,20 +517,23 @@ class TestFp8QuantBenchCastOnly(unittest.TestCase):
     amax = Tensor(3.0, dtype=dtypes.float32)
     out = Tensor.invalid(n_local, dtype=FP8_DTYPE, device=x.device)
     inv = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+    fxn = _build_cast_runner(n_local)
 
     with Context(DEBUG=0):
       Tensor.realize(x, amax)
 
     # warmup
-    o, s, _, _ = Tensor.custom_kernel(out, inv, x, amax, fxn=_build_cast_runner(n_local), grad_fxn=_cast_grad)
-    Tensor.realize(o, s)
+    with Context(DEBUG=0):
+      o, s, _, _ = Tensor.custom_kernel(out, inv, x, amax, fxn=fxn, grad_fxn=_cast_grad)
+      Tensor.realize(o, s)
 
     times = []
     for _ in range(iters):
-      st = time.perf_counter()
-      o, s, _, _ = Tensor.custom_kernel(out, inv, x, amax, fxn=_build_cast_runner(n_local), grad_fxn=_cast_grad)
-      Tensor.realize(o, s)
-      times.append((time.perf_counter()-st)*1e6)
+      with Context(DEBUG=0):
+        st = time.perf_counter()
+        o, s, _, _ = Tensor.custom_kernel(out, inv, x, amax, fxn=fxn, grad_fxn=_cast_grad)
+        Tensor.realize(o, s)
+        times.append((time.perf_counter()-st)*1e6)
 
     best, avg = min(times), sum(times)/len(times)
     print(f"bench_cast elems={n_local} best_us={best:.2f} avg_us={avg:.2f}")

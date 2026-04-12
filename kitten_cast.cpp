@@ -12,33 +12,25 @@ using namespace kittens;
 #endif
 constexpr unsigned int TILE_ELEMS = PARAM_TILE;
 
-static __device__ __forceinline__ unsigned char f32_to_fp8(float v) {
-  unsigned int bits = __float_as_uint(v);
-  if ((bits & 0x7F800000u) != 0x7F800000u) v = __builtin_amdgcn_fmed3f(v, 448.0f, -448.0f);
-  return (unsigned char)__builtin_amdgcn_cvt_pk_fp8_f32(v, v, 0, false);
-}
-
 extern "C" __global__ void kitten_cast(unsigned char *out_fp8, float *inv_scale,
                                        const bf16 *x, const float *amax) {
-  float amax_f = __bfloat162float(__float2bfloat16(*amax));
-  float eps_f = __bfloat162float(__float2bfloat16(1e-8f));
-  __hip_bfloat16 sum_bf = __float2bfloat16(amax_f + eps_f);
-  __hip_bfloat16 rcp_bf = __float2bfloat16(1.0f / __bfloat162float(sum_bf));
-  float rcp_f = __bfloat162float(rcp_bf);
-  float fp8_max_f = __bfloat162float(__float2bfloat16(448.0f));
+  float scale = 448.0f / (*amax + 1e-8f);
 
   int base = blockIdx.x * TILE_ELEMS;
   int tid = threadIdx.x;
+  fp8e4m3_4 *out4 = reinterpret_cast<fp8e4m3_4*>(out_fp8 + base);
 #pragma unroll 4
-  for (int i = tid; i < TILE_ELEMS; i += 64) {
-    float val_f = __bfloat162float((__hip_bfloat16)x[base + i]);
-    float step_f = __bfloat162float(__float2bfloat16(rcp_f * val_f));
-    float scaled = __bfloat162float(__float2bfloat16(step_f * fp8_max_f));
-    out_fp8[base + i] = f32_to_fp8(scaled);
+  for (int i4 = tid; i4 < (int)(TILE_ELEMS/4); i4 += 64) {
+    int i = i4 << 2;
+    bf16_2 a = *reinterpret_cast<const bf16_2*>(x + base + i + 0);
+    bf16_2 b = *reinterpret_cast<const bf16_2*>(x + base + i + 2);
+    float2 fa = __bfloat1622float2((__hip_bfloat162)a);
+    float2 fb = __bfloat1622float2((__hip_bfloat162)b);
+    float4 v = make_float4(fa.x*scale, fa.y*scale, fb.x*scale, fb.y*scale);
+    out4[i4] = base_types::convertor<fp8e4m3_4, float4>::convert(v);
   }
 
   if (blockIdx.x == 0 && threadIdx.x == 0) {
-    float scale_f = __bfloat162float(__float2bfloat16(rcp_f * fp8_max_f));
-    *inv_scale = 1.0f / scale_f;
+    *inv_scale = 1.0f / scale;
   }
 }
