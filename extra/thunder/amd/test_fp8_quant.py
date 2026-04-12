@@ -42,6 +42,7 @@ def _compile_kitten(name:str, n_elems:int, use_kittens:bool=True):
   return src, HIPCCCompiler(Device[Device.DEFAULT].renderer.target.arch, flags).compile_cached(src)
 
 def _sharded_empty(shape, ref:Tensor, dtype=None, axis=None):
+  """Create an output tensor matching ref's device/sharding layout. Copies fa.py exactly."""
   dtype = dtype or ref.dtype
   if not isinstance(ref.device, tuple): return Tensor.invalid(*shape, dtype=dtype, device=ref.device)
   shard_axis = ref.uop.axis if axis is None else axis
@@ -73,7 +74,6 @@ def _build_cast_runner(n_elems:int):
 # --- grad functions ---
 
 def _amax_grad(gradient:UOp, kernel:UOp):
-  # amax = x.abs().max().detach() -- no gradient flows through max, pass x gradient unchanged
   return (None, gradient)
 
 def _cast_grad(gradient:UOp, kernel:UOp):
@@ -82,7 +82,6 @@ def _cast_grad(gradient:UOp, kernel:UOp):
   _, _, x_uop, amax_uop = kernel.src[1:]
   grad = Tensor(gradient, device=gradient.device)
   amax = Tensor(amax_uop, device=amax_uop.device)
-  # replicate ref's bf16 scale chain: scale = bf16(bf16(1/(bf16(amax+eps))) * bf16(448))
   scale = (FP8_MAX / (amax.cast(dtypes.bfloat16) + 1e-8)).cast(dtypes.bfloat16)
   return (None, None, (grad * scale).uop, None)
 
@@ -93,22 +92,30 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   for s in x.shape: n_elems *= s
   assert n_elems % ELEMS_PER_TILE == 0, f"n_elems={n_elems} must be divisible by {ELEMS_PER_TILE}"
   is_multi = isinstance(x.device, tuple)
-  n_local = n_elems // len(x.device) if is_multi else n_elems
+  is_sharded = is_multi and x.uop.axis is not None
+  n_local = n_elems // len(x.device) if is_sharded else n_elems
+  single_device = x.device[0] if is_multi else x.device
 
-  # kernel 1: amax reduction
-  amax_f32 = Tensor.zeros(1, dtype=dtypes.float32).contiguous().realize()
-  if is_multi: amax_f32 = amax_f32.shard(x.device, axis=None)
+  # kernel 1: amax reduction (amax_f32 must be zero-initialized for atomicMax)
+  def _zero_kernel(out:UOp) -> UOp:
+    i = UOp.range(out.size, 0)
+    return out.flatten()[i].store(0).end(i).sink(arg=KernelInfo(name="zero"))
+  amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+  amax_f32 = amax_f32.custom_kernel(fxn=_zero_kernel)[0]
   amax_f32, _ = Tensor.custom_kernel(amax_f32, x, fxn=_build_amax_runner(n_local), grad_fxn=_amax_grad)
 
   # kernel 2: scale + clamp + cast
   amax_input = amax_state.cast(dtypes.float32) if amax_state is not None else amax_f32
   if is_multi and not isinstance(amax_input.device, tuple): amax_input = amax_input.shard(x.device, axis=None)
-  out_fp8 = _sharded_empty(x.shape, x, dtype=FP8_DTYPE) if is_multi else Tensor.empty(*x.shape, dtype=FP8_DTYPE)
-  inv_scale = Tensor.empty(1, dtype=dtypes.float32)
-  if is_multi: inv_scale = inv_scale.shard(x.device, axis=None)
+  if is_sharded:
+    out_fp8 = _sharded_empty(x.shape, x, dtype=FP8_DTYPE)
+    inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+  else:
+    out_fp8 = Tensor.invalid(*x.shape, dtype=FP8_DTYPE, device=x.device)
+    inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
   out_fp8, inv_scale, _, _ = Tensor.custom_kernel(out_fp8, inv_scale, x, amax_input, fxn=_build_cast_runner(n_local), grad_fxn=_cast_grad)
 
-  return out_fp8, inv_scale, amax_f32.cast(x.dtype)
+  return out_fp8, inv_scale.squeeze(), amax_f32.squeeze().cast(x.dtype)
 
 
 def _shard_dp(*ts: Tensor) -> tuple[Tensor, ...]:
