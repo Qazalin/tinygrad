@@ -31,46 +31,50 @@ def ref_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
 
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
+KITTENS_PATH = Path(__file__).parent  # extra/thunder/amd
+TILE_R, TILE_C = 16, 32
+ELEMS_PER_TILE = TILE_R * TILE_C  # 512
 
 def _compile_kitten(name:str, n_elems:int):
   src = (REPO_ROOT / f"{name}.cpp").read_text()
-  return src, HIPCCCompiler("gfx950", ["-std=c++20", f"-DPARAM_N={n_elems}"]).compile_cached(src)
+  return src, HIPCCCompiler(Device[Device.DEFAULT].renderer.target.arch,
+    [f"-I{(KITTENS_PATH/'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math",
+     "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DPARAM_N={n_elems}"]).compile_cached(src)
 
-def _kitten_amax(amax_f32:UOp, x_bf16:UOp, n_elems:int=0):
-  threads = UOp.special(256, "lidx0")
-  workgroups = UOp.special(256, "gidx0")
-  nbytes = n_elems * 2
-  sink = UOp.sink(amax_f32.base, x_bf16.base, threads, workgroups,
-                  arg=KernelInfo("kitten_amax", estimates=Estimates(ops=n_elems, lds=nbytes, mem=nbytes)))
+def _build_amax_runner(n_elems:int):
+  num_tiles = n_elems // ELEMS_PER_TILE
   src, lib = _compile_kitten("kitten_amax", n_elems)
-  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
-                               UOp(Ops.BINARY, arg=lib)))
+  def runner(amax_f32:UOp, x_bf16:UOp):
+    sink = UOp.sink(UOp.special(num_tiles, "gidx0"), UOp.special(64, "lidx0"), amax_f32, x_bf16,
+                    arg=KernelInfo(name="kitten_amax"))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+  return runner
 
-def _kitten_cast(out_fp8:UOp, inv_scale:UOp, x_bf16:UOp, amax_f32:UOp, n_elems:int=0):
-  threads = UOp.special(256, "lidx0")
-  num_wg = min((n_elems + 255) // 256, 1024)
-  workgroups = UOp.special(num_wg, "gidx0")
-  nbytes_in, nbytes_out = n_elems * 2, n_elems
-  sink = UOp.sink(out_fp8.base, inv_scale.base, x_bf16.base, amax_f32.base, threads, workgroups,
-                  arg=KernelInfo("kitten_cast", estimates=Estimates(ops=n_elems*2, lds=nbytes_in+nbytes_out, mem=nbytes_in+nbytes_out)))
+def _build_cast_runner(n_elems:int):
+  num_tiles = n_elems // ELEMS_PER_TILE
   src, lib = _compile_kitten("kitten_cast", n_elems)
-  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
-                               UOp(Ops.BINARY, arg=lib)))
+  def runner(out_fp8:UOp, inv_scale:UOp, x_bf16:UOp, amax_f32:UOp):
+    sink = UOp.sink(UOp.special(num_tiles, "gidx0"), UOp.special(64, "lidx0"), out_fp8, inv_scale, x_bf16, amax_f32,
+                    arg=KernelInfo(name="kitten_cast"))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+  return runner
 
 def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
-  from functools import partial
   n_elems = 1
   for s in x.shape: n_elems *= s
+  assert n_elems % ELEMS_PER_TILE == 0, f"n_elems={n_elems} must be divisible by {ELEMS_PER_TILE}"
 
   # kernel 1: amax reduction
-  amax_f32 = Tensor.zeros(1, dtype=dtypes.float32)
-  amax_f32, _ = Tensor.custom_kernel(amax_f32, x, fxn=partial(_kitten_amax, n_elems=n_elems))
+  amax_f32 = Tensor.zeros(1, dtype=dtypes.float32).contiguous().realize()
+  amax_f32, _ = Tensor.custom_kernel(amax_f32, x, fxn=_build_amax_runner(n_elems))
 
   # kernel 2: scale + clamp + cast
   amax_input = amax_state.cast(dtypes.float32) if amax_state is not None else amax_f32
   out_fp8 = Tensor.empty(*x.shape, dtype=FP8_DTYPE)
   inv_scale = Tensor.empty(1, dtype=dtypes.float32)
-  out_fp8, inv_scale, _, _ = Tensor.custom_kernel(out_fp8, inv_scale, x, amax_input, fxn=partial(_kitten_cast, n_elems=n_elems))
+  out_fp8, inv_scale, _, _ = Tensor.custom_kernel(out_fp8, inv_scale, x, amax_input, fxn=_build_cast_runner(n_elems))
 
   return out_fp8, inv_scale, amax_f32.cast(x.dtype)
 
