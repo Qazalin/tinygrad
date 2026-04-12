@@ -187,6 +187,8 @@ def train_resnet():
     return x.shard(GPUS, axis=0).realize(), Tensor(y, requires_grad=False).shard(GPUS, axis=0), y, cookie
 
   # ** epoch loop **
+  import time
+  print(time.time())
   step_times = []
   for e in range(start_epoch, epochs):
     # ** train loop **
@@ -1770,6 +1772,8 @@ def train_stable_diffusion():
     t6 = time.perf_counter()
 
 if __name__ == "__main__":
+  import time
+  print(time.time())
   multiprocessing.set_start_method('spawn')
 
   if getenv("INITMLPERF"): bench_log_manager = WallTimeEvent(BenchEvent.MLPERF_INIT)
