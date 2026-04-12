@@ -30,29 +30,49 @@ def ref_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   return x_clamped.cast(FP8_DTYPE), scale.float().reciprocal(), new_amax
 
 
-def _kitten_quant_kernel(out_fp8:UOp, x_bf16:UOp, inv_scale:UOp, new_amax:UOp):
-  """custom_kernel callback: launches kitten_quant.cpp
-  args: out_fp8 (fp8), x_bf16 (bf16), inv_scale (float scalar), new_amax (bf16 scalar)"""
-  num_threads = 1
-  num_wg = 1
-  threads = UOp.special(num_threads, "lidx0")
-  workgroups = UOp.special(num_wg, "gidx0")
-  sink = UOp.sink(out_fp8.base, x_bf16.base, inv_scale.base, new_amax.base, threads, workgroups,
-                  arg=KernelInfo("kitten_quant", estimates=Estimates()))
-  src = (Path(__file__).parent.parent.parent.parent / "kitten_quant.cpp").read_text()
-  kittens_path = Path(__file__).parent
-  lib = HIPCCCompiler("gfx950", [f"-I{(kittens_path/'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math",
-                                  "-DHIP_ENABLE_WARP_SYNC_BUILTINS"]).compile_cached(src)
+REPO_ROOT = Path(__file__).parent.parent.parent.parent
+
+def _compile_kitten(name:str, n_elems:int):
+  src = (REPO_ROOT / f"{name}.cpp").read_text()
+  return src, HIPCCCompiler("gfx950", ["-std=c++20", f"-DPARAM_N={n_elems}"]).compile_cached(src)
+
+def _kitten_amax(amax_f32:UOp, x_bf16:UOp, n_elems:int=0):
+  threads = UOp.special(256, "lidx0")
+  workgroups = UOp.special(256, "gidx0")
+  nbytes = n_elems * 2
+  sink = UOp.sink(amax_f32.base, x_bf16.base, threads, workgroups,
+                  arg=KernelInfo("kitten_amax", estimates=Estimates(ops=n_elems, lds=nbytes, mem=nbytes)))
+  src, lib = _compile_kitten("kitten_amax", n_elems)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
                                UOp(Ops.BINARY, arg=lib)))
 
+def _kitten_cast(out_fp8:UOp, inv_scale:UOp, x_bf16:UOp, amax_f32:UOp, n_elems:int=0):
+  threads = UOp.special(256, "lidx0")
+  num_wg = min((n_elems + 255) // 256, 1024)
+  workgroups = UOp.special(num_wg, "gidx0")
+  nbytes_in, nbytes_out = n_elems * 2, n_elems
+  sink = UOp.sink(out_fp8.base, inv_scale.base, x_bf16.base, amax_f32.base, threads, workgroups,
+                  arg=KernelInfo("kitten_cast", estimates=Estimates(ops=n_elems*2, lds=nbytes_in+nbytes_out, mem=nbytes_in+nbytes_out)))
+  src, lib = _compile_kitten("kitten_cast", n_elems)
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
+                               UOp(Ops.BINARY, arg=lib)))
 
 def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
+  from functools import partial
+  n_elems = 1
+  for s in x.shape: n_elems *= s
+
+  # kernel 1: amax reduction
+  amax_f32 = Tensor.zeros(1, dtype=dtypes.float32)
+  amax_f32, _ = Tensor.custom_kernel(amax_f32, x, fxn=partial(_kitten_amax, n_elems=n_elems))
+
+  # kernel 2: scale + clamp + cast
+  amax_input = amax_state.cast(dtypes.float32) if amax_state is not None else amax_f32
   out_fp8 = Tensor.empty(*x.shape, dtype=FP8_DTYPE)
   inv_scale = Tensor.empty(1, dtype=dtypes.float32)
-  new_amax = Tensor.empty(1, dtype=x.dtype)
-  out_fp8, _, inv_scale, new_amax = Tensor.custom_kernel(out_fp8, x, inv_scale, new_amax, fxn=_kitten_quant_kernel)
-  return out_fp8, inv_scale, new_amax
+  out_fp8, inv_scale, _, _ = Tensor.custom_kernel(out_fp8, inv_scale, x, amax_input, fxn=partial(_kitten_cast, n_elems=n_elems))
+
+  return out_fp8, inv_scale, amax_f32.cast(x.dtype)
 
 
 def _shard_dp(*ts: Tensor) -> tuple[Tensor, ...]:

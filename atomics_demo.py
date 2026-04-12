@@ -2,47 +2,61 @@ from tinygrad import Tensor, UOp, Device
 from tinygrad.dtype import dtypes
 from tinygrad.helpers import Context, DEBUG, getenv
 from tinygrad.uop.ops import KernelInfo, Ops
+from pathlib import Path
 
 
 def build_atomic_amax_kernel(global_size:int, local_size:int, n:int):
+  assert local_size == 64, "HipKittens demo uses one 64-thread warp per block"
+  assert n % 512 == 0, "N must be divisible by 512 (one 16x32 tile per block)"
   code = f"""
 #include <hip/hip_runtime.h>
+#include "kittens.cuh"
+
+using namespace kittens;
 
 constexpr unsigned int GRID = {global_size};
-constexpr unsigned int BLOCK = {local_size};
+constexpr unsigned int BLOCK = WARP_THREADS;
+constexpr unsigned int TILE_R = 16;
+constexpr unsigned int TILE_C = 32;
+constexpr unsigned int ELEMS_PER_TILE = TILE_R * TILE_C;
+constexpr unsigned int N = {n};
+
+using ST = st_bf<TILE_R, TILE_C, st_16x32_s>;
+using RT = rt_bf<TILE_R, TILE_C, row_l, rt_16x32_s>;
+using G = group<1>;
 
 __device__ __forceinline__ void atomicMaxFloatNonNeg(float* addr, float value) {{
   atomicMax(reinterpret_cast<int*>(addr), __float_as_int(value));
 }}
 
-extern "C" __global__ void atomic_amax_abs_kernel(float* out, const float* x) {{
-  __shared__ float smax[BLOCK];
+extern "C" __global__ void atomic_amax_abs_kernel(float* out, const bf16* x) {{
+  gl<bf16, 1, 1, -1, -1> X{{const_cast<bf16*>(x), nullptr, nullptr, (size_t)(N / TILE_C), (size_t)TILE_C}};
 
-  const unsigned int tid = threadIdx.x;
-  const unsigned int gid = blockIdx.x * BLOCK + tid;
-  const unsigned int stride = GRID * BLOCK;
+  const int tile_idx = blockIdx.x;
+  __shared__ ST smem;
+  RT reg;
+  typename RT::col_vec row_max_vec;
 
-  float local_max = 0.0f;
-  for (unsigned int i = gid; i < {n}; i += stride) {{
-    local_max = fmaxf(local_max, fabsf(x[i]));
-  }}
-
-  smax[tid] = local_max;
+  G::load(smem, X, {{0, 0, tile_idx, 0}});
+  __builtin_amdgcn_s_waitcnt(0);
   __syncthreads();
 
-  for (unsigned int s = BLOCK >> 1; s > 0; s >>= 1) {{
-    if (tid < s) smax[tid] = fmaxf(smax[tid], smax[tid + s]);
-    __syncthreads();
-  }}
+  load(reg, smem);
+  abs(reg, reg);
+  row_max(row_max_vec, reg);
 
-  if (tid == 0) atomicMaxFloatNonNeg(out, smax[0]);
+  bf16 tile_max_bf = bf16(0.0f);
+  max(tile_max_bf, row_max_vec);
+  float tile_max = (float)tile_max_bf;
+  if (laneid() == 0) atomicMaxFloatNonNeg(out, tile_max);
 }}
 """
 
   def runner(out:UOp, buf:UOp) -> UOp:
     from tinygrad.runtime.support.compiler_amd import HIPCCCompiler
 
-    lib = HIPCCCompiler(Device[Device.DEFAULT].renderer.target.arch, []).compile_cached(code)
+    kittens_path = Path("extra") / "thunder" / "amd"
+    lib = HIPCCCompiler(Device[Device.DEFAULT].renderer.target.arch, [f"-I{(kittens_path/'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math", "-DHIP_ENABLE_WARP_SYNC_BUILTINS"]).compile_cached(code)
     sink = UOp.sink(
       UOp.special(global_size, "gidx0"),
       UOp.special(local_size, "lidx0"),
@@ -67,11 +81,12 @@ extern "C" __global__ void atomic_amax_abs_kernel(float* out, const float* x) {{
 if __name__ == "__main__":
   # defaults: DEV=AMD python atomics_demo.py
   n = getenv("N", 8 * 1024 * 1024)
-  global_size = getenv("GLOBALS", 1024)
-  local_size = getenv("LOCALS", 256)
+  global_size = getenv("GLOBALS", n // 512)
+  local_size = getenv("LOCALS", 64)
+  assert global_size * 512 == n, "GLOBALS must be N/512 for this tiled demo"
 
-  x = (Tensor.randn(n) * 1000).cast(dtypes.float).contiguous().realize()
-  expected = x.abs().max().item()
+  x = (Tensor.randn(n) * 1000).cast(dtypes.bfloat16).contiguous().realize()
+  expected = x.float().abs().max().item()
 
   out = Tensor.zeros(1, dtype=dtypes.float).contiguous().realize()
   fxn = build_atomic_amax_kernel(global_size, local_size, n)
