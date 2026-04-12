@@ -132,7 +132,7 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   single_device = x.device[0] if is_multi else x.device
 
   # kernel 1: amax reduction
-  if hk_mode >= 2:
+  if hk_mode == 2:
     num_partials_valid = min(getenv("HK_FP8_AMAX_PARTIALS", 16384), n_local // ELEMS_PER_TILE)
     num_partials = ((num_partials_valid + 255) // 256) * 256
     partials = Tensor.zeros(num_partials, dtype=dtypes.float32, device=x.device)
@@ -151,13 +151,19 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   # kernel 2: scale + clamp + cast
   amax_input = amax_state.cast(dtypes.float32) if amax_state is not None else amax_f32
   if is_multi and not isinstance(amax_input.device, tuple): amax_input = amax_input.shard(x.device, axis=None)
-  if is_sharded:
-    out_fp8 = _sharded_empty(x.shape, x, dtype=FP8_DTYPE)
-    inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+  if hk_mode >= 3:
+    # tinygrad cast path: keep custom amax kernel, skip custom cast kernel
+    amax_for_cast = amax_state if amax_state is not None else amax_f32.cast(x.dtype)
+    if is_multi and not isinstance(amax_for_cast.device, tuple): amax_for_cast = amax_for_cast.shard(x.device, axis=None)
+    out_fp8, inv_scale, _ = ref_quantize_fp8(x, amax_state=amax_for_cast)
   else:
-    out_fp8 = Tensor.invalid(*x.shape, dtype=FP8_DTYPE, device=x.device)
-    inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
-  out_fp8, inv_scale, _, _ = Tensor.custom_kernel(out_fp8, inv_scale, x, amax_input, fxn=_build_cast_runner(n_local), grad_fxn=_cast_grad)
+    if is_sharded:
+      out_fp8 = _sharded_empty(x.shape, x, dtype=FP8_DTYPE)
+      inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+    else:
+      out_fp8 = Tensor.invalid(*x.shape, dtype=FP8_DTYPE, device=x.device)
+      inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+    out_fp8, inv_scale, _, _ = Tensor.custom_kernel(out_fp8, inv_scale, x, amax_input, fxn=_build_cast_runner(n_local), grad_fxn=_cast_grad)
 
   return out_fp8, inv_scale.squeeze(), amax_f32.squeeze().cast(x.dtype)
 
@@ -471,6 +477,41 @@ class TestFp8QuantBenchLargeShapes(unittest.TestCase):
   def test_bench_hot_shapes(self):
     for shp in self.HOT_SHAPES:
       self._bench_one(shp)
+
+
+@unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 to run cast kernel benchmarks")
+class TestFp8QuantBenchCastOnly(unittest.TestCase):
+  """Isolated cast kernel benchmarks for the hottest profile sizes."""
+
+  HOT_ELEMS = [117440512, 58720256, 33554432]
+
+  def _bench_cast(self, n_local:int, iters:int=20):
+    assert n_local % ELEMS_PER_TILE == 0
+    x = Tensor.randn(n_local, dtype=dtypes.bfloat16)
+    amax = Tensor(3.0, dtype=dtypes.float32)
+    out = Tensor.invalid(n_local, dtype=FP8_DTYPE, device=x.device)
+    inv = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+
+    with Context(DEBUG=0):
+      Tensor.realize(x, amax)
+
+    # warmup
+    o, s, _, _ = Tensor.custom_kernel(out, inv, x, amax, fxn=_build_cast_runner(n_local), grad_fxn=_cast_grad)
+    Tensor.realize(o, s)
+
+    times = []
+    for _ in range(iters):
+      st = time.perf_counter()
+      o, s, _, _ = Tensor.custom_kernel(out, inv, x, amax, fxn=_build_cast_runner(n_local), grad_fxn=_cast_grad)
+      Tensor.realize(o, s)
+      times.append((time.perf_counter()-st)*1e6)
+
+    best, avg = min(times), sum(times)/len(times)
+    print(f"bench_cast elems={n_local} best_us={best:.2f} avg_us={avg:.2f}")
+
+  def test_bench_cast_hot_sizes(self):
+    for n in self.HOT_ELEMS:
+      self._bench_cast(n)
 
 
 if __name__ == "__main__":
