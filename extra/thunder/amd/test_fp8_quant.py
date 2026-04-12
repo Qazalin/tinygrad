@@ -96,6 +96,17 @@ def _build_amax_partial_runner(n_elems:int, num_partials:int):
                                  UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
   return runner
 
+def _build_amax_fused_runner(n_elems:int, num_blocks:int):
+  src, lib = _compile_kitten("kitten_amax_fused", n_elems, extra_defs={"PARAM_GRID":num_blocks})
+  est = Estimates(ops=2*n_elems, lds=n_elems*2+4, mem=n_elems*2+4)
+  name = f"kitten_amax_fused_{n_elems}_{num_blocks}"
+  def runner(amax_f32:UOp, x_bf16:UOp):
+    sink = UOp.sink(UOp.special(num_blocks, "gidx0"), UOp.special(64, "lidx0"), amax_f32, x_bf16,
+                    arg=KernelInfo(name=name, estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+  return runner
+
 def _build_amax_reduce_runner(num_partials_padded:int, num_partials_valid:int):
   src, lib = _compile_kitten("kitten_amax_reduce", num_partials_padded, use_kittens=False, extra_defs={"PARAM_VALID":num_partials_valid})
   name = f"kitten_amax_reduce_{num_partials_padded}_{num_partials_valid}"
@@ -152,12 +163,21 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
 
   # kernel 1: amax reduction
   if hk_mode == 2:
-    num_partials_valid = min(getenv("HK_FP8_AMAX_PARTIALS", 16384), n_local // ELEMS_PER_TILE)
-    num_partials = ((num_partials_valid + 255) // 256) * 256
-    partials = Tensor.zeros(num_partials, dtype=dtypes.float32, device=x.device)
-    partials, _ = Tensor.custom_kernel(partials, x, fxn=_build_amax_partial_runner(n_local, num_partials_valid), grad_fxn=_amax_grad)
-    amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
-    amax_f32, _ = Tensor.custom_kernel(amax_f32, partials, fxn=_build_amax_reduce_runner(num_partials, num_partials_valid), grad_fxn=_amax_reduce_grad)
+    if getenv("HK_FP8_FUSE_REDUCE", 0):
+      num_blocks = min(getenv("HK_FP8_AMAX_PARTIALS", 8192), n_local // ELEMS_PER_TILE)
+      def _zero_kernel(out:UOp) -> UOp:
+        i = UOp.range(out.size, 0)
+        return out.flatten()[i].store(0).end(i).sink(arg=KernelInfo(name="zero", estimates=Estimates(ops=0, lds=4, mem=4)))
+      amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+      amax_f32 = amax_f32.custom_kernel(fxn=_zero_kernel)[0]
+      amax_f32, _ = Tensor.custom_kernel(amax_f32, x, fxn=_build_amax_fused_runner(n_local, num_blocks), grad_fxn=_amax_grad)
+    else:
+      num_partials_valid = min(getenv("HK_FP8_AMAX_PARTIALS", 16384), n_local // ELEMS_PER_TILE)
+      num_partials = ((num_partials_valid + 255) // 256) * 256
+      partials = Tensor.zeros(num_partials, dtype=dtypes.float32, device=x.device)
+      partials, _ = Tensor.custom_kernel(partials, x, fxn=_build_amax_partial_runner(n_local, num_partials_valid), grad_fxn=_amax_grad)
+      amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+      amax_f32, _ = Tensor.custom_kernel(amax_f32, partials, fxn=_build_amax_reduce_runner(num_partials, num_partials_valid), grad_fxn=_amax_reduce_grad)
   else:
     # one-pass atomic path
     def _zero_kernel(out:UOp) -> UOp:
@@ -541,6 +561,32 @@ class TestFp8QuantBenchCastOnly(unittest.TestCase):
   def test_bench_cast_hot_sizes(self):
     for n in self.HOT_ELEMS:
       self._bench_cast(n)
+
+
+@unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 to run reduce kernel benchmarks")
+class TestFp8QuantBenchAmaxReduce(unittest.TestCase):
+  def _bench_reduce(self, num_partials:int=16384, iters:int=100):
+    num_padded = ((num_partials + 255)//256)*256
+    partials = Tensor.randn(num_padded, dtype=dtypes.float32)
+    out = Tensor.zeros(1, dtype=dtypes.float32)
+    fxn = _build_amax_reduce_runner(num_padded, num_partials)
+
+    with Context(DEBUG=0):
+      Tensor.realize(partials)
+      Tensor.realize(out.custom_kernel(partials, fxn=fxn)[0])
+
+    times = []
+    for _ in range(iters):
+      with Context(DEBUG=0):
+        st = time.perf_counter()
+        Tensor.realize(out.custom_kernel(partials, fxn=fxn)[0])
+        times.append((time.perf_counter()-st)*1e6)
+
+    best, avg = min(times), sum(times)/len(times)
+    print(f"bench_amax_reduce partials={num_partials} padded={num_padded} best_us={best:.2f} avg_us={avg:.2f}")
+
+  def test_bench_amax_reduce_16384(self):
+    self._bench_reduce(16384)
 
 
 if __name__ == "__main__":
