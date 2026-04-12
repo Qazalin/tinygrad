@@ -4,7 +4,6 @@ if __name__ == "__main__":
   os.environ["OPTIM_DTYPE"] = "bfloat16"
   if "DEV" not in os.environ: os.environ["DEV"] = "NULL"
   # CDNA
-  os.environ["EMULATE"] = "AMD_CDNA4"
   os.environ["DEVICE_IN_FUNCTION_BUG"] = "1"
   os.environ["ALL2ALL"] = "1"
   os.environ["USE_ATOMICS"] = "1"

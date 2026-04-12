@@ -75,11 +75,11 @@ def _build_amax_partial_runner(n_elems:int, num_partials:int):
                                  UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
   return runner
 
-def _build_amax_reduce_runner(num_partials:int):
-  src, lib = _compile_kitten("kitten_amax_reduce", num_partials, use_kittens=False)
-  est = Estimates(ops=2*num_partials, lds=num_partials*4+4, mem=num_partials*4+4)
+def _build_amax_reduce_runner(num_partials_padded:int, num_partials_valid:int):
+  src, lib = _compile_kitten("kitten_amax_reduce", num_partials_padded, use_kittens=True, extra_defs={"PARAM_VALID":num_partials_valid})
+  est = Estimates(ops=2*num_partials_valid, lds=num_partials_padded*4+4, mem=num_partials_padded*4+4)
   def runner(amax_f32:UOp, partials_f32:UOp):
-    sink = UOp.sink(UOp.special(1, "gidx0"), UOp.special(256, "lidx0"), amax_f32, partials_f32,
+    sink = UOp.sink(UOp.special(1, "gidx0"), UOp.special(64, "lidx0"), amax_f32, partials_f32,
                     arg=KernelInfo(name="kitten_amax_reduce", estimates=est))
     return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
                                  UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
@@ -128,11 +128,12 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
 
   # kernel 1: amax reduction
   if hk_mode >= 2:
-    num_partials = min(getenv("HK_FP8_AMAX_PARTIALS", 16384), n_local // ELEMS_PER_TILE)
-    partials = Tensor.invalid(num_partials, dtype=dtypes.float32, device=x.device)
-    partials, _ = Tensor.custom_kernel(partials, x, fxn=_build_amax_partial_runner(n_local, num_partials), grad_fxn=_amax_grad)
+    num_partials_valid = min(getenv("HK_FP8_AMAX_PARTIALS", 16384), n_local // ELEMS_PER_TILE)
+    num_partials = ((num_partials_valid + 255) // 256) * 256
+    partials = Tensor.zeros(num_partials, dtype=dtypes.float32, device=x.device)
+    partials, _ = Tensor.custom_kernel(partials, x, fxn=_build_amax_partial_runner(n_local, num_partials_valid), grad_fxn=_amax_grad)
     amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
-    amax_f32, _ = Tensor.custom_kernel(amax_f32, partials, fxn=_build_amax_reduce_runner(num_partials), grad_fxn=_amax_reduce_grad)
+    amax_f32, _ = Tensor.custom_kernel(amax_f32, partials, fxn=_build_amax_reduce_runner(num_partials, num_partials_valid), grad_fxn=_amax_reduce_grad)
   else:
     # one-pass atomic path
     def _zero_kernel(out:UOp) -> UOp:
