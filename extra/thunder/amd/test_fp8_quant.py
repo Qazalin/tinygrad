@@ -132,6 +132,19 @@ def _build_cast_runner(n_elems:int):
                                  UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
   return runner
 
+def _build_cast_amax_fused_runner(n_elems:int):
+  assert n_elems % CAST_ELEMS_PER_WG == 0, f"n_elems={n_elems} must be divisible by {CAST_ELEMS_PER_WG}"
+  num_tiles = n_elems // CAST_ELEMS_PER_WG
+  src, lib = _compile_kitten("kitten_cast_amax_fused", n_elems, use_kittens=True, kittens_fast_math=True, extra_defs={"PARAM_TILE":CAST_ELEMS_PER_WG})
+  name = f"kitten_cast_amax_fused_{n_elems}"
+  est = Estimates(ops=4*n_elems, lds=n_elems*2+n_elems+8, mem=n_elems*2+n_elems+8)
+  def runner(out_fp8:UOp, inv_scale:UOp, out_amax:UOp, x_bf16:UOp, amax_in:UOp):
+    sink = UOp.sink(UOp.special(num_tiles, "gidx0"), UOp.special(64, "lidx0"), out_fp8, inv_scale, out_amax, x_bf16, amax_in,
+                    arg=KernelInfo(name=name, estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+  return runner
+
 # --- grad functions ---
 
 def _amax_grad(gradient:UOp, kernel:UOp):
@@ -149,10 +162,19 @@ def _cast_grad(gradient:UOp, kernel:UOp):
   scale = (FP8_MAX / (amax.cast(dtypes.bfloat16) + 1e-8)).cast(dtypes.bfloat16)
   return (None, None, (grad * scale).uop, None)
 
+def _cast_amax_fused_grad(gradient:UOp, kernel:UOp):
+  # kernel args order: out_fp8, inv_scale, out_amax, x, amax_in
+  _, _, _, x_uop, amax_uop = kernel.src[1:]
+  grad = Tensor(gradient, device=gradient.device)
+  amax = Tensor(amax_uop, device=amax_uop.device)
+  scale = (FP8_MAX / (amax.cast(dtypes.bfloat16) + 1e-8)).cast(dtypes.bfloat16)
+  return (None, None, None, (grad * scale).uop, None)
+
 # --- main entry point ---
 
 def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   hk_mode = getenv("HK_FP8_QUANTIZE", 1)
+  use_fused_cast_amax = hk_mode == 2 and amax_state is not None and getenv("HK_FP8_CAST_AMAX_FUSED", 1)
   n_elems = 1
   for s in x.shape: n_elems *= s
   assert n_elems % ELEMS_PER_TILE == 0, f"n_elems={n_elems} must be divisible by {ELEMS_PER_TILE}"
@@ -162,7 +184,9 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   single_device = x.device[0] if is_multi else x.device
 
   # kernel 1: amax reduction
-  if hk_mode == 2:
+  if use_fused_cast_amax:
+    amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+  elif hk_mode == 2:
     if getenv("HK_FP8_FUSE_REDUCE", 0):
       num_blocks = min(getenv("HK_FP8_AMAX_PARTIALS", 8192), n_local // ELEMS_PER_TILE)
       def _zero_kernel(out:UOp) -> UOp:
@@ -190,7 +214,22 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   # kernel 2: scale + clamp + cast
   amax_input = amax_state.cast(dtypes.float32) if amax_state is not None else amax_f32
   if is_multi and not isinstance(amax_input.device, tuple): amax_input = amax_input.shard(x.device, axis=None)
-  if hk_mode >= 3:
+  if use_fused_cast_amax:
+    def _zero_kernel(out:UOp) -> UOp:
+      i = UOp.range(out.size, 0)
+      return out.flatten()[i].store(0).end(i).sink(arg=KernelInfo(name="zero", estimates=Estimates(ops=0, lds=4, mem=4)))
+    if is_sharded:
+      out_fp8 = _sharded_empty(x.shape, x, dtype=FP8_DTYPE)
+      inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+      amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+    else:
+      out_fp8 = Tensor.invalid(*x.shape, dtype=FP8_DTYPE, device=x.device)
+      inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+      amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+    amax_f32 = amax_f32.custom_kernel(fxn=_zero_kernel)[0]
+    out_fp8, inv_scale, amax_f32, _, _ = Tensor.custom_kernel(out_fp8, inv_scale, amax_f32, x, amax_input,
+      fxn=_build_cast_amax_fused_runner(n_local), grad_fxn=_cast_amax_fused_grad)
+  elif hk_mode >= 3:
     # tinygrad cast path: keep custom amax kernel, skip custom cast kernel
     amax_for_cast = amax_state if amax_state is not None else amax_f32.cast(x.dtype)
     if is_multi and not isinstance(amax_for_cast.device, tuple): amax_for_cast = amax_for_cast.shard(x.device, axis=None)
@@ -521,6 +560,38 @@ class TestFp8QuantBenchLargeShapes(unittest.TestCase):
     print(f"bench shape={shape} elems={shape[0]*shape[1]} best_ms={best:.3f} avg_ms={avg:.3f}")
 
   def test_bench_hot_shapes(self):
+    for shp in self.HOT_SHAPES:
+      self._bench_one(shp)
+
+
+@unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 to run large-shape benchmarks")
+class TestFp8QuantBenchWithAmaxState(unittest.TestCase):
+  HOT_SHAPES = [
+    (8192, 14336),
+    (4096, 14336),
+    (4096, 8192),
+  ]
+
+  def _bench_one(self, shape:tuple[int, int], iters:int=5):
+    x = Tensor.randn(*shape, dtype=dtypes.bfloat16)
+    amax = Tensor(3.0, dtype=dtypes.bfloat16)
+    with Context(DEBUG=0):
+      Tensor.realize(x, amax)
+
+    y, s, a = custom_quantize_fp8(x, amax_state=amax)
+    Tensor.realize(y, s, a)
+
+    times = []
+    for _ in range(iters):
+      st = time.perf_counter()
+      y, s, a = custom_quantize_fp8(x, amax_state=amax)
+      Tensor.realize(y, s, a)
+      times.append((time.perf_counter()-st)*1e3)
+
+    best, avg = min(times), sum(times)/len(times)
+    print(f"bench_with_amax shape={shape} elems={shape[0]*shape[1]} best_ms={best:.3f} avg_ms={avg:.3f}")
+
+  def test_bench_hot_shapes_with_amax(self):
     for shp in self.HOT_SHAPES:
       self._bench_one(shp)
 
