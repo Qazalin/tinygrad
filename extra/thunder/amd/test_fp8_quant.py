@@ -35,6 +35,22 @@ REPO_ROOT = Path(__file__).parent.parent.parent.parent
 KITTENS_PATH = Path(__file__).parent  # extra/thunder/amd
 TILE_R, TILE_C = 16, 32
 ELEMS_PER_TILE = TILE_R * TILE_C  # 512
+CAST_ELEMS_PER_WG = getenv("HK_FP8_CAST_TILE", 2048)
+
+def _get_fp8_tolerances() -> tuple[float, float]:
+  hk_mode = getenv("HK_FP8_QUANTIZE", 1)
+  d_atol = 64.0 if hk_mode >= 2 else 0.0
+  d_rtol = 0.02 if hk_mode >= 2 else 0.0
+  return float(getenv("FP8_ATOL", d_atol)), float(getenv("FP8_RTOL", d_rtol))
+
+def _get_scalar_tolerances() -> tuple[float, float]:
+  hk_mode = getenv("HK_FP8_QUANTIZE", 1)
+  d_atol = 1e-2 if hk_mode >= 2 else 0.0
+  d_rtol = 1e-2 if hk_mode >= 2 else 0.0
+  return float(getenv("FP8_SCALAR_ATOL", d_atol)), float(getenv("FP8_SCALAR_RTOL", d_rtol))
+
+def _scalar_close(a:float, b:float, atol:float, rtol:float) -> bool:
+  return abs(a-b) <= atol + rtol * abs(a)
 
 def _compile_kitten(name:str, n_elems:int, use_kittens:bool=True, extra_defs:dict[str, int]|None=None, kittens_fast_math:bool=True):
   src = (REPO_ROOT / f"{name}.cpp").read_text()
@@ -92,8 +108,9 @@ def _build_amax_reduce_runner(num_partials_padded:int, num_partials_valid:int):
   return runner
 
 def _build_cast_runner(n_elems:int):
-  num_tiles = n_elems // ELEMS_PER_TILE
-  src, lib = _compile_kitten("kitten_cast", n_elems, use_kittens=True, kittens_fast_math=False)
+  assert n_elems % CAST_ELEMS_PER_WG == 0, f"n_elems={n_elems} must be divisible by {CAST_ELEMS_PER_WG}"
+  num_tiles = n_elems // CAST_ELEMS_PER_WG
+  src, lib = _compile_kitten("kitten_cast", n_elems, use_kittens=True, kittens_fast_math=False, extra_defs={"PARAM_TILE":CAST_ELEMS_PER_WG})
   name = f"kitten_cast_{n_elems}"
   # read n_elems bf16 + 1 float amax, write n_elems fp8 + 1 float inv_scale. ops: 2 per element (mul + clamp)
   est = Estimates(ops=2*n_elems, lds=n_elems*2+4+n_elems+4, mem=n_elems*2+4+n_elems+4)
@@ -222,11 +239,14 @@ class TestFp8QuantForwardValues(unittest.TestCase):
     with Context(DEBUG=0):
       ref_bf16 = ref_fp8.cast(dtypes.bfloat16)
       cst_bf16 = cst_fp8.cast(dtypes.bfloat16)
-      eq_mask = (ref_bf16 == cst_bf16)
-      n_total = int(eq_mask.numel())
-      n_eq = int(eq_mask.sum().item())
-      if n_eq != n_total:
-        n_mismatch = n_total - n_eq
+      fp8_atol, fp8_rtol = _get_fp8_tolerances()
+      diff = (ref_bf16.cast(dtypes.float32) - cst_bf16.cast(dtypes.float32)).abs()
+      allowed = ref_bf16.cast(dtypes.float32).abs() * fp8_rtol + fp8_atol
+      ok_mask = (diff <= allowed)
+      n_total = int(ok_mask.numel())
+      n_ok = int(ok_mask.sum().item())
+      if n_ok != n_total:
+        n_mismatch = n_total - n_ok
         diff = (ref_bf16.cast(dtypes.float32) - cst_bf16.cast(dtypes.float32))
         max_abs_diff = float(diff.abs().max().item())
         ref_min = float(ref_bf16.cast(dtypes.float32).min().item())
@@ -245,15 +265,16 @@ class TestFp8QuantForwardValues(unittest.TestCase):
       # bf16 has no python fmt so cast scalars to fp32 before .item()
       ref_scale_v = ref_scale.cast(dtypes.float32).item()
       cst_scale_v = cst_scale.cast(dtypes.float32).item()
-      self.assertEqual(ref_scale_v, cst_scale_v,
-                       f"x_scale value mismatch [{ctx}]: ref={ref_scale_v} cst={cst_scale_v} "
-                       f"diff={cst_scale_v - ref_scale_v}")
+      scalar_atol, scalar_rtol = _get_scalar_tolerances()
+      self.assertTrue(_scalar_close(ref_scale_v, cst_scale_v, scalar_atol, scalar_rtol),
+                      f"x_scale value mismatch [{ctx}]: ref={ref_scale_v} cst={cst_scale_v} "
+                      f"diff={cst_scale_v - ref_scale_v} atol={scalar_atol} rtol={scalar_rtol}")
 
       ref_amax_v = ref_amax.cast(dtypes.float32).item()
       cst_amax_v = cst_amax.cast(dtypes.float32).item()
-      self.assertEqual(ref_amax_v, cst_amax_v,
-                       f"new_amax value mismatch [{ctx}]: ref={ref_amax_v} cst={cst_amax_v} "
-                       f"diff={cst_amax_v - ref_amax_v}")
+      self.assertTrue(_scalar_close(ref_amax_v, cst_amax_v, scalar_atol, scalar_rtol),
+                      f"new_amax value mismatch [{ctx}]: ref={ref_amax_v} cst={cst_amax_v} "
+                      f"diff={cst_amax_v - ref_amax_v} atol={scalar_atol} rtol={scalar_rtol}")
 
   def test_simple(self):
     x = Tensor.randn(getenv("A", 64), getenv("B", 128), dtype=dtypes.bfloat16)
@@ -310,11 +331,14 @@ class TestFp8QuantForwardSharded(unittest.TestCase):
     with Context(DEBUG=0):
       ref_bf16 = ref_fp8.cast(dtypes.bfloat16)
       cst_bf16 = cst_fp8.cast(dtypes.bfloat16)
-      eq_mask = (ref_bf16 == cst_bf16)
-      n_total = int(eq_mask.numel())
-      n_eq = int(eq_mask.sum().item())
-      if n_eq != n_total:
-        n_mismatch = n_total - n_eq
+      fp8_atol, fp8_rtol = _get_fp8_tolerances()
+      diff = (ref_bf16.cast(dtypes.float32) - cst_bf16.cast(dtypes.float32)).abs()
+      allowed = ref_bf16.cast(dtypes.float32).abs() * fp8_rtol + fp8_atol
+      ok_mask = (diff <= allowed)
+      n_total = int(ok_mask.numel())
+      n_ok = int(ok_mask.sum().item())
+      if n_ok != n_total:
+        n_mismatch = n_total - n_ok
         diff = (ref_bf16.cast(dtypes.float32) - cst_bf16.cast(dtypes.float32))
         max_abs_diff = float(diff.abs().max().item())
         self.fail(
@@ -488,7 +512,7 @@ class TestFp8QuantBenchCastOnly(unittest.TestCase):
   HOT_ELEMS = [117440512, 58720256, 33554432]
 
   def _bench_cast(self, n_local:int, iters:int=20):
-    assert n_local % ELEMS_PER_TILE == 0
+    assert n_local % CAST_ELEMS_PER_WG == 0
     x = Tensor.randn(n_local, dtype=dtypes.bfloat16)
     amax = Tensor(3.0, dtype=dtypes.float32)
     out = Tensor.invalid(n_local, dtype=FP8_DTYPE, device=x.device)

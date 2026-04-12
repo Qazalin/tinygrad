@@ -7,7 +7,10 @@
 #include "kittens.cuh"
 using namespace kittens;
 
-constexpr unsigned int TILE_ELEMS = 512; // 16*32
+#ifndef PARAM_TILE
+#define PARAM_TILE 2048
+#endif
+constexpr unsigned int TILE_ELEMS = PARAM_TILE;
 
 static __device__ __forceinline__ unsigned char f32_to_fp8(float v) {
   unsigned int bits = __float_as_uint(v);
@@ -26,6 +29,7 @@ extern "C" __global__ void kitten_cast(unsigned char *out_fp8, float *inv_scale,
 
   int base = blockIdx.x * TILE_ELEMS;
   int tid = threadIdx.x;
+#pragma unroll 4
   for (int i = tid; i < TILE_ELEMS; i += 64) {
     float val_f = __bfloat162float((__hip_bfloat16)x[base + i]);
     float step_f = __bfloat162float(__float2bfloat16(rcp_f * val_f));
