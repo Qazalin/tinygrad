@@ -9,11 +9,16 @@ Run on real hardware (MI350X):
   AMD=1 PYTHONPATH=. python extra/thunder/amd/test_fp8_quant.py
 """
 import unittest
+from pathlib import Path
 from tinygrad import Tensor, dtypes, Device
 from tinygrad.helpers import Context, getenv
+from tinygrad.uop.ops import UOp, KernelInfo, Ops
+from tinygrad.renderer import Estimates
+from tinygrad.runtime.support.compiler_amd import HIPCCCompiler
 
 FP8_DTYPE = dtypes.fp8e4m3
 FP8_MAX = 448.0
+ELEMS_PER_WG = 64 * 128  # must match kitten_quant.cpp
 
 
 def ref_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
@@ -25,12 +30,29 @@ def ref_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   return x_clamped.cast(FP8_DTYPE), scale.float().reciprocal(), new_amax
 
 
+def _kitten_quant_kernel(out_fp8:UOp, x_bf16:UOp, inv_scale:UOp, new_amax:UOp):
+  """custom_kernel callback: launches kitten_quant.cpp
+  args: out_fp8 (fp8), x_bf16 (bf16), inv_scale (float scalar), new_amax (bf16 scalar)"""
+  num_threads = 1
+  num_wg = 1
+  threads = UOp.special(num_threads, "lidx0")
+  workgroups = UOp.special(num_wg, "gidx0")
+  sink = UOp.sink(out_fp8.base, x_bf16.base, inv_scale.base, new_amax.base, threads, workgroups,
+                  arg=KernelInfo("kitten_quant", estimates=Estimates()))
+  src = (Path(__file__).parent.parent.parent.parent / "kitten_quant.cpp").read_text()
+  kittens_path = Path(__file__).parent
+  lib = HIPCCCompiler("gfx950", [f"-I{(kittens_path/'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math",
+                                  "-DHIP_ENABLE_WARP_SYNC_BUILTINS"]).compile_cached(src)
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
+                               UOp(Ops.BINARY, arg=lib)))
+
+
 def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
-  new_amax = x.abs().max().detach()
-  scale = FP8_MAX / ((amax_state if amax_state is not None else new_amax) + 1e-8)
-  x_scaled = x * scale
-  x_clamped = x_scaled + (x_scaled.detach().clamp(-FP8_MAX, FP8_MAX) - x_scaled.detach())  # STE
-  return x_clamped.cast(FP8_DTYPE), scale.float().reciprocal(), new_amax
+  out_fp8 = Tensor.empty(*x.shape, dtype=FP8_DTYPE)
+  inv_scale = Tensor.empty(1, dtype=dtypes.float32)
+  new_amax = Tensor.empty(1, dtype=x.dtype)
+  out_fp8, _, inv_scale, new_amax = Tensor.custom_kernel(out_fp8, x, inv_scale, new_amax, fxn=_kitten_quant_kernel)
+  return out_fp8, inv_scale, new_amax
 
 
 def _shard_dp(*ts: Tensor) -> tuple[Tensor, ...]:
