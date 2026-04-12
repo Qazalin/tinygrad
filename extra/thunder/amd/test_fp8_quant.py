@@ -54,9 +54,11 @@ def _sharded_empty(shape, ref:Tensor, dtype=None, axis=None):
 def _build_amax_runner(n_elems:int):
   num_tiles = n_elems // ELEMS_PER_TILE
   src, lib = _compile_kitten("kitten_amax", n_elems)
+  # read n_elems bf16, write 1 float. ops: 1 abs + 1 max per element
+  est = Estimates(ops=2*n_elems, lds=n_elems*2+4, mem=n_elems*2+4)
   def runner(amax_f32:UOp, x_bf16:UOp):
     sink = UOp.sink(UOp.special(num_tiles, "gidx0"), UOp.special(64, "lidx0"), amax_f32, x_bf16,
-                    arg=KernelInfo(name="kitten_amax"))
+                    arg=KernelInfo(name="kitten_amax", estimates=est))
     return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
                                  UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
   return runner
@@ -64,9 +66,11 @@ def _build_amax_runner(n_elems:int):
 def _build_cast_runner(n_elems:int):
   num_tiles = n_elems // ELEMS_PER_TILE
   src, lib = _compile_kitten("kitten_cast", n_elems, use_kittens=False)
+  # read n_elems bf16 + 1 float amax, write n_elems fp8 + 1 float inv_scale. ops: 2 per element (mul + clamp)
+  est = Estimates(ops=2*n_elems, lds=n_elems*2+4+n_elems+4, mem=n_elems*2+4+n_elems+4)
   def runner(out_fp8:UOp, inv_scale:UOp, x_bf16:UOp, amax_f32:UOp):
     sink = UOp.sink(UOp.special(num_tiles, "gidx0"), UOp.special(64, "lidx0"), out_fp8, inv_scale, x_bf16, amax_f32,
-                    arg=KernelInfo(name="kitten_cast"))
+                    arg=KernelInfo(name="kitten_cast", estimates=est))
     return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
                                  UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
   return runner
@@ -99,7 +103,7 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   # kernel 1: amax reduction (amax_f32 must be zero-initialized for atomicMax)
   def _zero_kernel(out:UOp) -> UOp:
     i = UOp.range(out.size, 0)
-    return out.flatten()[i].store(0).end(i).sink(arg=KernelInfo(name="zero"))
+    return out.flatten()[i].store(0).end(i).sink(arg=KernelInfo(name="zero", estimates=Estimates(ops=0, lds=4, mem=4)))
   amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
   amax_f32 = amax_f32.custom_kernel(fxn=_zero_kernel)[0]
   amax_f32, _ = Tensor.custom_kernel(amax_f32, x, fxn=_build_amax_runner(n_local), grad_fxn=_amax_grad)
