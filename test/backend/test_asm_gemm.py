@@ -3,6 +3,7 @@ from tinygrad import Tensor, Device, dtypes, Context
 from tinygrad.device import is_dtype_supported
 from tinygrad.helpers import getenv, system
 from extra.gemm.cdna_asm_gemm import asm_gemm
+from extra.thunder.amd.quantize_fp8 import custom_quantize_fp8
 from test.helpers import needs_second_gpu
 from examples.mlperf.models.flat_llama import FP8_DTYPE
 
@@ -227,6 +228,32 @@ class TestMagicGu(unittest.TestCase):
         magic, shift = _magicgu_mulhi(iters, total * batch)
         old_magic, old_shift = old_iters_args[iters]
         self.assertEqual((magic, shift), (old_magic, old_shift), f"mismatch for ({M},{N},{K}) batch={batch} iters={iters}")
+
+def ref_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
+  FP8_DTYPE = dtypes.fp8e4m3
+  FP8_MAX = 448.0
+  new_amax = x.abs().max().detach()
+  scale = FP8_MAX / ((amax_state if amax_state is not None else new_amax) + 1e-8)
+  x_scaled = x * scale
+  x_clamped = x_scaled + (x_scaled.detach().clamp(-FP8_MAX, FP8_MAX) - x_scaled.detach())  # STE
+  return x_clamped.cast(FP8_DTYPE), scale.float().reciprocal(), new_amax
+
+class TestFP8Quantize(unittest.TestCase):
+  def run_test(self, x:Tensor, amax_state:Tensor|None=None) -> None:
+    x_ref = x.clone()
+    x_cst = x.clone()
+    amax_ref = amax_state.clone() if amax_state is not None else None
+    amax_cst = amax_state.clone() if amax_state is not None else None
+    with Context(DEBUG=0):
+      Tensor.realize(x_ref, x_cst)
+      if amax_state is not None: Tensor.realize(amax_ref, amax_cst)
+
+    ref_fp8, ref_scale, ref_amax = ref_quantize_fp8(x_ref, amax_state=amax_ref)
+    cst_fp8, cst_scale, cst_amax = custom_quantize_fp8(x_cst, amax_state=amax_cst)
+
+  def test_simple(self):
+    x = Tensor.randn(getenv("A", 64), getenv("B", 128), dtype=dtypes.bfloat16)
+    self.run_test(x, amax_state=None)
 
 if __name__ == "__main__":
   unittest.main()
