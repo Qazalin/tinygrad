@@ -2,7 +2,7 @@ Step-2 kernel categories (from discovery ranks 1-200)
 
 Scope
 - Uses the kernels currently documented in `discovery.md` (ranks 1-200).
-- These 200 kernels cover 2.073s out of 2.137s total step-2 time (~97.01%), so this is near-complete for where time is going.
+- These 200 kernels cover 2.073s coverage (~2.8s step time).
 
 1) How many of these kernels are just dumb copies?
 - Dumb-copy kernels (exact/simple copy/cast, not heavy math): 51 / 200 unique kernels.
