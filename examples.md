@@ -1,0 +1,46 @@
+Example kernels to inspect with `get_source.py`
+- Dumb copies / casts
+  - `E_6144_16_16_2n1`
+  - `E_8192_16_4_4`
+  - `E_32768_8_16_4_2`
+  - `E_16384_16_32_7n6`
+- Layout / transpose / reindex
+  - `E_8192_16_32_7_2n6`
+  - `E_224_32_8_16_2_16_4n1`
+  - `E_128_128_16_4_16_2`
+  - `E_16_2_8_32_32_2_2_2_2_4_2`
+- Memset / zero-fill
+  - `E_2_32_32`
+  - `E_56_4_32`
+  - `E_16_16_4`
+- FP8 GEMM compute
+  - `hk_fp8_gemm_8192_14336_4096`
+  - `hk_fp8_gemm_8192_4096_14336`
+  - `hk_fp8_gemm_14336_4096_8192`
+- FP8 quant/cast/amax
+  - `kitten_cast_amax_partial_58720256`
+  - `kitten_amax_reduce_16384_16384`
+  - `kitten_cast_117440512`
+- Flash attention
+  - `custom_fa_forward`
+  - `custom_fa_backward`
+  - `custom_fa_backward_pre`
+- Dense vocab GEMMs
+  - `gemm_1_8192_128256_4096`
+  - `gemm_1_4096_128256_8192`
+- Optimizer fused updates
+  - `E_458752_8_32_4_4n1`
+  - `E_458752_32_16_2_4n1`
+  - `E_524288_16_32_7n1`
+- Loss / CE path
+  - `r_262144_8_501`
+  - `r_256_128_32_2_501`
+  - `E_512_512_16_16_4_4`
+- RMSNorm stats
+  - `r_8192_64_16_4`
+  - `r_8192_64_16_4n1`
+- Embedding backward
+  - `embedding_bwd`
+
+Use:
+- `python3 get_source.py <kernel_name>`
