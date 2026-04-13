@@ -38,6 +38,12 @@ ELEMS_PER_TILE = TILE_R * TILE_C  # 512
 CAST_ELEMS_PER_WG = getenv("HK_FP8_CAST_TILE", 2048)
 FUSED_CAST_ELEMS_PER_WG = getenv("HK_FP8_CAST_AMAX_TILE", 16384)
 
+counters = {"used":0, "fused_cast":0}
+import atexit
+@atexit.register
+def print_stats():
+  print(f'quantize_fp8: {counters["used"]} used, {counters["fused_cast"]} with fusion')
+
 def _get_fp8_tolerances() -> tuple[float, float]:
   hk_mode = getenv("HK_FP8_QUANTIZE", 1)
   d_atol = 64.0 if hk_mode >= 2 else 0.0
@@ -209,9 +215,13 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
 
   # kernel 1: amax reduction
   if use_fused_cast_amax:
+    counters["used"] += 1
+    counters["fused_cast"] += 1
     amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
   elif hk_mode == 2:
+    counters["used"] += 1
     if getenv("HK_FP8_FUSE_REDUCE", 0):
+      raise RuntimeError("no longer supported")
       num_blocks = min(getenv("HK_FP8_AMAX_PARTIALS", 8192), n_local // ELEMS_PER_TILE)
       def _zero_kernel(out:UOp) -> UOp:
         i = UOp.range(out.size, 0)
@@ -227,6 +237,7 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
       amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
       amax_f32, _ = Tensor.custom_kernel(amax_f32, partials, fxn=_build_amax_reduce_runner(num_partials, num_partials_valid), grad_fxn=_amax_reduce_grad)
   else:
+    raise RuntimeError("no longer supported")
     # one-pass atomic path
     def _zero_kernel(out:UOp) -> UOp:
       i = UOp.range(out.size, 0)
