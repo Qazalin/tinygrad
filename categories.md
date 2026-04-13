@@ -1,7 +1,7 @@
 Step-2 kernel categories (from discovery ranks 1-200)
 
 Scope
-- Uses the kernels currently documented in `discovery.txt` (ranks 1-200).
+- Uses the kernels currently documented in `discovery.md` (ranks 1-200).
 - These 200 kernels cover 2.073s out of 2.137s total step-2 time (~97.01%), so this is near-complete for where time is going.
 
 1) How many of these kernels are just dumb copies?
