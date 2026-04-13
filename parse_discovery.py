@@ -3,9 +3,9 @@ from pathlib import Path
 
 
 def main() -> int:
-  path = Path("discovery.txt")
+  path = Path("discovery.md")
   if not path.exists():
-    print("error: discovery.txt not found")
+    print("error: discovery.md not found")
     return 1
 
   kernels = 0
