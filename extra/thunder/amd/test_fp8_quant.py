@@ -1,0 +1,747 @@
+"""
+Test harness for a custom fp8 quantize kernel.
+
+- `ref_quantize_fp8` is a verbatim copy of flat_llama.quantize_fp8 (the tinygrad-scheduler impl).
+- `custom_quantize_fp8` is currently a placeholder that just calls the ref impl. Later we swap
+  in a Tensor.custom_kernel-based implementation and these tests become the correctness gate.
+
+Run on real hardware (MI350X):
+  AMD=1 PYTHONPATH=. python extra/thunder/amd/test_fp8_quant.py
+"""
+import unittest
+import time
+from pathlib import Path
+from tinygrad import Tensor, dtypes, Device
+from tinygrad.helpers import Context, getenv
+from tinygrad.uop.ops import UOp, KernelInfo, Ops
+from tinygrad.renderer import Estimates
+from tinygrad.runtime.support.compiler_amd import HIPCCCompiler
+
+FP8_DTYPE = dtypes.fp8e4m3
+FP8_MAX = 448.0
+ELEMS_PER_WG = 64 * 128  # must match kitten_quant.cpp
+
+
+def ref_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
+  """Verbatim copy of examples/mlperf/models/flat_llama.py:26-31."""
+  new_amax = x.abs().max().detach()
+  scale = FP8_MAX / ((amax_state if amax_state is not None else new_amax) + 1e-8)
+  x_scaled = x * scale
+  x_clamped = x_scaled + (x_scaled.detach().clamp(-FP8_MAX, FP8_MAX) - x_scaled.detach())  # STE
+  return x_clamped.cast(FP8_DTYPE), scale.float().reciprocal(), new_amax
+
+
+REPO_ROOT = Path(__file__).parent.parent.parent.parent
+KITTENS_PATH = Path(__file__).parent  # extra/thunder/amd
+TILE_R, TILE_C = 16, 32
+ELEMS_PER_TILE = TILE_R * TILE_C  # 512
+CAST_ELEMS_PER_WG = getenv("HK_FP8_CAST_TILE", 2048)
+FUSED_CAST_ELEMS_PER_WG = getenv("HK_FP8_CAST_AMAX_TILE", 16384)
+
+def _get_fp8_tolerances() -> tuple[float, float]:
+  hk_mode = getenv("HK_FP8_QUANTIZE", 1)
+  d_atol = 64.0 if hk_mode >= 2 else 0.0
+  d_rtol = 0.02 if hk_mode >= 2 else 0.0
+  return float(getenv("FP8_ATOL", d_atol)), float(getenv("FP8_RTOL", d_rtol))
+
+def _get_scalar_tolerances() -> tuple[float, float]:
+  hk_mode = getenv("HK_FP8_QUANTIZE", 1)
+  d_atol = 1e-2 if hk_mode >= 2 else 0.0
+  d_rtol = 1e-2 if hk_mode >= 2 else 0.0
+  return float(getenv("FP8_SCALAR_ATOL", d_atol)), float(getenv("FP8_SCALAR_RTOL", d_rtol))
+
+def _scalar_close(a:float, b:float, atol:float, rtol:float) -> bool:
+  return abs(a-b) <= atol + rtol * abs(a)
+
+def _compile_kitten(name:str, n_elems:int, use_kittens:bool=True, extra_defs:dict[str, int]|None=None, kittens_fast_math:bool=True):
+  src = (REPO_ROOT / f"{name}.cpp").read_text()
+  flags = ["-std=c++20", f"-DPARAM_N={n_elems}"]
+  if extra_defs is not None:
+    flags += [f"-D{k}={v}" for k, v in extra_defs.items()]
+  if use_kittens:
+    flags += [f"-I{(KITTENS_PATH/'include').as_posix()}", "-DKITTENS_CDNA4", "-DHIP_ENABLE_WARP_SYNC_BUILTINS"]
+    if kittens_fast_math: flags += ["-ffast-math"]
+  return src, HIPCCCompiler(Device[Device.DEFAULT].renderer.target.arch, flags).compile_cached(src)
+
+def _sharded_empty(shape, ref:Tensor, dtype=None, axis=None):
+  """Create an output tensor matching ref's device/sharding layout. Copies fa.py exactly."""
+  dtype = dtype or ref.dtype
+  if not isinstance(ref.device, tuple): return Tensor.invalid(*shape, dtype=dtype, device=ref.device)
+  shard_axis = ref.uop.axis if axis is None else axis
+  per_dev = tuple(s // len(ref.device) if i == shard_axis else s for i, s in enumerate(shape))
+  return Tensor(Tensor.invalid(*per_dev, dtype=dtype, device=ref.device).uop.multi(shard_axis), dtype=dtype, device=ref.device)
+
+# --- kernel builders ---
+
+def _build_amax_runner(n_elems:int):
+  num_tiles = n_elems // ELEMS_PER_TILE
+  src, lib = _compile_kitten("kitten_amax", n_elems)
+  name = f"kitten_amax_{n_elems}"
+  # read n_elems bf16, write 1 float. ops: 1 abs + 1 max per element
+  est = Estimates(ops=2*n_elems, lds=n_elems*2+4, mem=n_elems*2+4)
+  def runner(amax_f32:UOp, x_bf16:UOp):
+    sink = UOp.sink(UOp.special(num_tiles, "gidx0"), UOp.special(64, "lidx0"), amax_f32, x_bf16,
+                    arg=KernelInfo(name=name, estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+  return runner
+
+def _build_amax_partial_runner(n_elems:int, num_partials:int):
+  src, lib = _compile_kitten("kitten_amax_partial", n_elems, extra_defs={"PARAM_GRID":num_partials})
+  name = f"kitten_amax_partial_{n_elems}_{num_partials}"
+  est = Estimates(ops=2*n_elems, lds=n_elems*2+num_partials*4, mem=n_elems*2+num_partials*4)
+  def runner(partials_f32:UOp, x_bf16:UOp):
+    sink = UOp.sink(UOp.special(num_partials, "gidx0"), UOp.special(64, "lidx0"), partials_f32, x_bf16,
+                    arg=KernelInfo(name=name, estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+  return runner
+
+def _build_amax_fused_runner(n_elems:int, num_blocks:int):
+  src, lib = _compile_kitten("kitten_amax_fused", n_elems, extra_defs={"PARAM_GRID":num_blocks})
+  est = Estimates(ops=2*n_elems, lds=n_elems*2+4, mem=n_elems*2+4)
+  name = f"kitten_amax_fused_{n_elems}_{num_blocks}"
+  def runner(amax_f32:UOp, x_bf16:UOp):
+    sink = UOp.sink(UOp.special(num_blocks, "gidx0"), UOp.special(64, "lidx0"), amax_f32, x_bf16,
+                    arg=KernelInfo(name=name, estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+  return runner
+
+def _build_amax_reduce_runner(num_partials_padded:int, num_partials_valid:int):
+  src, lib = _compile_kitten("kitten_amax_reduce", num_partials_padded, use_kittens=False, extra_defs={"PARAM_VALID":num_partials_valid})
+  name = f"kitten_amax_reduce_{num_partials_padded}_{num_partials_valid}"
+  est = Estimates(ops=2*num_partials_valid, lds=num_partials_padded*4+4, mem=num_partials_padded*4+4)
+  def runner(amax_f32:UOp, partials_f32:UOp):
+    sink = UOp.sink(UOp.special(1, "gidx0"), UOp.special(256, "lidx0"), amax_f32, partials_f32,
+                    arg=KernelInfo(name=name, estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+  return runner
+
+def _build_cast_runner(n_elems:int):
+  assert n_elems % CAST_ELEMS_PER_WG == 0, f"n_elems={n_elems} must be divisible by {CAST_ELEMS_PER_WG}"
+  num_tiles = n_elems // CAST_ELEMS_PER_WG
+  src, lib = _compile_kitten("kitten_cast", n_elems, use_kittens=True, kittens_fast_math=False, extra_defs={"PARAM_TILE":CAST_ELEMS_PER_WG})
+  name = f"kitten_cast_{n_elems}"
+  # read n_elems bf16 + 1 float amax, write n_elems fp8 + 1 float inv_scale. ops: 2 per element (mul + clamp)
+  est = Estimates(ops=2*n_elems, lds=n_elems*2+4+n_elems+4, mem=n_elems*2+4+n_elems+4)
+  def runner(out_fp8:UOp, inv_scale:UOp, x_bf16:UOp, amax_f32:UOp):
+    sink = UOp.sink(UOp.special(num_tiles, "gidx0"), UOp.special(64, "lidx0"), out_fp8, inv_scale, x_bf16, amax_f32,
+                    arg=KernelInfo(name=name, estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+  return runner
+
+def _build_cast_amax_fused_runner(n_elems:int, tile_elems:int=FUSED_CAST_ELEMS_PER_WG):
+  if n_elems % tile_elems != 0:
+    for cand in (16384, 8192, 4096, 2048, 1024, 512):
+      if cand <= n_elems and n_elems % cand == 0:
+        tile_elems = cand
+        break
+  assert n_elems % tile_elems == 0, f"n_elems={n_elems} must be divisible by {tile_elems}"
+  num_tiles = n_elems // tile_elems
+  src, lib = _compile_kitten("kitten_cast_amax_fused", n_elems, use_kittens=True, kittens_fast_math=True, extra_defs={"PARAM_TILE":tile_elems})
+  name = f"kitten_cast_amax_fused_{n_elems}"
+  est = Estimates(ops=4*n_elems, lds=n_elems*2+n_elems+8, mem=n_elems*2+n_elems+8)
+  def runner(out_fp8:UOp, inv_scale:UOp, out_amax:UOp, x_bf16:UOp, amax_in:UOp):
+    sink = UOp.sink(UOp.special(num_tiles, "gidx0"), UOp.special(64, "lidx0"), out_fp8, inv_scale, out_amax, x_bf16, amax_in,
+                    arg=KernelInfo(name=name, estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+  return runner
+
+def _build_cast_amax_partial_runner(n_elems:int, tile_elems:int=FUSED_CAST_ELEMS_PER_WG):
+  if n_elems % tile_elems != 0:
+    for cand in (16384, 8192, 4096, 2048, 1024, 512):
+      if cand <= n_elems and n_elems % cand == 0:
+        tile_elems = cand
+        break
+  assert n_elems % tile_elems == 0, f"n_elems={n_elems} must be divisible by {tile_elems}"
+  num_tiles = n_elems // tile_elems
+  src, lib = _compile_kitten("kitten_cast_amax_partial", n_elems, use_kittens=True, kittens_fast_math=True, extra_defs={"PARAM_TILE":tile_elems})
+  name = f"kitten_cast_amax_partial_{n_elems}"
+  est = Estimates(ops=4*n_elems, lds=n_elems*2+n_elems+num_tiles*4+8, mem=n_elems*2+n_elems+num_tiles*4+8)
+  def runner(out_fp8:UOp, inv_scale:UOp, partials_out:UOp, x_bf16:UOp, amax_in:UOp):
+    sink = UOp.sink(UOp.special(num_tiles, "gidx0"), UOp.special(64, "lidx0"), out_fp8, inv_scale, partials_out, x_bf16, amax_in,
+                    arg=KernelInfo(name=name, estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+  return runner, num_tiles
+
+# --- grad functions ---
+
+def _amax_grad(gradient:UOp, kernel:UOp):
+  return (None, gradient)
+
+def _amax_reduce_grad(gradient:UOp, kernel:UOp):
+  return (None, None)
+
+def _cast_grad(gradient:UOp, kernel:UOp):
+  # STE backward: grad_x = upstream * scale (straight-through, ignoring clamp)
+  # kernel args order: out_fp8, inv_scale, x, amax
+  _, _, x_uop, amax_uop = kernel.src[1:]
+  grad = Tensor(gradient, device=gradient.device)
+  amax = Tensor(amax_uop, device=amax_uop.device)
+  scale = (FP8_MAX / (amax.cast(dtypes.bfloat16) + 1e-8)).cast(dtypes.bfloat16)
+  return (None, None, (grad * scale).uop, None)
+
+def _cast_amax_fused_grad(gradient:UOp, kernel:UOp):
+  # kernel args order: out_fp8, inv_scale, out_amax, x, amax_in
+  _, _, _, x_uop, amax_uop = kernel.src[1:]
+  grad = Tensor(gradient, device=gradient.device)
+  amax = Tensor(amax_uop, device=amax_uop.device)
+  scale = (FP8_MAX / (amax.cast(dtypes.bfloat16) + 1e-8)).cast(dtypes.bfloat16)
+  return (None, None, None, (grad * scale).uop, None)
+
+# --- main entry point ---
+
+def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
+  hk_mode = getenv("HK_FP8_QUANTIZE", 1)
+  use_fused_cast_amax = hk_mode == 2 and amax_state is not None and getenv("HK_FP8_CAST_AMAX_FUSED", 1)
+  n_elems = 1
+  for s in x.shape: n_elems *= s
+  assert n_elems % ELEMS_PER_TILE == 0, f"n_elems={n_elems} must be divisible by {ELEMS_PER_TILE}"
+  is_multi = isinstance(x.device, tuple)
+  is_sharded = is_multi and x.uop.axis is not None
+  n_local = n_elems // len(x.device) if is_sharded else n_elems
+  single_device = x.device[0] if is_multi else x.device
+
+  # kernel 1: amax reduction
+  if use_fused_cast_amax:
+    amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+  elif hk_mode == 2:
+    if getenv("HK_FP8_FUSE_REDUCE", 0):
+      num_blocks = min(getenv("HK_FP8_AMAX_PARTIALS", 8192), n_local // ELEMS_PER_TILE)
+      def _zero_kernel(out:UOp) -> UOp:
+        i = UOp.range(out.size, 0)
+        return out.flatten()[i].store(0).end(i).sink(arg=KernelInfo(name="zero", estimates=Estimates(ops=0, lds=4, mem=4)))
+      amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+      amax_f32 = amax_f32.custom_kernel(fxn=_zero_kernel)[0]
+      amax_f32, _ = Tensor.custom_kernel(amax_f32, x, fxn=_build_amax_fused_runner(n_local, num_blocks), grad_fxn=_amax_grad)
+    else:
+      num_partials_valid = min(getenv("HK_FP8_AMAX_PARTIALS", 16384), n_local // ELEMS_PER_TILE)
+      num_partials = ((num_partials_valid + 255) // 256) * 256
+      partials = Tensor.zeros(num_partials, dtype=dtypes.float32, device=x.device)
+      partials, _ = Tensor.custom_kernel(partials, x, fxn=_build_amax_partial_runner(n_local, num_partials_valid), grad_fxn=_amax_grad)
+      amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+      amax_f32, _ = Tensor.custom_kernel(amax_f32, partials, fxn=_build_amax_reduce_runner(num_partials, num_partials_valid), grad_fxn=_amax_reduce_grad)
+  else:
+    # one-pass atomic path
+    def _zero_kernel(out:UOp) -> UOp:
+      i = UOp.range(out.size, 0)
+      return out.flatten()[i].store(0).end(i).sink(arg=KernelInfo(name="zero", estimates=Estimates(ops=0, lds=4, mem=4)))
+    amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+    amax_f32 = amax_f32.custom_kernel(fxn=_zero_kernel)[0]
+    amax_f32, _ = Tensor.custom_kernel(amax_f32, x, fxn=_build_amax_runner(n_local), grad_fxn=_amax_grad)
+
+  # kernel 2: scale + clamp + cast
+  amax_input = amax_state.cast(dtypes.float32) if amax_state is not None else amax_f32
+  if is_multi and not isinstance(amax_input.device, tuple): amax_input = amax_input.shard(x.device, axis=None)
+  if use_fused_cast_amax:
+    fxn_fused, num_tiles = _build_cast_amax_partial_runner(n_local)
+    num_partials = ((num_tiles + 255) // 256) * 256
+    if is_sharded:
+      out_fp8 = _sharded_empty(x.shape, x, dtype=FP8_DTYPE)
+      inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+      partials = Tensor.zeros(num_partials, dtype=dtypes.float32, device=x.device)
+    else:
+      out_fp8 = Tensor.invalid(*x.shape, dtype=FP8_DTYPE, device=x.device)
+      inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+      partials = Tensor.zeros(num_partials, dtype=dtypes.float32, device=x.device)
+    out_fp8, inv_scale, partials, _, _ = Tensor.custom_kernel(out_fp8, inv_scale, partials, x, amax_input,
+      fxn=fxn_fused, grad_fxn=_cast_amax_fused_grad)
+    amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+    amax_f32, _ = Tensor.custom_kernel(amax_f32, partials, fxn=_build_amax_reduce_runner(num_partials, num_tiles), grad_fxn=_amax_reduce_grad)
+  elif hk_mode >= 3:
+    # tinygrad cast path: keep custom amax kernel, skip custom cast kernel
+    amax_for_cast = amax_state if amax_state is not None else amax_f32.cast(x.dtype)
+    if is_multi and not isinstance(amax_for_cast.device, tuple): amax_for_cast = amax_for_cast.shard(x.device, axis=None)
+    out_fp8, inv_scale, _ = ref_quantize_fp8(x, amax_state=amax_for_cast)
+  else:
+    if is_sharded:
+      out_fp8 = _sharded_empty(x.shape, x, dtype=FP8_DTYPE)
+      inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+    else:
+      out_fp8 = Tensor.invalid(*x.shape, dtype=FP8_DTYPE, device=x.device)
+      inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+    out_fp8, inv_scale, _, _ = Tensor.custom_kernel(out_fp8, inv_scale, x, amax_input, fxn=_build_cast_runner(n_local), grad_fxn=_cast_grad)
+
+  return out_fp8, inv_scale.squeeze(), amax_f32.squeeze().cast(x.dtype)
+
+
+def _shard_dp(*ts: Tensor) -> tuple[Tensor, ...]:
+  devs = tuple(f"{Device.DEFAULT}:{i}" for i in range(8))
+  out = []
+  for t in ts:
+    if t.shape and t.shape[0] % len(devs) == 0:
+      out.append(t.shard(devs, axis=0))
+    else:
+      out.append(t.shard(devs, axis=None))
+  return tuple(out)
+
+
+class TestFp8QuantForwardValues(unittest.TestCase):
+  """Forward numeric equivalence between ref and custom on real inputs."""
+
+  def _cmp_fwd(self, x: Tensor, amax_state: Tensor | None):
+    x_ref = x.clone()
+    x_cst = x.clone()
+    amax_ref = amax_state.clone() if amax_state is not None else None
+    amax_cst = amax_state.clone() if amax_state is not None else None
+    with Context(DEBUG=0):
+      Tensor.realize(x_ref, x_cst)
+      if amax_state is not None: Tensor.realize(amax_ref, amax_cst)
+
+    ref_fp8, ref_scale, ref_amax = ref_quantize_fp8(x_ref, amax_state=amax_ref)
+    cst_fp8, cst_scale, cst_amax = custom_quantize_fp8(x_cst, amax_state=amax_cst)
+
+    ctx = f"shape={tuple(x.shape)} dtype={x.dtype} amax_state={'None' if amax_state is None else amax_state.cast(dtypes.float32).item()}"
+
+    # shape / dtype / device contract
+    self.assertEqual(ref_fp8.shape, cst_fp8.shape,
+                     f"x_fp8 shape mismatch [{ctx}]: ref={tuple(ref_fp8.shape)} cst={tuple(cst_fp8.shape)}")
+    self.assertEqual(ref_fp8.dtype, cst_fp8.dtype,
+                     f"x_fp8 dtype mismatch [{ctx}]: ref={ref_fp8.dtype} cst={cst_fp8.dtype}")
+    self.assertEqual(ref_fp8.dtype, FP8_DTYPE,
+                     f"x_fp8 dtype wrong [{ctx}]: got {ref_fp8.dtype}, expected {FP8_DTYPE}")
+    self.assertEqual(ref_scale.dtype, cst_scale.dtype,
+                     f"x_scale dtype mismatch [{ctx}]: ref={ref_scale.dtype} cst={cst_scale.dtype}")
+    self.assertEqual(ref_scale.dtype, dtypes.float32,
+                     f"x_scale dtype wrong [{ctx}]: got {ref_scale.dtype}, expected float32")
+    self.assertEqual(ref_amax.dtype, cst_amax.dtype,
+                     f"new_amax dtype mismatch [{ctx}]: ref={ref_amax.dtype} cst={cst_amax.dtype}")
+    self.assertEqual(ref_amax.dtype, x.dtype,
+                     f"new_amax dtype wrong [{ctx}]: got {ref_amax.dtype}, expected {x.dtype}")
+
+    # numerical equivalence: fp8 fwd path is deterministic so we expect bit-identical results
+    # compare fp8 outputs bitwise by casting back to bf16 (cast-back is lossy but deterministic)
+    Tensor.realize(cst_fp8, cst_scale, cst_amax)
+    Tensor.realize(ref_fp8, ref_scale, ref_amax)
+    if Device.DEFAULT == "NULL": return None
+    with Context(DEBUG=0):
+      ref_bf16 = ref_fp8.cast(dtypes.bfloat16)
+      cst_bf16 = cst_fp8.cast(dtypes.bfloat16)
+      fp8_atol, fp8_rtol = _get_fp8_tolerances()
+      diff = (ref_bf16.cast(dtypes.float32) - cst_bf16.cast(dtypes.float32)).abs()
+      allowed = ref_bf16.cast(dtypes.float32).abs() * fp8_rtol + fp8_atol
+      ok_mask = (diff <= allowed)
+      n_total = int(ok_mask.numel())
+      n_ok = int(ok_mask.sum().item())
+      if n_ok != n_total:
+        n_mismatch = n_total - n_ok
+        diff = (ref_bf16.cast(dtypes.float32) - cst_bf16.cast(dtypes.float32))
+        max_abs_diff = float(diff.abs().max().item())
+        ref_min = float(ref_bf16.cast(dtypes.float32).min().item())
+        ref_max = float(ref_bf16.cast(dtypes.float32).max().item())
+        cst_min = float(cst_bf16.cast(dtypes.float32).min().item())
+        cst_max = float(cst_bf16.cast(dtypes.float32).max().item())
+        self.fail(
+          f"x_fp8 value mismatch [{ctx}]: "
+          f"{n_mismatch}/{n_total} elements differ "
+          f"({100.0 * n_mismatch / n_total:.3f}%), "
+          f"max|ref-cst|={max_abs_diff} "
+          f"ref range=[{ref_min}, {ref_max}] "
+          f"cst range=[{cst_min}, {cst_max}]"
+        )
+
+      # bf16 has no python fmt so cast scalars to fp32 before .item()
+      ref_scale_v = ref_scale.cast(dtypes.float32).item()
+      cst_scale_v = cst_scale.cast(dtypes.float32).item()
+      scalar_atol, scalar_rtol = _get_scalar_tolerances()
+      self.assertTrue(_scalar_close(ref_scale_v, cst_scale_v, scalar_atol, scalar_rtol),
+                      f"x_scale value mismatch [{ctx}]: ref={ref_scale_v} cst={cst_scale_v} "
+                      f"diff={cst_scale_v - ref_scale_v} atol={scalar_atol} rtol={scalar_rtol}")
+
+      ref_amax_v = ref_amax.cast(dtypes.float32).item()
+      cst_amax_v = cst_amax.cast(dtypes.float32).item()
+      self.assertTrue(_scalar_close(ref_amax_v, cst_amax_v, scalar_atol, scalar_rtol),
+                      f"new_amax value mismatch [{ctx}]: ref={ref_amax_v} cst={cst_amax_v} "
+                      f"diff={cst_amax_v - ref_amax_v} atol={scalar_atol} rtol={scalar_rtol}")
+
+  def test_simple(self):
+    x = Tensor.randn(getenv("A", 64), getenv("B", 128), dtype=dtypes.bfloat16)
+    self._cmp_fwd(x, amax_state=None)
+
+  def test_fwd_with_amax_state_small(self):
+    x = Tensor.randn(64, 128, dtype=dtypes.bfloat16)
+    amax = Tensor(2.5, dtype=dtypes.bfloat16)
+    self._cmp_fwd(x, amax_state=amax)
+
+  @unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 for hot-shape amax_state test")
+  def test_fwd_with_amax_state_hot(self):
+    x = Tensor.randn(8192, 14336, dtype=dtypes.bfloat16)
+    amax = Tensor(2.5, dtype=dtypes.bfloat16)
+    self._cmp_fwd(x, amax_state=amax)
+
+  def test_fwd_contains_clamp_overflow(self):
+    # values that would exceed fp8 range (448) to exercise clamp
+    x = Tensor.randn(64, 128, dtype=dtypes.bfloat16) * 1000.0
+    amax = Tensor(1.0, dtype=dtypes.bfloat16)  # tiny amax → large scale → clamp hits
+    self._cmp_fwd(x, amax_state=amax)
+
+  def test_fwd_swiglu_shape_single_device(self):
+    # realistic SwiGLU output shape, single device
+    x = Tensor.randn(1, 1024, 14336, dtype=dtypes.bfloat16)
+    amax = Tensor(3.0, dtype=dtypes.bfloat16)
+    self._cmp_fwd(x, amax_state=amax)
+
+  def test_fwd_hot_amax_shapes(self):
+    # exercise large shapes that trigger the hottest amax kernels in profile traces
+    for a, b in [(8192, 14336), (4096, 14336), (4096, 8192)]:
+      x = Tensor.randn(a, b, dtype=dtypes.bfloat16)
+      self._cmp_fwd(x, amax_state=None)
+
+
+class TestFp8QuantForwardSharded(unittest.TestCase):
+  """Forward equivalence with DP sharding matching profile.sh (8 devices, axis=0)."""
+
+  def _cmp_fwd_sharded(self, x: Tensor, amax_state: Tensor | None):
+    with Context(DEBUG=0):
+      Tensor.realize(x) if amax_state is None else Tensor.realize(x, amax_state)
+    x_sh, amax_sh = _shard_dp(x, amax_state) if amax_state is not None else (_shard_dp(x)[0], None)
+
+    ref_fp8, ref_scale, ref_amax = ref_quantize_fp8(x_sh.clone(), amax_state=amax_sh.clone() if amax_sh is not None else None)
+    cst_fp8, cst_scale, cst_amax = custom_quantize_fp8(x_sh.clone(), amax_state=amax_sh.clone() if amax_sh is not None else None)
+
+    ctx = f"shape={tuple(x.shape)} dtype={x.dtype} sharded=8"
+
+    self.assertEqual(ref_fp8.shape, cst_fp8.shape,
+                     f"x_fp8 shape mismatch [{ctx}]: ref={tuple(ref_fp8.shape)} cst={tuple(cst_fp8.shape)}")
+    self.assertEqual(ref_fp8.dtype, cst_fp8.dtype,
+                     f"x_fp8 dtype mismatch [{ctx}]: ref={ref_fp8.dtype} cst={cst_fp8.dtype}")
+    self.assertEqual(ref_fp8.uop.axis, cst_fp8.uop.axis,
+                     f"x_fp8 shard axis mismatch [{ctx}]: ref={ref_fp8.uop.axis} cst={cst_fp8.uop.axis}")
+    self.assertEqual(ref_fp8.uop.axis, 0,
+                     f"x_fp8 shard axis wrong [{ctx}]: got {ref_fp8.uop.axis}, expected 0")
+
+    Tensor.realize(cst_fp8, cst_scale, cst_amax)
+    Tensor.realize(ref_fp8, ref_scale, ref_amax)
+    with Context(DEBUG=0):
+      ref_bf16 = ref_fp8.cast(dtypes.bfloat16)
+      cst_bf16 = cst_fp8.cast(dtypes.bfloat16)
+      fp8_atol, fp8_rtol = _get_fp8_tolerances()
+      diff = (ref_bf16.cast(dtypes.float32) - cst_bf16.cast(dtypes.float32)).abs()
+      allowed = ref_bf16.cast(dtypes.float32).abs() * fp8_rtol + fp8_atol
+      ok_mask = (diff <= allowed)
+      n_total = int(ok_mask.numel())
+      n_ok = int(ok_mask.sum().item())
+      if n_ok != n_total:
+        n_mismatch = n_total - n_ok
+        diff = (ref_bf16.cast(dtypes.float32) - cst_bf16.cast(dtypes.float32))
+        max_abs_diff = float(diff.abs().max().item())
+        self.fail(
+          f"x_fp8 value mismatch [{ctx}]: "
+          f"{n_mismatch}/{n_total} elements differ "
+          f"({100.0 * n_mismatch / n_total:.3f}%), "
+          f"max|ref-cst|={max_abs_diff}"
+        )
+
+  def test_fwd_sharded_small(self):
+    x = Tensor.randn(8, 128, 256, dtype=dtypes.bfloat16)
+    amax = Tensor(2.0, dtype=dtypes.bfloat16)
+    self._cmp_fwd_sharded(x, amax_state=amax)
+
+  def test_fwd_sharded_swiglu_shape(self):
+    # matches profile.sh DP=8 BS=8 SEQLEN=8192 hidden=14336 per-device swiglu shape
+    x = Tensor.randn(8, 8192, 14336, dtype=dtypes.bfloat16)
+    amax = Tensor(3.0, dtype=dtypes.bfloat16)
+    self._cmp_fwd_sharded(x, amax_state=amax)
+
+
+class TestFp8QuantBackwardSTE(unittest.TestCase):
+  """
+  The STE backward for quantize_fp8 passes gradient through as if clamp+cast were identity,
+  multiplied by `scale` (= 448/(amax_state+eps)). This test builds a scalar loss and compares
+  the input gradient between the ref impl and the custom impl.
+  """
+
+  def _cmp_bwd(self, x_init: Tensor, amax_state: Tensor | None):
+    with Context(DEBUG=0):
+      Tensor.realize(x_init) if amax_state is None else Tensor.realize(x_init, amax_state)
+    x_ref = x_init.clone().requires_grad_(True)
+    x_cst = x_init.clone().requires_grad_(True)
+
+    ref_fp8, _, _ = ref_quantize_fp8(x_ref, amax_state=amax_state)
+    cst_fp8, _, _ = custom_quantize_fp8(x_cst, amax_state=amax_state)
+
+    # scalar loss that depends on fp8 values (cast back to bf16 so autodiff has a dtype to work in)
+    ref_loss = ref_fp8.cast(dtypes.bfloat16).sum()
+    cst_loss = cst_fp8.cast(dtypes.bfloat16).sum()
+
+    (ref_grad,) = ref_loss.gradient(x_ref)
+    (cst_grad,) = cst_loss.gradient(x_cst)
+
+    ctx = f"shape={tuple(x_init.shape)} dtype={x_init.dtype} amax_state={'None' if amax_state is None else amax_state.cast(dtypes.float32).item()}"
+
+    self.assertEqual(ref_grad.shape, cst_grad.shape,
+                     f"grad shape mismatch [{ctx}]: ref={tuple(ref_grad.shape)} cst={tuple(cst_grad.shape)}")
+    self.assertEqual(ref_grad.dtype, cst_grad.dtype,
+                     f"grad dtype mismatch [{ctx}]: ref={ref_grad.dtype} cst={cst_grad.dtype}")
+
+    Tensor.realize(ref_grad, cst_grad)
+    with Context(DEBUG=0):
+      eq_mask = (ref_grad == cst_grad)
+      n_total = int(eq_mask.numel())
+      n_eq = int(eq_mask.sum().item())
+      if n_eq != n_total:
+        n_mismatch = n_total - n_eq
+        diff = (ref_grad.cast(dtypes.float32) - cst_grad.cast(dtypes.float32))
+        max_abs_diff = float(diff.abs().max().item())
+        self.fail(
+          f"grad value mismatch [{ctx}]: "
+          f"{n_mismatch}/{n_total} elements differ "
+          f"({100.0 * n_mismatch / n_total:.3f}%), "
+          f"max|ref-cst|={max_abs_diff}"
+        )
+
+  def test_bwd_no_amax_state(self):
+    x = Tensor.randn(64, 128, dtype=dtypes.bfloat16)
+    self._cmp_bwd(x, amax_state=None)
+
+  def test_bwd_with_amax_state(self):
+    x = Tensor.randn(64, 128, dtype=dtypes.bfloat16)
+    amax = Tensor(2.5, dtype=dtypes.bfloat16)
+    self._cmp_bwd(x, amax_state=amax)
+
+  def test_bwd_clamp_zeros_outside_range(self):
+    """
+    flat_llama's STE: x_clamped = x_scaled + (clamp(x_scaled).detach() - x_scaled.detach())
+    which algebraically simplifies to: forward = clamp(x_scaled), backward = d/dx(x_scaled) = scale.
+    So the STE passes `scale` through everywhere, ignoring the clamp boundary. That's the "straight-through"
+    semantics — grad does NOT zero at the clamp. Verify both impls agree on this.
+    """
+    x = Tensor.randn(64, 128, dtype=dtypes.bfloat16) * 10.0
+    amax = Tensor(0.01, dtype=dtypes.bfloat16)  # tiny amax → huge scale → everything clamps
+    self._cmp_bwd(x, amax_state=amax)
+
+
+class TestFp8QuantBackwardSharded(unittest.TestCase):
+  """Backward equivalence with DP sharding."""
+
+  def test_bwd_sharded(self):
+    x = Tensor.randn(8, 128, 256, dtype=dtypes.bfloat16)
+    amax = Tensor(2.0, dtype=dtypes.bfloat16)
+    with Context(DEBUG=0):
+      Tensor.realize(x, amax)
+    x_sh, amax_sh = _shard_dp(x, amax)
+    x_ref = x_sh.clone().requires_grad_(True)
+    x_cst = x_sh.clone().requires_grad_(True)
+
+    ref_fp8, _, _ = ref_quantize_fp8(x_ref, amax_state=amax_sh.clone())
+    cst_fp8, _, _ = custom_quantize_fp8(x_cst, amax_state=amax_sh.clone())
+
+    ref_loss = ref_fp8.cast(dtypes.bfloat16).sum()
+    cst_loss = cst_fp8.cast(dtypes.bfloat16).sum()
+
+    (ref_grad,) = ref_loss.gradient(x_ref)
+    (cst_grad,) = cst_loss.gradient(x_cst)
+
+    ctx = f"shape={tuple(x.shape)} sharded=8"
+    self.assertEqual(ref_grad.shape, cst_grad.shape,
+                     f"grad shape mismatch [{ctx}]: ref={tuple(ref_grad.shape)} cst={tuple(cst_grad.shape)}")
+    self.assertEqual(ref_grad.dtype, cst_grad.dtype,
+                     f"grad dtype mismatch [{ctx}]: ref={ref_grad.dtype} cst={cst_grad.dtype}")
+    self.assertEqual(ref_grad.uop.axis, cst_grad.uop.axis,
+                     f"grad shard axis mismatch [{ctx}]: ref={ref_grad.uop.axis} cst={cst_grad.uop.axis}")
+
+    Tensor.realize(ref_grad, cst_grad)
+    with Context(DEBUG=0):
+      eq_mask = (ref_grad == cst_grad)
+      n_total = int(eq_mask.numel())
+      n_eq = int(eq_mask.sum().item())
+      if n_eq != n_total:
+        n_mismatch = n_total - n_eq
+        self.fail(
+          f"grad value mismatch [{ctx}]: "
+          f"{n_mismatch}/{n_total} elements differ "
+          f"({100.0 * n_mismatch / n_total:.3f}%)"
+        )
+
+
+@unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 to run large-shape benchmarks")
+class TestFp8QuantBenchLargeShapes(unittest.TestCase):
+  """Benchmarks the largest fp8 quant shapes seen in profile traces."""
+
+  HOT_SHAPES = [
+    (8192, 14336),  # 117,440,512
+    (4096, 14336),  # 58,720,256
+    (4096, 8192),   # 33,554,432
+    (12288, 4096),  # 50,331,648
+  ]
+
+  def _bench_one(self, shape:tuple[int, int], iters:int=5):
+    x = Tensor.randn(*shape, dtype=dtypes.bfloat16)
+    with Context(DEBUG=0):
+      Tensor.realize(x)
+
+    # warmup
+    y, s, a = custom_quantize_fp8(x)
+    Tensor.realize(y, s, a)
+
+    times = []
+    for _ in range(iters):
+      st = time.perf_counter()
+      y, s, a = custom_quantize_fp8(x)
+      Tensor.realize(y, s, a)
+      times.append((time.perf_counter()-st)*1e3)
+
+    best, avg = min(times), sum(times)/len(times)
+    print(f"bench shape={shape} elems={shape[0]*shape[1]} best_ms={best:.3f} avg_ms={avg:.3f}")
+
+  def test_bench_hot_shapes(self):
+    for shp in self.HOT_SHAPES:
+      self._bench_one(shp)
+
+
+@unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 to run large-shape benchmarks")
+class TestFp8QuantBenchWithAmaxState(unittest.TestCase):
+  HOT_SHAPES = [
+    (8192, 14336),
+    (4096, 14336),
+    (4096, 8192),
+  ]
+
+  def _bench_one(self, shape:tuple[int, int], iters:int=5):
+    x = Tensor.randn(*shape, dtype=dtypes.bfloat16)
+    amax = Tensor(3.0, dtype=dtypes.bfloat16)
+    with Context(DEBUG=0):
+      Tensor.realize(x, amax)
+
+    y, s, a = custom_quantize_fp8(x, amax_state=amax)
+    Tensor.realize(y, s, a)
+
+    times = []
+    for _ in range(iters):
+      st = time.perf_counter()
+      y, s, a = custom_quantize_fp8(x, amax_state=amax)
+      Tensor.realize(y, s, a)
+      times.append((time.perf_counter()-st)*1e3)
+
+    best, avg = min(times), sum(times)/len(times)
+    print(f"bench_with_amax shape={shape} elems={shape[0]*shape[1]} best_ms={best:.3f} avg_ms={avg:.3f}")
+
+  def test_bench_hot_shapes_with_amax(self):
+    for shp in self.HOT_SHAPES:
+      self._bench_one(shp)
+
+
+@unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 to run fused-kernel benchmarks")
+class TestFp8QuantBenchCastAmaxFusedOnly(unittest.TestCase):
+  HOT_ELEMS = [117440512, 58720256, 33554432]
+  TILE_CANDS = [2048, 4096, 8192, 16384]
+
+  def _bench_fused(self, n_local:int, tile:int, iters:int=20):
+    if n_local % tile != 0: return
+    x = Tensor.randn(n_local, dtype=dtypes.bfloat16)
+    amax_in = Tensor(3.0, dtype=dtypes.float32)
+    out = Tensor.invalid(n_local, dtype=FP8_DTYPE, device=x.device)
+    inv = Tensor.zeros(1, dtype=dtypes.float32, device=x.device)
+    amax_out = Tensor.zeros(1, dtype=dtypes.float32, device=x.device)
+    fxn = _build_cast_amax_fused_runner(n_local, tile_elems=tile)
+
+    with Context(DEBUG=0):
+      Tensor.realize(x, amax_in)
+      o, s, a, _, _ = Tensor.custom_kernel(out, inv, amax_out, x, amax_in, fxn=fxn)
+      Tensor.realize(o, s, a)
+
+    times = []
+    for _ in range(iters):
+      with Context(DEBUG=0):
+        amax_out = amax_out.assign(0.0).realize()
+        st = time.perf_counter()
+        o, s, a, _, _ = Tensor.custom_kernel(out, inv, amax_out, x, amax_in, fxn=fxn)
+        Tensor.realize(o, s, a)
+        times.append((time.perf_counter()-st)*1e6)
+    best, avg = min(times), sum(times)/len(times)
+    print(f"bench_cast_amax_fused elems={n_local} tile={tile} best_us={best:.2f} avg_us={avg:.2f}")
+
+  def test_bench_fused_hot_sizes(self):
+    for n in self.HOT_ELEMS:
+      for tile in self.TILE_CANDS:
+        self._bench_fused(n, tile)
+
+  def test_trace_fused_58720256(self):
+    if not getenv("RUN_BENCH", 0): self.skipTest("set RUN_BENCH=1")
+    n_local = 58720256
+    tile = getenv("HK_FP8_CAST_AMAX_TILE", 16384)
+    assert n_local % tile == 0
+    x = Tensor.randn(n_local, dtype=dtypes.bfloat16)
+    amax_in = Tensor(3.0, dtype=dtypes.float32)
+    out = Tensor.invalid(n_local, dtype=FP8_DTYPE, device=x.device)
+    inv = Tensor.zeros(1, dtype=dtypes.float32, device=x.device)
+    amax_out = Tensor.zeros(1, dtype=dtypes.float32, device=x.device)
+    fxn = _build_cast_amax_fused_runner(n_local, tile_elems=tile)
+    with Context(DEBUG=0):
+      Tensor.realize(x, amax_in, inv)
+      amax_out = amax_out.assign(0.0).realize()
+      o, s, a, _, _ = Tensor.custom_kernel(out, inv, amax_out, x, amax_in, fxn=fxn)
+      Tensor.realize(o, s, a)
+
+
+@unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 to run cast kernel benchmarks")
+class TestFp8QuantBenchCastOnly(unittest.TestCase):
+  """Isolated cast kernel benchmarks for the hottest profile sizes."""
+
+  HOT_ELEMS = [117440512, 58720256, 33554432]
+
+  def _bench_cast(self, n_local:int, iters:int=20):
+    assert n_local % CAST_ELEMS_PER_WG == 0
+    x = Tensor.randn(n_local, dtype=dtypes.bfloat16)
+    amax = Tensor(3.0, dtype=dtypes.float32)
+    out = Tensor.invalid(n_local, dtype=FP8_DTYPE, device=x.device)
+    inv = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+    fxn = _build_cast_runner(n_local)
+
+    with Context(DEBUG=0):
+      Tensor.realize(x, amax)
+
+    # warmup
+    with Context(DEBUG=0):
+      o, s, _, _ = Tensor.custom_kernel(out, inv, x, amax, fxn=fxn, grad_fxn=_cast_grad)
+      Tensor.realize(o, s)
+
+    times = []
+    for _ in range(iters):
+      with Context(DEBUG=0):
+        st = time.perf_counter()
+        o, s, _, _ = Tensor.custom_kernel(out, inv, x, amax, fxn=fxn, grad_fxn=_cast_grad)
+        Tensor.realize(o, s)
+        times.append((time.perf_counter()-st)*1e6)
+
+    best, avg = min(times), sum(times)/len(times)
+    print(f"bench_cast elems={n_local} best_us={best:.2f} avg_us={avg:.2f}")
+
+  def test_bench_cast_hot_sizes(self):
+    for n in self.HOT_ELEMS:
+      self._bench_cast(n)
+
+
+@unittest.skipUnless(getenv("RUN_BENCH", 0), "set RUN_BENCH=1 to run reduce kernel benchmarks")
+class TestFp8QuantBenchAmaxReduce(unittest.TestCase):
+  def _bench_reduce(self, num_partials:int=16384, iters:int=100):
+    num_padded = ((num_partials + 255)//256)*256
+    partials = Tensor.randn(num_padded, dtype=dtypes.float32)
+    out = Tensor.zeros(1, dtype=dtypes.float32)
+    fxn = _build_amax_reduce_runner(num_padded, num_partials)
+
+    with Context(DEBUG=0):
+      Tensor.realize(partials)
+      Tensor.realize(out.custom_kernel(partials, fxn=fxn)[0])
+
+    times = []
+    for _ in range(iters):
+      with Context(DEBUG=0):
+        st = time.perf_counter()
+        Tensor.realize(out.custom_kernel(partials, fxn=fxn)[0])
+        times.append((time.perf_counter()-st)*1e6)
+
+    best, avg = min(times), sum(times)/len(times)
+    print(f"bench_amax_reduce partials={num_partials} padded={num_padded} best_us={best:.2f} avg_us={avg:.2f}")
+
+  def test_bench_amax_reduce_16384(self):
+    self._bench_reduce(16384)
+
+
+if __name__ == "__main__":
+  unittest.main(verbosity=2)
