@@ -9,6 +9,7 @@ from tinygrad.uop.ops import KernelInfo, Ops, UOp
 FP8_MAX = 448.0
 TILE_ELEMS = 16 * 32
 CAST_ELEMS_PER_WG = getenv("HK_FP8_CAST_TILE", 2048)
+WAVE_SIZE = 64
 
 @functools.cache
 def custom_quantize_fp8_amax_partials(partials:UOp, x:UOp, device:str, arch:str, n:int, grid:int) -> UOp:
@@ -16,7 +17,7 @@ def custom_quantize_fp8_amax_partials(partials:UOp, x:UOp, device:str, arch:str,
   assert numel == n
   code = (pathlib.Path(__file__).parent / "quantize_fp8_amax.cpp").read_text()
   compile_args = [f"-I{(pathlib.Path(__file__).parent / 'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math", "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DPARAM_N={n}", f"-DPARAM_GRID={grid}"]
-  lidx, gidx = UOp.special(64, "lidx0"), UOp.special(grid, "gidx0")
+  lidx, gidx = UOp.special(WAVE_SIZE, "lidx0"), UOp.special(grid, "gidx0")
   sink = UOp.sink(partials.base, x.base, lidx, gidx, arg=KernelInfo(name="custom_quantize_fp8_amax_partials", estimates=Estimates()))
   lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=device), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code), UOp(Ops.BINARY, arg=lib)))
@@ -25,7 +26,7 @@ def custom_quantize_fp8_amax_partials(partials:UOp, x:UOp, device:str, arch:str,
 def custom_quantize_fp8_amax_reduce(amax:UOp, partials:UOp, device:str, arch:str, num_partials:int) -> UOp:
   code = (pathlib.Path(__file__).parent / "quantize_fp8_reduce.cpp").read_text()
   compile_args = ["-std=c++20", f"-DPARAM_N={num_partials}", f"-DPARAM_VALID={num_partials}"]
-  lidx, gidx = UOp.special(64, "lidx0"), UOp.special(1, "gidx0")
+  lidx, gidx = UOp.special(WAVE_SIZE, "lidx0"), UOp.special(1, "gidx0")
   sink = UOp.sink(amax.base, partials.base, lidx, gidx, arg=KernelInfo(name="custom_quantize_fp8_amax_reduce", estimates=Estimates()))
   lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=device), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code), UOp(Ops.BINARY, arg=lib)))
@@ -36,7 +37,7 @@ def custom_quantize_fp8_cast(x_fp8:UOp, inv_scale:UOp, x:UOp, amax:UOp, device:s
   assert numel % CAST_ELEMS_PER_WG == 0, f"n_elems={numel} must be divisible by {CAST_ELEMS_PER_WG}"
   code = (pathlib.Path(__file__).parent / "quantize_fp8_cast.cpp").read_text()
   compile_args = [f"-I{(pathlib.Path(__file__).parent / 'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DPARAM_N={numel}", f"-DPARAM_TILE={CAST_ELEMS_PER_WG}"]
-  threads, blocks = 64, numel // CAST_ELEMS_PER_WG
+  threads, blocks = WAVE_SIZE, numel // CAST_ELEMS_PER_WG
   lidx, gidx = UOp.special(threads, "lidx0"), UOp.special(blocks, "gidx0")
   sink = UOp.sink(x_fp8.base, inv_scale.base, x.base, amax.base, lidx, gidx, arg=KernelInfo(name="custom_quantize_fp8_cast", estimates=Estimates()))
   lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
