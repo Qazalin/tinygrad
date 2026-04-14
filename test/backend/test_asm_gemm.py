@@ -228,9 +228,17 @@ class TestMagicGu(unittest.TestCase):
         old_magic, old_shift = old_iters_args[iters]
         self.assertEqual((magic, shift), (old_magic, old_shift), f"mismatch for ({M},{N},{K}) batch={batch} iters={iters}")
 
+from extra.thunder.amd.quantize_fp8 import custom_quantize_fp8
+from examples.mlperf.models.flat_llama import quantize_fp8
+
 class TestQuantizeFP8(unittest.TestCase):
   def test_simple(self):
-    pass
+    Tensor.manual_seed(0)
+    x = Tensor.randn((32, 32), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16).realize()
+    x2, inv_scale, new_amax = quantize_fp8(x)
+    print(x.numpy())
+    print("--------")
+    print(x2.numpy())
 
 if __name__ == "__main__":
   unittest.main()
