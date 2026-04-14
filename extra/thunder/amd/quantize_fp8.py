@@ -25,7 +25,7 @@ def custom_quantize_fp8_amax_partials(partials:UOp, x:UOp, device:str, arch:str,
 def custom_quantize_fp8_amax_reduce(amax:UOp, partials:UOp, device:str, arch:str, num_partials:int) -> UOp:
   code = (pathlib.Path(__file__).parent / "quantize_fp8_reduce.cpp").read_text()
   compile_args = ["-std=c++20", f"-DPARAM_N={num_partials}", f"-DPARAM_VALID={num_partials}"]
-  lidx, gidx = UOp.special(256, "lidx0"), UOp.special(1, "gidx0")
+  lidx, gidx = UOp.special(64, "lidx0"), UOp.special(1, "gidx0")
   sink = UOp.sink(amax.base, partials.base, lidx, gidx, arg=KernelInfo(name="custom_quantize_fp8_amax_reduce", estimates=Estimates()))
   lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=device), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code), UOp(Ops.BINARY, arg=lib)))
