@@ -10,6 +10,7 @@ FP8_MAX = 448.0
 TILE_ELEMS = 16 * 32
 CAST_ELEMS_PER_WG = getenv("HK_FP8_CAST_TILE", 2048)
 WAVE_SIZE = 64
+REDUCE_THREADS = 256
 
 @functools.cache
 def custom_quantize_fp8_amax_partials(partials:UOp, x:UOp, device:str, arch:str, n:int, grid:int) -> UOp:
@@ -25,8 +26,8 @@ def custom_quantize_fp8_amax_partials(partials:UOp, x:UOp, device:str, arch:str,
 @functools.cache
 def custom_quantize_fp8_amax_reduce(amax:UOp, partials:UOp, device:str, arch:str, num_partials:int) -> UOp:
   code = (pathlib.Path(__file__).parent / "quantize_fp8_reduce.cpp").read_text()
-  compile_args = ["-std=c++20", f"-DPARAM_N={num_partials}", f"-DPARAM_VALID={num_partials}"]
-  lidx, gidx = UOp.special(WAVE_SIZE, "lidx0"), UOp.special(1, "gidx0")
+  compile_args = [f"-I{(pathlib.Path(__file__).parent / 'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DPARAM_N={num_partials}", f"-DPARAM_VALID={num_partials}", f"-DPARAM_BLOCK={REDUCE_THREADS}"]
+  lidx, gidx = UOp.special(REDUCE_THREADS, "lidx0"), UOp.special(1, "gidx0")
   sink = UOp.sink(amax.base, partials.base, lidx, gidx, arg=KernelInfo(name="custom_quantize_fp8_amax_reduce", estimates=Estimates()))
   lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=device), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code), UOp(Ops.BINARY, arg=lib)))
