@@ -21,6 +21,11 @@ FP8_DTYPE = dtypes.fp8e4m3
 FP8_MAX = 448.0
 ELEMS_PER_WG = 64 * 128  # must match kitten_quant.cpp
 
+import atexit
+counters = {"used":0}
+@atexit.register
+def print_counters():
+  print(f"hk_fp8_quantize {counters}")
 
 def ref_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   """Verbatim copy of examples/mlperf/models/flat_llama.py:26-31."""
@@ -197,6 +202,7 @@ def _cast_amax_fused_grad(gradient:UOp, kernel:UOp):
 # --- main entry point ---
 
 def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
+  counters["used"] += 1
   hk_mode = getenv("HK_FP8_QUANTIZE", 1)
   use_fused_cast_amax = hk_mode == 2 and amax_state is not None
   n_elems = 1
