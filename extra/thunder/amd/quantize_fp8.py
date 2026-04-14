@@ -40,6 +40,13 @@ def custom_quantize_fp8_cast(x_fp8:UOp, inv_scale:UOp, x:UOp, amax:UOp, device:s
   lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=device), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code), UOp(Ops.BINARY, arg=lib)))
 
+
+def amax_grad(gradient:UOp, kernel:UOp):
+  return (None, gradient)
+
+def amax_reduce_grad(gradient:UOp, kernel:UOp):
+  return (None, None)
+
 def custom_quantize_fp8(x:Tensor, amax_state:Tensor|None=None) -> tuple[Tensor, Tensor, Tensor]:
   assert isinstance(x.device, str), "multi todo"
   assert amax_state is None, "delayed scaling todo"
@@ -54,8 +61,10 @@ def custom_quantize_fp8(x:Tensor, amax_state:Tensor|None=None) -> tuple[Tensor, 
   num_tiles = n // TILE_ELEMS
   global_size = min(getenv("HK_QFP8_GLOBALS", 131072), num_tiles)
   partials = Tensor.invalid(global_size, dtype=dtypes.float, device=x.device)
-  partials = Tensor.custom_kernel(partials, x, fxn=functools.partial(custom_quantize_fp8_amax_partials, device=dname, arch=arch, n=n, grid=global_size))[0]
-  amax = Tensor.custom_kernel(amax, partials, fxn=functools.partial(custom_quantize_fp8_amax_reduce, device=dname, arch=arch, num_partials=global_size))[0]
+  partials, _ = Tensor.custom_kernel(partials, x, fxn=functools.partial(custom_quantize_fp8_amax_partials, device=dname, arch=arch, n=n, grid=global_size),
+                                  grad_fxn=amax_grad)
+  amax, _ = Tensor.custom_kernel(amax, partials, fxn=functools.partial(custom_quantize_fp8_amax_reduce, device=dname, arch=arch, num_partials=global_size),
+                              grad_fxn=amax_reduce_grad)
 
   new_amax = amax.cast(x.dtype).detach()
   scale = FP8_MAX / (new_amax + 1e-8)

@@ -240,20 +240,20 @@ class TestQuantizeFP8(unittest.TestCase):
       Tensor.realize(*[t for t in (ref_x, cmp_x, ref_amax, cmp_amax) if t is not None])
     ref_x2, ref_inv_scale, ref_new_amax = quantize_fp8(ref_x, amax_state=ref_amax)
     cmp_x2, cmp_inv_scale, cmp_new_amax = custom_quantize_fp8(cmp_x, amax_state=cmp_amax)
+    self.assertEqual(cmp_x2.dtype, FP8_DTYPE)
+    self.assertEqual(cmp_inv_scale.dtype, dtypes.float)
+    self.assertEqual(cmp_new_amax.dtype, dtypes.bfloat16)
+    cmp_x2.float().sum().backward()
+    ref_x2.float().sum().backward()
     print("** ref")
     Tensor.realize(ref_x2, ref_inv_scale, ref_new_amax)
     print("** compare")
     Tensor.realize(cmp_x2, cmp_inv_scale, cmp_new_amax)
-    self.assertEqual(cmp_x2.dtype, FP8_DTYPE)
-    self.assertEqual(cmp_inv_scale.dtype, dtypes.float)
-    self.assertEqual(cmp_new_amax.dtype, dtypes.bfloat16)
     import numpy as np
     with Context(DEBUG=0):
       np.testing.assert_allclose(cmp_x2.numpy(), ref_x2.numpy())
       np.testing.assert_allclose(cmp_inv_scale.numpy(), ref_inv_scale.numpy())
       np.testing.assert_allclose(cmp_new_amax.numpy(), ref_new_amax.numpy())
-      cmp_x2.float().sum().backward()
-      ref_x2.float().sum().backward()
       np.testing.assert_allclose(cmp_x.grad.numpy(), ref_x.grad.numpy())
       assert cmp_inv_scale.grad is None and cmp_new_amax.grad is None
 
