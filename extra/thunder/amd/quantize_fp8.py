@@ -45,8 +45,6 @@ def custom_quantize_fp8(x:Tensor, amax_state:Tensor|None=None) -> tuple[Tensor, 
   assert amax_state is None, "delayed scaling todo"
   assert x.dtype == dtypes.bfloat16, f"expected bfloat16 input, got {x.dtype}"
 
-  x_fp8 = Tensor.invalid(*x.shape, dtype=dtypes.fp8e4m3, device=x.device)
-  inv_scale = Tensor.invalid(1, dtype=dtypes.float, device=x.device).reshape(())
   amax = Tensor.invalid(1, dtype=dtypes.float, device=x.device).reshape(())
 
   dname = x.device.split(":")[0]
@@ -59,6 +57,10 @@ def custom_quantize_fp8(x:Tensor, amax_state:Tensor|None=None) -> tuple[Tensor, 
   partials = Tensor.custom_kernel(partials, x, fxn=functools.partial(custom_quantize_fp8_amax_partials, device=dname, arch=arch, n=n, grid=global_size))[0]
   amax = Tensor.custom_kernel(amax, partials, fxn=functools.partial(custom_quantize_fp8_amax_reduce, device=dname, arch=arch, num_partials=global_size))[0]
 
-  x_fp8, inv_scale = Tensor.custom_kernel(x_fp8, inv_scale, x, amax, fxn=functools.partial(custom_quantize_fp8_cast, device=dname, arch=arch))[:2]
   new_amax = amax.cast(x.dtype).detach()
+  scale = FP8_MAX / (new_amax + 1e-8)
+  x_scaled = x * scale
+  x_clamped = x_scaled + (x_scaled.detach().clip(-FP8_MAX, FP8_MAX) - x_scaled.detach())
+  x_fp8 = x_clamped.cast(dtypes.fp8e4m3)
+  inv_scale = scale.float().reciprocal()
   return x_fp8, inv_scale, new_amax
