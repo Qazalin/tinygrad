@@ -228,14 +228,14 @@ class TestMagicGu(unittest.TestCase):
         old_magic, old_shift = old_iters_args[iters]
         self.assertEqual((magic, shift), (old_magic, old_shift), f"mismatch for ({M},{N},{K}) batch={batch} iters={iters}")
 
-from extra.thunder.amd.quantize_fp8 import custom_quantize_fp8, custom_abs_max
+from extra.thunder.amd.quantize_fp8 import custom_quantize_fp8, custom_amax
 from examples.mlperf.models.flat_llama import quantize_fp8
 
 class TestAmax(unittest.TestCase):
   def _compare(self, x:Tensor):
     with Context(DEBUG=0): Tensor.realize(x)
     ref = x.abs().max()
-    hk = custom_abs_max(x)
+    hk = custom_amax(x)
     self.assertEqual(hk.dtype, x.dtype)
     print("** ref")
     Tensor.realize(ref)
@@ -256,6 +256,22 @@ class TestAmax(unittest.TestCase):
     Tensor.manual_seed(0)
     x = Tensor.randn((2, 8192, 4096), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16)
     self._compare(x)
+
+  def test_multi_axis_none(self):
+    from examples.mlperf.models.flat_llama import _local_abs_max as ref_local_abs_max
+    devs = tuple(f"{Device.DEFAULT}:{i}" for i in range(8))
+    x = Tensor.randn((2, 8192, 4096), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16).shard(devs, axis=None)
+    ref = ref_local_abs_max(x).numpy()
+    cmp = custom_amax(x).numpy()
+    np.testing.assert_allclose(ref, cmp)
+
+  def test_multi_axis_0(self):
+    from examples.mlperf.models.flat_llama import _local_abs_max as ref_local_abs_max
+    devs = tuple(f"{Device.DEFAULT}:{i}" for i in range(8))
+    x = Tensor.randn((16, 8192, 4096), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16).shard(devs, axis=0)
+    ref = ref_local_abs_max(x).numpy()
+    cmp = custom_amax(x).numpy()
+    np.testing.assert_allclose(ref, cmp)
 
 class TestQuantizeFP8(unittest.TestCase):
   def compare(self, x:Tensor, amax_state:Tensor|None=None):
