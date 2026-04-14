@@ -2,12 +2,14 @@ import math, os, functools
 if __name__ == "__main__":
   os.environ["DEFAULT_FLOAT"] = "bfloat16"
   os.environ["OPTIM_DTYPE"] = "bfloat16"
-  if "DEV" not in os.environ: os.environ["DEV"] = "NULL"
+  if "DEV" not in os.environ: os.environ["DEV"] = "NULL:HIP:gfx950"
   # CDNA
-  os.environ["EMULATE"] = "AMD_CDNA4"
   os.environ["DEVICE_IN_FUNCTION_BUG"] = "1"
   os.environ["ALL2ALL"] = "1"
   os.environ["USE_ATOMICS"] = "1"
+  os.environ["FP8"] = "1"
+  os.environ["ALLREDUCE_CAST"] = "1"
+  os.environ["WQKV"] = "1"
   if "HK_FLASH_ATTENTION" not in os.environ:
     os.environ["HK_FLASH_ATTENTION"] = "1"
     if "ASM_GEMM" not in os.environ:
@@ -36,6 +38,9 @@ def _local_abs_max(x:Tensor) -> Tensor:
   return Tensor(fxn[0].uop.call(x.uop).gettuple(0))
 
 def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
+  if getenv("HK_QUANTIZE_FP8"):
+    from extra.thunder.amd.quantize_fp8 import custom_quantize_fp8
+    return custom_quantize_fp8(x, amax_state=amax_state)
   new_amax = (_local_abs_max(x) if isinstance(x.device, tuple) else x.abs().max()).detach()
   scale = FP8_MAX / ((amax_state if amax_state is not None else new_amax) + 1e-8)
   x_scaled = x * scale

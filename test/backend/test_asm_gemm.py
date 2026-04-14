@@ -228,5 +228,9 @@ class TestMagicGu(unittest.TestCase):
         old_magic, old_shift = old_iters_args[iters]
         self.assertEqual((magic, shift), (old_magic, old_shift), f"mismatch for ({M},{N},{K}) batch={batch} iters={iters}")
 
+class TestQuantizeFP8(unittest.TestCase):
+  def test_simple(self):
+    pass
+
 if __name__ == "__main__":
   unittest.main()
