@@ -232,13 +232,30 @@ from extra.thunder.amd.quantize_fp8 import custom_quantize_fp8
 from examples.mlperf.models.flat_llama import quantize_fp8
 
 class TestQuantizeFP8(unittest.TestCase):
+  def compare(self, x:Tensor, amax_state:Tensor|None=None):
+    ref_x, cmp_x = x.clone().requires_grad_(), x.clone().requires_grad_()
+    ref_amax = amax_state.clone() if amax_state is not None else None
+    cmp_amax = amax_state.clone() if amax_state is not None else None
+    with Context(DEBUG=0):
+      Tensor.realize(*[t for t in (ref_x, cmp_x, ref_amax, cmp_amax) if t is not None])
+    cmp_x2, cmp_inv_scale, cmp_new_amax = quantize_fp8(cmp_x, amax_state=cmp_amax)
+    ref_x2, ref_inv_scale, ref_new_amax = custom_quantize_fp8(ref_x, amax_state=ref_amax)
+    self.assertEqual(cmp_x2.dtype, FP8_DTYPE)
+    self.assertEqual(cmp_inv_scale.dtype, dtypes.float)
+    self.assertEqual(cmp_new_amax.dtype, dtypes.bfloat16)
+    import numpy as np
+    np.testing.assert_allclose(cmp_x2.numpy(), ref_x2.numpy())
+    np.testing.assert_allclose(cmp_inv_scale.numpy(), ref_inv_scale.numpy())
+    np.testing.assert_allclose(cmp_new_amax.numpy(), ref_new_amax.numpy())
+    cmp_x2.float().sum().backward()
+    ref_x2.float().sum().backward()
+    np.testing.assert_allclose(cmp_x.grad.numpy(), ref_x.grad.numpy())
+    assert cmp_inv_scale.grad is None and cmp_new_amax.grad is None
+
   def test_simple(self):
     Tensor.manual_seed(0)
-    x = Tensor.randn((32, 32), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16).realize()
-    x2, inv_scale, new_amax = quantize_fp8(x)
-    print(x.numpy())
-    print("--------")
-    print(x2.numpy())
+    x = Tensor.randn((32, 32), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16).requires_grad_(True).realize()
+    self.compare(x)
 
 if __name__ == "__main__":
   unittest.main()
