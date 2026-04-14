@@ -9,46 +9,59 @@ from tinygrad.uop.ops import KernelInfo, Ops, UOp
 FP8_MAX = 448.0
 TILE_ELEMS = 16 * 32
 CAST_ELEMS_PER_WG = getenv("HK_FP8_CAST_TILE", 2048)
-WAVE_SIZE = 64
-REDUCE_THREADS = 256
 
 @functools.cache
-def custom_quantize_fp8_amax_partials(partials:UOp, x:UOp, device:str, arch:str, n:int, grid:int) -> UOp:
+def custom_quantize_fp8_amax(amax:UOp, x:UOp, device:str, arch:str, n:int, grid:int) -> UOp:
   numel = prod(x.shape)
   assert numel == n
   code = (pathlib.Path(__file__).parent / "quantize_fp8_amax.cpp").read_text()
-  compile_args = [f"-I{(pathlib.Path(__file__).parent / 'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math", "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DPARAM_N={n}", f"-DPARAM_GRID={grid}"]
-  lidx, gidx = UOp.special(WAVE_SIZE, "lidx0"), UOp.special(grid, "gidx0")
-  sink = UOp.sink(partials.base, x.base, lidx, gidx, arg=KernelInfo(name="custom_quantize_fp8_amax_partials", estimates=Estimates()))
+  compile_args = [
+    f"-I{(pathlib.Path(__file__).parent / 'include').as_posix()}",
+    "-std=c++20",
+    "-DKITTENS_CDNA4",
+    "-ffast-math",
+    "-DHIP_ENABLE_WARP_SYNC_BUILTINS",
+    f"-DPARAM_N={n}",
+    f"-DPARAM_GRID={grid}",
+  ]
+  lidx, gidx = UOp.special(64, "lidx0"), UOp.special(grid, "gidx0")
+  sink = UOp.sink(amax.base, x.base, lidx, gidx, arg=KernelInfo(name="custom_quantize_fp8_amax", estimates=Estimates()))
   lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
-  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=device), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code), UOp(Ops.BINARY, arg=lib)))
-
-@functools.cache
-def custom_quantize_fp8_amax_reduce(amax:UOp, partials:UOp, device:str, arch:str, num_partials:int) -> UOp:
-  code = (pathlib.Path(__file__).parent / "quantize_fp8_reduce.cpp").read_text()
-  compile_args = [f"-I{(pathlib.Path(__file__).parent / 'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DPARAM_N={num_partials}", f"-DPARAM_VALID={num_partials}", f"-DPARAM_BLOCK={REDUCE_THREADS}"]
-  lidx, gidx = UOp.special(REDUCE_THREADS, "lidx0"), UOp.special(1, "gidx0")
-  sink = UOp.sink(amax.base, partials.base, lidx, gidx, arg=KernelInfo(name="custom_quantize_fp8_amax_reduce", estimates=Estimates()))
-  lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
-  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=device), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code), UOp(Ops.BINARY, arg=lib)))
+  return UOp(Ops.PROGRAM, src=(
+    sink,
+    UOp(Ops.DEVICE, arg=device),
+    UOp(Ops.LINEAR, src=(*sink.src, sink)),
+    UOp(Ops.SOURCE, arg=code),
+    UOp(Ops.BINARY, arg=lib)
+  ))
 
 @functools.cache
 def custom_quantize_fp8_cast(x_fp8:UOp, inv_scale:UOp, x:UOp, amax:UOp, device:str, arch:str) -> UOp:
   numel = prod(x.shape)
   assert numel % CAST_ELEMS_PER_WG == 0, f"n_elems={numel} must be divisible by {CAST_ELEMS_PER_WG}"
   code = (pathlib.Path(__file__).parent / "quantize_fp8_cast.cpp").read_text()
-  compile_args = [f"-I{(pathlib.Path(__file__).parent / 'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DPARAM_N={numel}", f"-DPARAM_TILE={CAST_ELEMS_PER_WG}"]
-  threads, blocks = WAVE_SIZE, numel // CAST_ELEMS_PER_WG
+  compile_args = [
+    f"-I{(pathlib.Path(__file__).parent / 'include').as_posix()}",
+    "-std=c++20",
+    "-DKITTENS_CDNA4",
+    "-DHIP_ENABLE_WARP_SYNC_BUILTINS",
+    f"-DPARAM_N={numel}",
+    f"-DPARAM_TILE={CAST_ELEMS_PER_WG}",
+  ]
+  threads, blocks = 64, numel // CAST_ELEMS_PER_WG
   lidx, gidx = UOp.special(threads, "lidx0"), UOp.special(blocks, "gidx0")
   sink = UOp.sink(x_fp8.base, inv_scale.base, x.base, amax.base, lidx, gidx, arg=KernelInfo(name="custom_quantize_fp8_cast", estimates=Estimates()))
   lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
-  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=device), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code), UOp(Ops.BINARY, arg=lib)))
+  return UOp(Ops.PROGRAM, src=(
+    sink,
+    UOp(Ops.DEVICE, arg=device),
+    UOp(Ops.LINEAR, src=(*sink.src, sink)),
+    UOp(Ops.SOURCE, arg=code),
+    UOp(Ops.BINARY, arg=lib)
+  ))
 
 def amax_grad(gradient:UOp, kernel:UOp):
   return (None, gradient)
-
-def amax_reduce_grad(gradient:UOp, kernel:UOp):
-  return (None, None)
 
 def cast_grad(gradient:UOp, kernel:UOp):
   _, _, x_uop, amax_uop = kernel.src[1:]
@@ -61,23 +74,33 @@ def custom_quantize_fp8(x:Tensor, amax_state:Tensor|None=None) -> tuple[Tensor, 
   assert isinstance(x.device, str), "multi todo"
   assert x.dtype == dtypes.bfloat16, f"expected bfloat16 input, got {x.dtype}"
 
-  amax = Tensor.invalid(1, dtype=dtypes.float, device=x.device).reshape(())
-
   dname = x.device.split(":")[0]
   arch = Device[x.device].renderer.target.arch
   n = prod(x.shape)
   assert n % TILE_ELEMS == 0, f"unsupported shape {n}"
+
   num_tiles = n // TILE_ELEMS
-  global_size = min(getenv("HK_FP8_AMAX_PARTIALS", 16384), num_tiles)
-  partials = Tensor.zeros(global_size, dtype=dtypes.float32, device=x.device)
-  partials, _ = Tensor.custom_kernel(partials, x, fxn=functools.partial(custom_quantize_fp8_amax_partials, device=dname, arch=arch, n=n, grid=global_size),
-                                  grad_fxn=amax_grad)
-  amax, _ = Tensor.custom_kernel(amax, partials, fxn=functools.partial(custom_quantize_fp8_amax_reduce, device=dname, arch=arch, num_partials=global_size),
-                              grad_fxn=amax_reduce_grad)
+  global_size = min(getenv("HK_FP8_AMAX_GRID", 16384), num_tiles)
+
+  # Must be zero-initialized because kernel 1 atomically maxes into it.
+  amax = Tensor.zeros(1, dtype=dtypes.float32, device=x.device).reshape(())
+  amax, _ = Tensor.custom_kernel(
+    amax,
+    x,
+    fxn=functools.partial(custom_quantize_fp8_amax, device=dname, arch=arch, n=n, grid=global_size),
+    grad_fxn=amax_grad
+  )
 
   out_fp8 = Tensor.invalid(*x.shape, dtype=dtypes.fp8e4m3, device=x.device)
   inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
-  amax_input = amax_state if amax_state is not None else amax.cast(x.dtype)
-  amax_input = amax_input.cast(dtypes.float32)
-  out_fp8, inv_scale, _, _ = Tensor.custom_kernel(out_fp8, inv_scale, x, amax_input, fxn=functools.partial(custom_quantize_fp8_cast, device=dname, arch=arch), grad_fxn=cast_grad)
+
+  amax_input = amax_state.cast(dtypes.float32) if amax_state is not None else amax
+  out_fp8, inv_scale, _, _ = Tensor.custom_kernel(
+    out_fp8,
+    inv_scale,
+    x,
+    amax_input,
+    fxn=functools.partial(custom_quantize_fp8_cast, device=dname, arch=arch),
+    grad_fxn=cast_grad
+  )
   return out_fp8, inv_scale.squeeze(), amax.squeeze().cast(x.dtype)
