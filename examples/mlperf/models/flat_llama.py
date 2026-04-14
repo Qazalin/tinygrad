@@ -38,10 +38,8 @@ def _local_abs_max(x:Tensor) -> Tensor:
   return Tensor(fxn[0].uop.call(x.uop).gettuple(0))
 
 def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
-  if getenv("HK_QUANTIZE_FP8"):
-    from extra.thunder.amd.quantize_fp8 import custom_quantize_fp8
-    return custom_quantize_fp8(x, amax_state=amax_state)
-  new_amax = (_local_abs_max(x) if isinstance(x.device, tuple) else x.abs().max()).detach()
+  new_amax = _local_abs_max(x) if isinstance(x.device, tuple) else x.abs().max()
+  new_amax = new_amax.detach()
   scale = FP8_MAX / ((amax_state if amax_state is not None else new_amax) + 1e-8)
   x_scaled = x * scale
   x_clamped = x_scaled + (x_scaled.detach().clamp(-FP8_MAX, FP8_MAX) - x_scaled.detach())  # STE

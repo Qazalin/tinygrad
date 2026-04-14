@@ -70,6 +70,27 @@ def cast_grad(gradient:UOp, kernel:UOp):
   scale = (FP8_MAX / (amax.cast(dtypes.bfloat16) + 1e-8)).cast(dtypes.bfloat16)
   return (None, None, (grad * scale).uop, None)
 
+def custom_abs_max(x:Tensor) -> Tensor:
+  assert isinstance(x.device, str), "multi todo"
+  assert x.dtype == dtypes.bfloat16, f"expected bfloat16 input, got {x.dtype}"
+
+  dname = x.device.split(":")[0]
+  arch = Device[x.device].renderer.target.arch
+  n = prod(x.shape)
+  assert n % TILE_ELEMS == 0, f"unsupported shape {n}"
+
+  num_tiles = n // TILE_ELEMS
+  global_size = min(getenv("HK_FP8_AMAX_GRID", 16384), num_tiles)
+
+  amax = Tensor.zeros(1, dtype=dtypes.float32, device=x.device).reshape(())
+  amax, _ = Tensor.custom_kernel(
+    amax,
+    x,
+    fxn=functools.partial(custom_quantize_fp8_amax, device=dname, arch=arch, n=n, grid=global_size),
+    grad_fxn=amax_grad
+  )
+  return amax.squeeze().cast(x.dtype)
+
 def custom_quantize_fp8(x:Tensor, amax_state:Tensor|None=None) -> tuple[Tensor, Tensor, Tensor]:
   assert isinstance(x.device, str), "multi todo"
   assert x.dtype == dtypes.bfloat16, f"expected bfloat16 input, got {x.dtype}"

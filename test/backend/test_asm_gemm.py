@@ -228,8 +228,34 @@ class TestMagicGu(unittest.TestCase):
         old_magic, old_shift = old_iters_args[iters]
         self.assertEqual((magic, shift), (old_magic, old_shift), f"mismatch for ({M},{N},{K}) batch={batch} iters={iters}")
 
-from extra.thunder.amd.quantize_fp8 import custom_quantize_fp8
+from extra.thunder.amd.quantize_fp8 import custom_quantize_fp8, custom_abs_max
 from examples.mlperf.models.flat_llama import quantize_fp8
+
+class TestAmax(unittest.TestCase):
+  def _compare(self, x:Tensor):
+    with Context(DEBUG=0): Tensor.realize(x)
+    ref = x.abs().max()
+    hk = custom_abs_max(x)
+    self.assertEqual(hk.dtype, x.dtype)
+    print("** ref")
+    Tensor.realize(ref)
+    print("** custom")
+    Tensor.realize(hk)
+    atol = float(getenv("HK_ABS_MAX_ATOL", 0.5))
+    rtol = float(getenv("HK_ABS_MAX_RTOL", 0.1))
+    import numpy as np
+    with Context(DEBUG=0):
+      np.testing.assert_allclose(hk.numpy(), ref.numpy(), atol=atol, rtol=rtol)
+
+  def test_simple(self):
+    Tensor.manual_seed(0)
+    x = Tensor.randn((1024, 1024), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16)
+    self._compare(x)
+
+  def test_other(self):
+    Tensor.manual_seed(0)
+    x = Tensor.randn((2, 8192, 4096), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16)
+    self._compare(x)
 
 class TestQuantizeFP8(unittest.TestCase):
   def compare(self, x:Tensor, amax_state:Tensor|None=None):
