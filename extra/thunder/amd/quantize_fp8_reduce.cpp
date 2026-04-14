@@ -1,27 +1,16 @@
+// kitten_amax_reduce: two-pass amax stage 2
+// reduce float partial maxima to one scalar max (single block)
 #include <hip/hip_runtime.h>
 
-#ifndef NUM_PARTIALS
-constexpr unsigned int NUM_PARTIALS = 1;
-#endif
+extern "C" __global__ void custom_quantize_fp8_amax_reduce(float *amax_out, const float *partials_in) {
+  constexpr unsigned int VALID = PARAM_VALID;
+  constexpr unsigned int BLOCK = 64;
+  const unsigned int tid = threadIdx.x;
 
-#ifndef BLOCK
-constexpr unsigned int BLOCK = 256;
-#endif
-
-__global__ void custom_quantize_fp8_amax_reduce(float *amax_ptr, const float *partials_ptr) {
-  __shared__ float smax[BLOCK];
-
-  unsigned int tid = threadIdx.x;
   float v = 0.0f;
-  for (unsigned int i = tid; i < NUM_PARTIALS; i += BLOCK) v = fmaxf(v, partials_ptr[i]);
+  #pragma unroll 4
+  for (unsigned int i = tid; i < VALID; i += BLOCK) v = fmaxf(v, partials_in[i]);
 
-  smax[tid] = v;
-  __syncthreads();
-
-  for (unsigned int s = BLOCK >> 1; s > 0; s >>= 1) {
-    if (tid < s) smax[tid] = fmaxf(smax[tid], smax[tid + s]);
-    __syncthreads();
-  }
-
-  if (tid == 0) amax_ptr[0] = smax[0];
+  for (int ofs = 32; ofs > 0; ofs >>= 1) v = fmaxf(v, __shfl_xor(v, ofs, 64));
+  if (tid == 0) amax_out[0] = v;
 }

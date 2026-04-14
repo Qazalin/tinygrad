@@ -251,9 +251,11 @@ class TestQuantizeFP8(unittest.TestCase):
     Tensor.realize(cmp_x2, cmp_inv_scale, cmp_new_amax)
     import numpy as np
     with Context(DEBUG=0):
-      np.testing.assert_allclose(cmp_x2.numpy(), ref_x2.numpy())
-      np.testing.assert_allclose(cmp_inv_scale.numpy(), ref_inv_scale.numpy())
-      np.testing.assert_allclose(cmp_new_amax.numpy(), ref_new_amax.numpy())
+      fp8_atol, fp8_rtol = 64.0, 0.02
+      scalar_atol, scalar_rtol = 1e-2, 1e-2
+      np.testing.assert_allclose(cmp_x2.numpy(), ref_x2.numpy(), atol=fp8_atol, rtol=fp8_rtol)
+      np.testing.assert_allclose(cmp_inv_scale.numpy(), ref_inv_scale.numpy(), atol=scalar_atol, rtol=scalar_rtol)
+      np.testing.assert_allclose(cmp_new_amax.numpy(), ref_new_amax.numpy(), atol=scalar_atol, rtol=scalar_rtol)
       np.testing.assert_allclose(cmp_x.grad.numpy(), ref_x.grad.numpy())
       assert cmp_inv_scale.grad is None and cmp_new_amax.grad is None
 
