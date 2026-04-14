@@ -77,6 +77,7 @@ def custom_quantize_fp8(x:Tensor, amax_state:Tensor|None=None) -> tuple[Tensor, 
 
   out_fp8 = Tensor.invalid(*x.shape, dtype=dtypes.fp8e4m3, device=x.device)
   inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
-  amax_input = amax_state.cast(dtypes.float32) if amax_state is not None else amax
+  amax_input = amax_state if amax_state is not None else amax.cast(x.dtype)
+  amax_input = amax_input.cast(dtypes.float32)
   out_fp8, inv_scale, _, _ = Tensor.custom_kernel(out_fp8, inv_scale, x, amax_input, fxn=functools.partial(custom_quantize_fp8_cast, device=dname, arch=arch), grad_fxn=cast_grad)
   return out_fp8, inv_scale.squeeze(), amax.squeeze().cast(x.dtype)
