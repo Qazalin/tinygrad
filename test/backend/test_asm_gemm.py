@@ -238,8 +238,10 @@ class TestQuantizeFP8(unittest.TestCase):
     cmp_amax = amax_state.clone() if amax_state is not None else None
     with Context(DEBUG=0):
       Tensor.realize(*[t for t in (ref_x, cmp_x, ref_amax, cmp_amax) if t is not None])
-    cmp_x2, cmp_inv_scale, cmp_new_amax = quantize_fp8(cmp_x, amax_state=cmp_amax)
-    ref_x2, ref_inv_scale, ref_new_amax = custom_quantize_fp8(ref_x, amax_state=ref_amax)
+    ref_x2, ref_inv_scale, ref_new_amax = quantize_fp8(ref_x, amax_state=ref_amax)
+    Tensor.realize(ref_x2, ref_inv_scale, ref_new_amax)
+    cmp_x2, cmp_inv_scale, cmp_new_amax = custom_quantize_fp8(cmp_x, amax_state=cmp_amax)
+    Tensor.realize(cmp_x2, cmp_inv_scale, cmp_new_amax)
     self.assertEqual(cmp_x2.dtype, FP8_DTYPE)
     self.assertEqual(cmp_inv_scale.dtype, dtypes.float)
     self.assertEqual(cmp_new_amax.dtype, dtypes.bfloat16)
@@ -255,6 +257,11 @@ class TestQuantizeFP8(unittest.TestCase):
   def test_simple(self):
     Tensor.manual_seed(0)
     x = Tensor.randn((32, 32), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16).requires_grad_(True).realize()
+    self.compare(x)
+
+  def test_other(self):
+    Tensor.manual_seed(0)
+    x = Tensor.randn((2, 8192, 4096), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16).requires_grad_(True).realize()
     self.compare(x)
 
 if __name__ == "__main__":
