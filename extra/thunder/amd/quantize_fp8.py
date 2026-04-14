@@ -76,5 +76,5 @@ def custom_quantize_fp8(x:Tensor, amax_state:Tensor|None=None) -> tuple[Tensor, 
   else:
     amax = Tensor.custom_kernel(amax, x, fxn=functools.partial(custom_quantize_fp8_amax, device=dname, arch=arch))[0]
   x_fp8, inv_scale = Tensor.custom_kernel(x_fp8, inv_scale, x, amax, fxn=functools.partial(custom_quantize_fp8_cast, device=dname, arch=arch))[:2]
-  new_amax = amax.cast(x.dtype) #.detach()
+  new_amax = amax.cast(x.dtype).detach()
   return x_fp8, inv_scale, new_amax
