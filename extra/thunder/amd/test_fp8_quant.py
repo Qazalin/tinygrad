@@ -198,7 +198,7 @@ def _cast_amax_fused_grad(gradient:UOp, kernel:UOp):
 
 def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   hk_mode = getenv("HK_FP8_QUANTIZE", 1)
-  use_fused_cast_amax = hk_mode == 2 and amax_state is not None and getenv("HK_FP8_CAST_AMAX_FUSED", 1)
+  use_fused_cast_amax = hk_mode == 2 and amax_state is not None
   n_elems = 1
   for s in x.shape: n_elems *= s
   assert n_elems % ELEMS_PER_TILE == 0, f"n_elems={n_elems} must be divisible by {ELEMS_PER_TILE}"
