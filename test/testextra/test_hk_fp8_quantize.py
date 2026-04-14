@@ -4,6 +4,7 @@ import numpy as np
 
 from tinygrad import Tensor, dtypes, Device
 from tinygrad.helpers import getenv
+from extra.thunder.amd import fp8_quant
 from extra.thunder.amd.fp8_quant import custom_quantize_fp8, ref_quantize_fp8
 
 
@@ -36,6 +37,12 @@ class TestHKFp8Quantize(unittest.TestCase):
 
   def test_forward_no_amax_state(self):
     self._assert_forward_close(Tensor.randn(64, 128, dtype=dtypes.bfloat16))
+
+  def test_forward_no_amax_state_uses_custom_kernel(self):
+    before = fp8_quant._COUNTERS["used_no_amax_state"]
+    y, s, a = custom_quantize_fp8(Tensor.randn(64, 128, dtype=dtypes.bfloat16), amax_state=None)
+    Tensor.realize(y, s, a)
+    self.assertEqual(fp8_quant._COUNTERS["used_no_amax_state"], before + 1)
 
   def test_forward_with_amax_state(self):
     self._assert_forward_close(Tensor.randn(64, 128, dtype=dtypes.bfloat16), Tensor(3.0, dtype=dtypes.bfloat16))

@@ -1,4 +1,4 @@
-import functools
+import atexit, functools
 from pathlib import Path
 
 from tinygrad import Device, Tensor, dtypes, getenv
@@ -9,12 +9,18 @@ from tinygrad.uop.ops import KernelInfo, Ops, UOp
 FP8_DTYPE = dtypes.fp8e4m3
 FP8_MAX = 448.0
 ELEMS_PER_TILE = 16 * 32
+CAST_TILE = 2048
 FUSED_CAST_TILE = 16384
 FUSED_CAST_BLOCK = 256
 
 _THIS_DIR = Path(__file__).parent
 _KERNEL_DIR = _THIS_DIR / "fp8_quant_kernels"
 _KITTENS_INCLUDE = _THIS_DIR / "include"
+
+_COUNTERS = {"used": 0, "used_no_amax_state": 0}
+def _hk_fp8_quantize_report():
+  print(f'hk_fp8_quantize: {_COUNTERS["used"]} used ({_COUNTERS["used_no_amax_state"]} with no amax_state)')
+atexit.register(_hk_fp8_quantize_report)
 
 
 def _local_abs_max_input(x: Tensor) -> Tensor:
@@ -37,6 +43,53 @@ def _compile_kitten(name: str, n_elems: int, extra_defs: dict[str, int] | None =
   if fast_math: flags += ["-ffast-math"]
   lib = HIPCCCompiler(Device[Device.DEFAULT].renderer.target.arch, flags).compile_cached(src)
   return src, lib
+
+
+@functools.lru_cache(None)
+def _build_amax_runner(n_elems: int):
+  src, lib = _compile_kitten("kitten_amax", n_elems)
+  num_tiles = n_elems // ELEMS_PER_TILE
+  est = Estimates(ops=2 * n_elems, lds=n_elems * 2 + 4, mem=n_elems * 2 + 4)
+  name = f"kitten_amax_{n_elems}"
+
+  def runner(amax_f32: UOp, x_bf16: UOp):
+    sink = UOp.sink(UOp.special(num_tiles, "gidx0"), UOp.special(64, "lidx0"), amax_f32, x_bf16,
+                    arg=KernelInfo(name=name, estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+
+  return runner
+
+
+@functools.lru_cache(None)
+def _build_amax_fused_runner(n_elems: int, num_blocks: int):
+  src, lib = _compile_kitten("kitten_amax_fused", n_elems, extra_defs={"PARAM_GRID": num_blocks})
+  est = Estimates(ops=2 * n_elems, lds=n_elems * 2 + 4, mem=n_elems * 2 + 4)
+  name = f"kitten_amax_fused_{n_elems}_{num_blocks}"
+
+  def runner(amax_f32: UOp, x_bf16: UOp):
+    sink = UOp.sink(UOp.special(num_blocks, "gidx0"), UOp.special(64, "lidx0"), amax_f32, x_bf16,
+                    arg=KernelInfo(name=name, estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+
+  return runner
+
+
+@functools.lru_cache(None)
+def _build_cast_runner(n_elems: int, tile_elems: int = CAST_TILE):
+  src, lib = _compile_kitten("kitten_cast", n_elems, extra_defs={"PARAM_TILE": tile_elems}, fast_math=False)
+  num_tiles = n_elems // tile_elems
+  est = Estimates(ops=2 * n_elems, lds=n_elems * 2 + 4 + n_elems + 4, mem=n_elems * 2 + 4 + n_elems + 4)
+  name = f"kitten_cast_{n_elems}"
+
+  def runner(out_fp8: UOp, inv_scale: UOp, x_bf16: UOp, amax_f32: UOp):
+    sink = UOp.sink(UOp.special(num_tiles, "gidx0"), UOp.special(64, "lidx0"), out_fp8, inv_scale, x_bf16, amax_f32,
+                    arg=KernelInfo(name=name, estimates=est))
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=Device.DEFAULT), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+
+  return runner
 
 
 @functools.lru_cache(None)
@@ -110,6 +163,18 @@ def _cast_grad(gradient: UOp, kernel: UOp):
   return (None, None, None, (grad * scale).uop, None)
 
 
+def _cast_only_grad(gradient: UOp, kernel: UOp):
+  _, _, x_uop, amax_uop = kernel.src[1:]
+  grad = Tensor(gradient, device=gradient.device)
+  amax = Tensor(amax_uop, device=amax_uop.device)
+  scale = (FP8_MAX / (amax.cast(dtypes.bfloat16) + 1e-8)).cast(dtypes.bfloat16)
+  return (None, None, (grad * scale).uop, None)
+
+
+def _amax_grad(gradient: UOp, kernel: UOp):
+  return (None, gradient)
+
+
 def _amax_reduce_grad(gradient: UOp, kernel: UOp):
   return (None, None)
 
@@ -117,7 +182,6 @@ def _amax_reduce_grad(gradient: UOp, kernel: UOp):
 def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   if getenv("HK_FP8_QUANTIZE", 0) != 1: return ref_quantize_fp8(x, amax_state)
   if Device.DEFAULT != "AMD": return ref_quantize_fp8(x, amax_state)
-  if amax_state is None: return ref_quantize_fp8(x, amax_state)
 
   n_elems = x.numel()
   is_multi = isinstance(x.device, tuple)
@@ -133,28 +197,40 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
         break
   if n_local % tile_elems != 0: return ref_quantize_fp8(x, amax_state)
 
-  amax_input = amax_state.cast(dtypes.float32)
-  if is_multi and not isinstance(amax_input.device, tuple): amax_input = amax_input.shard(x.device, axis=None)
-
   out_fp8 = _sharded_empty(x.shape, x, dtype=FP8_DTYPE) if is_sharded else Tensor.invalid(*x.shape, dtype=FP8_DTYPE, device=x.device)
   kernel_inv_scale = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
 
-  if getenv("HK_FP8_CAST_AMAX_FUSED", 1):
+  if amax_state is None:
+    if n_local % CAST_TILE != 0: return ref_quantize_fp8(x, amax_state)
     amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device).custom_kernel(fxn=_zero_f32)[0]
-    out_fp8, kernel_inv_scale, amax_f32, _, _ = Tensor.custom_kernel(out_fp8, kernel_inv_scale, amax_f32, x, amax_input,
-                                                                     fxn=_build_cast_amax_fused_runner(n_local, tile_elems=tile_elems),
-                                                                     grad_fxn=_cast_grad)
+    x_for_amax = _local_abs_max_input(x) if is_multi else x
+    num_blocks = min(getenv("HK_FP8_AMAX_BLOCKS", 8192), n_local // ELEMS_PER_TILE)
+    amax_f32, _ = Tensor.custom_kernel(amax_f32, x_for_amax,
+                                       fxn=_build_amax_fused_runner(n_local, num_blocks), grad_fxn=_amax_grad)
+    amax_input = amax_f32
+    out_fp8, kernel_inv_scale, _, _ = Tensor.custom_kernel(out_fp8, kernel_inv_scale, x, amax_input,
+                                                           fxn=_build_cast_runner(n_local), grad_fxn=_cast_only_grad)
+    _COUNTERS["used_no_amax_state"] += 1
   else:
-    fxn_partial, num_tiles = _build_cast_amax_partial_runner(n_local, tile_elems=tile_elems)
-    num_partials = ((num_tiles + 255) // 256) * 256
-    partials = Tensor.zeros(num_partials, dtype=dtypes.float32, device=x.device)
-    out_fp8, kernel_inv_scale, partials, _, _ = Tensor.custom_kernel(out_fp8, kernel_inv_scale, partials, x, amax_input,
-                                                                      fxn=fxn_partial, grad_fxn=_cast_grad)
-    amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
-    amax_f32, _ = Tensor.custom_kernel(amax_f32, partials,
-                                       fxn=_build_amax_reduce_runner(num_partials, num_tiles), grad_fxn=_amax_reduce_grad)
+    amax_input = amax_state.cast(dtypes.float32)
+    if is_multi and not isinstance(amax_input.device, tuple): amax_input = amax_input.shard(x.device, axis=None)
+    if getenv("HK_FP8_CAST_AMAX_FUSED", 1):
+      amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device).custom_kernel(fxn=_zero_f32)[0]
+      out_fp8, kernel_inv_scale, amax_f32, _, _ = Tensor.custom_kernel(out_fp8, kernel_inv_scale, amax_f32, x, amax_input,
+                                                                       fxn=_build_cast_amax_fused_runner(n_local, tile_elems=tile_elems),
+                                                                       grad_fxn=_cast_grad)
+    else:
+      fxn_partial, num_tiles = _build_cast_amax_partial_runner(n_local, tile_elems=tile_elems)
+      num_partials = ((num_tiles + 255) // 256) * 256
+      partials = Tensor.zeros(num_partials, dtype=dtypes.float32, device=x.device)
+      out_fp8, kernel_inv_scale, partials, _, _ = Tensor.custom_kernel(out_fp8, kernel_inv_scale, partials, x, amax_input,
+                                                                        fxn=fxn_partial, grad_fxn=_cast_grad)
+      amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device)
+      amax_f32, _ = Tensor.custom_kernel(amax_f32, partials,
+                                         fxn=_build_amax_reduce_runner(num_partials, num_tiles), grad_fxn=_amax_reduce_grad)
 
   new_amax = amax_f32.squeeze().cast(x.dtype).detach()
+  _COUNTERS["used"] += 1
   scale_src = amax_state if amax_state is not None else new_amax
   inv_scale = (FP8_MAX / (scale_src + 1e-8)).float().reciprocal()
   return out_fp8, inv_scale, new_amax
