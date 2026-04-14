@@ -1,4 +1,5 @@
 import unittest
+import numpy as np
 from tinygrad import Tensor, Device, dtypes, Context
 from tinygrad.device import is_dtype_supported
 from tinygrad.helpers import getenv, system
