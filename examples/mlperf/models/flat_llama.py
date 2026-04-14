@@ -35,12 +35,16 @@ def _local_abs_max(x:Tensor) -> Tensor:
   fxn = _local_abs_max_fxn(param.uop, x.device)
   return Tensor(fxn[0].uop.call(x.uop).gettuple(0))
 
-def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
-  new_amax = (_local_abs_max(x) if isinstance(x.device, tuple) else x.abs().max()).detach()
-  scale = FP8_MAX / ((amax_state if amax_state is not None else new_amax) + 1e-8)
-  x_scaled = x * scale
-  x_clamped = x_scaled + (x_scaled.detach().clamp(-FP8_MAX, FP8_MAX) - x_scaled.detach())  # STE
-  return x_clamped.cast(FP8_DTYPE), scale.float().reciprocal(), new_amax
+if (hk_fp8_quantize:=getenv("HK_FP8_QUANTIZE", 0)) == 1:
+  from extra.thunder.amd.fp8_quant import custom_quantize_fp8 as quantize_fp8
+else:
+  if hk_fp8_quantize not in (0, 1): raise RuntimeError("HK_FP8_QUANTIZE only supports mode 1")
+  def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
+    new_amax = (_local_abs_max(x) if isinstance(x.device, tuple) else x.abs().max()).detach()
+    scale = FP8_MAX / ((amax_state if amax_state is not None else new_amax) + 1e-8)
+    x_scaled = x * scale
+    x_clamped = x_scaled + (x_scaled.detach().clamp(-FP8_MAX, FP8_MAX) - x_scaled.detach())  # STE
+    return x_clamped.cast(FP8_DTYPE), scale.float().reciprocal(), new_amax
 
 def matmul(x:Tensor, w:Tensor, fp8=FP8, amax_x:Tensor|None=None, amax_w:Tensor|None=None) -> tuple[Tensor,...]:
   if not fp8:
