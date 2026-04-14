@@ -31,9 +31,11 @@ def custom_quantize_fp8_amax_reduce(amax:UOp, partials:UOp, device:str, arch:str
 
 @functools.cache
 def custom_quantize_fp8_cast(x_fp8:UOp, inv_scale:UOp, x:UOp, amax:UOp, device:str, arch:str) -> UOp:
+  numel = prod(x.shape)
   code = (pathlib.Path(__file__).parent / "quantize_fp8_cast.cpp").read_text()
-  compile_args = [f"-I{(pathlib.Path(__file__).parent / 'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math"]
-  lidx, gidx = UOp.special(1, "lidx0"), UOp.special(1, "gidx0")
+  compile_args = [f"-I{(pathlib.Path(__file__).parent / 'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math", f"-DQFP8_N={numel}", f"-DQFP8_FP8_MAX={FP8_MAX}f"]
+  threads, blocks = 256, max(1, (numel + 255) // 256)
+  lidx, gidx = UOp.special(threads, "lidx0"), UOp.special(blocks, "gidx0")
   sink = UOp.sink(x_fp8.base, inv_scale.base, x.base, amax.base, lidx, gidx, arg=KernelInfo(name="custom_quantize_fp8_cast", estimates=Estimates()))
   lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=device), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code), UOp(Ops.BINARY, arg=lib)))
