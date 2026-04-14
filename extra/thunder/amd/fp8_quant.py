@@ -1,7 +1,8 @@
 import atexit, functools
 from pathlib import Path
 
-from tinygrad import Device, Tensor, dtypes, getenv
+from tinygrad import Device, Tensor, dtypes
+from tinygrad.helpers import ContextVar
 from tinygrad.renderer import Estimates
 from tinygrad.runtime.support.compiler_amd import HIPCCCompiler
 from tinygrad.uop.ops import KernelInfo, Ops, UOp
@@ -12,6 +13,10 @@ ELEMS_PER_TILE = 16 * 32
 CAST_TILE = 2048
 FUSED_CAST_TILE = 16384
 FUSED_CAST_BLOCK = 256
+
+HK_FP8_QUANTIZE = ContextVar("HK_FP8_QUANTIZE", 0)
+HK_FP8_CAST_AMAX_FUSED = ContextVar("HK_FP8_CAST_AMAX_FUSED", 0)
+HK_FP8_AMAX_BLOCKS = ContextVar("HK_FP8_AMAX_BLOCKS", 8192)
 
 _THIS_DIR = Path(__file__).parent
 _KERNEL_DIR = _THIS_DIR / "fp8_quant_kernels"
@@ -28,7 +33,7 @@ def _local_abs_max_input(x: Tensor) -> Tensor:
 
 
 def ref_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
-  new_amax = (_local_abs_max_input(x).abs().max() if isinstance(x.device, tuple) else x.abs().max()).detach()
+  new_amax = (_local_abs_max_input(x).abs().max() if isinstance(x.device, tuple) else x.abs().max()).cast(x.dtype).detach()
   scale = FP8_MAX / ((amax_state if amax_state is not None else new_amax) + 1e-8)
   x_scaled = x * scale
   x_clamped = x_scaled + (x_scaled.detach().clamp(-FP8_MAX, FP8_MAX) - x_scaled.detach())
@@ -180,7 +185,7 @@ def _amax_reduce_grad(gradient: UOp, kernel: UOp):
 
 
 def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
-  if getenv("HK_FP8_QUANTIZE", 0) != 1: return ref_quantize_fp8(x, amax_state)
+  if HK_FP8_QUANTIZE.value != 1: return ref_quantize_fp8(x, amax_state)
   if Device.DEFAULT != "AMD": return ref_quantize_fp8(x, amax_state)
 
   n_elems = x.numel()
@@ -204,7 +209,7 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
     if n_local % CAST_TILE != 0: return ref_quantize_fp8(x, amax_state)
     amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device).custom_kernel(fxn=_zero_f32)[0]
     x_for_amax = _local_abs_max_input(x) if is_multi else x
-    num_blocks = min(getenv("HK_FP8_AMAX_BLOCKS", 8192), n_local // ELEMS_PER_TILE)
+    num_blocks = min(HK_FP8_AMAX_BLOCKS.value, n_local // ELEMS_PER_TILE)
     amax_f32, _ = Tensor.custom_kernel(amax_f32, x_for_amax,
                                        fxn=_build_amax_fused_runner(n_local, num_blocks), grad_fxn=_amax_grad)
     amax_input = amax_f32
@@ -214,7 +219,7 @@ def custom_quantize_fp8(x: Tensor, amax_state: Tensor | None = None):
   else:
     amax_input = amax_state.cast(dtypes.float32)
     if is_multi and not isinstance(amax_input.device, tuple): amax_input = amax_input.shard(x.device, axis=None)
-    if getenv("HK_FP8_CAST_AMAX_FUSED", 1):
+    if HK_FP8_CAST_AMAX_FUSED.value:
       amax_f32 = Tensor.invalid(1, dtype=dtypes.float32, device=x.device).custom_kernel(fxn=_zero_f32)[0]
       out_fp8, kernel_inv_scale, amax_f32, _, _ = Tensor.custom_kernel(out_fp8, kernel_inv_scale, amax_f32, x, amax_input,
                                                                        fxn=_build_cast_amax_fused_runner(n_local, tile_elems=tile_elems),

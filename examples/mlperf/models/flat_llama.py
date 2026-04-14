@@ -4,7 +4,6 @@ if __name__ == "__main__":
   os.environ["OPTIM_DTYPE"] = "bfloat16"
   if "DEV" not in os.environ: os.environ["DEV"] = "NULL"
   # CDNA
-  os.environ["EMULATE"] = "AMD_CDNA4"
   os.environ["DEVICE_IN_FUNCTION_BUG"] = "1"
   os.environ["ALL2ALL"] = "1"
   os.environ["USE_ATOMICS"] = "1"
@@ -16,6 +15,7 @@ from tinygrad import Tensor, nn, function, getenv, dtypes, TinyJit
 from tinygrad.helpers import Timing, colored, GlobalCounters, profile_marker
 from tinygrad.uop.ops import Ops, UOp
 from extra.models.llama import apply_rotary_emb, precompute_freqs_cis
+from extra.thunder.amd import fp8_quant as hk_fp8_quant
 
 FP8 = getenv("FP8", 0)
 
@@ -35,16 +35,18 @@ def _local_abs_max(x:Tensor) -> Tensor:
   fxn = _local_abs_max_fxn(param.uop, x.device)
   return Tensor(fxn[0].uop.call(x.uop).gettuple(0))
 
-if (hk_fp8_quantize:=getenv("HK_FP8_QUANTIZE", 0)) == 1:
-  from extra.thunder.amd.fp8_quant import custom_quantize_fp8 as quantize_fp8
-else:
-  if hk_fp8_quantize not in (0, 1): raise RuntimeError("HK_FP8_QUANTIZE only supports mode 1")
-  def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
-    new_amax = (_local_abs_max(x) if isinstance(x.device, tuple) else x.abs().max()).detach()
-    scale = FP8_MAX / ((amax_state if amax_state is not None else new_amax) + 1e-8)
-    x_scaled = x * scale
-    x_clamped = x_scaled + (x_scaled.detach().clamp(-FP8_MAX, FP8_MAX) - x_scaled.detach())  # STE
-    return x_clamped.cast(FP8_DTYPE), scale.float().reciprocal(), new_amax
+def _ref_quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
+  new_amax = (_local_abs_max(x) if isinstance(x.device, tuple) else x.abs().max()).cast(x.dtype).detach()
+  scale = FP8_MAX / ((amax_state if amax_state is not None else new_amax) + 1e-8)
+  x_scaled = x * scale
+  x_clamped = x_scaled + (x_scaled.detach().clamp(-FP8_MAX, FP8_MAX) - x_scaled.detach())  # STE
+  return x_clamped.cast(FP8_DTYPE), scale.float().reciprocal(), new_amax
+
+def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
+  mode = hk_fp8_quant.HK_FP8_QUANTIZE.value
+  if mode == 1: return hk_fp8_quant.custom_quantize_fp8(x, amax_state=amax_state)
+  if mode != 0: raise RuntimeError("HK_FP8_QUANTIZE only supports mode 1")
+  return _ref_quantize_fp8(x, amax_state=amax_state)
 
 def matmul(x:Tensor, w:Tensor, fp8=FP8, amax_x:Tensor|None=None, amax_w:Tensor|None=None) -> tuple[Tensor,...]:
   if not fp8:
@@ -231,8 +233,9 @@ class FlatTransformer:
       if a:
         amaxs = ret[:10]
         amax_names = ["xqkv", "wqkv", "xo", "wo", "x1", "w1", "x3", "w3", "x2", "w2"]
-        for name, new_val in zip(amax_names, amaxs):
-          a[name][i].assign(new_val)
+        if getenv("FP8_UPDATE_AMAX", 1):
+          for name, new_val in zip(amax_names, amaxs):
+            a[name][i].assign(new_val.cast(a[name][i].dtype))
 
     logits = matmul(self.norm(h).contiguous().contiguous_backward(), self.output[0], fp8=False)[0].contiguous_backward()
     return logits
@@ -256,6 +259,9 @@ if __name__ == "__main__":
   config = {}
   BS                 = config["BS"]                     = getenv("BS", 16)
   SEQLEN             = config["SEQLEN"]                 = getenv("SEQLEN", 8192)
+  STEPS              = config["STEPS"]                  = getenv("STEPS", 6)
+  PRINT_LOSS         = getenv("PRINT_LOSS", 1)
+  FORWARD_ONLY       = getenv("FORWARD_ONLY", 0)
 
   from examples.llama3 import MODEL_PARAMS
   model_params = MODEL_PARAMS[getenv("LLAMA3_SIZE", "8B")]["args"]
@@ -288,17 +294,25 @@ if __name__ == "__main__":
   if DP > 1: tokens = tokens.shard(tuple(f"{Device.DEFAULT}:{i}" for i in range(DP)), axis=0)
   if MP > 1: tokens = tokens.shard(tuple(f"{Device.DEFAULT}:{i}" for i in range(MP)))
 
-  @TinyJit
-  def jit_step(tokens:Tensor):
+  def _step(tokens:Tensor):
     with Timing("python forward: "): loss = model(tokens[:, :-1]).sparse_categorical_crossentropy(tokens[:, 1:])
-    with Timing("python backward: "):
-      for t,g in zip(grads, loss.gradient(*grads)):
-        apply_grad(grads[t], g.uop)
-    with Timing("run step: "): loss.realize(*grads.values())
+    if not FORWARD_ONLY:
+      with Timing("python backward: "):
+        for t,g in zip(grads, loss.gradient(*grads)):
+          apply_grad(grads[t], g.uop)
+      with Timing("run step: "): loss.realize(*grads.values())
+    else:
+      with Timing("run step: "): loss.realize()
+    return loss
 
-  for i in range(6):
+  jit_step = TinyJit(_step) if getenv("USE_JIT", 1) else _step
+
+  for i in range(STEPS):
     GlobalCounters.reset()
     profile_marker(f"step {i}")
     with Timing(colored(f"*** step {i}: ", "red")):
-      jit_step(tokens)
+      loss = jit_step(tokens)
+      if PRINT_LOSS:
+        l = loss.float().item()
+        print(f"loss[{i}]={l} finite={math.isfinite(l)}")
   print("mem per device: " + ', '.join(f"{dev}: {mem/1e9:.2f} GB" for dev, mem in sorted(GlobalCounters.mem_used_per_device.items())))

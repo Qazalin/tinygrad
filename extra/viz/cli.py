@@ -132,9 +132,9 @@ def main(args) -> None:
     if agg and total > 0:
       from tabulate import tabulate
       items = sorted(agg.items(), key=lambda kv:kv[1][0], reverse=True)
-      rows = 20
+      rows = args.rows
       table = [[format_colored(name), time_to_str(t, w=9), c, f"{(t/total*100.0):.2f}%"] for name,(t,c) in items[:rows]]
-      if items[rows:]:
+      if not args.no_other and items[rows:]:
         other_t = sum(t for _,(t,_) in items[rows:])
         other_c = sum(c for _,(_,c) in items[rows:])
         table.append(["Other", time_to_str(other_t, w=9), other_c, f"{(other_t/total*100.0):.2f}%"])
@@ -170,6 +170,8 @@ def get_arg_parser() -> argparse.ArgumentParser:
   g_opts.add_argument("-s", "--src", type=str, default=None, metavar="NAME", help="Select a data source (default: list all sources)")
   g_opts.add_argument("-i", "--item", type=str, default=None, metavar="NAME", help="Select an item within the source (default: list all items)")
   g_opts.add_argument("--no-color", action="store_true", help="Turn off colored names")
+  g_opts.add_argument("--rows", type=int, default=20, metavar="N", help="Number of rows to show in profile table")
+  g_opts.add_argument("--no-other", action="store_true", help="Do not collapse remaining kernels into Other")
   g_opts.add_argument("--profile-path", type=pathlib.Path, metavar="PATH", help="Path to profile.pkl (optional file, default: latest profile)",
                       default=pathlib.Path(temp("profile.pkl", append_user=True)))
   g_opts.add_argument("--rewrites-path", type=pathlib.Path, metavar="PATH", help="Path to rewrites.pkl (optional file, default: latest rewrites)",

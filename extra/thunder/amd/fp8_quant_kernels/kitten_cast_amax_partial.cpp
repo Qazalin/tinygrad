@@ -47,6 +47,10 @@ extern "C" __global__ void kitten_cast_amax_partial(unsigned char *out_fp8, floa
     bf16 q2 = bf16((float)bf16((float)rcp * fb.x) * (float)fp8_max);
     bf16 q3 = bf16((float)bf16((float)rcp * fb.y) * (float)fp8_max);
     float4 v = make_float4((float)q0, (float)q1, (float)q2, (float)q3);
+    v.x = fmaxf(-448.0f, fminf(448.0f, v.x));
+    v.y = fmaxf(-448.0f, fminf(448.0f, v.y));
+    v.z = fmaxf(-448.0f, fminf(448.0f, v.z));
+    v.w = fmaxf(-448.0f, fminf(448.0f, v.w));
     out4[i4] = base_types::convertor<fp8e4m3_4, float4>::convert(v);
   }
 
