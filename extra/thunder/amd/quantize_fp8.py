@@ -70,6 +70,15 @@ def cast_grad(gradient:UOp, kernel:UOp):
   scale = (FP8_MAX / (amax.cast(dtypes.bfloat16) + 1e-8)).cast(dtypes.bfloat16)
   return (None, None, (grad * scale).uop, None)
 
+def _zero_kernel(out:UOp) -> UOp:
+  i = UOp.range(out.size, 0)
+  return out.flatten()[i].store(0).end(i).sink(arg=KernelInfo(name="zero"))
+
+def _zeroed_scalar_f32(device:str|tuple[str, ...]) -> Tensor:
+  out_uop = Tensor.empty(1, dtype=dtypes.float32, device=device).uop
+  out_uop = out_uop.custom_kernel(fxn=_zero_kernel)[0]
+  return Tensor(out_uop).reshape(())
+
 def _custom_amax_impl(x:Tensor) -> Tensor:
   assert x.dtype == dtypes.bfloat16, f"expected bfloat16 input, got {x.dtype}"
 
@@ -83,7 +92,7 @@ def _custom_amax_impl(x:Tensor) -> Tensor:
   global_size = min(getenv("HK_FP8_AMAX_GRID", 16384), num_tiles)
 
   # Must be zero-initialized because kernel atomically maxes into it.
-  amax = Tensor.zeros(1, dtype=dtypes.float32, device=x.device).reshape(())
+  amax = _zeroed_scalar_f32(x.device)
   amax, _ = Tensor.custom_kernel(
     amax,
     x,
@@ -118,7 +127,7 @@ def custom_quantize_fp8(x:Tensor, amax_state:Tensor|None=None) -> tuple[Tensor, 
   global_size = min(getenv("HK_FP8_AMAX_GRID", 16384), num_tiles)
 
   # Must be zero-initialized because kernel 1 atomically maxes into it.
-  amax = Tensor.zeros(1, dtype=dtypes.float32, device=x.device).reshape(())
+  amax = _zeroed_scalar_f32(x.device)
   amax, _ = Tensor.custom_kernel(
     amax,
     x,
