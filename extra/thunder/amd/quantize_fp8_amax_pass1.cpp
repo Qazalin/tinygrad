@@ -1,0 +1,5 @@
+#include "kittens.cuh"
+using namespace kittens;
+
+__global__ void custom_quantize_fp8_amax_pass1(float *partial_amax_ptr, const bf16 *x_ptr) {
+}
