@@ -251,8 +251,8 @@ class TestQuantizeFP8(unittest.TestCase):
     Tensor.realize(cmp_x2, cmp_inv_scale, cmp_new_amax)
     import numpy as np
     with Context(DEBUG=0):
-      fp8_atol, fp8_rtol = 64.0, 0.02
-      scalar_atol, scalar_rtol = 1e-2, 1e-2
+      fp8_atol, fp8_rtol = 0, 0
+      scalar_atol, scalar_rtol = 0, 0
       np.testing.assert_allclose(cmp_x2.numpy(), ref_x2.numpy(), atol=fp8_atol, rtol=fp8_rtol)
       np.testing.assert_allclose(cmp_inv_scale.numpy(), ref_inv_scale.numpy(), atol=scalar_atol, rtol=scalar_rtol)
       np.testing.assert_allclose(cmp_new_amax.numpy(), ref_new_amax.numpy(), atol=scalar_atol, rtol=scalar_rtol)
@@ -261,7 +261,7 @@ class TestQuantizeFP8(unittest.TestCase):
 
   def test_simple(self):
     Tensor.manual_seed(0)
-    x = Tensor.randn((32, 32), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16).requires_grad_(True).realize()
+    x = Tensor.randn((1024, 1024), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16).requires_grad_(True).realize()
     self.compare(x)
 
   def test_other(self):
