@@ -15,6 +15,7 @@ if __name__ == "__main__":
     if "ASM_GEMM" not in os.environ:
       os.environ["ASM_GEMM"] = "1"
 from tinygrad import Tensor, nn, function, getenv, dtypes, TinyJit
+from tinygrad.helpers import HK_AMAX
 from tinygrad.helpers import Timing, colored, GlobalCounters, profile_marker
 from tinygrad.uop.ops import Ops, UOp
 from extra.models.llama import apply_rotary_emb, precompute_freqs_cis
@@ -28,11 +29,13 @@ FP8_MAX = 448.0
 # per-device abs max without allreduce (matches TE delayed scaling behavior)
 @functools.cache
 def _local_abs_max_fxn(x_p, device):
+  global _HK_AMAX_DBG
   x = Tensor(x_p, device=device)
   inner = Tensor(x.uop.src[0]) if x.uop.op is Ops.MULTI else x
-  if getenv("HK_AMAX"):
+  if HK_AMAX:
     from extra.thunder.amd.quantize_fp8 import custom_amax
-    return custom_amax(inner)
+    out = custom_amax(inner)
+    return (out,)
   return (inner.abs().max(),)
 
 def _local_abs_max(x:Tensor) -> Tensor:

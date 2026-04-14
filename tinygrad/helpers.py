@@ -255,6 +255,7 @@ ALLOW_TF32 = ContextVar("ALLOW_TF32", 0)
 SCACHE = ContextVar("SCACHE", 1)
 # allow use of atomics for embedding backward
 USE_ATOMICS = ContextVar("USE_ATOMICS", 0)
+HK_AMAX = ContextVar("HK_AMAX", 0)
 
 @dataclass(frozen=True)
 class Metadata:

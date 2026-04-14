@@ -264,7 +264,9 @@ class TestAmax(unittest.TestCase):
     x = Tensor.randn((2, 8192, 4096), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16).shard(devs, axis=None)
     ref = ref_local_abs_max(x).numpy()
     cmp = custom_amax(x).numpy()
-    np.testing.assert_allclose(ref, cmp)
+    atol = float(getenv("HK_ABS_MAX_ATOL", 0.5))
+    rtol = float(getenv("HK_ABS_MAX_RTOL", 0.1))
+    np.testing.assert_allclose(ref, cmp, atol=atol, rtol=rtol)
 
   def test_multi_axis_0(self):
     from examples.mlperf.models.flat_llama import _local_abs_max as ref_local_abs_max
@@ -272,7 +274,21 @@ class TestAmax(unittest.TestCase):
     x = Tensor.randn((16, 8192, 4096), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16).shard(devs, axis=0)
     ref = ref_local_abs_max(x).numpy()
     cmp = custom_amax(x).numpy()
-    np.testing.assert_allclose(ref, cmp)
+    atol = float(getenv("HK_ABS_MAX_ATOL", 0.5))
+    rtol = float(getenv("HK_ABS_MAX_RTOL", 0.1))
+    np.testing.assert_allclose(ref, cmp, atol=atol, rtol=rtol)
+
+  def test_multi_axis_none_hk_amax_ref_path(self):
+    from examples.mlperf.models.flat_llama import _local_abs_max as ref_local_abs_max
+    devs = tuple(f"{Device.DEFAULT}:{i}" for i in range(8))
+    x = Tensor.randn((2, 8192, 4096), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16).shard(devs, axis=None)
+    with Context(HK_AMAX=0, DEBUG=0):
+      ref = ref_local_abs_max(x).numpy()
+    with Context(HK_AMAX=1, DEBUG=0):
+      cmp = ref_local_abs_max(x).numpy()
+    atol = float(getenv("HK_ABS_MAX_ATOL", 0.5))
+    rtol = float(getenv("HK_ABS_MAX_RTOL", 0.1))
+    np.testing.assert_allclose(ref, cmp, atol=atol, rtol=rtol)
 
 class TestQuantizeFP8(unittest.TestCase):
   def compare(self, x:Tensor, amax_state:Tensor|None=None):

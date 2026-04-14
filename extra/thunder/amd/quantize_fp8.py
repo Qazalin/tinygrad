@@ -99,7 +99,7 @@ def _custom_amax_fxn(x_p:UOp, device:str|tuple[str, ...]):
   return (_custom_amax_impl(inner),)
 
 def custom_amax(x:Tensor) -> Tensor:
-  if isinstance(x.device, tuple) and x.uop.op is Ops.MULTI:
+  if isinstance(x.device, tuple):
     param = x.as_param(0)
     fxn = _custom_amax_fxn(param.uop, x.device)
     return Tensor(fxn[0].uop.call(x.uop).gettuple(0))
