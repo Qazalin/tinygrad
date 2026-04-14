@@ -70,7 +70,7 @@ def cast_grad(gradient:UOp, kernel:UOp):
   scale = (FP8_MAX / (amax.cast(dtypes.bfloat16) + 1e-8)).cast(dtypes.bfloat16)
   return (None, None, (grad * scale).uop, None)
 
-def custom_abs_max(x:Tensor) -> Tensor:
+def custom_amax(x:Tensor) -> Tensor:
   assert isinstance(x.device, str), "multi todo"
   assert x.dtype == dtypes.bfloat16, f"expected bfloat16 input, got {x.dtype}"
 

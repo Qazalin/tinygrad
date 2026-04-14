@@ -30,6 +30,9 @@ FP8_MAX = 448.0
 def _local_abs_max_fxn(x_p, device):
   x = Tensor(x_p, device=device)
   inner = Tensor(x.uop.src[0]) if x.uop.op is Ops.MULTI else x
+  if getenv("HK_AMAX"):
+    from extra.thunder.amd.quantize_fp8 import custom_amax
+    return custom_amax(inner)
   return (inner.abs().max(),)
 
 def _local_abs_max(x:Tensor) -> Tensor:
