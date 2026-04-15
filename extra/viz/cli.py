@@ -4,7 +4,7 @@ if hasattr(signal, "SIGPIPE"): signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 from typing import Iterator
 from tinygrad.viz import serve as viz
 from tinygrad.uop.ops import RewriteTrace
-from tinygrad.helpers import temp, ansistrip, colored, time_to_str, ansilen, ProfilePointEvent, ProfileRangeEvent, TracingKey, unwrap, DEBUG
+from tinygrad.helpers import temp, ansistrip, colored, time_to_str, ansilen, ProfilePointEvent, ProfileRangeEvent, TracingKey, unwrap
 
 # profile decoder used in CLI and tests
 def decode_profile(data:bytes) -> dict:
@@ -55,6 +55,21 @@ def main(args) -> None:
   viz.load_rewrites(viz_data:=viz.VizData(viz.load_pickle(args.rewrites_path, default=RewriteTrace([], [], {}))))
 
   def format_colored(s:str) -> str: return ansistrip(s) if args.no_color else s
+  def profile_events(data:dict, item:str|None=None) -> list[dict]:
+    events = data.get("events", [])
+    if item is None: return events
+    return [e for e in events if ansistrip(e["name"]) == item]
+  def dump_json(payload:dict|list) -> None:
+    print(json.dumps(payload, indent=2))
+  def source_for_prg(prg) -> str|None:
+    for s in reversed(getattr(prg, "src", [])):
+      if isinstance(src:=getattr(s, "arg", None), str): return src
+    return None
+  def debug_blocks(name:str) -> list[str]:
+    if args.debug < 3 or (prg_idx:=viz_data.ref_map.get(ansistrip(name))) is None: return []
+    blocks = [viz._reconstruct(viz_data, viz_data.trace.rewrites[prg_idx][0].sink).pyrender()]
+    if args.debug >= 4 and (src:=source_for_prg(viz_data.ctxs[prg_idx]["prg"])) is not None: blocks.append(src)
+    return blocks
 
   if args.profile:
     events:list = viz.load_pickle(args.profile_path, default=[])
@@ -117,32 +132,57 @@ def main(args) -> None:
       return None
 
     # ** Profiler printer
+    if args.format == "runtime":
+      rows = [{"idx":i, "name":e["name"], "dur_s":(et:=e["dur"]*1e-6), "dur_ms":et*1e3,
+               "st":e.get("st"), "fmt":e.get("fmt", "")} for i,e in enumerate(profile_events(data, args.item))]
+      if args.export_json:
+        dump_json({"format":"runtime", "source":ansistrip(args.src), "item":args.item, "count":len(rows),
+                   "rows":[{**r, "name":ansistrip(r["name"])} for r in rows]})
+        return None
+      if not rows: return None
+      debug_emitted = 0
+      for r in rows:
+        disp_name = format_colored(r["name"])
+        name = disp_name + (" " * max(0, 46 - ansilen(disp_name)))
+        ptm = colored(time_to_str(r["dur_s"], w=9), "yellow" if r["dur_s"] > 0.01 else None)
+        st = f" @{r['st']:9.3f}us" if r["st"] is not None else ""
+        print(f"{name} {ptm}/{r['dur_ms']:9.2f}ms{st}  " + r["fmt"].replace("\n", " | ") + "  ")
+        blocks = debug_blocks(r["name"])
+        debug_emitted += len(blocks)
+        for dbg in blocks: print(dbg)
+      if args.debug >= 3 and debug_emitted == 0:
+        print("warning: --debug requested but no rewrite-backed debug data found; check --rewrites-path", file=sys.stderr)
+      return None
+
     agg:dict[str, tuple[float, int]] = {}
-    total = 0
-    for e in data.get("events", []):
+    rows = profile_events(data, args.item)
+    total = sum(e["dur"] * 1e-6 for e in rows)
+    for e in rows:
       et = e["dur"] * 1e-6
-      if args.item is not None:
-        if ansistrip(e["name"]) == args.item:
-          ptm = colored(time_to_str(et, w=9), "yellow" if et > 0.01 else None)
-          name = e["name"] + (" " * (46 - ansilen(e["name"])))
-          print(f"{format_colored(name)} {ptm}/{et*1e3:9.2f}ms  " + e.get("fmt", "").replace("\n", " | ") + "  ")
-      else:
-        t, c = agg.get(e["name"], (0.0, 0))
-        agg[e["name"]] = (t+et, c+1)
-        total += et
+      t, c = agg.get(e["name"], (0.0, 0))
+      agg[e["name"]] = (t+et, c+1)
+    if args.export_json:
+      items = sorted(agg.items(), key=lambda kv:kv[1][0], reverse=True)
+      dump_json({"format":"aggregate", "source":ansistrip(args.src), "item":args.item, "total_s":total,
+                 "rows":[{"name":ansistrip(name), "total_s":t, "total_ms":t*1e3, "count":c,
+                           "pct":(t/total*100.0 if total > 0 else 0.0)} for name,(t,c) in items]})
+      return None
     if agg and total > 0:
       items = sorted(agg.items(), key=lambda kv:kv[1][0], reverse=True)
-      num_rows = 20
-      for name,(t,c) in items[:num_rows]:
+      num_rows = 20 if args.item is None else -1
+      view = items if num_rows < 0 else items[:num_rows]
+      debug_emitted = 0
+      for name,(t,c) in view:
         print(f"{format_colored(name)}{' '*(46-ansilen(name))} {time_to_str(t, w=9)} {c:7d} {t/total*100.0:6.2f}%")
-        if DEBUG >= 3 and (prg_idx:=viz_data.ref_map.get(ansistrip(name))) is not None:
-          prg = viz_data.ctxs[prg_idx]["prg"]
-          print(viz._reconstruct(viz_data, viz_data.trace.rewrites[prg_idx][0].sink).pyrender())
-          if DEBUG >= 4: print(prg.src[3].arg)
+        blocks = debug_blocks(name)
+        debug_emitted += len(blocks)
+        for dbg in blocks: print(dbg)
       if num_rows > -1 and items[num_rows:]:
         other_t = sum(t for _,(t,_) in items[num_rows:])
         other_c = sum(c for _,(_,c) in items[num_rows:])
         print(f"{'Other':46s} {time_to_str(other_t, w=9)} {other_c:7d} {other_t/total*100.0:6.2f}%")
+      if args.debug >= 3 and debug_emitted == 0:
+        print("warning: --debug requested but no rewrite-backed debug data found; check --rewrites-path", file=sys.stderr)
     return None
 
   # ** Graph rewrites printer
@@ -174,6 +214,11 @@ def get_arg_parser() -> argparse.ArgumentParser:
   g_opts.add_argument("-s", "--src", type=str, default=None, metavar="NAME", help="Select a data source (default: list all sources)")
   g_opts.add_argument("-i", "--item", type=str, default=None, metavar="NAME", help="Select an item within the source (default: list all items)")
   g_opts.add_argument("--no-color", action="store_true", help="Turn off colored names")
+  g_opts.add_argument("--format", choices=("aggregate", "runtime"), default="aggregate",
+                      help="Profiler output format (default: aggregate)")
+  g_opts.add_argument("--debug", type=int, choices=range(0, 8), default=0, metavar="LEVEL",
+                      help="Replay DEBUG output from trace (3=AST, 4=source)")
+  g_opts.add_argument("--export-json", action="store_true", help="Export selected view as JSON")
   g_opts.add_argument("--profile-path", type=pathlib.Path, metavar="PATH", help="Path to profile.pkl (optional file, default: latest profile)",
                       default=pathlib.Path(temp("profile.pkl", append_user=True)))
   g_opts.add_argument("--rewrites-path", type=pathlib.Path, metavar="PATH", help="Path to rewrites.pkl (optional file, default: latest rewrites)",
