@@ -7,16 +7,19 @@ Supported on all backends.
 Flags: VIZ=-1 to only save the trace to a file, VIZ=1 also launches a web server.
 
 1. Set VIZ to -1 to save the trace.
-2. Use `extra/viz/cli.py` to inspect the trace files.
+2. Use `extra/viz/cli.py` to inspect the trace files. Remember to add --no-color for pruning ANSI color codes.
 
 ## Inspect runtime profiling
 
 Use `extra/viz/cli.py --profile` to list all sources.
 
-List top slowest kernels on a source: `--profile -s "AMD"`
-List samples of a kernel on a source: `--profile -s "AMD" -i E_3 | head 4`
+List top slowest kernels on a source (aggregate view): `--profile -s "AMD" --format aggregate`
+List runtime samples in event order: `--profile -s "AMD" --format runtime`
+List runtime samples for one kernel: `--profile -s "AMD" --format runtime -i E_3`
 
-Use DEBUG=3 (include AST) and DEBUG=4 (include source) to print more information about each kernel in the list.
+Use `--debug 3` (include AST) and `--debug 4` (include source) to replay DEBUG output from the same trace data (no re tracing required!)
+
+Use `--export-json` to export either view as JSON.
 
 ## Inspect codegen and PatternMatcher
 
