@@ -4,7 +4,7 @@ if hasattr(signal, "SIGPIPE"): signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 from typing import Iterator
 from tinygrad.viz import serve as viz
 from tinygrad.uop.ops import RewriteTrace
-from tinygrad.helpers import temp, ansistrip, colored, time_to_str, ansilen, ProfilePointEvent, ProfileRangeEvent, TracingKey, unwrap
+from tinygrad.helpers import temp, ansistrip, colored, time_to_str, ansilen, ProfilePointEvent, ProfileRangeEvent, TracingKey, unwrap, DEBUG
 
 # profile decoder used in CLI and tests
 def decode_profile(data:bytes) -> dict:
@@ -103,15 +103,17 @@ def main(args) -> None:
     # ** PMC printer
     if "PMC" in args.src:
       pmc = viz.unpack_pmc(data)
-      cols = pmc["cols"]
-      rows:list = []
       for r in pmc["rows"]:
-        if args.item is None: rows.append(r[:2])
+        if args.item is None:
+          print(f"{r[0]:30s} {str(r[1]):>12s}")
         elif args.item == r[0]:
-          rows = r[2]["rows"] if len(r) > 2 else [r[:2]]
-          cols = r[2]["cols"] if len(r) > 2 else cols
-      print(*cols)
-      for row in rows: print(*row)
+          if len(r) == 2:
+            print(f"{r[0]:30s} {str(r[1]):>12s}")
+            break
+          print(f"{'XCC':>3s} {'INST':>4s} {'SE':>2s} {'SA':>2s} " + " ".join(f"{x:>8s}" for x in r[2]["cols"][4:]))
+          for row in r[2]["rows"]:
+            print(f"{row[0]:3d} {row[1]:4d} {row[2]:2d} {row[3]:2d} " + " ".join(f"{x:8d}" for x in row[4:]))
+          break
       return None
 
     # ** Profiler printer
@@ -133,6 +135,10 @@ def main(args) -> None:
       num_rows = 20
       for name,(t,c) in items[:num_rows]:
         print(f"{format_colored(name)}{' '*(46-ansilen(name))} {time_to_str(t, w=9)} {c:7d} {t/total*100.0:6.2f}%")
+        if DEBUG >= 3 and (prg_idx:=viz_data.ref_map.get(ansistrip(name))) is not None:
+          prg = viz_data.ctxs[prg_idx]["prg"]
+          print(viz._reconstruct(viz_data, viz_data.trace.rewrites[prg_idx][0].sink).pyrender())
+          if DEBUG >= 4: print(prg.src[3].arg)
       if num_rows > -1 and items[num_rows:]:
         other_t = sum(t for _,(t,_) in items[num_rows:])
         other_c = sum(c for _,(_,c) in items[num_rows:])

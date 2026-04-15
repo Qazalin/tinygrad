@@ -16,6 +16,8 @@ Use `extra/viz/cli.py --profile` to list all sources.
 List top slowest kernels on a source: `--profile -s "AMD"`
 List samples of a kernel on a source: `--profile -s "AMD" -i E_3 | head 4`
 
+Use DEBUG=3 (include AST) and DEBUG=4 (include source) to print more information about each kernel in the list.
+
 ## Inspect codegen and PatternMatcher
 
 Use `extra/viz/cli.py --rewrites` to list all sources.
