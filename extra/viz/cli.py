@@ -61,6 +61,16 @@ def main(args) -> None:
     return [e for e in events if ansistrip(e["name"]) == item]
   def dump_json(payload:dict|list) -> None:
     print(json.dumps(payload, indent=2))
+  def marker_color(c:str|None) -> str|None:
+    if c is None: return None
+    return {"gray":"WHITE", "grey":"WHITE", "red":"RED", "green":"GREEN", "yellow":"YELLOW",
+            "blue":"BLUE", "magenta":"MAGENTA", "cyan":"CYAN", "white":"WHITE", "black":"BLACK"}.get(c.lower())
+  def marker_line(m:dict) -> str:
+    ts, name, color = int(m.get("ts", 0)), m.get("name", ""), m.get("color")
+    sep, cc = ("-" if args.no_color else "─"), marker_color(color if isinstance(color, str) else None)
+    tag = colored("MARKER", cc) if cc and not args.no_color else "MARKER"
+    color_tag = f" {colored(f'[{color}]', cc)}" if cc and not args.no_color and color else (f" [{color}]" if color else "")
+    return f"{sep*10} {tag} {sep*10} @ {ts:>9,d}us" + (f" {sep} {name}" if name else "") + color_tag
   def source_for_prg(prg) -> str|None:
     for s in reversed(getattr(prg, "src", [])):
       if isinstance(src:=getattr(s, "arg", None), str): return src
@@ -132,16 +142,27 @@ def main(args) -> None:
       return None
 
     # ** Profiler printer
-    if args.format == "runtime":
+    if args.mode == "raw":
       rows = [{"idx":i, "name":e["name"], "dur_s":(et:=e["dur"]*1e-6), "dur_ms":et*1e3,
                "st":e.get("st"), "fmt":e.get("fmt", "")} for i,e in enumerate(profile_events(data, args.item))]
+      markers = [{"idx":i, **m} for i,m in enumerate(profile.get("markers", []))]
+      timeline = sorted([
+        *[("marker", m) for m in markers],
+        *[("event", r) for r in rows],
+      ], key=lambda x: ((x[1]["ts"] if x[0] == "marker" else x[1].get("st") if x[1].get("st") is not None else 1<<62),
+                        0 if x[0] == "marker" else 1, x[1]["idx"]))
       if args.export_json:
-        dump_json({"format":"runtime", "source":ansistrip(args.src), "item":args.item, "count":len(rows),
-                   "rows":[{**r, "name":ansistrip(r["name"])} for r in rows]})
+        dump_json({"mode":"raw", "source":ansistrip(args.src), "item":args.item, "count":len(rows),
+                   "rows":[{**r, "name":ansistrip(r["name"])} for r in rows],
+                   "markers":markers,
+                   "timeline":[{**r, "kind":k, "name":ansistrip(r["name"])} if k == "event" else {**r, "kind":k} for k,r in timeline]})
         return None
-      if not rows: return None
+      if not rows and not markers: return None
       debug_emitted = 0
-      for r in rows:
+      for k,r in timeline:
+        if k == "marker":
+          print(marker_line(r))
+          continue
         disp_name = format_colored(r["name"])
         name = disp_name + (" " * max(0, 46 - ansilen(disp_name)))
         ptm = colored(time_to_str(r["dur_s"], w=9), "yellow" if r["dur_s"] > 0.01 else None)
@@ -163,7 +184,7 @@ def main(args) -> None:
       agg[e["name"]] = (t+et, c+1)
     if args.export_json:
       items = sorted(agg.items(), key=lambda kv:kv[1][0], reverse=True)
-      dump_json({"format":"aggregate", "source":ansistrip(args.src), "item":args.item, "total_s":total,
+      dump_json({"mode":"agg", "source":ansistrip(args.src), "item":args.item, "total_s":total,
                  "rows":[{"name":ansistrip(name), "total_s":t, "total_ms":t*1e3, "count":c,
                            "pct":(t/total*100.0 if total > 0 else 0.0)} for name,(t,c) in items]})
       return None
@@ -214,8 +235,8 @@ def get_arg_parser() -> argparse.ArgumentParser:
   g_opts.add_argument("-s", "--src", type=str, default=None, metavar="NAME", help="Select a data source (default: list all sources)")
   g_opts.add_argument("-i", "--item", type=str, default=None, metavar="NAME", help="Select an item within the source (default: list all items)")
   g_opts.add_argument("--no-color", action="store_true", help="Turn off colored names")
-  g_opts.add_argument("--format", choices=("aggregate", "runtime"), default="aggregate",
-                      help="Profiler output format (default: aggregate)")
+  g_opts.add_argument("--mode", choices=("agg", "raw"), default="agg",
+                      help="Profiler output mode (default: agg)")
   g_opts.add_argument("--debug", type=int, choices=range(0, 8), default=0, metavar="LEVEL",
                       help="Replay DEBUG output from trace (3=AST, 4=source)")
   g_opts.add_argument("--export-json", action="store_true", help="Export selected view as JSON")
