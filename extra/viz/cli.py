@@ -6,6 +6,7 @@ from typing import Iterator
 from tinygrad.viz import serve as viz
 from tinygrad.uop.ops import RewriteTrace
 from tinygrad.helpers import temp, ansistrip, colored, time_to_str, ansilen, ProfilePointEvent, ProfileRangeEvent, TracingKey, unwrap, NO_COLOR
+from tinygrad.helpers import Context, DEBUG
 
 # profile decoder used in CLI and tests
 def decode_profile(data:bytes) -> dict:
@@ -56,6 +57,24 @@ def main(args) -> None:
   viz.load_rewrites(viz_data:=viz.VizData(viz.load_pickle(args.rewrites_path, default=RewriteTrace([], [], {}))))
 
   def format_colored(s:str) -> str: return ansistrip(s) if NO_COLOR else s
+
+  if args.debug:
+    events:list = viz.load_pickle(args.profile_path, default=[])
+    for _,_,e in viz.flatten_events(events, {}):
+      if not isinstance(e, ProfileRangeEvent): continue
+      if args.src is not None and e.device != args.src: continue
+      name = e.name if isinstance(e.name, str) else e.name.display_name
+      prg_uop = None
+      if (r:=viz_data.ref_map.get(name)) is not None and "prg" in viz_data.ctxs[r] and viz_data.ctxs[r]["prg"] is not None:
+        name = (prg_uop:=viz_data.ctxs[r]["prg"]).src[0].arg.name
+      print(f"*** {e.device[:7]:7s} {name+' '*(46-ansilen(name))} {time_to_str(float(e.en-e.st), w=9)}")
+      if prg_uop is not None:
+        if DEBUG >= 3:
+          print(viz._reconstruct(viz_data, viz_data.trace.rewrites[viz_data.ref_map[ansistrip(name)]][0].sink).pyrender())
+        if DEBUG >= 4: print(prg_uop.src[3].arg)
+      elif DEBUG >= 3 and isinstance(e.name, TracingKey) and e.name.tb:
+        for fp,lineno,fn,code in e.name.tb[1:2]: print(f"  {fn}  {fp}:{lineno}", f"    {code}")
+    return None
 
   if args.profile:
     events:list = viz.load_pickle(args.profile_path, default=[])
@@ -177,6 +196,7 @@ def get_arg_parser() -> argparse.ArgumentParser:
   g_mode = parser.add_argument_group("mode")
   g_mode.add_argument("-p", "--profile", action="store_true", help="View profile")
   g_mode.add_argument("-r", "--rewrites", action="store_true", help="View graph rewrites")
+  g_mode.add_argument("-d", "--debug", type=int, metavar="LEVEL", help="Reconstruct DEBUG trace (1-7 DEBUG levels, default 0)", default=DEBUG.value)
   g_opts = parser.add_argument_group("optional args")
   g_opts.add_argument("-s", "--src", type=str, default=None, metavar="NAME", help="Select a data source (default: list all sources)")
   g_opts.add_argument("-i", "--item", type=str, default=None, metavar="NAME", help="Select an item within the source (default: list all items)")
@@ -189,9 +209,12 @@ def get_arg_parser() -> argparse.ArgumentParser:
 
 if __name__ == "__main__":
   args = get_arg_parser().parse_args()
-  if not args.profile and not args.rewrites:
+  if not args.profile and not args.rewrites and not args.debug:
     get_arg_parser().print_help()
     sys.exit(0)
+
+  if args.debug:
+    Context(DEBUG=args.debug).__enter__()
 
   try: main(args)
   except KeyboardInterrupt: pass

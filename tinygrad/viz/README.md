@@ -14,7 +14,5 @@ Use VIZ=2 to enable SQTT tracing.
 
 ### Viewing Traces
 
-There are two ways to view the trace files:
-
-1. Browser web UI, tinygrad/viz/serve.py launches in http://localhost:8000.
-2. Command line interface at: `extra/viz/cli.py --help`.
+- Browser web UI at: `tinygrad/viz/serve.py`, launches in http://localhost:8000.
+- Command line interface at: `extra/viz/cli.py --help`.
