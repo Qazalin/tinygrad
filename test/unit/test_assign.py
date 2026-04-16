@@ -621,6 +621,35 @@ class TestAssign(unittest.TestCase):
     # N matmuls + N assigns + 1 final read = 2*N+1 (AFTER embedding allows full graph scheduling with shared contiguous reuse)
     self.assertEqual(GlobalCounters.kernel_count, 2*N+1)
 
+  def test_double_assign_from_const(self):
+    a = Tensor.empty(2)
+    a.assign(Tensor.ones(2))
+    a.assign(Tensor.ones(2))
+    GlobalCounters.reset()
+    a.realize()
+    self.assertEqual(GlobalCounters.kernel_count, 1)
+    self.assertEqual(a.tolist(), [1.,1.])
+
+  def test_nested_after_contiguous_store(self):
+    # Mirrors the nested contiguous-write-then-assign-back shape from torch backend view updates.
+    base = Tensor.empty(3, dtype=dtypes.int64)
+    base.assign(Tensor([1, 2, 3], dtype=dtypes.int64))
+    contig = base.contiguous()
+    contig.assign(Tensor([1, 4, 3], dtype=dtypes.int64))
+    GlobalCounters.reset()
+    base.assign(contig).realize()
+    self.assertEqual(GlobalCounters.kernel_count, 2)  # TODO: first copy is dead, could be 1
+    self.assertEqual(base.tolist(), [1,4,3])
+
+  def test_nested_after_contiguous_store_no_init(self):
+    # Same shape as test_nested_after_contiguous_store, but without the initial assign.
+    base = Tensor.empty(3, dtype=dtypes.int64)
+    contig = base.contiguous()
+    contig.assign(Tensor([1, 4, 3], dtype=dtypes.int64))
+    GlobalCounters.reset()
+    base.assign(contig).realize()
+    self.assertEqual(GlobalCounters.kernel_count, 1)
+    self.assertEqual(base.tolist(), [1,4,3])
 
 class TestAssignOrdering(unittest.TestCase):
   """Tests for complex assign orderings that could differ between lazy and eager execution.
@@ -946,6 +975,37 @@ class TestPartialAssignToSharedBuffer(unittest.TestCase):
     Tensor.realize(*views)
     for v, s in zip(views, shapes):
       np.testing.assert_allclose(v.numpy(), np.ones(s))
+
+
+class TestAfterCachePatterns(unittest.TestCase):
+  def test_double_store_after(self):
+    a = Tensor.zeros(10).contiguous()
+    b = Tensor.zeros(10).contiguous()
+    c = Tensor.ones(10).contiguous()
+    Tensor.realize(a, b, c)
+
+    a_store = a.uop.store(c.uop)
+    b_store = b.uop.store(c.uop)
+
+    a = Tensor(a.uop.after(a_store, b_store))
+    a.realize()
+    np.testing.assert_array_equal(a.numpy(), 1)
+    np.testing.assert_array_equal(b.numpy(), 1)
+
+  def test_double_store_after_different_sizes(self):
+    full = Tensor.zeros(2).contiguous()
+    head = Tensor.zeros(1).contiguous()
+    full_src = Tensor([1, 2], dtype=dtypes.float).contiguous()
+    head_src = Tensor([3], dtype=dtypes.float).contiguous()
+    Tensor.realize(full, head, full_src, head_src)
+
+    full_store = full.uop.store(full_src.uop)
+    head_store = head.uop.store(head_src.uop)
+
+    head = Tensor(head.uop.after(head_store, full_store))
+    head.realize()
+    np.testing.assert_array_equal(head.numpy(), [3])
+    np.testing.assert_array_equal(full.numpy(), [1, 2])
 
 if __name__ == "__main__":
   unittest.main()

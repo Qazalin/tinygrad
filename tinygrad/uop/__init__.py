@@ -26,7 +26,8 @@ class Ops(FastEnum):
 
   # uops that aren't rendered
   NOOP = auto(); REWRITE_ERROR = auto()
-  PARAM = auto(); CALL = auto()
+  # FUNCTION has a TUPLE body and is gradient-able; CALL is an opaque kernel invocation
+  PARAM = auto(); FUNCTION = auto(); CALL = auto()
 
   # renderer
   # LINEAR is a list of UOps, SOURCE has a str arg that's human readable, BINARY has bytes arg that's compiled
@@ -34,7 +35,7 @@ class Ops(FastEnum):
 
   # AFTER passes src[0] through and promises in the toposort that any consumers of the AFTER run after src[1:]
   # GROUP is a NOOP that just merges things together
-  SINK = auto(); AFTER = auto(); GROUP = auto()
+  SINK = auto(); AFTER = auto(); GROUP = auto(); BEAM = auto()
 
   # vector creation / item selection
   GEP = auto(); VECTORIZE = auto()

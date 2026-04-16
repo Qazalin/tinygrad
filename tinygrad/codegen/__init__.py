@@ -6,7 +6,6 @@ from tinygrad.uop.ops import PatternMatcher, graph_rewrite, UOp, pm_lower_index_
 from tinygrad.uop.spec import type_verify, program_spec, kernel_spec
 from tinygrad.renderer import Renderer, ProgramSpec, Estimates
 from tinygrad.dtype import dtypes
-from tinygrad.codegen.opt import Opt
 
 # import all pattern matchers here
 from tinygrad.codegen.gpudims import pm_add_gpudims
@@ -21,7 +20,7 @@ from tinygrad.schedule.rangeify import pm_add_buffers_local, rangeify_codegen, p
 from tinygrad.codegen.late.linearizer import CFGContext, pm_split_ends, pm_add_control_flow, linearize
 from tinygrad.renderer.amd.elf import do_assemble_amd
 
-def full_rewrite_to_sink(sink:UOp, ren:Renderer|None=None, optimize:bool=True) -> UOp:
+def full_rewrite_to_sink(sink:UOp, ren:Renderer|None=None, optimize:bool=True, beam:int=0) -> UOp:
   if ren is None: ren = Renderer(Target())
 
   if VIZ: graph_rewrite(sink, PatternMatcher([]), name="View Base AST")
@@ -46,7 +45,7 @@ def full_rewrite_to_sink(sink:UOp, ren:Renderer|None=None, optimize:bool=True) -
     sink = graph_rewrite(sink, pm_flatten_range+pm_simplify_ranges, ctx={}, name="simplify ranges")
 
     # do postrange optimization, BEAM or hand_coded_optimizations
-    sink = apply_opts(sink, ren)
+    sink = apply_opts(sink, ren, beam=beam)
 
   # ** expander (expand_rewrite) **
   sink = graph_rewrite(sink, sym+pm_move_where_on_load, name="postopt symbolic")
@@ -151,7 +150,7 @@ pm_to_program = PatternMatcher([
 
 @Context(ALLOW_DEVICE_USAGE=0)
 @track_rewrites(name=lambda ast,renderer,ret,**kwargs: TracingKey(ret.name, (ret.function_name, ast), ret=renderer), replay=True)
-def get_program(ast:UOp, renderer:Renderer, opts:list[Opt]|None=None) -> ProgramSpec:
+def get_program(ast:UOp, renderer:Renderer) -> ProgramSpec:
   """
   Transform an AST into a ProgramSpec. May trigger BEAM search.
 
@@ -164,14 +163,11 @@ def get_program(ast:UOp, renderer:Renderer, opts:list[Opt]|None=None) -> Program
   """
 
   if ast.op is Ops.PROGRAM: prg = ast
-  elif ast.op is Ops.SINK:
+  elif ast.op is Ops.SINK or ast.op is Ops.BEAM:
+    beam, ast = (ast.arg, ast.src[0]) if ast.op is Ops.BEAM else (0, ast)
     # rewrite to prg
     assert isinstance(ast.arg, KernelInfo), "requires KernelInfo on arg to get_program"
-    if opts is not None:
-      # TODO: should this be here?
-      assert ast.arg.opts_to_apply is None, "can't apply opts if there's already opts to apply"
-      ast = ast.replace(arg=replace(ast.arg, opts_to_apply=tuple(opts)))
-    full_sink = full_rewrite_to_sink(ast, renderer, optimize=ast.tag is None)
+    full_sink = full_rewrite_to_sink(ast, renderer, optimize=ast.tag is None, beam=beam)
     prg = UOp(Ops.PROGRAM, src=(full_sink, UOp(Ops.DEVICE, arg=renderer.target.device)))
   else:
     raise RuntimeError(f"can't call get_program on {ast.op}")

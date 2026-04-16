@@ -4,7 +4,7 @@ from tinygrad.helpers import round_up, getenv, OSX, temp, ceildiv, unwrap, fetch
 from tinygrad.runtime.autogen import libc, pci, vfio, iokit, corefoundation
 from tinygrad.runtime.support.hcq import FileIOInterface, MMIOInterface, HCQBuffer, hcq_filter_visible_devices
 from tinygrad.runtime.support.memory import VirtMapping, AddrSpace, BumpAllocator
-from tinygrad.runtime.support.usb import ASM24Controller, USBMMIOInterface
+from tinygrad.runtime.support.usb import USB3, CustomASM24Controller, ASM24Controller, USBMMIOInterface
 
 MAP_FIXED, MAP_FIXED_NOREPLACE = 0x10, 0x100000
 MAP_LOCKED, MAP_POPULATE, MAP_NORESERVE = 0 if OSX else 0x2000, getattr(mmap, "MAP_POPULATE", 0 if OSX else 0x008000), 0x400
@@ -66,7 +66,9 @@ class _System:
       iokit.IOServiceGetMatchingServices(0, iokit.IOServiceMatching(b"IOPCIDevice"), ctypes.byref(iterator:=ctypes.c_uint()))
       while svc:=iokit.IOIteratorNext(iterator): all_devs.append((v:=read_prop(svc, "vendor-id"), d:=read_prop(svc, "device-id"), f"{v:x}:{d:x}"))
     else:
-      for pcibus in FileIOInterface("/sys/bus/pci/devices").listdir():
+      try: devs = FileIOInterface("/sys/bus/pci/devices")
+      except FileNotFoundError: raise RuntimeError("no pcie")
+      for pcibus in devs.listdir():
         if base_class is not None and int(FileIOInterface(f"/sys/bus/pci/devices/{pcibus}/class").read(), 16) >> 16 != base_class: continue
         all_devs.append((int(FileIOInterface(f"/sys/bus/pci/devices/{pcibus}/vendor").read(), 16),
                          int(FileIOInterface(f"/sys/bus/pci/devices/{pcibus}/device").read(), 16), pcibus))
@@ -78,11 +80,11 @@ class _System:
     if getenv("REMOTE", ""): return [(functools.partial(RemotePCIDevice,sock=s), x) for s,x in RemotePCIDevice.remote_list(vendor,devices,base_class)]
     return [(APLRemotePCIDevice if OSX else PCIDevice, x) for x in System.pci_scan_bus(vendor, devices, base_class)]
 
-  def pci_probe_device(self, devpref:str, dev_id:int, vendor:int, devices:tuple[tuple[int, tuple[int, ...]], ...], base_class:int|None=None):
-    cl, pcibus = hcq_filter_visible_devices(self.list_devices(vendor, devices, base_class))[dev_id]
-    return cl(devpref, pcibus)
+  def pci_probe_device(self, device:str, dev_id:int, vendor:int, devices:tuple[tuple[int, tuple[int, ...]], ...], base_class:int|None=None):
+    cl, pcibus = hcq_filter_visible_devices(self.list_devices(vendor, devices, base_class), device)[dev_id]
+    return cl(device[:2], pcibus)
 
-  def pci_setup_usb_bars(self, usb:ASM24Controller, gpu_bus:int, mem_base:int, pref_mem_base:int) -> dict[int, tuple[int, int]]:
+  def pci_setup_usb_bars(self, usb:CustomASM24Controller|ASM24Controller, gpu_bus:int, mem_base:int, pref_mem_base:int) -> dict[int, tuple[int, int]]:
     for bus in range(gpu_bus):
       # All 3 values must be written at the same time.
       buses = (0 << 0) | ((bus+1) << 8) | ((gpu_bus) << 16)
@@ -213,7 +215,9 @@ class PCIDevice:
 class USBPCIDevice(PCIDevice):
   def __init__(self, devpref:str, pcibus:str):
     self.lock_fd = System.flock_acquire(f"{devpref.lower()}_{pcibus.lower()}.lock")
-    self.usb = ASM24Controller()
+    usb = USB3(0xADD1, 0x0001, 0x81, 0x83, 0x02, 0x04)
+    if DEBUG >= 1: print(f"am usb: product string: {usb.product!r}")
+    self.usb: CustomASM24Controller | ASM24Controller = CustomASM24Controller(usb) if usb.is_custom else ASM24Controller(usb)
     self.pcibus, self._bar_info = pcibus, System.pci_setup_usb_bars(self.usb, gpu_bus=4, mem_base=0x10000000, pref_mem_base=(32 << 30))
     self.sram = BumpAllocator(size=0x80000, wrap=False) # asm24 controller sram
 
@@ -240,7 +244,7 @@ class PCIIfaceBase:
 
   def __init__(self, dev, dev_id, vendor, devices:tuple[tuple[int, tuple[int, ...]], ...], vram_bar, va_start, va_size,
                dev_impl_t, base_class:int|None=None):
-    self.pci_dev = System.pci_probe_device(dev.__class__.__name__[:2], dev_id, vendor, devices, base_class=base_class)
+    self.pci_dev = System.pci_probe_device(dev.__class__.__name__[:-6], dev_id, vendor, devices, base_class=base_class)
     if self.is_local(): System.reserve_va(va_start, va_size)
     with contextlib.suppress(Exception): self.pci_dev.resize_bar(vram_bar)
     self.dev_impl = dev_impl_t(self.pci_dev)
@@ -263,10 +267,9 @@ class PCIIfaceBase:
     return HCQBuffer(mapping.va_addr, size, view=barview, meta=PCIAllocationMeta(mapping, cpu_access, hMemory=mapping.paddrs[0][0]), owner=self.dev)
 
   def free(self, b:HCQBuffer):
-    for dev in b.mapped_devs[1:]:
-      if hasattr(dev.iface, 'dev_impl'): dev.iface.dev_impl.mm.unmap_range(b.va_addr, b.size)
-    if b.meta.mapping.aspace is AddrSpace.PHYS: self.dev_impl.mm.vfree(b.meta.mapping)
-    if self.is_local() and b.owner == self.dev and b.meta.has_cpu_mapping: FileIOInterface.munmap(b.va_addr, b.size)
+    if b.owner != self.dev: self.dev.iface.dev_impl.mm.unmap_range(b.va_addr, b.size)
+    if b.owner == self.dev and b.meta.mapping.aspace is AddrSpace.PHYS: self.dev_impl.mm.vfree(b.meta.mapping)
+    if b.owner == self.dev and self.is_local() and b.meta.has_cpu_mapping: FileIOInterface.munmap(b.va_addr, b.size)
 
   def p2p_paddrs(self, paddrs:list[tuple[int,int]]) -> tuple[list[tuple[int,int]], AddrSpace]:
     return [(p + self.pci_dev.bar_info(self.vram_bar)[0], sz) for p, sz in paddrs], AddrSpace.SYS
@@ -287,6 +290,7 @@ class PCIIfaceBase:
     else: raise RuntimeError(f"map failed: {b.owner} -> {self.dev}")
 
     self.dev_impl.mm.map_range(int(b.va_addr), round_up(b.size, 0x1000), paddrs, aspace=aspace, snooped=snooped, uncached=uncached)
+    return HCQBuffer(b.va_addr, b.size, meta=b.meta, owner=b.owner)
 
 # *** Remote PCI Devices
 

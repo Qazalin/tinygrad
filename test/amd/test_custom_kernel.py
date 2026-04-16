@@ -15,7 +15,7 @@ from extra.gemm.amd_asm_matmul import Kernel
 def custom_add_one(A:UOp) -> UOp:
   A = A.flatten()
   assert dtypes.is_float(A.dtype.base), f"buffer dtype must be float32, got {A.dtype}"
-  threads = UOp.special(A.size, "lidx0")
+  threads = UOp.special(A.numel(), "lidx0")
   insts = [
     s_load_b64(s[0:1], s[0:1], soffset=NULL),
     s_waitcnt_lgkmcnt(sdst=NULL, simm16=0),
@@ -27,13 +27,13 @@ def custom_add_one(A:UOp) -> UOp:
     global_store_b32(addr=v[0], data=v[1], saddr=s[0:1]),
     s_endpgm(),
   ]
-  sink = UOp.sink(A.base, threads, arg=KernelInfo(f"custom_add_one_{A.size}", estimates=Estimates(ops=A.size, mem=A.size*4*2)))
+  sink = UOp.sink(A.base, threads, arg=KernelInfo(f"custom_add_one_{A.numel()}", estimates=Estimates(ops=A.numel(), mem=A.numel()*4*2)))
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in insts]))))
 
 def custom_add_var(A:UOp, B:UOp) -> UOp:
   A,B = A.flatten(), B.flatten()
   assert A.dtype.base == dtypes.uint32, f"buffer dtype must be uint32, got {A.dtype}"
-  threads = UOp.special(A.size, "lidx0")
+  threads = UOp.special(A.numel(), "lidx0")
   var = UOp.variable("var", 0, 10)
   insts = [
     s_load_b128(s[4:7], s[0:1]),
@@ -46,7 +46,7 @@ def custom_add_var(A:UOp, B:UOp) -> UOp:
     global_store_b32(addr=v[0], data=v[1], saddr=s[4:5]),
     s_endpgm(),
   ]
-  sink = UOp.sink(A.base, B.base, var, threads, arg=KernelInfo(f"custom_add_var_{A.size}"))
+  sink = UOp.sink(A.base, B.base, var, threads, arg=KernelInfo(f"custom_add_var_{A.numel()}"))
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg="AMD"), UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in insts]))))
 
 def custom_wave_sync(A:UOp, arch:str) -> UOp:
@@ -104,20 +104,21 @@ def custom_handwritten(A:UOp, arch:str) -> UOp:
   lds = UOp(Ops.DEFINE_LOCAL, dtypes.uint8.ptr(size=512, addrspace=AddrSpace.LOCAL), (), 'lds')  # 128 * 4 bytes
   k = Kernel(arch)
   k.emit(r4.s_nop(0))
-  k.emit(r4.v_mov_b32_e32(v[1], 10))
+  k.emit(r4.v_mov_b32_e32(v[1], 4))
   def emit_alt():
-    for i in range(4):
+    for i in range(2):
       k.emit(r4.v_mov_b32_e32(v[20+i], 4.0))
       k.emit(r4.v_rcp_f32_e32(v[22+i], v[20+i]))
       k.emit(r4.s_mov_b32(s[20+i], i))
+      k.emit(r4.s_mul_i32(s[14+i], s[12+i], 32))
   def emit_wmma():
-    for _ in range(4):
+    for _ in range(2):
       k.emit(r4.v_wmma_f32_16x16x16_f16(v[0:7], v[8:11], v[8:11], 1))
   k.label("start")
   k.emit(s_mov_b32(s[1], 10))
   k.label("loop")
   # wmma should've overlapped here if it was a different unit?
-  for _ in range(4):
+  for _ in range(2):
     emit_wmma()
     emit_alt()
   for _ in range(8): k.emit(s_nop(1))
@@ -131,7 +132,7 @@ def custom_handwritten(A:UOp, arch:str) -> UOp:
 
 def custom_data_deps(A:UOp, arch:str) -> UOp:
   A = A.flatten()
-  threads = UOp.special(A.size, "lidx0")
+  threads = UOp.special(A.numel(), "lidx0")
   k = Kernel(arch)
   k.emit(s_load_b64(s[0:1], s[0:1], soffset=NULL))
   k.emit(s_waitcnt_lgkmcnt(sdst=NULL, simm16=0))

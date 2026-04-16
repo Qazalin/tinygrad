@@ -29,7 +29,7 @@ def call_gradient(ctx:UOp, k:UOp, needed:set[int]) -> tuple[UOp|None, ...]:
   assert fxn.op is Ops.TUPLE, f"expected TUPLE body for gradient, got {fxn.op}"
   params = {x.arg:x for x in fxn.toposort(enter_calls=False) if x.op == Ops.PARAM}
   grad_args = ctx.src
-  root_grad = UOp(Ops.TUPLE, src=tuple(fxn.src[i].const_like(0) if g.op is Ops.NOOP else g.param_like(len(args)+i) for i,g in enumerate(grad_args)))
+  root_grad = UOp(Ops.TUPLE, src=tuple(UOp(Ops.NOOP) if g.op is Ops.NOOP else g.param_like(len(args)+i) for i,g in enumerate(grad_args)))
   grads = compute_gradient(fxn, root_grad, set(params.values()))
   # for precompiled calls, substitute forward outputs with params so intermediates aren't recomputed
   fwd_subs = {src: src.param_like(len(args)+len(grad_args)+i) for i, src in enumerate(fxn.src)} if k.arg.precompile else {}
@@ -92,18 +92,19 @@ def compute_gradient(root:UOp, root_grad:UOp, targets:set[UOp]) -> dict[UOp, UOp
   walk, in_target_path = _deepwalk(root, targets)
   grads: dict[UOp, UOp] = {root: root_grad}
   for t0 in reversed(walk):
-    if t0 not in grads: continue
-    # GETTUPLE: accumulate gradient into a TUPLE UOp on the CALL, process when we hit the CALL
+    if t0 not in grads or grads[t0].op is Ops.NOOP: continue
+    # GETTUPLE: accumulate gradient into a TUPLE UOp on the FUNCTION, process when we hit the FUNCTION
     if t0.op is Ops.GETTUPLE:
-      k = t0.src[0]  # the CALL
-      assert k.op is Ops.CALL and k.src[0].op is Ops.TUPLE
+      k = t0.src[0]  # the FUNCTION
+      assert k.op is Ops.FUNCTION and k.src[0].op is Ops.TUPLE
       n_outputs = len(k.src[0].src)
       prev = grads[k].src if k in grads else tuple(UOp(Ops.NOOP) for _ in range(n_outputs))
       grads[k] = UOp.maketuple(*(prev[i] + grads[t0] if i == t0.arg and prev[i].op is not Ops.NOOP else
                                  grads[t0] if i == t0.arg else prev[i] for i in range(n_outputs)))
       continue
-    # CALL: pass needed param set so backward only computes required gradients
-    if t0.op is Ops.CALL:
+    # FUNCTION/CALL: pass needed param set so backward only computes required gradients
+    # (FUNCTION uses implicit TUPLE gradient or grad_fxn; CALL requires an explicit grad_fxn)
+    if t0.op in {Ops.FUNCTION, Ops.CALL}:
       needed = {i for i, arg in enumerate(t0.src[1:]) if arg in targets or in_target_path.get(arg, False)}
       lgrads:tuple[UOp|None, ...]|None = call_gradient(grads[t0], t0, needed)
     else:
@@ -112,7 +113,7 @@ def compute_gradient(root:UOp, root_grad:UOp, targets:set[UOp]) -> dict[UOp, UOp
     assert len(lgrads) == len(t0.src), f"got {len(lgrads)} gradient, expected {len(t0.src)}"
     for k,v in zip(t0.src, lgrads):
       if v is None: continue
-      if k in grads: grads[k] = grads[k] + v
+      if k in grads and grads[k].op is not Ops.NOOP: grads[k] = grads[k] + v
       else: grads[k] = v
       if len(forward_metadata:=all_metadata.get(t0, ())):
         backward_metadata = tuple(dataclasses.replace(x, backward=True) for x in forward_metadata)

@@ -508,6 +508,8 @@ jobs:
         run: echo "What's a male chicken called? Answer with only one word." | MAX_BUFFER_SIZE=0 python3 -m tinygrad.apps.llm --model llama3.2:1b | tee /dev/stderr | grep -i rooster
       - name: Test 1B LLM (llama q4)
         run: echo "What's a male chicken called? Answer with only one word." | MAX_BUFFER_SIZE=0 python3 -m tinygrad.apps.llm --model llama3.2:1b-q4 | tee /dev/stderr | grep -i rooster
+      - name: Test 1B LLM (qwen3.5)
+        run: echo "What's a male chicken called? Answer with only one word." | MAX_BUFFER_SIZE=0 python3 -m tinygrad.apps.llm --model qwen3.5:0.8b | tee /dev/stderr | grep -i rooster
       - name: Test 1B LLM (qwen)
         # NOTE: qwen is dumb and only knows about female chickens
         run: echo "What's a female chicken called? Answer with only one word." | MAX_BUFFER_SIZE=0 python3 -m tinygrad.apps.llm --model qwen3:0.6b | tee /dev/stderr | grep -i hen
@@ -642,7 +644,6 @@ jobs:
     timeout-minutes: 20
     env:
       DEV: AMD
-      PYTHON_REMU: 1
       MOCKGPU: 1
     steps:
       - name: Checkout Code
@@ -690,9 +691,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      DEV: AMD
+      DEV: PCI+AMD
       MOCKGPU: 1
-      AMD_IFACE: PCI
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
@@ -705,7 +705,7 @@ jobs:
       - name: Run test_tiny on MOCKAM
         run: python test/test_tiny.py
       - name: Run test_tiny on MOCKAM USB
-        run: GMMU=0 AMD_IFACE=USB python test/test_tiny.py
+        run: GMMU=0 DEV=USB+AMD python test/test_tiny.py
       - name: Run test_hcq on MOCKAM
         run: python -m pytest test/device/test_hcq.py
       - name: Run disk copy tests on MOCKAM
