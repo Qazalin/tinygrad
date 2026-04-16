@@ -1314,8 +1314,10 @@ if TRACK_MATCH_STATS or PROFILE:
       os.environ["VIZ"], os.environ["PROFILE"] = "0", "0"
       args = ['--rewrites-path', os.getenv("VIZ_DATA", "")] if os.getenv("VIZ_DATA", "") else []
       args += ['--profile-path', os.getenv("PROFILE_DATA", "")] if os.getenv("PROFILE_DATA", "") else []
-      viz_path = pathlib.Path(__file__).resolve().parent.parent / "viz" / "serve.py"
-      os.execv(sys.executable, [sys.executable, viz_path.as_posix()] + args)
+      if sys.stdout.isatty():
+        viz_path = pathlib.Path(__file__).resolve().parent.parent / "viz" / "serve.py"
+        os.execv(sys.executable, [sys.executable, viz_path.as_posix()] + args)
+      else: print(f"Saved VIZ output. Use extra/viz/cli.py {' '.join(args)} to view.")
 
 # *** simple graph rewrite engine ***
 
