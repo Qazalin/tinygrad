@@ -4,7 +4,7 @@ os.environ["VIZ"] = "0"
 if hasattr(signal, "SIGPIPE"): signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 from typing import Iterator
 from tinygrad.viz import serve as viz
-from tinygrad.uop.ops import RewriteTrace
+from tinygrad.uop.ops import RewriteTrace, sym_infer
 from tinygrad.helpers import temp, ansistrip, colored, time_to_str, ansilen, ProfilePointEvent, ProfileRangeEvent, TracingKey, unwrap, NO_COLOR
 from tinygrad.helpers import Context, DEBUG
 
@@ -60,14 +60,27 @@ def main(args) -> None:
 
   if args.debug:
     events:list = viz.load_pickle(args.profile_path, default=[])
+    exec_points:dict[str, ProfilePointEvent] = {}
     for _,_,e in viz.flatten_events(events, {}):
+      if isinstance(e, ProfilePointEvent) and e.name == "exec": exec_points[e.arg["name"]] = e
       if not isinstance(e, ProfileRangeEvent): continue
       if args.src is not None and e.device != args.src: continue
       name = e.name if isinstance(e.name, str) else e.name.display_name
       prg_uop = None
+      fmt = []
       if (r:=viz_data.ref_map.get(name)) is not None and "prg" in viz_data.ctxs[r] and viz_data.ctxs[r]["prg"] is not None:
         name = (prg_uop:=viz_data.ctxs[r]["prg"]).src[0].arg.name
-      print(f"*** {e.device[:7]:7s} {name+' '*(46-ansilen(name))} {time_to_str(float(e.en-e.st), w=9)}")
+        p = prg_uop
+        if (ei:=exec_points.get(p.src[0].arg.name)):
+          dur = float(e.en-e.st)
+          flops = sym_infer((estimates:=p.src[0].arg.estimates).ops, var_vals:=ei.arg['var_vals'])/(t:=dur*1e-6)
+          membw, ldsbw = sym_infer(estimates.mem, var_vals)/t, sym_infer(estimates.lds, var_vals)/t
+          fmt = [f"{flops*1e-9:.0f} GFLOPS" if flops < 1e14 else f"{flops*1e-12:.0f} TFLOPS",
+                (f"{membw*1e-9:.0f} GB/s" if membw < 1e13 else f"{membw*1e-12:.0f} TB/s")+" mem",
+                (f"{ldsbw*1e-9:.0f} GB/s" if ldsbw < 1e15 else f"{ldsbw*1e-12:.0f} TB/s")+" lds"]
+          if (metadata_str:=",".join([str(m) for m in (ei.arg['metadata'] or ())])): fmt.append(metadata_str)
+          if type(e).__name__ == "ProfileGraphEntry": fmt.append("(batched)")
+      print(f"*** {e.device[:7]:7s} {name+' '*(46-ansilen(name))} {time_to_str(float(e.en-e.st), w=9)}  "+" ".join(fmt))
       if prg_uop is not None:
         if DEBUG >= 3:
           print(viz._reconstruct(viz_data, viz_data.trace.rewrites[viz_data.ref_map[ansistrip(name)]][0].sink).pyrender())
