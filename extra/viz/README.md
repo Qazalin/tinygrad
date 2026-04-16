@@ -13,13 +13,13 @@ Flags: VIZ=-1 to only save the trace to a file, VIZ=1 also launches a web server
 
 Use `extra/viz/cli.py --profile` to list all sources.
 
-List top slowest kernels on a source (aggregate view): `--profile -s "AMD" --format aggregate`
-List runtime samples in event order: `--profile -s "AMD" --format runtime`
-List runtime samples for one kernel: `--profile -s "AMD" --format runtime -i E_3`
+List top slowest kernels on a source (aggregate mode): `--profile -s "AMD" --mode agg`
+List raw timeline samples in event order (includes markers): `--profile -s "AMD" --mode raw`
+List raw timeline samples for one kernel: `--profile -s "AMD" --mode raw -i E_3`
 
 Use `--debug 3` (include AST) and `--debug 4` (include source) to replay DEBUG output from the same trace data (no re tracing required!)
 
-Use `--export-json` to export either view as JSON.
+Use `--export-json` to export either mode as JSON.
 
 ## Inspect codegen and PatternMatcher
 
