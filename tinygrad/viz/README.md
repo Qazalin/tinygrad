@@ -14,8 +14,6 @@ VIZ is a tool for:
 | --- | --- |
 | `1` | Collect a trace and launch the web UI |
 | `2` | Collect a trace with SQTT and launch the web UI |
-| `-1` | Collect a trace without launching the web UI |
-| `-2` | Collect a trace with SQTT without launching the web UI |
 
 ### Viewing Traces
 
