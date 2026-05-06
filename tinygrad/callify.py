@@ -97,13 +97,36 @@ def transform_precompiled_call(c:UOp) -> UOp|None:
   # add the outputs to the call
   srcs = c.src[0].src
   resolved = [c.gettuple(i) for i in range(len(srcs))]
-  outs = tuple(r.empty_like() for r in resolved)
-  targets = [o.param_like(len(c.src)-1+i).shrink_to(s.shape) for i,(o,s) in enumerate(zip(outs, srcs))]
-  fxn = UOp.sink(*[t.after(t.store(s)) for t,s in zip(targets, srcs)])
+  outs: list[UOp] = []
+  body_srcs: list[UOp] = []
+  reapply_mops: list[tuple[UOp, ...]] = []
+  for s,r in zip(srcs, resolved):
+    x, mops = s, []
+    while x.op in GroupOp.Movement:
+      mops.append(x)
+      x = x.src[0]
+    if mops and x.op is Ops.CONTIGUOUS:
+      out = x.empty_like()
+      outs.append(out)
+      target = out.param_like(len(input_buffers)+len(outs)-1)
+      body_srcs.append(target.after(target.store(x.src[0])))
+      reapply_mops.append(tuple(mops))
+      continue
+
+    out = r.empty_like()
+    outs.append(out)
+    target = out.param_like(len(input_buffers)+len(outs)-1).shrink_to(s.shape)
+    body_srcs.append(target.after(target.store(s)))
+    reapply_mops.append(())
+  fxn = UOp.sink(*body_srcs)
 
   # body switches from TUPLE to SINK, so the node becomes an opaque CALL (not FUNCTION)
   new_call = UOp(Ops.CALL, c.dtype, (fxn, *input_buffers, *outs), c.arg)
-  rets = tuple(o.after(new_call) for o in outs)
+  rets = []
+  for o,mops in zip(outs, reapply_mops):
+    ret = o.after(new_call)
+    for m in reversed(mops): ret = m.replace(src=(ret,)+m.src[1:])
+    rets.append(ret)
 
   # if the CALL has symbolic shapes, shrink the max-sized output to the actual symbolic shape
   # NOTE: must use resolved shapes from the FUNCTION (which substitutes PARAMs with external args), not raw body shapes

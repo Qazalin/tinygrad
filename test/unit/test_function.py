@@ -150,6 +150,19 @@ class TestFunction(unittest.TestCase):
     np.testing.assert_allclose(a.grad.numpy(), [2., 2.])
     np.testing.assert_allclose(b.grad.numpy(), [2., 2.])
 
+  def test_precompile_reshape_return_no_extra_copy(self):
+    @function(precompile=True)
+    def f(x:Tensor) -> Tensor:
+      y = (x+1).contiguous()
+      return y.reshape(2, 4)
+
+    x = Tensor.arange(8).realize()
+    y = f(x)
+    GlobalCounters.reset()
+    y.realize()
+    self.assertEqual(GlobalCounters.kernel_count, 1)
+    np.testing.assert_equal(y.numpy(), [[1,2,3,4], [5,6,7,8]])
+
   def test_unused_param_backward(self):
     @function
     def f(a:Tensor, b:Tensor, c:Tensor) -> Tensor: return a + c  # b is unused
