@@ -569,18 +569,23 @@ split_kernels = PatternMatcher([
 def remove_passthrough_copy(a:UOp) -> UOp|None:
   if len(a.src) != 2 or a.src[1].op is not Ops.CALL or len(a.src[1].src) != 3: return None
   ksrc, dst, src = a.src[1].src
-  if a.src[0] is not dst or src.op is not Ops.AFTER: return None
-  if dst.op is not Ops.BUFFER or src.src[0].op is not Ops.BUFFER: return None
-  if dst.dtype != src.src[0].dtype or dst.shape != src.src[0].shape or dst.device != src.src[0].device: return None
+  if a.src[0] is not dst or dst.op is not Ops.BUFFER: return None
   stores = [u for u in ksrc.toposort() if u.op is Ops.STORE]
   if len(stores) != 1: return None
   st_dst, st_val = stores[0].src
   if st_val.op is Ops.CONTIGUOUS: st_val = st_val.src[0]
   if st_dst.op is not Ops.INDEX or st_val.op is not Ops.INDEX: return None
-  if st_dst.dtype.base != st_val.dtype.base or st_dst.render() != st_val.render(): return None
+  if st_dst.dtype.base != st_val.dtype.base: return None
   if st_dst.src[0].op is not Ops.PARAM or st_dst.src[0].arg != 0: return None
-  if st_val.src[0].op is not Ops.PARAM or st_val.src[0].arg != 1: return None
-  return src
+  if src.op is Ops.AFTER:
+    if src.src[0].op is not Ops.BUFFER or dst.dtype != src.src[0].dtype or dst.shape != src.src[0].shape or dst.device != src.src[0].device: return None
+    if st_val.src[0].op is not Ops.PARAM or st_val.src[0].arg != 1 or st_dst.render() != st_val.render(): return None
+    return src
+  if src.op is Ops.PARAM:
+    if dst.dtype != src.dtype or dst.device != src.device or prod(dst.shape) != prod(src.shape): return None
+    if st_val.src[0].op is not Ops.RESHAPE or st_val.src[0].src[0].op is not Ops.PARAM or st_val.src[0].src[0].arg != 1: return None
+    return src.reshape(dst.shape)
+  return None
 
 pm_remove_passthrough_copies = PatternMatcher([(UPat(Ops.AFTER, name="a"), remove_passthrough_copy)])
 
