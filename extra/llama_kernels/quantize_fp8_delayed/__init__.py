@@ -5,6 +5,11 @@ from tinygrad.uop.ops import UOp, Ops, KernelInfo
 from tinygrad.renderer import Estimates
 from extra.llama_kernels import FP8_MAX, NUM_WG, THREADS_PER_WG, alloc_like, alloc_local, scalar_amax, dname_of, compile_hip
 
+def _unwrap_reshape_after(x:Tensor) -> Tensor:
+  u = x.uop
+  while u.op is Ops.RESHAPE: u = u.src[0]
+  return Tensor(u, device=x.device) if u.op is Ops.AFTER else x
+
 @functools.cache
 def _custom_quantize_fp8_with_amax(fp8_out:UOp, amax_partial:UOp, x:UOp, amax_state:UOp, dname:str) -> UOp:
   n_elems = 1
@@ -51,8 +56,8 @@ def quantize_fp8_delayed(x:Tensor, amax_state:Tensor, fp8_dtype=dtypes.fp8e4m3) 
   fp8_out      = alloc_like(x.shape,  fp8_dtype,      x.device, axis)
   amax_partial = alloc_local((NUM_WG,), dtypes.float32, x.device, axis)
   fxn = functools.partial(_custom_quantize_fp8_with_amax, dname=dname_of(x.device))
-  fp8_out, amax_partial, *_ = Tensor.custom_kernel(fp8_out, amax_partial, x, amax_state,
-                                                    fxn=fxn, grad_fxn=_quantize_fp8_delayed_bwd)
+  fp8_out, amax_partial, *_ = Tensor.custom_kernel(fp8_out, amax_partial, _unwrap_reshape_after(x), amax_state,
+                                                     fxn=fxn, grad_fxn=_quantize_fp8_delayed_bwd)
   new_amax = scalar_amax(amax_partial)
   inv_scale = (amax_state.float() + 1e-8) / FP8_MAX
   store_effect = amax_state.uop.store(new_amax.uop)
@@ -63,5 +68,5 @@ def quantize_fp8_scalar(x:Tensor, amax_state:Tensor, fp8_dtype=dtypes.fp8e4m3) -
   axis = x.uop.axis if isinstance(x.device, tuple) else None
   fp8_out = alloc_like(x.shape, fp8_dtype, x.device, axis)
   fxn = functools.partial(_custom_quantize_fp8_scalar, dname=dname_of(x.device))
-  fp8_out, *_ = Tensor.custom_kernel(fp8_out, x, amax_state, fxn=fxn)
+  fp8_out, *_ = Tensor.custom_kernel(fp8_out, _unwrap_reshape_after(x), amax_state, fxn=fxn)
   return fp8_out
