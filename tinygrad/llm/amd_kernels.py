@@ -118,7 +118,9 @@ _GDN_QKV_CONV_HIP_SRC = r"""
 constexpr int DIM = 1024;
 constexpr int CHANNELS = 6144;
 constexpr int CONV_KERNEL = 4;
-constexpr int THREADS = 32;
+constexpr int THREADS = 128;
+constexpr int LANES_PER_ROW = 32;
+constexpr int ROWS_PER_BLOCK = THREADS / LANES_PER_ROW;
 
 extern "C" __global__ __launch_bounds__(THREADS) void gdn_qkv_conv_q8__WEIGHT_OFFSET__(
     float* __restrict__ conv_out,
@@ -128,64 +130,42 @@ extern "C" __global__ __launch_bounds__(THREADS) void gdn_qkv_conv_q8__WEIGHT_OF
     const unsigned char* __restrict__ qkv_w,
     const unsigned char* __restrict__ conv_w) {
   int tid = threadIdx.x;
-  int ch0 = blockIdx.x * THREADS * 3 + tid * 3;
-  float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f;
-
+  int lane = tid & (LANES_PER_ROW - 1);
+  int row = tid >> 5;
+  int ch0 = blockIdx.x * ROWS_PER_BLOCK + row;
+  __shared__ _Float16 xh_shared[DIM];
   #pragma unroll
-  for (int block = 0; block < DIM / 32; block++) {
-    int base = __WEIGHT_OFFSET__ + (ch0 * (DIM / 32) + block) * 34;
-    const unsigned char* wb0 = qkv_w + base;
-    const unsigned char* wb1 = wb0 + (DIM / 32) * 34;
-    const unsigned char* wb2 = wb1 + (DIM / 32) * 34;
-    float scale0 = float(*reinterpret_cast<const _Float16*>(wb0));
-    float scale1 = float(*reinterpret_cast<const _Float16*>(wb1));
-    float scale2 = float(*reinterpret_cast<const _Float16*>(wb2));
-    #pragma unroll
-    for (int i = 0; i < 32; i++) {
-      int k = block * 32 + i;
-      _Float16 xh = (_Float16)x[k];
-      _Float16 wh0 = (_Float16)(scale0 * float(*reinterpret_cast<const int8_t*>(wb0 + 2 + i)));
-      _Float16 wh1 = (_Float16)(scale1 * float(*reinterpret_cast<const int8_t*>(wb1 + 2 + i)));
-      _Float16 wh2 = (_Float16)(scale2 * float(*reinterpret_cast<const int8_t*>(wb2 + 2 + i)));
-      acc0 += float((_Float16)(xh * wh0));
-      acc1 += float((_Float16)(xh * wh1));
-      acc2 += float((_Float16)(xh * wh2));
-    }
+  for (int i = 0; i < DIM / THREADS; i++) xh_shared[i * THREADS + tid] = (_Float16)x[i * THREADS + tid];
+  __syncthreads();
+  float acc0 = 0.0f;
+
+  int base = __WEIGHT_OFFSET__ + (ch0 * (DIM / 32) + lane) * 34;
+  const unsigned char* wb0 = qkv_w + base;
+  float scale0 = float(*reinterpret_cast<const _Float16*>(wb0));
+  #pragma unroll
+  for (int i = 0; i < 32; i++) {
+    _Float16 xh = xh_shared[lane * 32 + i];
+    _Float16 wh0 = (_Float16)(scale0 * float(*reinterpret_cast<const int8_t*>(wb0 + 2 + i)));
+    acc0 += float((_Float16)(xh * wh0));
+  }
+  #pragma unroll
+  for (int delta = 16; delta > 0; delta >>= 1) {
+    acc0 += __shfl_down(acc0, delta, LANES_PER_ROW);
   }
 
-  float projected0 = float((_Float16)acc0);
-  float projected1 = float((_Float16)acc1);
-  float projected2 = float((_Float16)acc2);
-  float s00 = conv_state[ch0], s01 = conv_state[CHANNELS + ch0], s02 = conv_state[2 * CHANNELS + ch0];
-  float s10 = conv_state[ch0 + 1], s11 = conv_state[CHANNELS + ch0 + 1], s12 = conv_state[2 * CHANNELS + ch0 + 1];
-  float s20 = conv_state[ch0 + 2], s21 = conv_state[CHANNELS + ch0 + 2], s22 = conv_state[2 * CHANNELS + ch0 + 2];
-  const unsigned char* cw0 = conv_w + ch0 * CONV_KERNEL * 4;
-  const unsigned char* cw1 = cw0 + CONV_KERNEL * 4;
-  const unsigned char* cw2 = cw1 + CONV_KERNEL * 4;
-  _Float16 c00 = (_Float16)(*reinterpret_cast<const float*>(cw0 + 0));
-  _Float16 c01 = (_Float16)(*reinterpret_cast<const float*>(cw0 + 4));
-  _Float16 c02 = (_Float16)(*reinterpret_cast<const float*>(cw0 + 8));
-  _Float16 c03 = (_Float16)(*reinterpret_cast<const float*>(cw0 + 12));
-  _Float16 c10 = (_Float16)(*reinterpret_cast<const float*>(cw1 + 0));
-  _Float16 c11 = (_Float16)(*reinterpret_cast<const float*>(cw1 + 4));
-  _Float16 c12 = (_Float16)(*reinterpret_cast<const float*>(cw1 + 8));
-  _Float16 c13 = (_Float16)(*reinterpret_cast<const float*>(cw1 + 12));
-  _Float16 c20 = (_Float16)(*reinterpret_cast<const float*>(cw2 + 0));
-  _Float16 c21 = (_Float16)(*reinterpret_cast<const float*>(cw2 + 4));
-  _Float16 c22 = (_Float16)(*reinterpret_cast<const float*>(cw2 + 8));
-  _Float16 c23 = (_Float16)(*reinterpret_cast<const float*>(cw2 + 12));
-  conv_out[ch0] = ((s00 * float(c00) + s01 * float(c01)) + s02 * float(c02)) + projected0 * float(c03);
-  conv_out[ch0 + 1] = ((s10 * float(c10) + s11 * float(c11)) + s12 * float(c12)) + projected1 * float(c13);
-  conv_out[ch0 + 2] = ((s20 * float(c20) + s21 * float(c21)) + s22 * float(c22)) + projected2 * float(c23);
-  next_state[ch0] = s01;
-  next_state[ch0 + 1] = s11;
-  next_state[ch0 + 2] = s21;
-  next_state[CHANNELS + ch0] = s02;
-  next_state[CHANNELS + ch0 + 1] = s12;
-  next_state[CHANNELS + ch0 + 2] = s22;
-  next_state[2 * CHANNELS + ch0] = projected0;
-  next_state[2 * CHANNELS + ch0 + 1] = projected1;
-  next_state[2 * CHANNELS + ch0 + 2] = projected2;
+  if (lane == 0) {
+    float projected0 = float((_Float16)acc0);
+    float s00 = conv_state[ch0], s01 = conv_state[CHANNELS + ch0], s02 = conv_state[2 * CHANNELS + ch0];
+    const unsigned char* cw0 = conv_w + ch0 * CONV_KERNEL * 4;
+    _Float16 c00 = (_Float16)(*reinterpret_cast<const float*>(cw0 + 0));
+    _Float16 c01 = (_Float16)(*reinterpret_cast<const float*>(cw0 + 4));
+    _Float16 c02 = (_Float16)(*reinterpret_cast<const float*>(cw0 + 8));
+    _Float16 c03 = (_Float16)(*reinterpret_cast<const float*>(cw0 + 12));
+    conv_out[ch0] = ((s00 * float(c00) + s01 * float(c01)) + s02 * float(c02)) + projected0 * float(c03);
+    next_state[ch0] = s01;
+    next_state[CHANNELS + ch0] = s02;
+    next_state[2 * CHANNELS + ch0] = projected0;
+  }
 }
 """
 
@@ -200,7 +180,7 @@ def _gdn_qkv_conv_kernel(conv_out:UOp, next_state:UOp, conv_state:UOp, x:UOp, qk
   ops = _GDN_CHANNELS * _DIM * 2 + _GDN_CHANNELS * 8
   mem = _q8_bytes(_GDN_CHANNELS * _DIM) + (_DIM + _GDN_CHANNELS * _GDN_CONV_KERNEL + 2 * _GDN_CHANNELS) * 4
   sink = UOp.sink(
-    UOp.special(_GDN_CHANNELS // (32 * 3), "gidx0"), UOp.special(32, "lidx0"),
+    UOp.special(_GDN_CHANNELS // 4, "gidx0"), UOp.special(128, "lidx0"),
     conv_out, next_state, conv_state, x, qkv_w, conv_w,
     arg=KernelInfo(name="gdn_qkv_conv_q8", estimates=Estimates(ops=ops, mem=mem)))
   return UOp(Ops.PROGRAM, src=(
