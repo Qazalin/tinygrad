@@ -2,8 +2,11 @@ from __future__ import annotations
 import functools, itertools, pathlib
 from dataclasses import dataclass, replace
 from tinygrad import Tensor, nn, UOp, TinyJit, getenv, function
+from tinygrad.helpers import ContextVar
 from tinygrad.llm.gguf import gguf_load
 from tinygrad.uop.ops import resolve
+
+CUSTOM_GDN_QKV = ContextVar("CUSTOM_GDN_QKV", 0)
 
 @functools.cache
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, device:str|None=None) -> Tensor:
@@ -256,14 +259,22 @@ class GatedDeltaNetBlock(FFNBlock):
     assert T == 1, "GatedDeltaNetBlock currently only supports T=1"
 
     # input processing
+    x_float = x
     x = x.half()
     out_gate = self.attn_gate(x).reshape(B, 1, self.num_v_heads, self.head_v_dim)
     beta = self.ssm_beta(x).sigmoid().reshape(B, self.num_v_heads, 1, 1)
     alpha = ((self.ssm_alpha(x).float() + self.ssm_dt["bias"]).softplus() * self.ssm_a).reshape(B, self.num_v_heads, 1, 1).exp()
 
     # qkv conv
-    conv_window = self.conv_state.cat(self.attn_qkv(x), dim=1)
-    conv_out = (conv_window * self.ssm_conv1d["weight"].T.unsqueeze(0)).sum(1).silu()
+    fused_conv_state = False
+    if CUSTOM_GDN_QKV and x.device == "AMD" and B == 1 and self.num_v_heads == 16 and self.head_v_dim == 128 and self.head_k_dim == 128:
+      from tinygrad.llm.amd_kernels import gdn_qkv_conv
+      conv_out, next_conv_state = gdn_qkv_conv(self.conv_state, x_float, self.attn_qkv.weight, self.ssm_conv1d["weight"])
+      conv_out = conv_out.silu()
+      fused_conv_state = True
+    else:
+      conv_window = self.conv_state.cat(self.attn_qkv(x), dim=1)
+      conv_out = (conv_window * self.ssm_conv1d["weight"].T.unsqueeze(0)).sum(1).silu()
     q, k, v = conv_out.split([self.q_dim, self.q_dim, self.conv_channels - 2*self.q_dim], dim=-1)
     q = q.reshape(B, self.num_k_heads, self.head_k_dim).normalize(dim=-1).repeat(1, self.num_v_heads//self.num_k_heads, 1)
     k = k.reshape(B, self.num_k_heads, self.head_k_dim).normalize(dim=-1).repeat(1, self.num_v_heads//self.num_k_heads, 1)
@@ -273,11 +284,15 @@ class GatedDeltaNetBlock(FFNBlock):
     # store the updated state
     if getenv("CUSTOM_GDN") and x.device == "AMD" and B == 1 and self.num_v_heads == 16 and self.head_v_dim == 128 and self.head_k_dim == 128:
       from tinygrad.llm.amd_kernels import gdn_recurrent_update_conv
-      core_attn_in = gdn_recurrent_update_conv(self.recurrent_state, conv_out, alpha, beta)
-      conv_state_store = self.conv_state.uop.after(core_attn_in.uop).store(conv_window[:, 1:, :].cast(self.conv_state.dtype).uop)
-      core_attn_in = Tensor(core_attn_in.uop.after(conv_state_store))
+      if fused_conv_state:
+        conv_state_store = self.conv_state.uop.store(next_conv_state.cast(self.conv_state.dtype).uop)
+        core_attn_in = Tensor(gdn_recurrent_update_conv(self.recurrent_state, conv_out, alpha, beta).uop.after(conv_state_store))
+      else:
+        core_attn_in = gdn_recurrent_update_conv(self.recurrent_state, conv_out, alpha, beta)
+        conv_state_store = self.conv_state.uop.after(core_attn_in.uop).store(conv_window[:, 1:, :].cast(self.conv_state.dtype).uop)
+        core_attn_in = Tensor(core_attn_in.uop.after(conv_state_store))
     else:
-      conv_state_store = self.conv_state.uop.store(conv_window[:, 1:, :].cast(self.conv_state.dtype).uop)
+      conv_state_store = self.conv_state.uop.store((next_conv_state if fused_conv_state else conv_window[:, 1:, :]).cast(self.conv_state.dtype).uop)
       # recurrent
       recurrent_state = self.recurrent_state * alpha
       recurrent_state = recurrent_state + ((v - recurrent_state@k) * beta)@k.transpose(-1, -2)
