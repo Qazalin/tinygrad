@@ -252,32 +252,48 @@ __global__ __launch_bounds__(256, 1) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_pt
         asm volatile("s_waitcnt vmcnt(16)");
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
+
+        __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_sched_barrier(0);
+
         auto b_subtile_1 = kittens::subtile_inplace<BLOCK_SIZE_COL / 2 / WARPS_COL, k_step>(Bs[curr][1], {warp_n, 0});
         load(b[1], b_subtile_1);
+
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(c[0][0], a[0], b[0], c[0][0]);
         __builtin_amdgcn_sched_barrier(0);
+
+        __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_sched_barrier(0);
+
         auto a_subtile_1 = kittens::subtile_inplace<BLOCK_SIZE_ROW / 2 / WARPS_ROW, k_step>(As[curr][1], {warp_m, 0});
         load(a[1], a_subtile_1);
+
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(c[0][1], a[0], b[1], c[0][1]);
+        __builtin_amdgcn_sched_barrier(0);
+
         __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt vmcnt(8)");
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
+
+        __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_sched_barrier(0);
+
         auto a_subtile_0_next = kittens::subtile_inplace<BLOCK_SIZE_ROW / 2 / WARPS_ROW, k_step>(As[next][0], {warp_m, 0});
         load(a[0], a_subtile_0_next);
+
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(c[1][0], a[1], b[0], c[1][0]);
         __builtin_amdgcn_sched_barrier(0);
+
         auto b_subtile_0_next = kittens::subtile_inplace<BLOCK_SIZE_COL / 2 / WARPS_COL, k_step>(Bs[next][0], {warp_n, 0});
         load(b[0], b_subtile_0_next);
+
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(c[1][1], a[1], b[1], c[1][1]);
         __builtin_amdgcn_sched_barrier(0);
@@ -291,27 +307,42 @@ __global__ __launch_bounds__(256, 1) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_pt
         asm volatile("s_waitcnt vmcnt(0)");
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
+
+        __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_sched_barrier(0);
+
         auto b_subtile_1 = kittens::subtile_inplace<BLOCK_SIZE_COL / 2 / WARPS_COL, k_step>(Bs[curr][1], {warp_n, 0});
         load(b[1], b_subtile_1);
+
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(c[0][0], a[0], b[0], c[0][0]);
         __builtin_amdgcn_sched_barrier(0);
+
+        __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_sched_barrier(0);
+
         auto a_subtile_1 = kittens::subtile_inplace<BLOCK_SIZE_ROW / 2 / WARPS_ROW, k_step>(As[curr][1], {warp_m, 0});
         load(a[1], a_subtile_1);
+
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(c[0][1], a[0], b[1], c[0][1]);
         __builtin_amdgcn_sched_barrier(0);
+
+        __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_sched_barrier(0);
+
+        __builtin_amdgcn_sched_barrier(0);
         mma_ABt(c[1][0], a[1], b[0], c[1][0]);
+        __builtin_amdgcn_sched_barrier(0);
+
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(c[1][1], a[1], b[1], c[1][1]);
         __builtin_amdgcn_sched_barrier(0);
     }
+    __builtin_amdgcn_sched_barrier(0);
     }
 
    // apply x_scale * w_scale before bf16 store to prevent overflow
