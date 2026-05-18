@@ -19,23 +19,6 @@ constexpr int GEMM_K = 8192;
 constexpr int NUM_WARPS = 4;
 using G = kittens::group<NUM_WARPS>;
 
-template<typename T, int ROWS, int COLS>
-struct simple_gl {
-    using identifier = ducks::gl::identifier;
-    using dtype = T;
-    T *raw_ptr;
-
-    __device__ inline T& operator[](const coord<ducks::default_type> &idx) const {
-        return raw_ptr[idx.r * COLS + idx.c];
-    }
-    template<int axis> __device__ inline size_t stride() const {
-        if constexpr (axis == 0) return ROWS * COLS;
-        if constexpr (axis == 1) return ROWS * COLS;
-        if constexpr (axis == 2) return COLS;
-        return 1;
-    }
-};
-
 struct precomputed_addresses {
     i32x4 srsrc;
     uintptr_t lds_base;
@@ -112,27 +95,6 @@ __device__ inline static void mma_one(D &d, const A &a, const B &b, const C &c, 
     mma_ABt_base(d.tiles[n][m], a.tiles[n][0], b.tiles[m][0], c.tiles[n][m]);
 }
 
-template<typename D, typename A, typename B>
-__device__ inline static void mma_64x64(D &d, const A &a, const B &b) {
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 0, 0);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 0, 1);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 0, 2);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 0, 3);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 1, 0);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 1, 1);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 1, 2);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 1, 3);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 2, 0);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 2, 1);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 2, 2);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 2, 3);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 3, 0);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 3, 1);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 3, 2);
-    __builtin_amdgcn_sched_barrier(0); mma_one(d, a, b, d, 3, 3);
-    __builtin_amdgcn_sched_barrier(0);
-}
-
 template<typename ST_GL, typename GL_GL, typename ST, typename RT, typename RT_A, typename RT_B, typename RT_C, ducks::coord::tile COORD=coord<ST_GL>>
 __device__ inline static void do_interleaved_cluster(ST_GL &dst_gl, const GL_GL &src_gl, COORD idx, RT &dst, const ST &src, RT_A &a, RT_B &b, RT_C &c) {
     __builtin_amdgcn_sched_barrier(0); mma_one(c, a, b, c, 0, 0);
@@ -188,9 +150,9 @@ __global__ __launch_bounds__(256, 1) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_pt
 #endif
 ) {
     constexpr int M = GEMM_M, N = GEMM_N, K = GEMM_K;
-    simple_gl<fp8e4m3, M, K> A{A_ptr};
-    simple_gl<fp8e4m3, N, K> B{B_ptr};
-    simple_gl<bf16, M, N> C{C_ptr};
+    kittens::gl<fp8e4m3, 1, 1, M, K> A{A_ptr, nullptr, nullptr, nullptr, nullptr};
+    kittens::gl<fp8e4m3, 1, 1, N, K> B{B_ptr, nullptr, nullptr, nullptr, nullptr};
+    kittens::gl<bf16, 1, 1, M, N> C{C_ptr, nullptr, nullptr, nullptr, nullptr};
 
     constexpr int WARPS_COL = 2;
     constexpr int WARPS_ROW = 2;
@@ -279,14 +241,12 @@ __global__ __launch_bounds__(256, 1) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_pt
     asm volatile("s_waitcnt vmcnt(16)");
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
-    __builtin_amdgcn_sched_barrier(0);
     asm volatile("s_waitcnt lgkmcnt(0)");
     __builtin_amdgcn_sched_barrier(0);
     auto b_subtile_1 = kittens::subtile_inplace<BLOCK_SIZE_COL / 2 / WARPS_COL, BLOCK_K>(Bs[curr][1], {warp_n, 0});
     load(b[1], b_subtile_1);
     __builtin_amdgcn_sched_barrier(0);
     mma_ABt(c[0][0], a[0], b[0], c[0][0]);
-    __builtin_amdgcn_sched_barrier(0);
     __builtin_amdgcn_sched_barrier(0);
     asm volatile("s_waitcnt lgkmcnt(0)");
     __builtin_amdgcn_sched_barrier(0);
@@ -295,10 +255,8 @@ __global__ __launch_bounds__(256, 1) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_pt
     __builtin_amdgcn_sched_barrier(0);
     mma_ABt(c[0][1], a[0], b[1], c[0][1]);
     __builtin_amdgcn_sched_barrier(0);
-    __builtin_amdgcn_sched_barrier(0);
     asm volatile("s_waitcnt vmcnt(8)");
     __builtin_amdgcn_s_barrier();
-    __builtin_amdgcn_sched_barrier(0);
     __builtin_amdgcn_sched_barrier(0);
     asm volatile("s_waitcnt lgkmcnt(0)");
     __builtin_amdgcn_sched_barrier(0);
@@ -318,14 +276,12 @@ __global__ __launch_bounds__(256, 1) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_pt
     asm volatile("s_waitcnt vmcnt(0)");
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
-    __builtin_amdgcn_sched_barrier(0);
     asm volatile("s_waitcnt lgkmcnt(0)");
     __builtin_amdgcn_sched_barrier(0);
     b_subtile_1 = kittens::subtile_inplace<BLOCK_SIZE_COL / 2 / WARPS_COL, BLOCK_K>(Bs[curr][1], {warp_n, 0});
     load(b[1], b_subtile_1);
     __builtin_amdgcn_sched_barrier(0);
     mma_ABt(c[0][0], a[0], b[0], c[0][0]);
-    __builtin_amdgcn_sched_barrier(0);
     __builtin_amdgcn_sched_barrier(0);
     asm volatile("s_waitcnt lgkmcnt(0)");
     __builtin_amdgcn_sched_barrier(0);
@@ -334,12 +290,9 @@ __global__ __launch_bounds__(256, 1) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_pt
     __builtin_amdgcn_sched_barrier(0);
     mma_ABt(c[0][1], a[0], b[1], c[0][1]);
     __builtin_amdgcn_sched_barrier(0);
-    __builtin_amdgcn_sched_barrier(0);
     asm volatile("s_waitcnt lgkmcnt(0)");
     __builtin_amdgcn_sched_barrier(0);
-    __builtin_amdgcn_sched_barrier(0);
     mma_ABt(c[1][0], a[1], b[0], c[1][0]);
-    __builtin_amdgcn_sched_barrier(0);
     __builtin_amdgcn_sched_barrier(0);
     mma_ABt(c[1][1], a[1], b[1], c[1][1]);
     __builtin_amdgcn_sched_barrier(0);
