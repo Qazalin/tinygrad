@@ -82,7 +82,7 @@ __device__ inline static void load_one(ST &dst, const GL &src, precomputed_addre
 }
 
 template<int num_offsets, typename RT, typename ST>
-__device__ inline static void prefill_swizzled_offsets(RT &dst, ST &src, uint32_t *swizzled_offsets) {
+__device__ inline static void prefill_swizzled_offsets(RT &dst, const ST &src, uint32_t *swizzled_offsets) {
     using U = ST::dtype;
     constexpr int subtile_stride = RT::base_tile_cols * sizeof(U) / 2;
     const uint32_t st_offset = (kittens::laneid() % RT::base_tile_rows) * ST::underlying_cols + (kittens::laneid() / RT::base_tile_rows * 16 / sizeof(U));
@@ -94,7 +94,7 @@ __device__ inline static void prefill_swizzled_offsets(RT &dst, ST &src, uint32_
 }
 
 template<int register_row, int register_col, int k, typename RT, typename ST>
-__device__ inline static void load_one(RT &dst, ST &src, uint32_t *swizzled_offsets) {
+__device__ inline static void load_one(RT &dst, const ST &src, uint32_t *swizzled_offsets) {
     using U = ST::dtype;
     constexpr int packing = base_types::packing<typename RT::dtype>::num();
     const int idx = k * RT::base_tile_stride / packing;
@@ -134,7 +134,7 @@ __device__ inline static void mma_64x64(D &d, const A &a, const B &b) {
 }
 
 template<typename ST_GL, typename GL_GL, typename ST, typename RT, typename RT_A, typename RT_B, typename RT_C, ducks::coord::tile COORD=coord<ST_GL>>
-__device__ inline static void do_interleaved_cluster(ST_GL &dst_gl, const GL_GL &src_gl, COORD idx, RT &dst, ST &src, RT_A &a, RT_B &b, RT_C &c) {
+__device__ inline static void do_interleaved_cluster(ST_GL &dst_gl, const GL_GL &src_gl, COORD idx, RT &dst, const ST &src, RT_A &a, RT_B &b, RT_C &c) {
     __builtin_amdgcn_sched_barrier(0); mma_one(c, a, b, c, 0, 0);
     __builtin_amdgcn_sched_barrier(0);
     precomputed_addresses addresses = precompute_addresses(dst_gl, src_gl, idx);
