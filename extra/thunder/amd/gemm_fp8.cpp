@@ -188,9 +188,9 @@ __global__ __launch_bounds__(256, 1) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_pt
 #endif
 ) {
     constexpr int M = GEMM_M, N = GEMM_N, K = GEMM_K;
-    simple_gl<fp8e4m3, M, K> A{A_ptr};
-    simple_gl<fp8e4m3, N, K> B{B_ptr};
-    simple_gl<bf16, M, N> C{C_ptr};
+    kittens::gl<fp8e4m3, 1, 1, M, K> A{A_ptr, nullptr, nullptr, nullptr, nullptr};
+    kittens::gl<fp8e4m3, 1, 1, N, K> B{B_ptr, nullptr, nullptr, nullptr, nullptr};
+    kittens::gl<bf16, 1, 1, M, N> C{C_ptr, nullptr, nullptr, nullptr, nullptr};
 
     constexpr int WARPS_COL = 2;
     constexpr int WARPS_ROW = 2;
