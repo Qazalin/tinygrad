@@ -210,19 +210,8 @@ __global__ __launch_bounds__(256, 1) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_pt
     __shared__ ST_B Bs[2][2];
     RT_C c[2][2];
 
-    int wgid = blockIdx.x;
-    constexpr int NUM_XCDS = 8;
-    if (gridDim.x >= NUM_XCDS && (gridDim.x % NUM_XCDS) == 0) {
-        wgid = (wgid % NUM_XCDS) * (gridDim.x / NUM_XCDS) + (wgid / NUM_XCDS);
-    }
-    constexpr int WGM = 4;
-    constexpr int blocks_row = M / BLOCK_SIZE_ROW;
-    constexpr int num_wgid_in_group = WGM * blocks_col;
-    const int group_id = wgid / num_wgid_in_group;
-    const int first_block_row = group_id * WGM;
-    const int group_size_row = (blocks_row - first_block_row) < WGM ? (blocks_row - first_block_row) : WGM;
-    int block_row = first_block_row + ((wgid % num_wgid_in_group) % group_size_row);
-    int block_col = (wgid % num_wgid_in_group) / group_size_row;
+    int block_row = blockIdx.x / blocks_col;
+    int block_col = blockIdx.x % blocks_col;
     int warp_m = warpid() / WARPS_COL;
     int warp_n = warpid() % WARPS_COL;
     int curr = 0, next = 1;
