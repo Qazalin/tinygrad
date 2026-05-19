@@ -3,9 +3,6 @@ import unittest
 from tinygrad import Tensor, Device, dtypes, Context
 from extra.llama_kernels.fused_pad_grad_accum import fused_pad_grad_accum
 
-def _is_gfx950() -> bool:
-  return Device[Device.DEFAULT].renderer.target.arch.startswith("gfx950")
-
 def _run_fused_pad_grad_accum(n_chunks:int, chunk_size:int):
   total = n_chunks * chunk_size
   Tensor.manual_seed(0)
@@ -25,7 +22,6 @@ def _run_fused_pad_grad_accum(n_chunks:int, chunk_size:int):
   with Context(DEBUG=0, TRACK_MATCH_STATS=0):
     assert (out.float() - ref.float()).abs().max().item() == 0.0, f"mismatch for n_chunks={n_chunks} chunk_size={chunk_size}"
 
-@unittest.skipUnless(_is_gfx950(), "fused_pad_grad_accum is compiled for gfx950")
 class TestFusedPadGradAccum(unittest.TestCase):
   def test_profile_shape_4096(self):
     _run_fused_pad_grad_accum(32, 4096)
