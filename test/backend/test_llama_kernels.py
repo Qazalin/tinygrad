@@ -2,7 +2,7 @@ import unittest
 from tinygrad import Tensor, dtypes, Context, Device
 from extra.llama_kernels.fused_ce import fused_ce_loss
 
-def run_fused_ce(bs:int, seqlen:int, vocab:int, label_smoothing:float=0.0) -> None:
+def run_fused_ce(bs:int, seqlen:int, vocab:int, label_smoothing:float=0.0, benchmark=False) -> None:
   Tensor.manual_seed(0)
   logits_rand = Tensor.randn(bs, seqlen, vocab).cast(dtypes.bfloat16)
   targets = Tensor.randint(bs, seqlen, high=vocab, dtype=dtypes.int32)
@@ -11,6 +11,7 @@ def run_fused_ce(bs:int, seqlen:int, vocab:int, label_smoothing:float=0.0) -> No
     Tensor.realize(logits, logits_ref, targets)
 
   loss = fused_ce_loss(logits, targets, label_smoothing=label_smoothing)
+  if benchmark: return loss.realize()
   loss.backward()
   Tensor.realize(loss, logits.grad)
 
@@ -33,7 +34,8 @@ class TestFusedCE(unittest.TestCase):
   def test_fused_ce_smoothing_2_16_1024(self): run_fused_ce(2, 16, 1024, label_smoothing=0.2)
   def test_fused_ce_smoothing_4_128_1024(self): run_fused_ce(4, 128, 1024, label_smoothing=0.2)
   def test_fused_ce_smoothing_4_1024_8192(self): run_fused_ce(16, 1024, 8192, label_smoothing=0.2)
-  def test_fused_ce_smoothing_4_1024_128256(self): run_fused_ce(16, 1024, 128256, label_smoothing=0.2)
+
+  def test_fused_ce_smoothing_perf(self): run_fused_ce(16, 1024, 128256, label_smoothing=0.2, benchmark=True)
 
   # note: this is the shape used in llama 8b.
   #def test_fused_ce_smoothing_16_1024_128256(self): run_fused_ce(16, 1024, 128256, label_smoothing=0.2)
