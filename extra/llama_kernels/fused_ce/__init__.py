@@ -79,80 +79,64 @@ def _custom_fused_ce_loss_fwd(loss_out:UOp, max_out:UOp, lse_out:UOp, logits:UOp
 
   target_idx = targets[row].cast(dtypes.weakint)
 
-  def fconst(x:float) -> UOp: return UOp.const(dtypes.float, x)
-  def fuop(x:UOp|float) -> UOp: return x if isinstance(x, UOp) else fconst(x)
-  def fadd(a:UOp, b:UOp|float) -> UOp: return UOp(Ops.ADD, dtypes.float, (a, fuop(b)))
-  def fsub(a:UOp, b:UOp|float) -> UOp: return UOp(Ops.SUB, dtypes.float, (a, fuop(b)))
-  def fmul(a:UOp, b:UOp|float) -> UOp: return UOp(Ops.MUL, dtypes.float, (a, fuop(b)))
-  def fwhere(c:UOp, a:UOp|float, b:UOp|float) -> UOp: return UOp(Ops.WHERE, dtypes.float, (c, fuop(a), fuop(b)))
-  def fexp(a:UOp) -> UOp: return UOp(Ops.CUSTOM, dtypes.float, (a,), arg=f"__builtin_amdgcn_exp2f(({{0}})*{1 / math.log(2)}f)")
-  def flog(a:UOp) -> UOp: return fmul(UOp(Ops.LOG2, dtypes.float, (a,)), math.log(2))
-  zidx = UOp.const(dtypes.weakint, 0)
-  def load0(buf:UOp) -> UOp: return buf.index(zidx, ptr=True).load()
-  def store0(buf:UOp, val:UOp|float) -> UOp: return buf.index(zidx, ptr=True).store(val)
-  def load_at(buf:UOp, idx:UOp) -> UOp: return buf.index(idx, ptr=True).load()
-
   # Per-lane online softmax state, followed by an explicit local-memory lane reduction.
   chunk = UOp.range(chunks, 2, AxisType.REDUCE)
   lane_max = UOp.placeholder((1,), dtypes.float, slot=0, addrspace=AddrSpace.REG)
   lane_sum_exp = UOp.placeholder((1,), dtypes.float, slot=2, addrspace=AddrSpace.REG)
   lane_sum_x = UOp.placeholder((1,), dtypes.float, slot=4, addrspace=AddrSpace.REG)
   lane_target = UOp.placeholder((1,), dtypes.float, slot=5, addrspace=AddrSpace.REG)
-  init = UOp.group(store0(lane_max, -math.inf), store0(lane_sum_exp, 0.0),
-                   store0(lane_sum_x, 0.0), store0(lane_target, 0.0))
+  init = UOp.group(lane_max[0].store(-math.inf), lane_sum_exp[0].store(0.0),
+                   lane_sum_x[0].store(0.0), lane_target[0].store(0.0))
   lane_max, lane_sum_exp = lane_max.after(init), lane_sum_exp.after(init)
   lane_sum_x, lane_target = lane_sum_x.after(init), lane_target.after(init)
 
-  chunk_update = None
   vec_base = (chunk * THREADS_PER_WG + lane) * VEC
-  raw_vec = UOp(Ops.CUSTOM, dtypes.float.vec(VEC // 2), (logits.base, row.cast(dtypes.int), vec_base.cast(dtypes.int)),
-                arg=f"*((float{VEC // 2}*)({{0}}+({{1}})*{vocab}+{{2}}))") if VEC > 1 else None
-  for v in range(VEC):
-    lane_max_cur = lane_max.after(chunk) if chunk_update is None else lane_max.after(chunk_update)
-    lane_sum_exp_cur = lane_sum_exp.after(chunk) if chunk_update is None else lane_sum_exp.after(chunk_update)
-    lane_sum_x_cur = lane_sum_x.after(chunk) if chunk_update is None else lane_sum_x.after(chunk_update)
-    lane_target_cur = lane_target.after(chunk) if chunk_update is None else lane_target.after(chunk_update)
-    idx = (chunk * THREADS_PER_WG + lane) * VEC + v
-    if raw_vec is not None:
-      x = UOp(Ops.CUSTOM, dtypes.float, (raw_vec,), arg=f"((float)(((hip_bfloat16*)(&{{0}}))[{v}]))")
-    else:
-      x = logits[row, idx].cast(dtypes.float)
-    old_max = load0(lane_max_cur)
-    old_sum_exp = load0(lane_sum_exp_cur)
-    is_new_max = UOp(Ops.CMPLT, dtypes.bool, (old_max, x))
-    new_max = fwhere(is_new_max, x, old_max)
-    new_sum_exp = fwhere(is_new_max, fadd(fmul(old_sum_exp, fexp(fsub(old_max, x))), 1.0), fadd(old_sum_exp, fexp(fsub(x, old_max))))
-    target_x = fwhere(UOp(Ops.CMPEQ, dtypes.bool, (idx, target_idx)), x, load0(lane_target_cur))
-    chunk_update = UOp.group(store0(lane_sum_exp, new_sum_exp), store0(lane_max, new_max),
-                             store0(lane_sum_x, fadd(load0(lane_sum_x_cur), x)),
-                             store0(lane_target, target_x))
-  assert chunk_update is not None
+  old_max, old_sum_exp = lane_max.after(chunk)[0], lane_sum_exp.after(chunk)[0]
+  if VEC == 1:
+    idx = vec_base
+    x = logits[row, idx].cast(dtypes.float)
+    new_max = old_max.maximum(x)
+    new_sum_exp = (old_sum_exp * (old_max - new_max).exp()) + (x - new_max).exp()
+    sum_exp_store = lane_sum_exp[0].store(new_sum_exp)
+    chunk_update = UOp.group(sum_exp_store,
+                             lane_max.after(sum_exp_store)[0].store(new_max),
+                             lane_sum_x[0].store(lane_sum_x.after(chunk)[0] + x),
+                             lane_target[0].store(idx.eq(target_idx).where(x, lane_target.after(chunk)[0])))
+  else:
+    vec = UOp.range(VEC, 3, AxisType.UPCAST)
+    idx = vec_base + vec
+    x = logits[row, idx].cast(dtypes.float)
+    block_max = x.reduce(vec, arg=Ops.MAX)
+    new_max = old_max.maximum(block_max)
+    block_sum_exp = (x - new_max).exp().reduce(vec, arg=Ops.ADD)
+    block_sum_x = x.reduce(vec, arg=Ops.ADD)
+    block_target = idx.eq(target_idx).where(x, x.const_like(0)).reduce(vec, arg=Ops.ADD)
+    sum_exp_store = lane_sum_exp[0].store(old_sum_exp * (old_max - new_max).exp() + block_sum_exp)
+    chunk_update = UOp.group(sum_exp_store,
+                             lane_max.after(sum_exp_store)[0].store(new_max),
+                             lane_sum_x[0].store(lane_sum_x.after(chunk)[0] + block_sum_x),
+                             lane_target[0].store(lane_target.after(chunk)[0] + block_target))
   chunk_update = chunk_update.end(chunk)
   lane_max, lane_sum_exp = lane_max.after(chunk_update), lane_sum_exp.after(chunk_update)
   lane_sum_x, lane_target = lane_sum_x.after(chunk_update), lane_target.after(chunk_update)
 
-  tail_update = None
   if tail_lanes:
     active = lane < tail_lanes
-    tail_base = chunks * THREADS_PER_WG * VEC + lane * VEC
-    for v in range(VEC):
-      lane_max_cur = lane_max if tail_update is None else lane_max.after(tail_update)
-      lane_sum_exp_cur = lane_sum_exp if tail_update is None else lane_sum_exp.after(tail_update)
-      lane_sum_x_cur = lane_sum_x if tail_update is None else lane_sum_x.after(tail_update)
-      lane_target_cur = lane_target if tail_update is None else lane_target.after(tail_update)
-      idx = chunks * THREADS_PER_WG * VEC + lane * VEC + v
-      x_raw = logits[row, active.where(idx, idx.const_like(0))].cast(dtypes.float)
-      x = active.where(x_raw, x_raw.const_like(-math.inf))
-      x_for_sum = active.where(x_raw, x_raw.const_like(0))
-      old_max = load0(lane_max_cur)
-      old_sum_exp = load0(lane_sum_exp_cur)
-      is_new_max = UOp(Ops.CMPLT, dtypes.bool, (old_max, x))
-      new_max = fwhere(is_new_max, x, old_max)
-      new_sum_exp = fwhere(is_new_max, fadd(fmul(old_sum_exp, fexp(fsub(old_max, x))), 1.0), fadd(old_sum_exp, fexp(fsub(x, old_max))))
-      target_x = fwhere(active & idx.eq(target_idx), x_raw, load0(lane_target_cur))
-      tail_update = UOp.group(store0(lane_sum_exp, new_sum_exp), store0(lane_max, new_max),
-                              store0(lane_sum_x, fadd(load0(lane_sum_x_cur), x_for_sum)),
-                              store0(lane_target, target_x))
+    tail_vec = UOp.range(VEC, 3, AxisType.UPCAST)
+    tail_idx = chunks * THREADS_PER_WG * VEC + lane * VEC + tail_vec
+    tail_x_raw = logits[row, active.where(tail_idx, tail_idx.const_like(0))].cast(dtypes.float)
+    tail_x = active.where(tail_x_raw, tail_x_raw.const_like(-math.inf))
+    tail_x_for_sum = active.where(tail_x_raw, tail_x_raw.const_like(0))
+    old_max, old_sum_exp = lane_max[0], lane_sum_exp[0]
+    new_max = old_max.maximum(tail_x.reduce(tail_vec, arg=Ops.MAX))
+    tail_sum_exp = (tail_x - new_max).exp().reduce(tail_vec, arg=Ops.ADD)
+    tail_sum_x = tail_x_for_sum.reduce(tail_vec, arg=Ops.ADD)
+    tail_target = (active & tail_idx.eq(target_idx)).where(tail_x_raw, tail_x_raw.const_like(0)).reduce(tail_vec, arg=Ops.ADD)
+    sum_exp_store = lane_sum_exp[0].store(old_sum_exp * (old_max - new_max).exp() + tail_sum_exp)
+    tail_update = UOp.group(sum_exp_store,
+                            lane_max.after(sum_exp_store)[0].store(new_max),
+                            lane_sum_x[0].store(lane_sum_x[0] + tail_sum_x),
+                            lane_target[0].store(lane_target[0] + tail_target))
     lane_max, lane_sum_exp = lane_max.after(tail_update), lane_sum_exp.after(tail_update)
     lane_sum_x, lane_target = lane_sum_x.after(tail_update), lane_target.after(tail_update)
 
@@ -160,8 +144,8 @@ def _custom_fused_ce_loss_fwd(loss_out:UOp, max_out:UOp, lse_out:UOp, logits:UOp
   smem_sum_exp = UOp.placeholder((THREADS_PER_WG,), dtypes.float, slot=1, addrspace=AddrSpace.LOCAL)
   smem_sum_x = UOp.placeholder((THREADS_PER_WG,), dtypes.float, slot=2, addrspace=AddrSpace.LOCAL)
   smem_target = UOp.placeholder((THREADS_PER_WG,), dtypes.float, slot=3, addrspace=AddrSpace.LOCAL)
-  to_smem = UOp.group(smem_max.index(lane, ptr=True).store(load0(lane_max)), smem_sum_exp.index(lane, ptr=True).store(load0(lane_sum_exp)),
-                      smem_sum_x.index(lane, ptr=True).store(load0(lane_sum_x)), smem_target.index(lane, ptr=True).store(load0(lane_target))).barrier()
+  to_smem = UOp.group(smem_max[lane].store(lane_max[0]), smem_sum_exp[lane].store(lane_sum_exp[0]),
+                      smem_sum_x[lane].store(lane_sum_x[0]), smem_target[lane].store(lane_target[0])).barrier()
   smem_max, smem_sum_exp = smem_max.after(to_smem), smem_sum_exp.after(to_smem)
   smem_sum_x, smem_target = smem_sum_x.after(to_smem), smem_target.after(to_smem)
 
@@ -170,22 +154,22 @@ def _custom_fused_ce_loss_fwd(loss_out:UOp, max_out:UOp, lse_out:UOp, logits:UOp
     other = active.where(lane + step, lane)
     m1p, s1p = smem_max.index(lane, ptr=True), smem_sum_exp.index(lane, ptr=True)
     sx1p, tgt1p = smem_sum_x.index(lane, ptr=True), smem_target.index(lane, ptr=True)
-    m1, m2 = load_at(smem_max, lane), load_at(smem_max, other)
-    s1, s2 = load_at(smem_sum_exp, lane), load_at(smem_sum_exp, other)
-    new_m = UOp(Ops.MAX, dtypes.float, (m1, m2))
-    new_s = fadd(fmul(s1, fexp(fsub(m1, new_m))), fmul(s2, fexp(fsub(m2, new_m))))
+    m1, m2 = smem_max[lane], smem_max[other]
+    s1, s2 = smem_sum_exp[lane], smem_sum_exp[other]
+    new_m = m1.maximum(m2)
+    new_s = s1 * (m1 - new_m).exp() + s2 * (m2 - new_m).exp()
     reduce_step = UOp.group(s1p.store(new_s, gate=active), m1p.store(new_m, gate=active),
-                            sx1p.store(fadd(load_at(smem_sum_x, lane), load_at(smem_sum_x, other)), gate=active),
-                            tgt1p.store(fadd(load_at(smem_target, lane), load_at(smem_target, other)), gate=active)).barrier()
+                            sx1p.store(smem_sum_x[lane] + smem_sum_x[other], gate=active),
+                            tgt1p.store(smem_target[lane] + smem_target[other], gate=active)).barrier()
     smem_max, smem_sum_exp = smem_max.after(reduce_step), smem_sum_exp.after(reduce_step)
     smem_sum_x, smem_target = smem_sum_x.after(reduce_step), smem_target.after(reduce_step)
 
-  row_max = load_at(smem_max, zidx)
-  row_sum_exp = load_at(smem_sum_exp, zidx)
-  mean_logits = fmul(load_at(smem_sum_x, zidx), 1.0 / vocab)
-  target = load_at(smem_target, zidx)
-  row_lse = fadd(flog(row_sum_exp), row_max)
-  loss = fsub(fsub(row_lse, fmul(target, 1.0 - label_smoothing)), fmul(mean_logits, label_smoothing))
+  row_max = smem_max[0]
+  row_sum_exp = smem_sum_exp[0]
+  mean_logits = smem_sum_x[0] / vocab
+  target = smem_target[0]
+  row_lse = row_sum_exp.log() + row_max
+  loss = row_lse - (1.0 - label_smoothing) * target - label_smoothing * mean_logits
   out_row = row.valid(lane.eq(0))
   stores = UOp.group(loss_out[out_row].store(loss), max_out[out_row].store(row_max), lse_out[out_row].store(row_lse))
 

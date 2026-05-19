@@ -159,7 +159,7 @@ def split_load_store(ctx:Renderer|None, ls:UOp, idx:UOp):
   if ctx is not None and ctx.target.device == "DSP":
     lengths = [128,64,32,16,8,4]
     must_divide = False
-  elif buf.dtype.base not in (dtypes.float, dtypes.half, *dtypes.fp8s) and not isinstance(buf.dtype, ImageDType):
+  elif buf.dtype.base not in (dtypes.float, dtypes.half, dtypes.bfloat16, *dtypes.fp8s) and not isinstance(buf.dtype, ImageDType):
     pass
   elif buf.ptrdtype.addrspace == AddrSpace.REG:
     pass
@@ -167,7 +167,8 @@ def split_load_store(ctx:Renderer|None, ls:UOp, idx:UOp):
     lengths = [4]
   elif ctx is not None and ctx.supports_float4:
     # TODO: a better way to get this than ctx
-    lengths = [8,4,2] if buf.dtype.base == dtypes.half and getenv("ALLOW_HALF8") else ([16,8,4,2] if "AMX" in ctx.target.arch else [4,2])
+    lengths = [8,4,2] if buf.dtype.base == dtypes.bfloat16 and ctx.target.device == "AMD" else \
+      ([8,4,2] if buf.dtype.base == dtypes.half and getenv("ALLOW_HALF8") else ([16,8,4,2] if "AMX" in ctx.target.arch else [4,2]))
   lengths.append(1)  # worst case, it's not folded
 
   # filter fold lengths that don't divide
