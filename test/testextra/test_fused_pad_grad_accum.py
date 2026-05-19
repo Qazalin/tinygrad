@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 import unittest
-from tinygrad import Tensor, Device, dtypes, Context
-from extra.llama_kernels.fused_pad_grad_accum import fused_pad_grad_accum, fused_pad_grad_accum_highlevel
+from tinygrad import Tensor, dtypes, Context
+from extra.llama_kernels.fused_pad_grad_accum import fused_pad_grad_accum
 
-def _run_fused_pad_grad_accum(n_chunks:int, chunk_size:int, highlevel=False):
+def _run_fused_pad_grad_accum(n_chunks:int, chunk_size:int):
   total = n_chunks * chunk_size
   Tensor.manual_seed(0)
 
@@ -14,7 +14,7 @@ def _run_fused_pad_grad_accum(n_chunks:int, chunk_size:int, highlevel=False):
   with Context(DEBUG=0, TRACK_MATCH_STATS=0):
     Tensor.realize(grad, grad_ref, *chunks)
 
-  out = (fused_pad_grad_accum_highlevel if highlevel else fused_pad_grad_accum)(grad, chunks).realize()
+  out = fused_pad_grad_accum(grad, chunks).realize()
   ref = (grad_ref + chunks[0].cat(*chunks[1:], dim=0)).realize()
 
   assert out.shape == ref.shape == (total,)
@@ -25,9 +25,6 @@ def _run_fused_pad_grad_accum(n_chunks:int, chunk_size:int, highlevel=False):
 class TestFusedPadGradAccum(unittest.TestCase):
   def test_profile_shape_4096(self):
     _run_fused_pad_grad_accum(32, 4096)
-
-  def test_highlevel_shape_4096(self):
-    _run_fused_pad_grad_accum(32, 4096, highlevel=True)
 
   def test_profile_shape_2097152(self):
     _run_fused_pad_grad_accum(32, 2097152)
