@@ -10,7 +10,7 @@ ELEMS_PER_THREAD = 8  # vectorized 16-byte load (uint4 = 8 bf16)
 def _build_src(n_chunks:int) -> str:
   template = (pathlib.Path(__file__).parent/"fused_pad_grad_accum.cpp").read_text()
   params = "".join(f",\n    const __hip_bfloat16* __restrict__ chunk{i}" for i in range(n_chunks))
-  dispatch = "\n    ".join(f"case {i}: chunk_ptr = chunk{i}; break;" for i in range(n_chunks))
+  dispatch = "\n    else ".join(f"if (chunk_idx == {i}) chunk_ptr = chunk{i};" for i in range(n_chunks))
   return (template.replace("__FUSED_PAD_GRAD_ACCUM_PARAMS", params)
                   .replace("__FUSED_PAD_GRAD_ACCUM_DISPATCH", dispatch))
 

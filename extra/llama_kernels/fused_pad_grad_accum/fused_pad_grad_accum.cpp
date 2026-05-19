@@ -1,6 +1,6 @@
 // Fused custom kernel: grad_buf += cat(*chunks, dim=0) in one HBM pass.
 //
-// Template source — chunk parameter list and switch dispatch are filled by codegen
+// Template source — chunk parameter list and if/else dispatch are filled by codegen
 // in cast_amax.py:_build_fused_pad_grad_accum_src to support arbitrary N.
 //
 // Defines required at compile time:
@@ -9,7 +9,7 @@
 //   ELEMS_PER_THREAD (8 = one uint4 per thread = 16-byte vectorized load)
 //
 // Layout: one block-per-(slice-of-chunk) — blockIdx.x / BLOCKS_PER_CHUNK selects the chunk.
-// All threads in a block read the same chunk → switch is uniform → no warp divergence.
+// All threads in a block read the same chunk, so dispatch is uniform with no warp divergence.
 
 #include <hip/hip_runtime.h>
 #include <hip/hip_bf16.h>
@@ -35,11 +35,8 @@ void fused_pad_grad_accum(
   const int block_in_chunk = bid - chunk_idx * BLOCKS_PER_CHUNK;
   const int tid = threadIdx.x;
 
-  const __hip_bfloat16* chunk_ptr;
-  switch (chunk_idx) {
-    __FUSED_PAD_GRAD_ACCUM_DISPATCH
-    default: chunk_ptr = (const __hip_bfloat16*)0; break;  // unreachable
-  }
+  const __hip_bfloat16* chunk_ptr = (const __hip_bfloat16*)0;  // default is unreachable
+  __FUSED_PAD_GRAD_ACCUM_DISPATCH
 
   // int64 for global_offset: at 32 chunks × 117M elements = 3.6B, int32 overflows → MEMVIOL.
   const int local_offset = block_in_chunk * ELEMS_PER_BLOCK + tid * ELEMS_PER_THREAD;
