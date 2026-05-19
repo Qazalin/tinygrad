@@ -33,7 +33,7 @@ def _run_fused_pad_grad_accum(n_chunks:int, chunk_size:int):
 
   assert out.shape == ref.shape == (total,)
   assert out.dtype == ref.dtype == dtypes.bfloat16
-  assert out.allclose(ref, atol=0, rtol=0).item(), f"mismatch for n_chunks={n_chunks} chunk_size={chunk_size}"
+  assert out.allclose(ref, atol=0, rtol=0).float().item(), f"mismatch for n_chunks={n_chunks} chunk_size={chunk_size}"
 
 @unittest.skipUnless(_is_gfx950(), "fused_pad_grad_accum is compiled for gfx950")
 class TestFusedPadGradAccum(unittest.TestCase):
