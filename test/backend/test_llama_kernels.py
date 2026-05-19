@@ -38,7 +38,7 @@ class TestFusedCE(unittest.TestCase):
   def test_fused_ce_smoothing_perf(self): run_fused_ce(16, 1024, 128256, label_smoothing=0.2, benchmark=True)
 
   # note: this is the shape used in llama 8b.
-  #def test_fused_ce_smoothing_16_1024_128256(self): run_fused_ce(16, 1024, 128256, label_smoothing=0.2)
+  def test_fused_ce_smoothing_16_1024_128256(self): run_fused_ce(16, 1024, 128256, label_smoothing=0.2)
 
 if __name__ == '__main__':
   unittest.main()
