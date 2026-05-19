@@ -32,7 +32,8 @@ class TestFusedCE(unittest.TestCase):
   def test_fused_ce_smoothing_1_2_1024(self): run_fused_ce(1, 2, 1024, label_smoothing=0.2)
   def test_fused_ce_smoothing_2_16_1024(self): run_fused_ce(2, 16, 1024, label_smoothing=0.2)
   def test_fused_ce_smoothing_4_128_1024(self): run_fused_ce(4, 128, 1024, label_smoothing=0.2)
-  def test_fused_ce_smoothing_4_1024_8192(self): run_fused_ce(4, 1024, 8192, label_smoothing=0.2)
+  def test_fused_ce_smoothing_4_1024_8192(self): run_fused_ce(16, 1024, 8192, label_smoothing=0.2)
+  def test_fused_ce_smoothing_4_1024_128256(self): run_fused_ce(16, 1024, 128256, label_smoothing=0.2)
 
   # note: this is the shape used in llama 8b.
   #def test_fused_ce_smoothing_16_1024_128256(self): run_fused_ce(16, 1024, 128256, label_smoothing=0.2)
