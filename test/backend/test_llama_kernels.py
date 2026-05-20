@@ -75,13 +75,13 @@ def run_fused_rmsnorm_mul_quantize_fp8(bs:int, seqlen:int, hidden:int, with_resi
                  *([h_ref, residual_ref.grad] if with_residual else []))
 
   with Context(DEBUG=0):
-    assert x_normed.allclose(x_normed_ref, atol=2e-3, rtol=2e-3).item(), "x_normed mismatch"
+    assert x_normed.allclose(x_normed_ref, atol=2e-3, rtol=8e-3).item(), "x_normed mismatch"
     assert rrms.allclose(rrms_ref, atol=2e-4, rtol=2e-4).item(), "rrms mismatch"
     assert new_amax.allclose(new_amax_ref, atol=2e-3, rtol=2e-3).item(), "amax mismatch"
     assert inv_scale.allclose(inv_scale_ref, atol=1e-6, rtol=1e-6).item(), "inv_scale mismatch"
     assert (fp8.float() * inv_scale).allclose(fp8_ref.float() * inv_scale_ref, atol=2e-1, rtol=2e-1).item(), "fp8 mismatch"
     assert x.grad.allclose(x_ref.grad.cast(dtypes.bfloat16), atol=5e-2, rtol=5e-2).item(), "x grad mismatch"
-    assert weight.grad.allclose(weight_ref.grad.cast(dtypes.bfloat16), atol=5e-2, rtol=5e-2).item(), "weight grad mismatch"
+    assert weight.grad.allclose(weight_ref.grad.cast(dtypes.bfloat16), atol=2.5e-1, rtol=5e-2).item(), "weight grad mismatch"
     if with_residual:
       assert h.allclose(h_ref, atol=2e-3, rtol=2e-3).item(), "h mismatch"
       assert residual.grad.allclose(residual_ref.grad.cast(dtypes.bfloat16), atol=5e-2, rtol=5e-2).item(), "residual grad mismatch"

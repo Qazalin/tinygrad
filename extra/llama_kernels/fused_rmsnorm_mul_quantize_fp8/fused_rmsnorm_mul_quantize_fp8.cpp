@@ -97,11 +97,12 @@ fused_rmsnorm_mul_quantize_fp8(
 #if HAS_RESIDUAL
         const float f = static_cast<float>(xi[i]) + static_cast<float>(ri[i]);
         h_buf[i] = static_cast<__hip_bfloat16>(f);
+        const float h = static_cast<float>(h_buf[i]);
 #else
-        const float f = static_cast<float>(xi[i]);
+        const float h = static_cast<float>(xi[i]);
 #endif
-        regs[v * VEC + i] = f;
-        sum_sq += f * f;
+        regs[v * VEC + i] = h;
+        sum_sq += h * h;
       }
 #if HAS_RESIDUAL
       *reinterpret_cast<float4*>(&h_out[row_off + h_base]) = *reinterpret_cast<float4*>(h_buf);
