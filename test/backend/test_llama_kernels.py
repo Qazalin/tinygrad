@@ -3,7 +3,6 @@ from tinygrad import Tensor, dtypes, Context, Device
 from tinygrad.device import is_dtype_supported
 from extra.llama_kernels.fused_ce import fused_ce_loss
 from extra.llama_kernels.fused_rmsnorm_mul_quantize_fp8 import fused_rmsnorm_mul_quantize_fp8, fused_add_rmsnorm_mul_quantize_fp8
-from extra.llama_kernels import FP8_MAX
 
 def run_fused_ce(bs:int, seqlen:int, vocab:int, label_smoothing:float=0.0) -> None:
   Tensor.manual_seed(0)
@@ -60,15 +59,13 @@ def run_fused_rmsnorm_mul_quantize_fp8(bs:int, seqlen:int, hidden:int, with_resi
   Tensor.realize(loss, fp8, inv_scale, new_amax, x_normed, rrms, x.grad, weight.grad,
                  *([h, residual.grad] if with_residual else []))
 
+  from examples.mlperf.models.flat_llama import quantize_fp8, rmsnorm
   h_ref = x_ref + residual_ref if with_residual else x_ref
-  h_ref_float = h_ref.float()
-  rrms_ref = ((h_ref_float * h_ref_float).mean(axis=-1) + eps).rsqrt()
-  x_normed_ref = (h_ref_float * rrms_ref.reshape(bs, seqlen, 1)).cast(dtypes.bfloat16)
-  y_ref = x_normed_ref.float() * weight_ref.float()
-  fp8_ref = (y_ref * (FP8_MAX / (amax_state.float() + 1e-8))).clip(-FP8_MAX, FP8_MAX).cast(dtypes.fp8e4m3)
-  inv_scale_ref = (amax_state.float() + 1e-8) / FP8_MAX
-  new_amax_ref = y_ref.abs().max()
-  loss_ref = (y_ref * (FP8_MAX / (amax_state.float() + 1e-8))).sum()
+  with Context(FUSED_ADD_NORM_MUL_QUANTIZE=0):
+    x_normed_ref, rrms_ref = rmsnorm(h_ref, eps)
+    rrms_ref = rrms_ref.squeeze(-1)
+    fp8_ref, inv_scale_ref, new_amax_ref = quantize_fp8(x_normed_ref * weight_ref, amax_state=amax_state)
+  loss_ref = fp8_ref.float().sum()
   if with_residual: loss_ref = loss_ref + h_ref.float().sum()
   loss_ref.backward()
   Tensor.realize(loss_ref, fp8_ref, inv_scale_ref, new_amax_ref, x_normed_ref, rrms_ref, x_ref.grad, weight_ref.grad,
@@ -81,7 +78,9 @@ def run_fused_rmsnorm_mul_quantize_fp8(bs:int, seqlen:int, hidden:int, with_resi
     assert inv_scale.allclose(inv_scale_ref, atol=1e-6, rtol=1e-6).item(), "inv_scale mismatch"
     assert (fp8.float() * inv_scale).allclose(fp8_ref.float() * inv_scale_ref, atol=2e-1, rtol=2e-1).item(), "fp8 mismatch"
     assert x.grad.allclose(x_ref.grad.cast(dtypes.bfloat16), atol=5e-2, rtol=5e-2).item(), "x grad mismatch"
-    assert weight.grad.allclose(weight_ref.grad.cast(dtypes.bfloat16), atol=2.5e-1, rtol=5e-2).item(), "weight grad mismatch"
+    weight_grad_ref = weight_ref.grad.cast(dtypes.bfloat16)
+    weight_grad_err = (weight.grad - weight_grad_ref).float()
+    assert (weight_grad_err.square().sum() / weight_grad_ref.float().square().sum()).sqrt().item() < 5e-3, "weight grad mismatch"
     if with_residual:
       assert h.allclose(h_ref, atol=2e-3, rtol=2e-3).item(), "h mismatch"
       assert residual.grad.allclose(residual_ref.grad.cast(dtypes.bfloat16), atol=5e-2, rtol=5e-2).item(), "residual grad mismatch"

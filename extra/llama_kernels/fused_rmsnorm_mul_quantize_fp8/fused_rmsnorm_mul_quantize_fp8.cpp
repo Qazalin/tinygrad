@@ -134,7 +134,7 @@ fused_rmsnorm_mul_quantize_fp8(
       for (int i = 0; i < VEC; i++) {
         const float x_normed = regs[v * VEC + i] * rrms;
         xn[i] = static_cast<__hip_bfloat16>(x_normed);
-        const float y = x_normed * static_cast<float>(wi[i]);
+        const float y = static_cast<float>(xn[i]) * static_cast<float>(wi[i]);
         local_max = fmaxf(local_max, fabsf(y));
         const float scaled = fmaxf(-FP8_MAX, fminf(FP8_MAX, y * scale));
         out[i] = __hip_cvt_float_to_fp8(scaled, __HIP_SATFINITE, __HIP_E4M3);
