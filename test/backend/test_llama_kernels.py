@@ -92,6 +92,7 @@ class TestFusedRMSNormMulQuantizeFP8(unittest.TestCase):
     if not (is_dtype_supported(dtypes.bfloat16, target) and is_dtype_supported(dtypes.fp8e4m3, target)): self.skipTest("need bfloat16/fp8e4m3")
 
   def test_fused_rmsnorm_mul_quantize_fp8_1_2_2048(self): run_fused_rmsnorm_mul_quantize_fp8(1, 2, 2048)
+  def test_fused_rmsnorm_mul_quantize_fp8_16_1024_4096(self): run_fused_rmsnorm_mul_quantize_fp8(16, 1024, 4096)
   def test_fused_add_rmsnorm_mul_quantize_fp8_1_2_2048(self): run_fused_rmsnorm_mul_quantize_fp8(1, 2, 2048, with_residual=True)
 
 if __name__ == '__main__':
