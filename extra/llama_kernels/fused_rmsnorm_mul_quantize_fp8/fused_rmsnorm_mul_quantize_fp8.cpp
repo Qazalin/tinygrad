@@ -97,12 +97,11 @@ fused_rmsnorm_mul_quantize_fp8(
 #if HAS_RESIDUAL
         const float f = static_cast<float>(xi[i]) + static_cast<float>(ri[i]);
         h_buf[i] = static_cast<__hip_bfloat16>(f);
-        const float h = static_cast<float>(h_buf[i]);
 #else
-        const float h = static_cast<float>(xi[i]);
+        const float f = static_cast<float>(xi[i]);
 #endif
-        regs[v * VEC + i] = h;
-        sum_sq += h * h;
+        regs[v * VEC + i] = f;
+        sum_sq += f * f;
       }
 #if HAS_RESIDUAL
       *reinterpret_cast<float4*>(&h_out[row_off + h_base]) = *reinterpret_cast<float4*>(h_buf);
@@ -134,7 +133,7 @@ fused_rmsnorm_mul_quantize_fp8(
       for (int i = 0; i < VEC; i++) {
         const float x_normed = regs[v * VEC + i] * rrms;
         xn[i] = static_cast<__hip_bfloat16>(x_normed);
-        const float y = static_cast<float>(xn[i]) * static_cast<float>(wi[i]);
+        const float y = x_normed * static_cast<float>(wi[i]);
         local_max = fmaxf(local_max, fabsf(y));
         const float scaled = fmaxf(-FP8_MAX, fminf(FP8_MAX, y * scale));
         out[i] = __hip_cvt_float_to_fp8(scaled, __HIP_SATFINITE, __HIP_E4M3);
