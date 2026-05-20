@@ -54,11 +54,11 @@ def run_fused_rmsnorm_mul_quantize_fp8(bs:int, seqlen:int, hidden:int, with_resi
     fp8, inv_scale, new_amax, h, x_normed, rrms = fused_add_rmsnorm_mul_quantize_fp8(x, residual, weight, amax_state, eps, dtypes.fp8e4m3)
   else:
     fp8, inv_scale, new_amax, x_normed, rrms = fused_rmsnorm_mul_quantize_fp8(x, weight, amax_state, eps, dtypes.fp8e4m3)
-  Tensor.realize(fp8, inv_scale, new_amax, x_normed, rrms, *([h] if with_residual else []))
   loss = fp8.float().sum()
   if with_residual: loss = loss + h.float().sum()
   loss.backward()
-  Tensor.realize(loss, x.grad, weight.grad, *([residual.grad] if with_residual else []))
+  Tensor.realize(loss, fp8, inv_scale, new_amax, x_normed, rrms, x.grad, weight.grad,
+                 *([h, residual.grad] if with_residual else []))
 
   h_ref = x_ref + residual_ref if with_residual else x_ref
   h_ref_float = h_ref.float()
@@ -68,11 +68,11 @@ def run_fused_rmsnorm_mul_quantize_fp8(bs:int, seqlen:int, hidden:int, with_resi
   fp8_ref = (y_ref * (FP8_MAX / (amax_state.float() + 1e-8))).clip(-FP8_MAX, FP8_MAX).cast(dtypes.fp8e4m3)
   inv_scale_ref = (amax_state.float() + 1e-8) / FP8_MAX
   new_amax_ref = y_ref.abs().max()
-  Tensor.realize(fp8_ref, inv_scale_ref, new_amax_ref, x_normed_ref, rrms_ref, *([h_ref] if with_residual else []))
   loss_ref = (y_ref * (FP8_MAX / (amax_state.float() + 1e-8))).sum()
   if with_residual: loss_ref = loss_ref + h_ref.float().sum()
   loss_ref.backward()
-  Tensor.realize(loss_ref, x_ref.grad, weight_ref.grad, *([residual_ref.grad] if with_residual else []))
+  Tensor.realize(loss_ref, fp8_ref, inv_scale_ref, new_amax_ref, x_normed_ref, rrms_ref, x_ref.grad, weight_ref.grad,
+                 *([h_ref, residual_ref.grad] if with_residual else []))
 
   with Context(DEBUG=0):
     assert x_normed.allclose(x_normed_ref, atol=2e-3, rtol=2e-3).item(), "x_normed mismatch"
