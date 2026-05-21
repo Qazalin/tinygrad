@@ -26,7 +26,6 @@ def run_fused_ce(bs:int, seqlen:int, vocab:int, label_smoothing:float=0.0) -> No
     assert loss.allclose(ref, atol=2e-3, rtol=2e-3).item(), "forward mismatch"
     assert logits.grad.allclose(logits_ref.grad, atol=2e-3, rtol=2e-3).item(), "grad mismatch"
 
-@unittest.skipUnless(dtypes.bfloat16 in Device[Device.DEFAULT].renderer.supported_dtypes(), "need bfloat16")
 class TestFusedCE(unittest.TestCase):
   def test_fused_ce_1_2_16(self): run_fused_ce(1, 2, 16, label_smoothing=0.2)
   def test_fused_ce_2_16_128(self): run_fused_ce(2, 16, 128)
@@ -59,10 +58,10 @@ def run_quantize_fp8(shape:tuple[int, ...], delayed:bool=True) -> None:
       assert new_amax.allclose(ref_new_amax, atol=0, rtol=0).item(), \
         f"amax mismatch: got={new_amax.item()} ref={ref_new_amax.item()} diff={abs(new_amax.item()-ref_new_amax.item())}"
 
-@unittest.skipUnless(dtypes.bfloat16 in Device[Device.DEFAULT].renderer.supported_dtypes(), "need bfloat16")
 class TestQuantizeFP8(unittest.TestCase):
   def test_scalar(self): run_quantize_fp8((32, getenv("N", 1024)), delayed=False)
   def test_delayed(self): run_quantize_fp8((2048, getenv("N", 1024)))
+  def test_llama_1(self): run_quantize_fp8((98304, 1024))
 
   def test_multi(self):
     devs = tuple(f"NULL:{i}" for i in range(8))
