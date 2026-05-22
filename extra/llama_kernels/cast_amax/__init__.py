@@ -71,7 +71,7 @@ def _custom_fused_cast_amax_w13_uop(fp8_out:UOp, amax_buf:UOp, xw13:UOp, amax_st
   f3 = xw13[row, 1, col].cast(dtypes.float)
   x2 = (f1 * (1.0 + (-f1).exp()).reciprocal()) * f3
 
-  abs_x2 = (x2 < 0.0).where(-x2, x2)
+  abs_x2 = x2.maximum(-x2)
   scaled = (x2 * scale).maximum(-FP8_MAX).minimum(FP8_MAX)
 
   fp8_store = fp8_out[idx].store(scaled.cast(fp8_out.dtype.base)).end(lane)
