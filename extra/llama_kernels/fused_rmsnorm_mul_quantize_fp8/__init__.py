@@ -1,7 +1,9 @@
 from __future__ import annotations
 import functools, pathlib
 from tinygrad import Tensor, dtypes
-from tinygrad.uop.ops import UOp, Ops, KernelInfo
+from tinygrad.dtype import AddrSpace
+from tinygrad.helpers import prod
+from tinygrad.uop.ops import UOp, Ops, KernelInfo, AxisType
 from tinygrad.renderer import Estimates
 from extra.llama_kernels import FP8_MAX, NUM_WG, THREADS_PER_WG, alloc_like, alloc_local, scalar_amax, dname_of, compile_hip
 
@@ -45,18 +47,108 @@ def _custom_fwd_add(fp8_out:UOp, h_out:UOp, x_normed_out:UOp, rrms_out:UOp, amax
 @functools.cache
 def _custom_bwd(grad_x:UOp, grad_weight_partial:UOp,
                 grad_fp8:UOp, x_normed:UOp, rrms:UOp, weight:UOp, amax_state:UOp, dname:str) -> UOp:
+  VEC = 8
   MBS, SEQ, HIDDEN = x_normed.shape
   n_elems = MBS * SEQ * HIDDEN
-  threads, workgroups = UOp.special(THREADS_PER_WG, "lidx0"), UOp.special(NUM_WG, "gidx0")
+  rows = MBS * SEQ
+  elems_per_thread = HIDDEN // THREADS_PER_WG
+  vecs_per_thread = elems_per_thread // VEC
+
+  assert n_elems % HIDDEN == 0
+  assert HIDDEN % (THREADS_PER_WG * VEC) == 0
+  assert rows % NUM_WG == 0
+  assert prod(grad_x.shape) == n_elems
+  assert prod(grad_fp8.shape) == n_elems
+  assert prod(x_normed.shape) == n_elems
+  assert prod(rrms.shape) == rows
+  assert prod(weight.shape) == HIDDEN
+  assert prod(grad_weight_partial.shape) == NUM_WG * HIDDEN
+
+  grad_x = grad_x.reshape(n_elems)
+  grad_weight_partial = grad_weight_partial.reshape(NUM_WG, vecs_per_thread, THREADS_PER_WG, VEC)
+  grad_fp8 = grad_fp8.reshape(n_elems)
+  x_normed = x_normed.reshape(n_elems)
+  rrms = rrms.reshape(rows)
+  weight = weight.reshape(HIDDEN)
+
+  wg = UOp.range(NUM_WG, 0, AxisType.GLOBAL)
+  tid = UOp.range(THREADS_PER_WG, 1, AxisType.LOCAL)
+  row_it = UOp.range(rows // NUM_WG, 2, AxisType.LOOP)
+
+  scale = FP8_MAX / (amax_state[0].cast(dtypes.float) + 1e-8)
+  inv_hidden = 1.0 / HIDDEN
+
+  w_regs = UOp.placeholder((elems_per_thread,), dtypes.float, slot=1, addrspace=AddrSpace.REG)
+  w_store = None
+  for i in range(elems_per_thread):
+    hidx = tid * VEC + (i // VEC) * THREADS_PER_WG * VEC + (i % VEC)
+    target = w_regs if w_store is None else w_regs.after(w_store)
+    w_store = target[i].store(weight[hidx].cast(dtypes.float))
+  w_regs = w_regs.after(w_store)
+
+  gw_accum = UOp.placeholder((elems_per_thread,), dtypes.float, slot=2, addrspace=AddrSpace.REG)
+  gw_init = None
+  for i in range(elems_per_thread):
+    target = gw_accum.after(w_store) if gw_init is None else gw_accum.after(gw_init)
+    gw_init = target[i].store(0.0)
+
+  xn_regs = UOp.placeholder((elems_per_thread,), dtypes.float, slot=3, addrspace=AddrSpace.REG)
+  g_xn_regs = UOp.placeholder((elems_per_thread,), dtypes.float, slot=4, addrspace=AddrSpace.REG)
+
+  row = wg + row_it * NUM_WG
+  row_off = row * HIDDEN
+  rrms_v = rrms[row].cast(dtypes.float)
+
+  local_dot = UOp.const(dtypes.float, 0.0)
+  row_store = None
+  for i in range(elems_per_thread):
+    hidx = tid * VEC + (i // VEC) * THREADS_PER_WG * VEC + (i % VEC)
+    idx = row_off + hidx
+
+    g_y = grad_fp8[idx].cast(dtypes.float) * scale
+    xn = x_normed[idx].cast(dtypes.float)
+    g_xn = g_y * w_regs[i]
+
+    local_dot = local_dot + g_xn * xn
+
+    target_xn = xn_regs if row_store is None else xn_regs.after(row_store)
+    row_store = target_xn[i].store(xn)
+
+    target_gxn = g_xn_regs.after(row_store)
+    row_store = target_gxn[i].store(g_xn)
+
+    target_gw = gw_accum.after(row_store)
+    row_store = target_gw[i].store(gw_accum.after(gw_init, row_it)[i] + g_y * xn)
+
+  lds = UOp.placeholder((THREADS_PER_WG,), dtypes.float, slot=0, addrspace=AddrSpace.LOCAL)
+  lds = lds.after(row_store, lds[tid].store(local_dot).barrier())
+
+  step = THREADS_PER_WG // 2
+  while step:
+    active = tid < step
+    other = lds[tid + step].load(UOp.const(dtypes.float, 0.0), active)
+    lds = lds.after(lds[tid].store(lds[tid] + other, gate=active).barrier())
+    step //= 2
+
+  mean_term = lds[0] * inv_hidden
+
+  grad_x_store = None
+  for i in range(elems_per_thread):
+    hidx = tid * VEC + (i // VEC) * THREADS_PER_WG * VEC + (i % VEC)
+    idx = row_off + hidx
+    dx = rrms_v * (g_xn_regs.after(row_store)[i] - xn_regs.after(row_store)[i] * mean_term)
+
+    target = grad_x if grad_x_store is None else grad_x.after(grad_x_store)
+    grad_x_store = target[idx].store(dx.cast(grad_x.dtype.base))
+
+  gw_accum = gw_accum.after(grad_x_store.barrier().end(row_it))
+
+  gw_partial_store = grad_weight_partial[wg, :, tid, :].store(gw_accum.reshape(vecs_per_thread, VEC))
+
   mem = n_elems * 2 * 3 + NUM_WG * HIDDEN * 4 + MBS * SEQ * 4 + HIDDEN * 2 + 4
-  sink = UOp.sink(grad_x.base, grad_weight_partial.base,
-                  grad_fp8.base, x_normed.base, rrms.base, weight.base, amax_state.base, threads, workgroups,
-                  arg=KernelInfo(f"fused_rmsnorm_mul_quantize_fp8_bwd_{n_elems}_h{HIDDEN}",
-                                 estimates=Estimates(ops=8*n_elems, mem=mem)))
-  defines = [f"-DN_ELEMS={n_elems}", f"-DHIDDEN={HIDDEN}", f"-DNUM_WG={NUM_WG}", f"-DTHREADS_PER_WG={THREADS_PER_WG}"]
-  src = _src_bwd()
-  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
-                               UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=compile_hip(src, defines))))
+  return gw_partial_store.end(tid, wg).sink(
+    arg=KernelInfo(f"fused_rmsnorm_mul_quantize_fp8_bwd_{n_elems}_h{HIDDEN}",
+                   estimates=Estimates(ops=8*n_elems, mem=mem), opts_to_apply=()))
 
 def _bwd_common(fp8_grad_u, h_grad_u, x_u, x_normed_u, rrms_u, weight_u, amax_state_u, kernel:UOp):
   device = x_u.device
