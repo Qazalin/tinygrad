@@ -2,6 +2,7 @@
 # Usage: NO_COLOR=1 python -m tinygrad.viz.cli --json | ./extra/viz/marker_interval.py "train @ 2" "train @ 3"
 import argparse, collections, json, sys
 from tinygrad.helpers import ansilen, time_to_str
+from tinygrad.viz.serve import fmt_colored
 
 def to_str(k:str, v) -> str:
   if k == "FLOPS" or k.startswith("B/s"): return f"{v*1e-9:.0f} G{k}" if v < 1e13 else f"{v*1e-12:.0f} T{k}"
@@ -77,7 +78,7 @@ if __name__ == "__main__":
     lane = crit_lane[name]
     est = {k:int(v / (lane_sum[name][lane] * 1e-3)) for k,v in lane_estimates[name][lane].items() if lane_sum[name][lane] > 0}
     display = name + " "*max(0, 58-ansilen(name))
-    print(f"{display} {time_to_str(crit[name]*1e-3, w=9)} {time_to_str(device_sum[name]*1e-3, w=9)} {counts[name]:7d} {crit[name]/window*100:6.2f}% {lane[:8]:>8s}"+
+    print(f"{fmt_colored(display)} {time_to_str(crit[name]*1e-3, w=9)} {time_to_str(device_sum[name]*1e-3, w=9)} {counts[name]:7d} {crit[name]/window*100:6.2f}% {lane[:8]:>8s}"+
           ("    "+fmt_data(est) if est else ""))
   if other:
     other_crit, other_dev, other_count = sum(crit[x] for x in other), sum(device_sum[x] for x in other), sum(counts[x] for x in other)
