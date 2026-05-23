@@ -2716,6 +2716,21 @@ def can_use_asm_gemm(a:Tensor, b:Tensor) -> bool:
     return todo(f"GEMM shape ({M},{N},{K}) not a multiple of ({TILE_M},{TILE_N},{TILE_K})")
   return True
 
+def can_use_fp8_wgrad_gemm(g:Tensor, a:Tensor) -> bool:
+  if g.dtype != FP8_DTYPE or a.dtype != FP8_DTYPE: return todo(f"wgrad dtypes must be fp8, got {g.dtype} {a.dtype}")
+  if g.ndim < 2 or a.ndim < 2: return todo(f"wgrad rank {g.shape} {a.shape}")
+  g2, a2 = g.reshape(-1, g.shape[-1]), a.reshape(-1, a.shape[-1])
+  K, M = g2.shape
+  K2, N = a2.shape
+  if K != K2: return todo(f"wgrad K mismatch {K} != {K2}")
+  if M % 256 != 0 or N % 256 != 0 or K % 128 != 0: return todo(f"wgrad shape ({M},{N},{K}) unsupported")
+  return can_use_asm_gemm(a2.T, g2)
+
+def fp8_wgrad_gemm(g:Tensor, a:Tensor, x_scale:Tensor) -> Tensor:
+  assert can_use_fp8_wgrad_gemm(g, a), f"{counters['todos'][-1]}"
+  g2, a2 = g.reshape(-1, g.shape[-1]), a.reshape(-1, a.shape[-1])
+  return asm_gemm(a2.T.contiguous(), g2, x_scale=x_scale).T.contiguous()
+
 # ** UOp gemm to test Tensor.custom_kernel multi and backward correctness on non cdna4
 # note: this can be removed after we have GEMM on mixins
 
@@ -2763,14 +2778,12 @@ def custom_gemm_bw(gradient:UOp, kernel:UOp):
         g_fp8 = Tensor(g_fp8.contiguous().uop.after(store_effect), device=a.device)
     # dgrad: uses g_scale * x_scale * w_scale
     grad_a = asm_gemm(g_fp8, b_t, x_scale=g_scale * s_x_t, w_scale=s_w_t)
-    # wgrad: no w_scale
-    g_fp8_2d = g_fp8.reshape(-1, g_fp8.shape[-1])
-    if getenv("FAST_FP8_TRANSPOSE", 0) and g_fp8_2d.shape[0] % 64 == 0 and g_fp8_2d.shape[1] % 64 == 0:
-      from extra.llama_kernels.fp8_transpose import fast_fp8_transpose
-      g_fp8_T = fast_fp8_transpose(g_fp8_2d)
+    # wgrad: no w_scale. Compute A.T @ G with existing FP8 GEMM, then transpose the BF16 result.
+    if getenv("FP8_WGRAD_GEMM", 1) and can_use_fp8_wgrad_gemm(g_fp8, a_t):
+      grad_b = fp8_wgrad_gemm(g_fp8, a_t, g_scale * s_x_t)
     else:
       g_fp8_T = g_fp8.permute(2, 0, 1).reshape(g_t.shape[-1], -1)
-    grad_b = asm_gemm(g_fp8_T, a_t.reshape(-1, a_t.shape[-1]), x_scale=g_scale * s_x_t)
+      grad_b = asm_gemm(g_fp8_T, a_t.reshape(-1, a_t.shape[-1]), x_scale=g_scale * s_x_t)
     ret = (None, grad_a.uop, grad_b.uop, None, None)
     if len(inputs) == 6: ret = ret + (None,)
     return ret

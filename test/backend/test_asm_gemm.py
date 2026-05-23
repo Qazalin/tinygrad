@@ -1,7 +1,7 @@
 import unittest
 from tinygrad import Tensor, Device, dtypes, Context
 from tinygrad.helpers import getenv, system, DEV
-from extra.gemm.cdna_asm_gemm import asm_gemm
+from extra.gemm.cdna_asm_gemm import asm_gemm, fp8_wgrad_gemm
 from test.helpers import needs_second_gpu
 from examples.mlperf.models.flat_llama import FP8_DTYPE, quantize_fp8, FP8_MAX
 
@@ -63,6 +63,26 @@ def run_asm_gemm(a_shape, b_shape, dtype=dtypes.float16, a_shard=None, b_shard=N
     assert tst.allclose(ref, atol=atol, rtol=rtol).item(), "forward mismatch"
     assert a.grad.allclose(a_ref.grad, atol=grad_atol, rtol=grad_rtol).item(), "grad_a mismatch"
     assert b.grad.allclose(b_ref.grad, atol=grad_atol, rtol=grad_rtol).item(), "grad_b mismatch"
+
+def verify_fp8_wgrad_gemm(M:int=256, N:int=256, K:int=128) -> None:
+  g_bf16 = Tensor.eye(K, M, dtype=dtypes.bfloat16)
+  a_bf16 = Tensor.eye(K, N, dtype=dtypes.bfloat16)
+  with Context(DEBUG=0):
+    Tensor.realize(g_bf16, a_bf16)
+
+  g_fp8, g_scale, _ = quantize_fp8(g_bf16)
+  a_fp8, a_scale, _ = quantize_fp8(a_bf16)
+  scale = g_scale * a_scale
+  with Context(DEBUG=0):
+    Tensor.realize(g_fp8, g_scale, a_fp8, a_scale, scale)
+
+  tst = fp8_wgrad_gemm(g_fp8, a_fp8, scale)
+  ref = asm_gemm(g_fp8.T.contiguous(), a_fp8, x_scale=scale)
+  Tensor.realize(tst, ref)
+
+  # no validation on the NULL device
+  if g_fp8.device.startswith("NULL"): return None
+  assert tst.allclose(ref, atol=2e-1, rtol=2e-2).item(), "fp8 wgrad mismatch"
 
 def verify_asm_gemm(batch:int, M:int, N:int, K:int, dtype=dtypes.float16, gpus:int=1) -> None:
   run_asm_gemm((batch, M, K), (K, N), dtype=dtype, a_shard=0, b_shard=None, gpus=gpus)
@@ -231,6 +251,7 @@ def has_hipcc():
 class TestGemmLlamaFP8(TestGemmLlama):
   dtype = FP8_DTYPE
 
+  def test_fp8_wgrad_direct(self): verify_fp8_wgrad_gemm()
   def test_llama_w13_forward(self): verify_asm_gemm(1, 16384, 28672, 4096, dtype=self.dtype)
   def test_llama_w13_backward_input(self): verify_asm_gemm(1, 16384, 4096, 28672, dtype=self.dtype)
   def test_llama_w13_backward_weight(self): verify_asm_gemm(1, 28672, 4096, 16384, dtype=self.dtype)
