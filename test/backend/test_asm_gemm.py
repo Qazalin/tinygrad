@@ -228,7 +228,19 @@ def has_hipcc():
   return True
 
 @unittest.skipUnless(has_hipcc(), "FP8 gemm requires hipcc to compile")
-class TestGemmLlamaFP8(TestGemmLlama): dtype = FP8_DTYPE
+class TestGemmLlamaFP8(TestGemmLlama):
+  dtype = FP8_DTYPE
+
+  def test_llama_w13_forward(self): verify_asm_gemm(1, 16384, 28672, 4096, dtype=self.dtype)
+  def test_llama_w13_backward_input(self): verify_asm_gemm(1, 16384, 4096, 28672, dtype=self.dtype)
+  def test_llama_w13_backward_weight(self): verify_asm_gemm(1, 28672, 4096, 16384, dtype=self.dtype)
+  def test_llama_w2_forward(self): verify_asm_gemm(1, 16384, 14336, 4096, dtype=self.dtype)
+  def test_llama_w2_backward_input(self): verify_asm_gemm(1, 16384, 4096, 14336, dtype=self.dtype)
+  def test_llama_w2_backward_weight(self): verify_asm_gemm(1, 4096, 14336, 16384, dtype=self.dtype)
+  def test_llama_wqkv_forward(self): verify_asm_gemm(1, 16384, 6144, 4096, dtype=self.dtype)
+  def test_llama_wqkv_backward_input(self): verify_asm_gemm(1, 16384, 4096, 6144, dtype=self.dtype)
+  def test_llama_wqkv_backward_weight(self): verify_asm_gemm(1, 6144, 4096, 16384, dtype=self.dtype)
+  def test_llama_wo_backward_weight(self): verify_asm_gemm(1, 4096, 4096, 16384, dtype=self.dtype)
 
 class TestMagicGu(unittest.TestCase):
   def test_magicgu_matches_old(self):

@@ -46,7 +46,7 @@ if __name__ == "__main__":
   intervals:list[tuple[float, float]] = []
   lane_sum:dict[str, dict[str, float]] = collections.defaultdict(lambda: collections.defaultdict(float))
   device_sum:dict[str, float] = collections.defaultdict(float)
-  estimates:dict[str, dict[str, float]] = collections.defaultdict(lambda: collections.defaultdict(float))
+  lane_estimates:dict[str, dict[str, dict[str, float]]] = collections.defaultdict(lambda: collections.defaultdict(lambda: collections.defaultdict(float)))
   counts:collections.Counter[str] = collections.Counter()
 
   for rec in records:
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     lane_sum[key][dev] += b - a
     device_sum[key] += b - a
     for k in ("FLOPS", "B/s mem", "B/s lds"):
-      if k in rec.get("fmt", {}): estimates[key][k] += rec["fmt"][k] * (b - a) * 1e-3
+      if k in rec.get("fmt", {}): lane_estimates[key][dev][k] += rec["fmt"][k] * (b - a) * 1e-3
     counts[key] += 1
 
   covered = union_len(intervals)
@@ -74,9 +74,10 @@ if __name__ == "__main__":
   print(f"window {args.start!r} -> {end_marker['name']!r}: {window:.3f} ms")
   print(f"covered: {covered:.3f} ms ({covered/window*100:.2f}%), gap: {window-covered:.3f} ms")
   for name in rows:
-    est = {k:int(v / (device_sum[name] * 1e-3)) for k,v in estimates[name].items() if device_sum[name] > 0}
+    lane = crit_lane[name]
+    est = {k:int(v / (lane_sum[name][lane] * 1e-3)) for k,v in lane_estimates[name][lane].items() if lane_sum[name][lane] > 0}
     display = name[:38] + " "*max(0, 38-ansilen(name[:38]))
-    print(f"{display} {time_to_str(crit[name]*1e-3, w=9)} {time_to_str(device_sum[name]*1e-3, w=9)} {counts[name]:7d} {crit[name]/window*100:6.2f}% {crit_lane[name][:8]:>8s}"+
+    print(f"{display} {time_to_str(crit[name]*1e-3, w=9)} {time_to_str(device_sum[name]*1e-3, w=9)} {counts[name]:7d} {crit[name]/window*100:6.2f}% {lane[:8]:>8s}"+
           ("    "+fmt_data(est) if est else ""))
   if other:
     other_crit, other_dev, other_count = sum(crit[x] for x in other), sum(device_sum[x] for x in other), sum(counts[x] for x in other)
