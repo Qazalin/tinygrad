@@ -2628,8 +2628,7 @@ def custom_asm_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
 # ** FP8 GEMM custom kernel
 
 @functools.cache
-def custom_hk_fp8_gemm(C:UOp, A:UOp, B:UOp, *args:UOp, dname:str, scale_mode:int=3, tile_m:int=256, tile_n:int=256,
-                       block_k:int=128, num_warps:int=8, warps_row:int=2, warps_col:int=4, gemm_wgm:int|None=None,
+def custom_hk_fp8_gemm(C:UOp, A:UOp, B:UOp, *args:UOp, dname:str, scale_mode:int=3, gemm_wgm:int|None=None,
                        gemm_xcd_swizzle:int=1, gemm_min_blocks_per_cu:int|None=None) -> UOp:
   # scale_mode: 0=no scale, 1=x only, 2=w only, 3=both
   n_scales = (1 if scale_mode & 1 else 0) + (1 if scale_mode & 2 else 0)
@@ -2637,12 +2636,8 @@ def custom_hk_fp8_gemm(C:UOp, A:UOp, B:UOp, *args:UOp, dname:str, scale_mode:int
   M, K = A.shape[0]*A.shape[1], A.shape[2]
   N, K2 = B.shape[(1 if B.ndim == 3 else 0):]
   assert K == K2, f"{A.shape} {B.shape}"
-  assert M % tile_m == 0 and N % tile_n == 0 and K % block_k == 0, f"{M=} {N=} {K=} {tile_m=} {tile_n=} {block_k=}"
-  assert num_warps in (4, 8), num_warps
-  assert warps_row * warps_col == num_warps, (warps_row, warps_col, num_warps)
-  assert tile_m % (warps_row * 2) == 0 and tile_n % (warps_col * 2) == 0, (tile_m, tile_n, warps_row, warps_col)
-  assert block_k % 128 == 0, block_k
-  assert 2 * (tile_m + tile_n) * block_k <= 163_840, f"LDS over limit: {tile_m=} {tile_n=} {block_k=}"
+  block_size = 256
+  assert M % block_size == 0 and N % block_size == 0, f"{M=} {N=}"
 
   if gemm_wgm is None: gemm_wgm = 8 if N == 4096 else 4
   if gemm_min_blocks_per_cu is None: gemm_min_blocks_per_cu = 1 if K == 4096 else 2
@@ -2650,50 +2645,42 @@ def custom_hk_fp8_gemm(C:UOp, A:UOp, B:UOp, *args:UOp, dname:str, scale_mode:int
   assert gemm_xcd_swizzle in (0, 1), gemm_xcd_swizzle
   assert gemm_min_blocks_per_cu in (1, 2), gemm_min_blocks_per_cu
 
-  threads = UOp.special(64 * num_warps, "lidx0")
-  workgroups = UOp.special((M // tile_m) * (N // tile_n), "gidx0")
+  threads = UOp.special(64 * 8, "lidx0")
+  workgroups = UOp.special((M // block_size) * (N // block_size), "gidx0")
   sink_inputs = (C.base, A.base, B.base) + tuple(s.base for s in scales) + (threads, workgroups)
   sink = UOp.sink(*sink_inputs,
-                  arg=KernelInfo(f"hk_fp8_gemm_{M}_{N}_{K}_m{tile_m}_n{tile_n}_k{block_k}_w{num_warps}_wr{warps_row}_wc{warps_col}_"
-                                 f"wgm{gemm_wgm}_mb{gemm_min_blocks_per_cu}_xcd{gemm_xcd_swizzle}_sm{scale_mode}",
+                  arg=KernelInfo(f"hk_fp8_gemm_{M}_{N}_{K}_wgm{gemm_wgm}_mb{gemm_min_blocks_per_cu}_xcd{gemm_xcd_swizzle}",
                                  estimates=Estimates(ops=2*M*N*K, mem=(M*K+N*K)*A.dtype.itemsize+M*N*C.dtype.itemsize)))
   kittens_path = pathlib.Path(__file__).parent.parent/"thunder"/"amd"
   src = (kittens_path/"gemm_fp8.cpp").read_text()
   lib = HIPCCCompiler("gfx950", [f"-I{(kittens_path/'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math",
                                  "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DGEMM_M={M}", f"-DGEMM_N={N}", f"-DGEMM_K={K}",
-                                 f"-DGEMM_TILE_M={tile_m}", f"-DGEMM_TILE_N={tile_n}", f"-DGEMM_BLOCK_K={block_k}",
-                                 f"-DGEMM_NUM_WARPS={num_warps}", f"-DGEMM_WARPS_ROW={warps_row}", f"-DGEMM_WARPS_COL={warps_col}",
                                  f"-DSCALE_MODE={scale_mode}", f"-DGEMM_WGM={gemm_wgm}", f"-DGEMM_XCD_SWIZZLE={gemm_xcd_swizzle}",
                                  "-DGEMM_NUM_XCDS=8", f"-DGEMM_MIN_BLOCKS_PER_CU={gemm_min_blocks_per_cu}"]).compile_cached(src)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
                                UOp(Ops.BINARY, arg=lib)))
 
-FP8_GEMM_DEFAULT_TILE = (256, 256, 128, 8, 2, 4)  # tile_m, tile_n, block_k, num_warps, warps_row, warps_col
-FP8_GEMM_M128_N256_TILE = (128, 256, 128, 8, 2, 4)
-FP8_GEMM_M256_N128_TILE = (256, 128, 128, 8, 2, 4)
 FP8_LLAMA_GEMM_VARIANTS = {
-  # shape: (*tile, wgm, min_blocks_per_cu, xcd_swizzle)
-  (4096, 4096, 16384): (*FP8_GEMM_M128_N256_TILE, 2, 1, 0),
-  (4096, 6144, 16384): (*FP8_GEMM_DEFAULT_TILE, 8, 2, 0),
-  (4096, 14336, 16384): (*FP8_GEMM_M256_N128_TILE, 2, 1, 1),
-  (4096, 16384, 4096): (*FP8_GEMM_DEFAULT_TILE, 1, 1, 0),
-  (4096, 16384, 6144): (*FP8_GEMM_DEFAULT_TILE, 1, 2, 0),
-  (4096, 16384, 14336): (*FP8_GEMM_DEFAULT_TILE, 1, 1, 0),
-  (4096, 16384, 28672): (*FP8_GEMM_DEFAULT_TILE, 4, 1, 1),
-  (4096, 28672, 16384): (*FP8_GEMM_DEFAULT_TILE, 8, 1, 1),
-  (6144, 4096, 16384): (*FP8_GEMM_M128_N256_TILE, 2, 1, 0),
-  (6144, 16384, 4096): (*FP8_GEMM_DEFAULT_TILE, 4, 2, 1),
-  (14336, 4096, 16384): (*FP8_GEMM_DEFAULT_TILE, 2, 2, 0),
-  (14336, 16384, 4096): (*FP8_GEMM_DEFAULT_TILE, 8, 2, 1),
-  (16384, 4096, 4096): (*FP8_GEMM_M128_N256_TILE, 8, 1, 1),
-  (16384, 4096, 6144): (*FP8_GEMM_M128_N256_TILE, 8, 2, 1),
-  (16384, 4096, 14336): (*FP8_GEMM_M128_N256_TILE, 8, 2, 1),
-  (16384, 4096, 28672): (*FP8_GEMM_M128_N256_TILE, 8, 2, 1),
-  (16384, 6144, 4096): (*FP8_GEMM_M128_N256_TILE, 4, 1, 1),
-  (16384, 14336, 4096): (*FP8_GEMM_M128_N256_TILE, 4, 1, 1),
-  (16384, 28672, 4096): (*FP8_GEMM_M256_N128_TILE, 4, 1, 1),
-  (28672, 4096, 16384): (*FP8_GEMM_M128_N256_TILE, 2, 1, 0),
-  (28672, 16384, 4096): (*FP8_GEMM_DEFAULT_TILE, 4, 2, 1),
+  (4096, 4096, 16384): (2, 1, 0),
+  (4096, 6144, 16384): (8, 2, 0),
+  (4096, 14336, 16384): (2, 1, 1),
+  (4096, 16384, 4096): (1, 1, 0),
+  (4096, 16384, 6144): (1, 2, 0),
+  (4096, 16384, 14336): (1, 1, 0),
+  (4096, 16384, 28672): (4, 1, 1),
+  (4096, 28672, 16384): (8, 1, 1),
+  (6144, 4096, 16384): (2, 1, 0),
+  (6144, 16384, 4096): (4, 2, 1),
+  (14336, 4096, 16384): (2, 2, 0),
+  (14336, 16384, 4096): (8, 2, 1),
+  (16384, 4096, 6144): (2, 2, 0),
+  (16384, 4096, 14336): (2, 2, 0),
+  (16384, 4096, 28672): (2, 1, 0),
+  (16384, 6144, 4096): (2, 2, 0),
+  (16384, 14336, 4096): (2, 2, 1),
+  (16384, 28672, 4096): (2, 2, 0),
+  (28672, 4096, 16384): (2, 1, 0),
+  (28672, 16384, 4096): (4, 2, 1),
 }
 
 counters = {"used":0, "specialized_fp8_llama":0, "todos":[]}
@@ -2840,22 +2827,13 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
       extra = [grad_amax_state] if grad_amax_state is not None else []
       if (variant:=FP8_LLAMA_GEMM_VARIANTS.get((M, N, K))) is not None:
         counters["specialized_fp8_llama"] += 1
-        default_tile_m, default_tile_n, default_block_k, default_num_warps, default_warps_row, default_warps_col, \
-          default_gemm_wgm, default_gemm_min_blocks_per_cu, default_gemm_xcd_swizzle = variant
+        default_gemm_wgm, default_gemm_min_blocks_per_cu, default_gemm_xcd_swizzle = variant
       else:
-        default_tile_m, default_tile_n, default_block_k, default_num_warps, default_warps_row, default_warps_col = FP8_GEMM_DEFAULT_TILE
         default_gemm_wgm, default_gemm_min_blocks_per_cu, default_gemm_xcd_swizzle = 8 if N == 4096 else 4, 1 if K == 4096 else 2, 1
-      tile_m = getenv("GEMM_TILE_M", default_tile_m)
-      tile_n = getenv("GEMM_TILE_N", default_tile_n)
-      block_k = getenv("GEMM_BLOCK_K", default_block_k)
-      num_warps = getenv("GEMM_NUM_WARPS", default_num_warps)
-      warps_row = getenv("GEMM_WARPS_ROW", default_warps_row)
-      warps_col = getenv("GEMM_WARPS_COL", default_warps_col)
       gemm_wgm = getenv("GEMM_WGM", default_gemm_wgm)
       gemm_min_blocks_per_cu = getenv("GEMM_MIN_BLOCKS_PER_CU", default_gemm_min_blocks_per_cu)
       gemm_xcd_swizzle = getenv("GEMM_XCD_SWIZZLE", default_gemm_xcd_swizzle)
-      fxn = functools.partial(custom_hk_fp8_gemm, dname=dname, scale_mode=scale_mode, tile_m=tile_m, tile_n=tile_n,
-                              block_k=block_k, num_warps=num_warps, warps_row=warps_row, warps_col=warps_col, gemm_wgm=gemm_wgm,
+      fxn = functools.partial(custom_hk_fp8_gemm, dname=dname, scale_mode=scale_mode, gemm_wgm=gemm_wgm,
                               gemm_xcd_swizzle=gemm_xcd_swizzle, gemm_min_blocks_per_cu=gemm_min_blocks_per_cu)
       out = Tensor.custom_kernel(out, a, b.T, *scales, *extra, fxn=fxn, grad_fxn=custom_gemm_bw)[0]
     else:
