@@ -2776,6 +2776,7 @@ def custom_hk_bf16_gemm_bw(gradient:UOp, kernel:UOp):
   assert all_same([gradient.device, a.device, b_t.device, b_orig.device, out.device])
   a_t, bt_t, g_t = Tensor(a, device=a.device), Tensor(b_t, device=a.device), Tensor(gradient, device=a.device)
   g_t = g_t[:a.shape[0]]
+  if g_t.dtype != bt_t.dtype: g_t = g_t.cast(bt_t.dtype)
   # Forward receives B transposed for the ThunderKittens ABt kernel: C = A @ b_t.T.
   grad_a = asm_gemm(g_t, bt_t).uop if can_use_asm_gemm(g_t, bt_t) else (g_t @ bt_t).uop
   a_t_flat, g_t_flat = a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1), g_t.reshape(-1, g_t.shape[-1])
@@ -2801,6 +2802,9 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
   if (k_sharded:=is_multi and a.uop.axis == 2): K //= len(a.device)
   if (m_sharded:=is_multi and a.uop.axis == 1): M //= len(a.device)
   n_sharded = is_multi and b.uop.axis == 1
+  renderer = Device[dname:=(a.device[0] if is_multi else a.device)].renderer
+  dname, arch = dname.split(":")[0], renderer.target.arch
+  use_hk_bf16 = arch.startswith("gfx950") and getenv("USE_ASM", 1) and a.dtype == dtypes.bfloat16 and getenv("USE_HK_BF16", 1)
 
   if is_multi:
     if n_sharded:
@@ -2813,8 +2817,6 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
   else:
     out = Tensor.invalids(batch, M, N, dtype=out_dtype, device=a.device)
 
-  renderer = Device[dname:=(a.device[0] if is_multi else a.device)].renderer
-  dname, arch = dname.split(":")[0], renderer.target.arch
   if arch.startswith("gfx950") and getenv("USE_ASM", 1):
     # fp8 gemm computes a@b.T, kernel multiplies output by x_scale * w_scale before bf16 store
     if a.dtype == FP8_DTYPE:
@@ -2823,7 +2825,7 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
       extra = [grad_amax_state] if grad_amax_state is not None else []
       fxn = functools.partial(custom_hk_fp8_gemm, dname=dname, scale_mode=scale_mode)
       out = Tensor.custom_kernel(out, a, b.T, *scales, *extra, fxn=fxn, grad_fxn=custom_gemm_bw)[0]
-    elif a.dtype == dtypes.bfloat16 and not k_sharded and getenv("USE_HK_BF16", 1):
+    elif use_hk_bf16:
       out = Tensor.custom_kernel(out, a, b.T, b, fxn=functools.partial(custom_hk_bf16_gemm, dname=dname), grad_fxn=custom_hk_bf16_gemm_bw)[0]
     else:
       out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_asm_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
