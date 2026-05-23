@@ -43,9 +43,8 @@ if __name__ == "__main__":
 
   start, end = start_marker["st_ms"], end_marker["st_ms"]
   window = end - start
-  events:list[tuple[float, int, str]] = []
-  presence:dict[str, list[tuple[float, float]]] = collections.defaultdict(list)
-  # possibly overlapped total time
+  intervals:list[tuple[float, float]] = []
+  lane_sum:dict[str, dict[str, float]] = collections.defaultdict(lambda: collections.defaultdict(float))
   device_sum:dict[str, float] = collections.defaultdict(float)
   estimates:dict[str, dict[str, float]] = collections.defaultdict(lambda: collections.defaultdict(float))
   counts:collections.Counter[str] = collections.Counter()
@@ -58,33 +57,18 @@ if __name__ == "__main__":
     a, b = max(st, start), min(en, end)
     if b <= a: continue
     key = f"{dev}:{name}" if dev in {"USER", "TINY", "CPU:COPY"} else name
-    events += [(a, 1, key), (b, -1, key)]
-    presence[key].append((a, b))
+    intervals.append((a, b))
+    lane_sum[key][dev] += b - a
     device_sum[key] += b - a
     for k in ("FLOPS", "B/s mem", "B/s lds"):
       if k in rec.get("fmt", {}): estimates[key][k] += rec["fmt"][k] * (b - a) * 1e-3
     counts[key] += 1
 
-  events.sort(key=lambda x:(x[0], -x[1]))
-  active:collections.Counter[str] = collections.Counter()
-  attr:dict[str, float] = collections.defaultdict(float)
-  covered, prev, i = 0.0, start, 0
-  while i < len(events):
-    t = events[i][0]
-    if t > prev:
-      keys = [k for k,n in active.items() if n > 0]
-      dur = t - prev
-      if keys:
-        covered += dur
-        for k in keys: attr[k] += dur / len(keys)
-      prev = t
-    while i < len(events) and events[i][0] == t:
-      _, delta, key = events[i]
-      active[key] += delta
-      if active[key] == 0: del active[key]
-      i += 1
+  covered = union_len(intervals)
+  crit = {name:max(lanes.values()) for name,lanes in lane_sum.items()}
+  crit_lane = {name:max(lanes, key=lambda lane:lanes[lane]) for name,lanes in lane_sum.items()}
 
-  rows = sorted(attr, key=lambda x:device_sum[x], reverse=True)
+  rows = sorted(crit, key=lambda x:crit[x], reverse=True)
   other = rows[args.limit:] if args.limit > 0 else []
   if args.limit > 0: rows = rows[:args.limit]
   print(f"window {args.start!r} -> {end_marker['name']!r}: {window:.3f} ms")
@@ -92,9 +76,9 @@ if __name__ == "__main__":
   for name in rows:
     est = {k:int(v / (device_sum[name] * 1e-3)) for k,v in estimates[name].items() if device_sum[name] > 0}
     display = name[:38] + " "*max(0, 38-ansilen(name[:38]))
-    print(f"{display} {time_to_str(attr[name]*1e-3, w=9)} {time_to_str(device_sum[name]*1e-3, w=9)} {counts[name]:7d} {attr[name]/window*100:6.2f}%"+
+    print(f"{display} {time_to_str(crit[name]*1e-3, w=9)} {time_to_str(device_sum[name]*1e-3, w=9)} {counts[name]:7d} {crit[name]/window*100:6.2f}% {crit_lane[name][:8]:>8s}"+
           ("    "+fmt_data(est) if est else ""))
   if other:
-    other_wall, other_dev, other_count = sum(attr[x] for x in other), sum(device_sum[x] for x in other), sum(counts[x] for x in other)
-    print(f"{'Other':38s} {time_to_str(other_wall*1e-3, w=9)} {time_to_str(other_dev*1e-3, w=9)} {other_count:7d} {other_wall/window*100:6.2f}%")
-  print(f"TOTAL {sum(attr.values()):.3f} ms ({sum(attr.values())/window*100:.2f}%)")
+    other_crit, other_dev, other_count = sum(crit[x] for x in other), sum(device_sum[x] for x in other), sum(counts[x] for x in other)
+    print(f"{'Other':38s} {time_to_str(other_crit*1e-3, w=9)} {time_to_str(other_dev*1e-3, w=9)} {other_count:7d} {other_crit/window*100:6.2f}%")
+  print(f"TOTAL crit {sum(crit.values()):.3f} ms ({sum(crit.values())/window*100:.2f}%), device {sum(device_sum.values()):.3f} ms")
