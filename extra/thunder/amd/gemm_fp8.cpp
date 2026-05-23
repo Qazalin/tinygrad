@@ -97,8 +97,20 @@ using G = kittens::group<NUM_WARPS>;
 #ifndef SCALE_MODE
 #define SCALE_MODE 3
 #endif
+#ifndef GEMM_WGM
+#define GEMM_WGM 4
+#endif
+#ifndef GEMM_XCD_SWIZZLE
+#define GEMM_XCD_SWIZZLE 1
+#endif
+#ifndef GEMM_NUM_XCDS
+#define GEMM_NUM_XCDS 8
+#endif
+#ifndef GEMM_MIN_BLOCKS_PER_CU
+#define GEMM_MIN_BLOCKS_PER_CU 2
+#endif
 
-__global__ __launch_bounds__(512, 2) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_ptr, fp8e4m3 *B_ptr
+__global__ __launch_bounds__(512, GEMM_MIN_BLOCKS_PER_CU) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_ptr, fp8e4m3 *B_ptr
 #if SCALE_MODE == 1
     , float *x_scale_ptr
 #elif SCALE_MODE == 2
@@ -148,10 +160,28 @@ __global__ __launch_bounds__(512, 2) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_pt
 
     // Calculate which block this threadblock should work on
     int global_block_id = blockIdx.x;
+    int wgid = global_block_id;
 
-    // Convert linear block ID to 2D coordinates
-    int block_row = global_block_id / blocks_per_col;
-    int block_col = global_block_id % blocks_per_col;
+#if GEMM_XCD_SWIZZLE
+    if constexpr (total_blocks_needed % GEMM_NUM_XCDS == 0) {
+        constexpr int blocks_per_xcd = total_blocks_needed / GEMM_NUM_XCDS;
+        wgid = (wgid % GEMM_NUM_XCDS) * blocks_per_xcd + (wgid / GEMM_NUM_XCDS);
+    }
+#endif
+
+#if GEMM_WGM > 1
+    constexpr int num_wgid_in_group = GEMM_WGM * blocks_per_col;
+    int group_id = wgid / num_wgid_in_group;
+    int first_block_row = group_id * GEMM_WGM;
+    int group_size_row = blocks_per_row - first_block_row;
+    group_size_row = group_size_row < GEMM_WGM ? group_size_row : GEMM_WGM;
+
+    int block_row = first_block_row + ((wgid % num_wgid_in_group) % group_size_row);
+    int block_col = (wgid % num_wgid_in_group) / group_size_row;
+#else
+    int block_row = wgid / blocks_per_col;
+    int block_col = wgid % blocks_per_col;
+#endif
     int block_m = block_row * BLOCK_SIZE_ROW;
     int block_n = block_col * BLOCK_SIZE_COL;
 
