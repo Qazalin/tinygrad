@@ -2658,25 +2658,6 @@ def custom_hk_fp8_gemm(C:UOp, A:UOp, B:UOp, *args:UOp, dname:str, scale_mode:int
                                  f"-DSCALE_MODE={scale_mode}", f"-DGEMM_WGM={gemm_wgm}", f"-DGEMM_XCD_SWIZZLE={gemm_xcd_swizzle}",
                                  "-DGEMM_NUM_XCDS=8", f"-DGEMM_MIN_BLOCKS_PER_CU={gemm_min_blocks_per_cu}"]).compile_cached(src)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
-                                UOp(Ops.BINARY, arg=lib)))
-
-# ** BF16 ThunderKittens GEMM custom kernel
-
-@functools.cache
-def custom_hk_bf16_gemm(C:UOp, A:UOp, B:UOp, *args:UOp, dname:str) -> UOp:
-  M, K = A.shape[0]*A.shape[1], A.shape[2]
-  N, K2 = B.shape[(1 if B.ndim == 3 else 0):]
-  assert K == K2, f"{A.shape} {B.shape}"
-  block_size = 256
-  threads = UOp.special(64 * 8, "lidx0")
-  workgroups = UOp.special((M // block_size) * (N // block_size), "gidx0")
-  sink = UOp.sink(C.base, A.base, B.base, threads, workgroups,
-                  arg=KernelInfo(f"hk_bf16_gemm_{M}_{N}_{K}", estimates=Estimates(ops=2*M*N*K, mem=(M*K+N*K+M*N)*A.dtype.itemsize)))
-  kittens_path = pathlib.Path(__file__).parent.parent/"thunder"/"amd"
-  src = (kittens_path/"gemm_bf16.cpp").read_text()
-  lib = HIPCCCompiler("gfx950", [f"-I{(kittens_path/'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math",
-                                 "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DGEMM_M={M}", f"-DGEMM_N={N}", f"-DGEMM_K={K}"]).compile_cached(src)
-  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
                                UOp(Ops.BINARY, arg=lib)))
 
 FP8_LLAMA_GEMM_VARIANTS = {
@@ -2805,18 +2786,6 @@ def custom_gemm_bw(gradient:UOp, kernel:UOp):
     else: grad_b = (a_t_flat @ g_t_flat).uop
     return (None, grad_a, grad_b)
 
-def custom_hk_bf16_gemm_bw(gradient:UOp, kernel:UOp):
-  out, a, b_t, b_orig = kernel.src[1:]
-  assert all_same([gradient.device, a.device, b_t.device, b_orig.device, out.device])
-  a_t, bt_t, g_t = Tensor(a, device=a.device), Tensor(b_t, device=a.device), Tensor(gradient, device=a.device)
-  g_t = g_t[:a.shape[0]]
-  if g_t.dtype != bt_t.dtype: g_t = g_t.cast(bt_t.dtype)
-  # Forward receives B transposed for the ThunderKittens ABt kernel: C = A @ b_t.T.
-  grad_a = asm_gemm(g_t, bt_t).uop if can_use_asm_gemm(g_t, bt_t) else (g_t @ bt_t).uop
-  a_t_flat, g_t_flat = a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1), g_t.reshape(-1, g_t.shape[-1])
-  grad_b = asm_gemm(a_t_flat, g_t_flat).uop if can_use_asm_gemm(a_t_flat, g_t_flat) else (a_t_flat @ g_t_flat).uop
-  return (None, grad_a, None, grad_b)
-
 # ** main gemm function
 
 def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=None, grad_amax_state:Tensor|None=None) -> Tensor:
@@ -2836,9 +2805,6 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
   if (k_sharded:=is_multi and a.uop.axis == 2): K //= len(a.device)
   if (m_sharded:=is_multi and a.uop.axis == 1): M //= len(a.device)
   n_sharded = is_multi and b.uop.axis == 1
-  renderer = Device[dname:=(a.device[0] if is_multi else a.device)].renderer
-  dname, arch = dname.split(":")[0], renderer.target.arch
-  use_hk_bf16 = arch.startswith("gfx950") and getenv("USE_ASM", 1) and a.dtype == dtypes.bfloat16 and getenv("USE_HK_BF16", 1)
 
   if is_multi:
     if n_sharded:
@@ -2851,6 +2817,8 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
   else:
     out = Tensor.invalids(batch, M, N, dtype=out_dtype, device=a.device)
 
+  renderer = Device[dname:=(a.device[0] if is_multi else a.device)].renderer
+  dname, arch = dname.split(":")[0], renderer.target.arch
   if arch.startswith("gfx950") and getenv("USE_ASM", 1):
     # fp8 gemm computes a@b.T, kernel multiplies output by x_scale * w_scale before bf16 store
     if a.dtype == FP8_DTYPE:
@@ -2868,8 +2836,6 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
       fxn = functools.partial(custom_hk_fp8_gemm, dname=dname, scale_mode=scale_mode, gemm_wgm=gemm_wgm,
                               gemm_xcd_swizzle=gemm_xcd_swizzle, gemm_min_blocks_per_cu=gemm_min_blocks_per_cu)
       out = Tensor.custom_kernel(out, a, b.T, *scales, *extra, fxn=fxn, grad_fxn=custom_gemm_bw)[0]
-    elif use_hk_bf16:
-      out = Tensor.custom_kernel(out, a, b.T, b, fxn=functools.partial(custom_hk_bf16_gemm, dname=dname), grad_fxn=custom_hk_bf16_gemm_bw)[0]
     else:
       out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_asm_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
   else:
