@@ -24,6 +24,7 @@ if __name__ == "__main__":
   parser.add_argument("start", type=str, help="start marker name, for example 'train @ 2'")
   parser.add_argument("end", type=str, help="end marker name, for example 'train @ 3'")
   parser.add_argument("-n", "--limit", type=int, default=60, help="number of rows to print (default: 60, <=0 for all)")
+  parser.add_argument("--include-sdma", action="store_true", help="include SDMA copy events")
   args = parser.parse_args()
 
   records = []
@@ -52,6 +53,7 @@ if __name__ == "__main__":
   for rec in records:
     dev, name = rec.get("device", ""), rec["name"]
     if dev == "AMD Graph": continue
+    if not args.include_sdma and (":SDMA:" in dev or " -> " in name): continue
     st, en = rec["st_ms"], rec["st_ms"] + rec["dur_ms"]
     a, b = max(st, start), min(en, end)
     if b <= a: continue
