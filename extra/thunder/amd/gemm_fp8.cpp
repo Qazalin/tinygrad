@@ -89,7 +89,26 @@ __device__ inline static void load_st_to_rt(RT &dst, const ST &src) {
     }
 }
 
-constexpr int NUM_WARPS = 8;
+#ifndef GEMM_TILE_M
+#define GEMM_TILE_M 256
+#endif
+#ifndef GEMM_TILE_N
+#define GEMM_TILE_N 256
+#endif
+#ifndef GEMM_BLOCK_K
+#define GEMM_BLOCK_K 128
+#endif
+#ifndef GEMM_NUM_WARPS
+#define GEMM_NUM_WARPS 8
+#endif
+#ifndef GEMM_WARPS_ROW
+#define GEMM_WARPS_ROW 2
+#endif
+#ifndef GEMM_WARPS_COL
+#define GEMM_WARPS_COL 4
+#endif
+
+constexpr int NUM_WARPS = GEMM_NUM_WARPS;
 
 using G = kittens::group<NUM_WARPS>;
 
@@ -110,7 +129,7 @@ using G = kittens::group<NUM_WARPS>;
 #define GEMM_MIN_BLOCKS_PER_CU 2
 #endif
 
-__global__ __launch_bounds__(512, GEMM_MIN_BLOCKS_PER_CU) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_ptr, fp8e4m3 *B_ptr
+__global__ __launch_bounds__(64 * GEMM_NUM_WARPS, GEMM_MIN_BLOCKS_PER_CU) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_ptr, fp8e4m3 *B_ptr
 #if SCALE_MODE == 1
     , float *x_scale_ptr
 #elif SCALE_MODE == 2
@@ -125,12 +144,16 @@ __global__ __launch_bounds__(512, GEMM_MIN_BLOCKS_PER_CU) void hk_fp8_gemm(bf16 
     kittens::gl<fp8e4m3, 1, 1, N, K> B{B_ptr, nullptr, nullptr, nullptr, nullptr};
     kittens::gl<bf16, 1, 1, M, N>    C{C_ptr, nullptr, nullptr, nullptr, nullptr};
 
-    // Each threadblock computes 256x256 output tile
-    constexpr int WARPS_COL = 4;
-    constexpr int WARPS_ROW = 2;
-    constexpr int BLOCK_SIZE_ROW = 256;
-    constexpr int BLOCK_SIZE_COL = 256;
-    constexpr int BLOCK_K = 128;
+    constexpr int WARPS_COL = GEMM_WARPS_COL;
+    constexpr int WARPS_ROW = GEMM_WARPS_ROW;
+    constexpr int BLOCK_SIZE_ROW = GEMM_TILE_M;
+    constexpr int BLOCK_SIZE_COL = GEMM_TILE_N;
+    constexpr int BLOCK_K = GEMM_BLOCK_K;
+    static_assert(NUM_WARPS == WARPS_ROW * WARPS_COL, "warp layout must match num warps");
+    static_assert(BLOCK_SIZE_ROW % (WARPS_ROW * 2) == 0, "M tile must split across row warps and halves");
+    static_assert(BLOCK_SIZE_COL % (WARPS_COL * 2) == 0, "N tile must split across col warps and halves");
+    static_assert(BLOCK_K % 128 == 0, "FP8 MFMA path requires K tile multiple of 128");
+    static_assert(2 * (BLOCK_SIZE_ROW + BLOCK_SIZE_COL) * BLOCK_K <= 163840, "GEMM tile exceeds LDS budget");
     constexpr int blocks_per_row = M / BLOCK_SIZE_ROW; // Number of blocks per matrix row
     constexpr int blocks_per_col = N / BLOCK_SIZE_COL; // Number of blocks per matrix col
     constexpr int total_blocks_needed = blocks_per_row * blocks_per_col; // Total blocks needed
@@ -185,8 +208,8 @@ __global__ __launch_bounds__(512, GEMM_MIN_BLOCKS_PER_CU) void hk_fp8_gemm(bf16 
     int block_m = block_row * BLOCK_SIZE_ROW;
     int block_n = block_col * BLOCK_SIZE_COL;
 
-    int warp_m = (warpid() / WARPS_COL); // warp row: 0 to 3
-    int warp_n = (warpid() % WARPS_COL); // warp col: 0 to 1
+    int warp_m = warpid() / WARPS_COL;
+    int warp_n = warpid() % WARPS_COL;
 
     int tic = 0, toc = 1;
 
