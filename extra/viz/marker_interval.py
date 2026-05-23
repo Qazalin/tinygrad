@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 # Usage: NO_COLOR=1 python -m tinygrad.viz.cli --json | ./extra/viz/marker_interval.py "train @ 2" "train @ 3"
 import argparse, collections, json, sys
-from tinygrad.helpers import ansistrip
+from tinygrad.helpers import ansilen, ansistrip, time_to_str
+
+def to_str(k:str, v) -> str:
+  if k == "FLOPS" or k.startswith("B/s"): return f"{v*1e-9:.0f} G{k}" if v < 1e13 else f"{v*1e-12:.0f} T{k}"
+  return f"{k}={v}"
+
+def fmt_data(data:dict[str, float]) -> str:
+  return "  ".join((p:=to_str(k, v))+" "*max(0, 14-ansilen(p)) for k,v in data.items())
 
 def union_len(ints:list[tuple[float, float]]) -> float:
   if not ints: return 0.0
@@ -39,6 +46,7 @@ if __name__ == "__main__":
   presence:dict[str, list[tuple[float, float]]] = collections.defaultdict(list)
   # possibly overlapped total time
   device_sum:dict[str, float] = collections.defaultdict(float)
+  estimates:dict[str, dict[str, float]] = collections.defaultdict(lambda: collections.defaultdict(float))
   counts:collections.Counter[str] = collections.Counter()
 
   for rec in records:
@@ -51,6 +59,8 @@ if __name__ == "__main__":
     events += [(a, 1, key), (b, -1, key)]
     presence[key].append((a, b))
     device_sum[key] += b - a
+    for k in ("FLOPS", "B/s mem", "B/s lds"):
+      if k in rec.get("fmt", {}): estimates[key][k] += rec["fmt"][k] * (b - a) * 1e-3
     counts[key] += 1
 
   events.sort(key=lambda x:(x[0], -x[1]))
@@ -72,11 +82,17 @@ if __name__ == "__main__":
       if active[key] == 0: del active[key]
       i += 1
 
-  rows = sorted(attr.items(), key=lambda kv: kv[1], reverse=True)
+  rows = sorted(attr, key=lambda x:device_sum[x], reverse=True)
+  other = rows[args.limit:] if args.limit > 0 else []
   if args.limit > 0: rows = rows[:args.limit]
   print(f"window {args.start!r} -> {end_marker['name']!r}: {window:.3f} ms")
   print(f"covered: {covered:.3f} ms ({covered/window*100:.2f}%), gap: {window-covered:.3f} ms")
-  print(f"{'rank':>4} {'wall_ms':>10} {'pct':>7} {'present_ms':>11} {'device_sum_ms':>13} {'count':>7}  name")
-  for rank,(name,ms) in enumerate(rows, 1):
-    print(f"{rank:4d} {ms:10.3f} {ms/window*100:6.2f}% {union_len(presence[name]):11.3f} {device_sum[name]:13.3f} {counts[name]:7d}  {name}")
+  for name in rows:
+    est = {k:int(v / (device_sum[name] * 1e-3)) for k,v in estimates[name].items() if device_sum[name] > 0}
+    display = name[:38] + " "*max(0, 38-ansilen(name[:38]))
+    print(f"{display} {time_to_str(attr[name]*1e-3, w=9)} {time_to_str(device_sum[name]*1e-3, w=9)} {counts[name]:7d} {attr[name]/window*100:6.2f}%"+
+          ("    "+fmt_data(est) if est else ""))
+  if other:
+    other_wall, other_dev, other_count = sum(attr[x] for x in other), sum(device_sum[x] for x in other), sum(counts[x] for x in other)
+    print(f"{'Other':38s} {time_to_str(other_wall*1e-3, w=9)} {time_to_str(other_dev*1e-3, w=9)} {other_count:7d} {other_wall/window*100:6.2f}%")
   print(f"TOTAL {sum(attr.values()):.3f} ms ({sum(attr.values())/window*100:.2f}%)")
