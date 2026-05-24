@@ -85,6 +85,9 @@ class GradAccClipAdamW(Optimizer):
       scale = FP8_MAX / (amax + 1e-8)
       fp8_w = (new_w * scale.reshape(-1, *([1]*(new_w.ndim-1)))).clamp(-FP8_MAX, FP8_MAX).cast(t.dtype)
       if hasattr(t, '_inv_scale'):
-        t._inv_scale.assign(((amax + 1e-8) / FP8_MAX).cast(t._inv_scale.dtype))
+        inv_scale = ((amax + 1e-8) / FP8_MAX).cast(t._inv_scale.dtype)
+        t._inv_scale.assign(inv_scale)
+        if hasattr(t, '_inv_scale_layers'):
+          for i, s in enumerate(t._inv_scale_layers): s.assign(inv_scale[i])
       return fp8_w
     return new_w.cast(t.dtype)

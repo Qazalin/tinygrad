@@ -136,6 +136,7 @@ class FlatTransformer:
     w_scales = [("wqkv", s_qkv), ("wo", s_o), ("w2", s_2)]
     w_scales += [("w1", s_1), ("w3", s_3)] if SPLIT_W13 else [("w13", s_13)]
     self._fp8_inv_scale = {name: s.float().contiguous().is_param_(False) for name, s in w_scales}
+    self._fp8_inv_scale_layers = {name: [s[i].float().contiguous().is_param_(False) for i in range(n_layers)] for name, s in w_scales}
 
   def lin_per_layer(self, in_features:int, out_features:int, std:float=0.02):
     if getenv("ZEROS"): w = Tensor.zeros(self.n_layers, out_features, in_features)
@@ -241,11 +242,14 @@ class FlatTransformer:
             amax_dict[name][i] = amax_dict[name][i].to(device).contiguous().is_param_(False)
       for name in self._fp8_inv_scale:
         self._fp8_inv_scale[name] = self._fp8_inv_scale[name].to(device).contiguous().is_param_(False)
+      for name in self._fp8_inv_scale_layers:
+        for i in range(len(self._fp8_inv_scale_layers[name])):
+          self._fp8_inv_scale_layers[name][i] = self._fp8_inv_scale_layers[name][i].to(device).contiguous().is_param_(False)
 
   def __call__(self, tokens:Tensor, save:bool=True):
     h = self.tok_embeddings(tokens)
     freqs_cis = self.freqs_cis.cast(h.dtype)[:, :tokens.shape[1], :, :, :]
-    a, ga, s = self._fp8_amax, self._fp8_grad_amax, self._fp8_inv_scale
+    a, ga, s = self._fp8_amax, self._fp8_grad_amax, self._fp8_inv_scale_layers
     for i in range(self.n_layers):
       attn_kwargs = dict(attention_norm=self.attention_norm[i], wqkv=self.wqkv[i], wo=self.wo[i],
                          amax_xqkv=a["xqkv"][i], amax_xo=a["xo"][i], s_qkv=s["wqkv"][i], s_o=s["wo"][i],

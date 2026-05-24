@@ -1439,19 +1439,21 @@ def train_llama3():
   fp8_amax = [t for ts in model._fp8_amax.values() for t in ts]
   fp8_grad_amax = [t for ts in model._fp8_grad_amax.values() for t in ts] if hasattr(model, "_fp8_grad_amax") else []
   fp8_inv_scales = list(model._fp8_inv_scale.values())
+  fp8_inv_scale_layers = [t for ts in model._fp8_inv_scale_layers.values() for t in ts] if hasattr(model, "_fp8_inv_scale_layers") else []
 
   from tinygrad.nn.state import get_state_dict
   model_state = get_state_dict(model)
   for wname in model._fp8_inv_scale:
     w = model_state[wname]
     w._inv_scale = model._fp8_inv_scale[wname]
+    if hasattr(model, "_fp8_inv_scale_layers"): w._inv_scale_layers = model._fp8_inv_scale_layers[wname]
     if optim.master_params:
       idx = next(j for j, p in enumerate(optim.params) if p is w)
       optim.master_params[idx].assign((optim.master_params[idx] * w._inv_scale.reshape(-1, *([1]*(w.ndim-1)))).contiguous())
 
   # realize everything here
   if optim.master_params: Tensor.realize(*optim.master_params)
-  Tensor.realize(*optim.params, *fp8_inv_scales, *fp8_amax, *fp8_grad_amax)
+  Tensor.realize(*optim.params, *fp8_inv_scales, *fp8_inv_scale_layers, *fp8_amax, *fp8_grad_amax)
 
   @TinyJit
   def minibatch(tokens:Tensor):
@@ -1480,7 +1482,7 @@ def train_llama3():
 
     lr_cpu = optim.lr.float().to("CPU")
     grad_norm_cpu = grad_norm.float().to("CPU")
-    Tensor.realize(lr_cpu, grad_norm_cpu, *grads, *fp8_inv_scales)
+    Tensor.realize(lr_cpu, grad_norm_cpu, *grads, *fp8_inv_scales, *fp8_inv_scale_layers)
 
     return lr_cpu, grad_norm_cpu
 
