@@ -97,6 +97,9 @@ using G = kittens::group<NUM_WARPS>;
 #ifndef SCALE_MODE
 #define SCALE_MODE 3
 #endif
+#ifndef X_SCALE_FROM_AMAX
+#define X_SCALE_FROM_AMAX 0
+#endif
 #ifndef GEMM_WGM
 #define GEMM_WGM 4
 #endif
@@ -377,7 +380,7 @@ __global__ __launch_bounds__(512, GEMM_MIN_BLOCKS_PER_CU) void hk_fp8_gemm(bf16 
 
     // apply x_scale * w_scale before bf16 store to prevent overflow
 #if SCALE_MODE == 1
-    float scale = *x_scale_ptr;
+    float scale = X_SCALE_FROM_AMAX ? ((*x_scale_ptr + 1e-8f) * 0.002232142857142857f) : *x_scale_ptr;
     mul(cA, cA, scale);
     mul(cB, cB, scale);
     mul(cC, cC, scale);
@@ -389,7 +392,8 @@ __global__ __launch_bounds__(512, GEMM_MIN_BLOCKS_PER_CU) void hk_fp8_gemm(bf16 
     mul(cC, cC, scale);
     mul(cD, cD, scale);
 #elif SCALE_MODE == 3
-    float scale = *x_scale_ptr * *w_scale_ptr;
+    float x_scale = X_SCALE_FROM_AMAX ? ((*x_scale_ptr + 1e-8f) * 0.002232142857142857f) : *x_scale_ptr;
+    float scale = x_scale * *w_scale_ptr;
     mul(cA, cA, scale);
     mul(cB, cB, scale);
     mul(cC, cC, scale);
