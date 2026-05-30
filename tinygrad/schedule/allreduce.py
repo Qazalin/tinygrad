@@ -1,18 +1,43 @@
-import functools, itertools
+import atexit, functools, itertools
+from collections import Counter
 from tinygrad.helpers import all_int, prod, DEBUG, RING, ALL2ALL, getenv
 from tinygrad.uop.ops import UOp, Invalid, Ops
 
 # *** allreduce implementation ***
+_allreduce_stats:Counter[str] = Counter()
+_allreduce_examples:dict[str, tuple] = {}
+
+def _record_allreduce_stat(key:str, *example):
+  _allreduce_stats[key] += 1
+  _allreduce_examples.setdefault(key, example)
+
+@atexit.register
+def _print_allreduce_stats():
+  if not _allreduce_stats: return
+  print("ALLREDUCE_STATS")
+  for key, count in sorted(_allreduce_stats.items()):
+    example = _allreduce_examples.get(key, ())
+    print(f"  {key}: {count}" + (f" example={example}" if example else ""))
+
 def reassemble_chunks(chunks:list[tuple[int, int]], copied_chunks:list[UOp], shape:tuple[int, ...], output:UOp|None) -> UOp:
   numel = prod(shape)
 
   # Replace masked usum+pad reassembly with explicit stores into each output slice.
   # TODO: fuse these stores into a single branch-free multi-store kernel.
   if output is not None and len(chunks) > 0 and all(e-s == chunks[0][1]-chunks[0][0] for s,e in chunks):
+    _record_allreduce_stat("reassemble.explicit_store", shape, chunks, output.device)
     flat_output = output.reshape((numel,))
     stores = [flat_output.shrink(((s,e),)).store(c.reshape((e-s,))) for (s,e),c in zip(chunks, copied_chunks)]
     return flat_output.after(*stores).sink()
 
+  if output is None and len(chunks) > 0 and all(e-s == chunks[0][1]-chunks[0][0] for s,e in chunks):
+    output = UOp.empty(shape, copied_chunks[0].dtype, copied_chunks[0].device)
+    _record_allreduce_stat("reassemble.explicit_store_early", shape, chunks, output.device)
+    flat_output = output.reshape((numel,))
+    stores = [flat_output.shrink(((s,e),)).store(c.reshape((e-s,))) for (s,e),c in zip(chunks, copied_chunks)]
+    return flat_output.after(*stores).reshape(shape)
+
+  _record_allreduce_stat("reassemble.usum", shape, chunks, output.device if output is not None else None)
   return UOp.usum(*[c.pad(((s,numel-e),)) for (s,e),c in zip(chunks, copied_chunks)]).reshape(shape)
 
 def handle_allreduce(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
@@ -24,6 +49,7 @@ def handle_allreduce(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
   # fallback to naive allreduce to save on kernel dispatch, chunking and reassembling chunks.
   use_all2all = (ALL2ALL >= 2 or (ndev > 2 and numel > getenv("RING_ALLREDUCE_THRESHOLD", 256_000) and ALL2ALL >= 1))
   use_ring = not use_all2all and (RING >= 2 or (ndev > 2 and numel > getenv("RING_ALLREDUCE_THRESHOLD", 256_000) and RING >= 1))
+  _record_allreduce_stat("mode.all2all" if use_all2all else "mode.ring" if use_ring else "mode.naive", shape, ndev, numel, buf.device)
   if DEBUG >= 2: print(f"{'ALL2ALL' if use_all2all else 'RING' if use_ring else 'NAIVE'} ALLREDUCE {ndev}x{numel} | {buf.dtype}")
 
   # contiguous before we copy it

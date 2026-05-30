@@ -1,4 +1,6 @@
 import numpy as np
+import os
+os.environ["LATE_ALLREDUCE"] = "0"
 from tinygrad import Tensor, Device, Context, dtypes
 from tinygrad.uop.ops import UOp, Ops
 
