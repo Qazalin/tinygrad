@@ -1,9 +1,21 @@
 import functools, itertools
 from tinygrad.helpers import all_int, prod, DEBUG, RING, ALL2ALL, getenv
-from tinygrad.uop.ops import UOp, Invalid
+from tinygrad.uop.ops import UOp, Invalid, Ops
 
 # *** allreduce implementation ***
-def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
+def reassemble_chunks(chunks:list[tuple[int, int]], copied_chunks:list[UOp], shape:tuple[int, ...], output:UOp|None) -> UOp:
+  numel = prod(shape)
+
+  # Replace masked usum+pad reassembly with explicit stores into each output slice.
+  # TODO: fuse these stores into a single branch-free multi-store kernel.
+  if output is not None and len(chunks) > 0 and all(e-s == chunks[0][1]-chunks[0][0] for s,e in chunks):
+    flat_output = output.reshape((numel,))
+    stores = [flat_output.shrink(((s,e),)).store(c.reshape((e-s,))) for (s,e),c in zip(chunks, copied_chunks)]
+    return flat_output.after(*stores).sink()
+
+  return UOp.usum(*[c.pad(((s,numel-e),)) for (s,e),c in zip(chunks, copied_chunks)]).reshape(shape)
+
+def handle_allreduce(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
   if not isinstance(buf.device, tuple): return None
   assert all_int(buf.shape), f"does not support symbolic shape {buf.shape}"
   ndev, shape, numel = len(buf.device), buf.shape, prod(buf.shape)
@@ -51,12 +63,13 @@ def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
         chain.append(rc := rc.copy_to_device(buf.device[(i+step)%ndev]))
       copied_chunks.append(UOp.mstack(*(chain[(j-i+1)%ndev] for j in range(ndev))))
 
-  # reassemble
-  return UOp.usum(*[c.pad(((s,numel-e),)) for (s,e),c in zip(chunks, copied_chunks)]).reshape(shape)
+  return reassemble_chunks(chunks, copied_chunks, shape, output)
 
 def create_allreduce_function(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
   if output is None: output = UOp.const(red.dtype, Invalid, red.device, red.shape).clone()
   to = red.param_like(0)
   src = buf.param_like(1)
   red = src.allreduce(red.arg, red.src[1])
-  return output.after(to.after(to.store(handle_allreduce(src, red))).sink().call(output, buf.contiguous(), name="allreduce", precompile=True))
+  handled = handle_allreduce(src, red, to)
+  if handled is not None and handled.op is Ops.SINK: return output.after(handled.call(output, buf.contiguous(), name="allreduce", precompile=True))
+  return output.after(to.after(to.store(handled)).sink().call(output, buf.contiguous(), name="allreduce", precompile=True))
