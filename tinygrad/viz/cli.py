@@ -165,9 +165,14 @@ def main(args) -> None:
         base_uop = viz_data.trace.rewrites[ref][0]
         from tinygrad.codegen import to_program
         from tinygrad import Context, Device
+        from tinygrad.uop.ops import Ops
         with Context(NOOPT=1):
-          prg = to_program(viz._reconstruct(viz_data, base_uop.sink), Device["NULL"].renderer)
-          display += f" ({prg.src[0].arg.name})"
+          ast=  viz._reconstruct(viz_data, base_uop.sink)
+          if ast.op is Ops.SINK:
+            try:
+              prg = to_program(ast, Device["NULL"].renderer)
+              display += f" ({prg.src[0].arg.name})"
+            except: continue
         yield {"name":display, "dur_ms":t, "count":c, "pct":t/total*100.0, "ref":ref, "fmt":{k:int(est[k]/(t*1e-3)) for k in est_keys if k in est}}
       if num_rows > 0 and items[num_rows:]:
         other_t = sum(t for _,(t,_,_,_) in items[num_rows:])
