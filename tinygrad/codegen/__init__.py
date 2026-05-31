@@ -28,31 +28,37 @@ def _fast_transpose_report():
 atexit.register(_fast_transpose_report)
 def _fast_transpose_no(msg:str) -> None: fast_transpose_counter["todos"].append(msg)
 
-def fp8_transpose_source(name:str, rows:int, cols:int) -> str:
-  comps = "xyzw"
+def fp8_transpose_config(rows:int, cols:int) -> tuple[int, tuple[int, int, int]]:
+  tile = 512 if (rows, cols) in {(16384, 28672), (16384, 6144)} else 256
+  local_size = (16, 16, 4) if tile == 512 else (16, 16, 1)
+  return tile, local_size
+
+def fp8_transpose_source(name:str, rows:int, cols:int, tile:int) -> str:
+  threads = 1024 if tile == 512 else 256
+  r_expr = "g0*512 + l2*128 + (l0>>1)*16" if tile == 512 else "g0*256 + (l1>>3)*128 + (l0>>1)*16"
+  c_expr = "g1*512 + l1*32 + (l0&1)*16" if tile == 512 else "g1*256 + (l1&7)*32 + (l0&1)*16"
+  args = ", ".join(f"hip_fp8 a{i}" for i in range(16))
+  vals = ",".join(f"a{i}" for i in range(16))
   lines = [f'''typedef long unsigned int size_t;
 typedef unsigned char hip_fp8;
-typedef hip_fp8 hip_fp84 __attribute__((ext_vector_type(4)));
+typedef hip_fp8 hip_fp816 __attribute__((ext_vector_type(16)));
 extern "C" __attribute__((device, const)) size_t __ockl_get_local_id(unsigned int);
 extern "C" __attribute__((device, const)) size_t __ockl_get_group_id(unsigned int);
-static inline __attribute__((device)) hip_fp84 make_hip_fp84(hip_fp8 a, hip_fp8 b, hip_fp8 c, hip_fp8 d) {{ return {{a,b,c,d}}; }}
-extern "C" __attribute__((global)) void __attribute__((amdgpu_flat_work_group_size(1, 1024))) {name}(hip_fp8* out, hip_fp8* in) {{
+static inline __attribute__((device)) hip_fp816 make_hip_fp816({args}) {{ return {{{vals}}}; }}
+extern "C" __attribute__((global)) void __attribute__((amdgpu_flat_work_group_size({threads}, {threads}))) {name}(hip_fp8* __restrict__ out, const hip_fp8* __restrict__ in) {{
   int g0 = __ockl_get_group_id(0);
   int g1 = __ockl_get_group_id(1);
   int l0 = __ockl_get_local_id(0);
   int l1 = __ockl_get_local_id(1);
   int l2 = __ockl_get_local_id(2);
-  int r = g0*512 + l2*128 + (l0>>1)*16;
-  int c = g1*512 + l1*32 + (l0&1)*16;
+  int r = {r_expr};
+  int c = {c_expr};
   int base_in = r * {cols} + c;
   int base_out = c * {rows} + r;''']
-  for r in range(16):
-    for g in range(4): lines.append(f"  hip_fp84 v{r}_{g} = *((hip_fp84*)(in + base_in + {r}*{cols} + {g*4}));")
+  for r in range(16): lines.append(f"  hip_fp816 v{r} = *((const hip_fp816*)(in + base_in + {r}*{cols}));")
   for c in range(16):
-    g, comp = divmod(c, 4)
-    for rg in range(4):
-      vals = ", ".join(f"v{rg*4+i}_{g}.{comps[comp]}" for i in range(4))
-      lines.append(f"  *((hip_fp84*)(out + base_out + {c}*{rows} + {rg*4})) = make_hip_fp84({vals});")
+    vals = ", ".join(f"v{i}[{c}]" for i in range(16))
+    lines.append(f"  *((hip_fp816*)(out + base_out + {c}*{rows})) = make_hip_fp816({vals});")
   lines.append("}")
   return "\n".join(lines)
 
@@ -306,9 +312,10 @@ def _try_fast_transpose_program(ast:UOp, renderer:Renderer) -> UOp|None:
 
   name = f"custom_fp8_transpose_{rows}_{cols}"
   fast_transpose_counter["used"] += 1
-  source = fp8_transpose_source(name, rows, cols)
+  tile, local_size = fp8_transpose_config(rows, cols)
+  source = fp8_transpose_source(name, rows, cols, tile)
   sink = ast.replace(arg=replace(ast.arg, name=name, estimates=Estimates(ops=0, mem=rows*cols*2)))
-  info = ProgramInfo(name=name, global_size=(rows//512, cols//512, 1), local_size=(16, 16, 4), globals=(0, 1), outs=(0,), ins=(1,))
+  info = ProgramInfo(name=name, global_size=(rows//tile, cols//tile, 1), local_size=local_size, globals=(0, 1), outs=(0,), ins=(1,))
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=renderer.target.device), UOp(Ops.LINEAR, dtypes.void), UOp(Ops.SOURCE, arg=source),
                               UOp(Ops.BINARY, arg=renderer.compiler.compile_cached(source))), arg=info)
 
