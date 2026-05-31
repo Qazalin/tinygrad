@@ -13,7 +13,7 @@ from tinygrad.dtype import dtypes
 fast_gather_counter = {"used": 0, "todos": []}
 def _fast_gather_report():
   print(f"fast_gather: {fast_gather_counter['used']} used, {len(fast_gather_counter['todos'])} not used")
-  if DEBUG >= 2 and fast_gather_counter["todos"]:
+  if (DEBUG >= 2 or getenv("PRINT_TODOS")) and fast_gather_counter["todos"]:
     from collections import Counter
     for msg, cnt in Counter(fast_gather_counter["todos"]).most_common(): print(f"  {cnt:3d}x {msg}")
 atexit.register(_fast_gather_report)
