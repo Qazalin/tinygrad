@@ -29,7 +29,7 @@ atexit.register(_fast_transpose_report)
 def _fast_transpose_no(msg:str) -> None: fast_transpose_counter["todos"].append(msg)
 
 def fp8_transpose_config(rows:int, cols:int) -> tuple[int, tuple[int, int, int]]:
-  tile = 512 if (rows, cols) in {(16384, 28672), (16384, 6144)} else 256
+  tile = 256 if (rows, cols) in {(4096, 4096), (6144, 4096)} else 512
   local_size = (16, 16, 4) if tile == 512 else (16, 16, 1)
   return tile, local_size
 
