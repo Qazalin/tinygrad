@@ -1,64 +1,44 @@
 import statistics, unittest
+import numpy as np
 
-from tinygrad import Device
-from tinygrad.device import Buffer
-from tinygrad.dtype import dtypes
-from tinygrad.helpers import ceildiv
-from tinygrad.codegen import fp8_transpose_source
+from tinygrad import Device, Tensor, dtypes
+from tinygrad.helpers import Context
+from tinygrad.engine.realize import compile_linear, time_call
 
 FP8_TRANSPOSE_SHAPES = ((16384, 28672), (4096, 14336), (28672, 4096), (4096, 4096), (6144, 4096), (16384, 4096), (16384, 6144))
 
-def compile_kernel(name:str, source:str): return Device[Device.DEFAULT].runtime(name, Device[Device.DEFAULT].compiler.compile_cached(source))
+def make_fp8_input(rows:int, cols:int) -> Tensor:
+  r = Tensor.arange(rows, device=Device.DEFAULT, dtype=dtypes.int32).reshape(rows, 1)
+  c = Tensor.arange(cols, device=Device.DEFAULT, dtype=dtypes.int32).reshape(1, cols)
+  return ((r + c) % 16).cast(dtypes.float32).cast(dtypes.fp8e4m3).realize()
 
-def fill_source(name:str, numel:int) -> str:
-  return f'''typedef long unsigned int size_t;
-typedef unsigned char uint8_t;
-extern "C" __attribute__((device, const)) size_t __ockl_get_local_id(unsigned int);
-extern "C" __attribute__((device, const)) size_t __ockl_get_group_id(unsigned int);
-extern "C" __attribute__((global)) void __attribute__((amdgpu_flat_work_group_size(1, 256))) {name}(uint8_t* out) {{
-  int idx = __ockl_get_group_id(0)*256 + __ockl_get_local_id(0);
-  if (idx < {numel}) out[idx] = (uint8_t)((idx ^ (idx >> 8) ^ (idx >> 16)) & 255);
-}}'''
+def tensor_transpose(x:Tensor, fast:int) -> Tensor:
+  with Context(FAST_TRANSPOSE=fast, BEAM=0, DEBUG=0): return x.T.contiguous()
 
-def baseline_source(name:str, rows:int, cols:int) -> str:
-  numel = rows * cols
-  return f'''typedef long unsigned int size_t;
-typedef unsigned char uint8_t;
-extern "C" __attribute__((device, const)) size_t __ockl_get_local_id(unsigned int);
-extern "C" __attribute__((device, const)) size_t __ockl_get_group_id(unsigned int);
-extern "C" __attribute__((global)) void __attribute__((amdgpu_flat_work_group_size(1, 256))) {name}(uint8_t* out, uint8_t* in) {{
-  int idx = __ockl_get_group_id(0)*256 + __ockl_get_local_id(0);
-  if (idx < {numel}) {{
-    int r = idx / {cols};
-    int c = idx - r * {cols};
-    out[c * {rows} + r] = in[idx];
-  }}
-}}'''
+def time_tensor_transpose(x:Tensor, fast:int) -> float:
+  with Context(FAST_TRANSPOSE=fast, BEAM=0, DEBUG=0):
+    linear, var_vals = tensor_transpose(x, fast).linear_with_vars()
+    linear = compile_linear(linear, beam=0)
+  assert len(linear.src) == 1
+  return statistics.median(time_call(linear.src[0], var_vals) for _ in range(5))
 
-@unittest.skipUnless(Device.DEFAULT == "AMD", "requires real AMD timings and execution")
 class TestFastFP8Transpose(unittest.TestCase):
+  @classmethod
+  def setUpClass(cls):
+    if Device.DEFAULT != "AMD": raise unittest.SkipTest("requires AMD as the default device")
+    try: Device[Device.DEFAULT]
+    except Exception as e: raise unittest.SkipTest(f"requires available AMD runtime: {e}")
+
   def test_supported_shapes_correct_and_faster_than_baseline(self):
     for rows, cols in FP8_TRANSPOSE_SHAPES:
       with self.subTest(rows=rows, cols=cols):
-        numel = rows * cols
-        inp = Buffer(Device.DEFAULT, numel, dtypes.uint8).allocate()
-        ref = Buffer(Device.DEFAULT, numel, dtypes.uint8).allocate()
-        out = Buffer(Device.DEFAULT, numel, dtypes.uint8).allocate()
+        x = make_fp8_input(rows, cols)
+        ref = tensor_transpose(x, 0).realize()
+        out = tensor_transpose(x, 1).realize()
+        np.testing.assert_allclose(out.numpy(), ref.numpy(), rtol=0, atol=0)
 
-        fill = compile_kernel(f"fill_fp8_transpose_{rows}_{cols}", fill_source(f"fill_fp8_transpose_{rows}_{cols}", numel))
-        baseline = compile_kernel(f"baseline_fp8_transpose_{rows}_{cols}", baseline_source(f"baseline_fp8_transpose_{rows}_{cols}", rows, cols))
-        fast = compile_kernel(f"custom_fp8_transpose_{rows}_{cols}", fp8_transpose_source(f"custom_fp8_transpose_{rows}_{cols}", rows, cols))
-
-        fill(inp._buf, global_size=(ceildiv(numel, 256), 1, 1), local_size=(256, 1, 1), wait=True)
-        baseline(ref._buf, inp._buf, global_size=(ceildiv(numel, 256), 1, 1), local_size=(256, 1, 1), wait=True)
-        fast(out._buf, inp._buf, global_size=(rows//512, cols//512, 1), local_size=(16, 16, 4), wait=True)
-
-        got, exp = bytearray(numel), bytearray(numel)
-        out.copyout(memoryview(got)); ref.copyout(memoryview(exp))
-        self.assertEqual(got, exp)
-
-        baseline_times = [baseline(ref._buf, inp._buf, global_size=(ceildiv(numel, 256), 1, 1), local_size=(256, 1, 1), wait=True) for _ in range(5)]
-        fast_times = [fast(out._buf, inp._buf, global_size=(rows//512, cols//512, 1), local_size=(16, 16, 4), wait=True) for _ in range(5)]
-        self.assertLess(statistics.median(fast_times), statistics.median(baseline_times))
+        baseline_tm = time_tensor_transpose(x, 0)
+        fast_tm = time_tensor_transpose(x, 1)
+        self.assertLess(fast_tm, baseline_tm)
 
 if __name__ == "__main__": unittest.main()

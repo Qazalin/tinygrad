@@ -1,7 +1,7 @@
 from typing import cast
 from dataclasses import replace
 import itertools, atexit
-from tinygrad.helpers import DISABLE_FAST_IDIV, TRANSCENDENTAL, SPEC, DEBUG, VIZ, IMAGE, NOOPT, EMULATED_DTYPES, NOLOCALS, USE_TC
+from tinygrad.helpers import DISABLE_FAST_IDIV, TRANSCENDENTAL, SPEC, DEBUG, VIZ, IMAGE, NOOPT, EMULATED_DTYPES, NOLOCALS, USE_TC, FAST_TRANSPOSE
 from tinygrad.helpers import ALLOW_TF32, TracingKey, Context, panic, getenv
 from tinygrad.uop.ops import PatternMatcher, graph_rewrite, UOp, pm_lower_index_dtype, Ops, UPat, track_rewrites, KernelInfo, ProgramInfo
 from tinygrad.uop.render import pyrender
@@ -280,7 +280,7 @@ extern "C" __attribute__((global)) void __attribute__((amdgpu_flat_work_group_si
                               UOp(Ops.BINARY, arg=renderer.compiler.compile_cached(source))), arg=info)
 
 def _try_fast_transpose_program(ast:UOp, renderer:Renderer) -> UOp|None:
-  if not getenv("FAST_TRANSPOSE"): return None
+  if not FAST_TRANSPOSE: return None
   if renderer.target.device not in {"AMD","NULL"}: _fast_transpose_no(f"only AMD/NULL, got {renderer.target.device}"); return None
   if ast.op is not Ops.SINK or len(ast.src) != 1: _fast_transpose_no("ast must be single SINK"); return None
   end = ast.src[0]
@@ -350,7 +350,7 @@ def do_to_program(ast:UOp, renderer:Renderer) -> UOp:
 
 to_program_cache: dict[tuple, UOp] = {}
 def to_program(ast:UOp, renderer:Renderer) -> UOp:
-  config = (NOOPT, EMULATED_DTYPES, NOLOCALS, USE_TC, IMAGE, DISABLE_FAST_IDIV, TRANSCENDENTAL, ALLOW_TF32)
+  config = (NOOPT, EMULATED_DTYPES, NOLOCALS, USE_TC, IMAGE, DISABLE_FAST_IDIV, TRANSCENDENTAL, ALLOW_TF32, FAST_TRANSPOSE)
   key = (ast.key, type(renderer), renderer.target, *[x.value for x in config])
   if (prg:=to_program_cache.get(key)) is None: to_program_cache[key] = prg = do_to_program(ast, renderer)
   return prg
