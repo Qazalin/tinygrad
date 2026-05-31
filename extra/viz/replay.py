@@ -43,10 +43,10 @@ def param_specs(prg:UOp) -> list[tuple[int, object]]:
   return [(x.max_numel(), x.dtype.base) for x in params]
 
 def make_input(numel:int, dtype, device:str) -> Tensor:
-  if dtypes.is_float(dtype): return Tensor.randn(numel, device=device, dtype=dtype).contiguous().realize()
-  if dtypes.is_bool(dtype): return Tensor.randint(numel, low=0, high=2, dtype=dtypes.int32, device=device).cast(dtype).contiguous().realize()
-  if dtypes.is_int(dtype): return Tensor.randint(numel, low=0, high=17, dtype=dtypes.int32, device=device).cast(dtype).contiguous().realize()
-  return Tensor.empty(numel, device=device, dtype=dtype).contiguous().realize()
+  if dtypes.is_float(dtype): return Tensor.randn(numel, device=device, dtype=dtype).contiguous()
+  if dtypes.is_bool(dtype): return Tensor.randint(numel, low=0, high=2, dtype=dtypes.int32, device=device).cast(dtype).contiguous()
+  if dtypes.is_int(dtype): return Tensor.randint(numel, low=0, high=17, dtype=dtypes.int32, device=device).cast(dtype).contiguous()
+  raise Exception("unsupported dtype")
 
 def make_args(prg:UOp, bases:list[Tensor]|None=None) -> list[Tensor]:
   device = prg.src[1].arg
@@ -54,7 +54,7 @@ def make_args(prg:UOp, bases:list[Tensor]|None=None) -> list[Tensor]:
   tensors = []
   for i,(numel,dtype) in enumerate(param_specs(prg)):
     if i in outs:
-      tensors.append(Tensor.full(numel, -123.0 if dtypes.is_float(dtype) else 123, device=device, dtype=dtype).contiguous())
+      tensors.append(make_input(numel, dtype, device))
     elif bases is not None:
       tensors.append(bases[i])
     else:

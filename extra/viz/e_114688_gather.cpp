@@ -16,20 +16,15 @@ extern "C" __attribute__((global)) void __attribute__((amdgpu_flat_work_group_si
     hip_bfloat16* data8_14680064) {
   int tid = __ockl_get_local_id(0);
   int gid = __ockl_get_group_id(0);
-  int v = (gid * 256 + tid) * 2;
+  int shard = __ockl_get_group_id(1);
+  int local_v = (gid * 256 + tid) * 2;
+  int v = shard * 1835008 + local_v;
 
   u32x4 *dst = (u32x4*)data0_117440512;
-  u32x4 *src;
-  int off;
-  if (v < 1835008) { src = (u32x4*)data1_14680064; off = v; }
-  else if (v < 3670016) { src = (u32x4*)data2_14680064; off = v - 1835008; }
-  else if (v < 5505024) { src = (u32x4*)data3_14680064; off = v - 3670016; }
-  else if (v < 7340032) { src = (u32x4*)data4_14680064; off = v - 5505024; }
-  else if (v < 9175040) { src = (u32x4*)data5_14680064; off = v - 7340032; }
-  else if (v < 11010048) { src = (u32x4*)data6_14680064; off = v - 9175040; }
-  else if (v < 12845056) { src = (u32x4*)data7_14680064; off = v - 11010048; }
-  else { src = (u32x4*)data8_14680064; off = v - 12845056; }
+  u32x4 *srcs[8] = {(u32x4*)data1_14680064, (u32x4*)data2_14680064, (u32x4*)data3_14680064, (u32x4*)data4_14680064,
+                    (u32x4*)data5_14680064, (u32x4*)data6_14680064, (u32x4*)data7_14680064, (u32x4*)data8_14680064};
+  u32x4 *src = srcs[shard];
 
-  dst[v] = src[off];
-  dst[v+1] = src[off+1];
+  dst[v] = src[local_v];
+  dst[v+1] = src[local_v+1];
 }
