@@ -93,9 +93,13 @@ class GradAccClipAdamW(Optimizer):
       # delayed scaling: reuse previous step's inv_scale
       t._inv_scale.assign(t._next_inv_scale)
       inv_scale = t._inv_scale.to(new_w.device) if offloaded else t._inv_scale
-      scale = inv_scale.reciprocal().reshape(-1, *([1]*(new_w.ndim-1)))
-      scaled = (new_w * scale).clamp(-FP8_MAX, FP8_MAX)
-      ret = scaled.cast(t.dtype)
+      if t.dtype == dtypes.fp8e4m3 and new_w.dtype == dtypes.float and new_w.ndim == 3 and inv_scale.ndim == 1 and not offloaded:
+        from extra.llama_kernels.fp8_optimizer_cast import fp8_optimizer_cast
+        ret = fp8_optimizer_cast(new_w, inv_scale, t)
+      else:
+        scale = inv_scale.reciprocal().reshape(-1, *([1]*(new_w.ndim-1)))
+        scaled = (new_w * scale).clamp(-FP8_MAX, FP8_MAX)
+        ret = scaled.cast(t.dtype)
       # update inv_scale for next step from quantized result
       new_amax = (ret.float().abs().max(axis=tuple(range(1, ret.ndim))) * inv_scale * FP8_AMAX_MARGIN).detach()
       new_inv = ((new_amax + 1e-8) / FP8_MAX).cast(t._inv_scale.dtype)
