@@ -19,6 +19,15 @@ def _fast_gather_report():
 atexit.register(_fast_gather_report)
 def _fast_gather_no(msg:str) -> None: fast_gather_counter["todos"].append(msg)
 
+fast_transpose_counter = {"used": 0, "todos": []}
+def _fast_transpose_report():
+  print(f"fast_transpose: {fast_transpose_counter['used']} used, {len(fast_transpose_counter['todos'])} not used")
+  if (DEBUG >= 2 or getenv("PRINT_TODOS")) and fast_transpose_counter["todos"]:
+    from collections import Counter
+    for msg, cnt in Counter(fast_transpose_counter["todos"]).most_common(): print(f"  {cnt:3d}x {msg}")
+atexit.register(_fast_transpose_report)
+def _fast_transpose_no(msg:str) -> None: fast_transpose_counter["todos"].append(msg)
+
 # import all pattern matchers here
 from tinygrad.codegen.gpudims import pm_add_gpudims
 from tinygrad.uop.symbolic import sym, symbolic_simple, gep_pushing, symbolic, pm_move_where_on_load
@@ -240,7 +249,65 @@ extern "C" __attribute__((global)) void __attribute__((amdgpu_flat_work_group_si
   info = ProgramInfo(name=name, global_size=(groups_per_input, len(inps), 1), local_size=(threads, 1, 1), globals=tuple(range(len(inps)+1)),
                      outs=(0,), ins=tuple(range(1, len(inps)+1)))
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=renderer.target.device), UOp(Ops.LINEAR, dtypes.void), UOp(Ops.SOURCE, arg=source),
-                             UOp(Ops.BINARY, arg=renderer.compiler.compile_cached(source))), arg=info)
+                              UOp(Ops.BINARY, arg=renderer.compiler.compile_cached(source))), arg=info)
+
+def _try_fast_transpose_program(ast:UOp, renderer:Renderer) -> UOp|None:
+  if not getenv("FAST_TRANSPOSE"): return None
+  if renderer.target.device not in {"AMD","NULL"}: _fast_transpose_no(f"only AMD/NULL, got {renderer.target.device}"); return None
+  if ast.op is not Ops.SINK or len(ast.src) != 1: _fast_transpose_no("ast must be single SINK"); return None
+  end = ast.src[0]
+  if end.op is not Ops.END or len(end.src) < 1 or (store:=end.src[0]).op is not Ops.STORE or len(store.src) != 2: _fast_transpose_no("sink must contain one store"); return None
+  idx, val = store.src
+  if idx.op is not Ops.INDEX or val.op is not Ops.INDEX: _fast_transpose_no("store must be index to index"); return None
+  out, inp = idx.src[0], val.src[0]
+  if out.op is not Ops.PARAM or inp.op is not Ops.PARAM or (out.arg.slot, inp.arg.slot) != (0, 1): _fast_transpose_no("params must be output slot 0 and input slot 1"); return None
+  if out.dtype.base is not dtypes.fp8e4m3 or inp.dtype.base is not dtypes.fp8e4m3: _fast_transpose_no(f"transpose dtype not included {inp.dtype.base}->{out.dtype.base}"); return None
+  ranges = end.src[1:]
+  if len(ranges) != 2 or any(r.op is not Ops.RANGE for r in ranges): _fast_transpose_no("transpose must have two ranges"); return None
+  rows, cols = ranges[1].src[0].arg, ranges[0].src[0].arg
+  def _is_linear_index(u:UOp, outer:UOp, stride:int, inner:UOp) -> bool:
+    if u.op is not Ops.ADD or len(u.src) != 2: return False
+    a, b = u.src
+    if b is not inner: return False
+    return a.op is Ops.MUL and len(a.src) == 2 and a.src[0] is outer and a.src[1].op is Ops.CONST and a.src[1].arg == stride
+  if not _is_linear_index(idx.src[1], ranges[0], rows, ranges[1]) or not _is_linear_index(val.src[1], ranges[1], cols, ranges[0]):
+    _fast_transpose_no("not a pure 2D transpose"); return None
+  allowed_shapes = {(16384, 28672), (4096, 14336), (28672, 4096), (4096, 4096), (6144, 4096), (16384, 4096), (16384, 6144)}
+  if (rows, cols) not in allowed_shapes or out.max_numel() != rows*cols or inp.max_numel() != rows*cols:
+    _fast_transpose_no(f"transpose shape not included ({rows},{cols})->({cols},{rows})"); return None
+
+  name = f"custom_fp8_transpose_{rows}_{cols}"
+  fast_transpose_counter["used"] += 1
+  comps = "xyzw"
+  lines = [f'''typedef long unsigned int size_t;
+typedef unsigned char hip_fp8;
+typedef hip_fp8 hip_fp84 __attribute__((ext_vector_type(4)));
+extern "C" __attribute__((device, const)) size_t __ockl_get_local_id(unsigned int);
+extern "C" __attribute__((device, const)) size_t __ockl_get_group_id(unsigned int);
+static inline __attribute__((device)) hip_fp84 make_hip_fp84(hip_fp8 a, hip_fp8 b, hip_fp8 c, hip_fp8 d) {{ return {{a,b,c,d}}; }}
+extern "C" __attribute__((global)) void __attribute__((amdgpu_flat_work_group_size(1, 1024))) {name}(hip_fp8* out, hip_fp8* in) {{
+  int g0 = __ockl_get_group_id(0);
+  int g1 = __ockl_get_group_id(1);
+  int l0 = __ockl_get_local_id(0);
+  int l1 = __ockl_get_local_id(1);
+  int l2 = __ockl_get_local_id(2);
+  int r = g0*512 + l2*128 + (l0>>1)*16;
+  int c = g1*512 + l1*32 + (l0&1)*16;
+  int base_in = r * {cols} + c;
+  int base_out = c * {rows} + r;''']
+  for r in range(16):
+    for g in range(4): lines.append(f"  hip_fp84 v{r}_{g} = *((hip_fp84*)(in + base_in + {r}*{cols} + {g*4}));")
+  for c in range(16):
+    g, comp = divmod(c, 4)
+    for rg in range(4):
+      vals = ", ".join(f"v{rg*4+i}_{g}.{comps[comp]}" for i in range(4))
+      lines.append(f"  *((hip_fp84*)(out + base_out + {c}*{rows} + {rg*4})) = make_hip_fp84({vals});")
+  lines.append("}")
+  source = "\n".join(lines)
+  sink = ast.replace(arg=replace(ast.arg, name=name, estimates=Estimates(ops=0, mem=rows*cols*2)))
+  info = ProgramInfo(name=name, global_size=(rows//512, cols//512, 1), local_size=(16, 16, 4), globals=(0, 1), outs=(0,), ins=(1,))
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=renderer.target.device), UOp(Ops.LINEAR, dtypes.void), UOp(Ops.SOURCE, arg=source),
+                              UOp(Ops.BINARY, arg=renderer.compiler.compile_cached(source))), arg=info)
 
 @track_rewrites(name=lambda ast,renderer,ret,**kwargs: TracingKey(ret.src[0].arg.name,(ret.src[0].arg.function_name, ast), ret=renderer), replay=True)
 @Context(ALLOW_DEVICE_USAGE=0)
@@ -258,7 +325,9 @@ def do_to_program(ast:UOp, renderer:Renderer) -> UOp:
   if ast.op is Ops.PROGRAM: prg = ast
   elif ast.op is Ops.SINK:
     assert isinstance(ast.arg, KernelInfo), "requires KernelInfo on arg to to_program"
-    if (fast_prg:=_try_fast_gather_program(ast, renderer)) is not None:
+    fast_prg = _try_fast_transpose_program(ast, renderer)
+    if fast_prg is None: fast_prg = _try_fast_gather_program(ast, renderer)
+    if fast_prg is not None:
       if VIZ:
         graph_rewrite(ast, PatternMatcher([]), name="View Base AST")
         graph_rewrite(fast_prg, PatternMatcher([]), name="View Program")
