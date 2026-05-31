@@ -258,7 +258,11 @@ def do_to_program(ast:UOp, renderer:Renderer) -> UOp:
   if ast.op is Ops.PROGRAM: prg = ast
   elif ast.op is Ops.SINK:
     assert isinstance(ast.arg, KernelInfo), "requires KernelInfo on arg to to_program"
-    if (fast_prg:=_try_fast_gather_program(ast, renderer)) is not None: return fast_prg
+    if (fast_prg:=_try_fast_gather_program(ast, renderer)) is not None:
+      if VIZ:
+        graph_rewrite(ast, PatternMatcher([]), name="View Base AST")
+        graph_rewrite(fast_prg, PatternMatcher([]), name="View Program")
+      return fast_prg
     full_sink = full_rewrite_to_sink(ast, renderer, optimize=ast.tag is None)
     prog_info = ProgramInfo.from_sink(full_sink)
     # instruction selection
