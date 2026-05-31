@@ -1,6 +1,6 @@
 from typing import cast
 from dataclasses import replace
-import itertools
+import itertools, atexit
 from tinygrad.helpers import DISABLE_FAST_IDIV, TRANSCENDENTAL, SPEC, DEBUG, VIZ, IMAGE, NOOPT, EMULATED_DTYPES, NOLOCALS, USE_TC
 from tinygrad.helpers import ALLOW_TF32, TracingKey, Context, panic
 from tinygrad.uop.ops import PatternMatcher, graph_rewrite, UOp, pm_lower_index_dtype, Ops, UPat, track_rewrites, KernelInfo, ProgramInfo
@@ -9,6 +9,11 @@ from tinygrad.uop.spec import type_verify, spec_tensor, spec_program
 from tinygrad.renderer import Renderer, Estimates
 from tinygrad.renderer.isa import ISARenderer, IselContext, PreRegAllocContext
 from tinygrad.dtype import dtypes
+
+fast_gather_counter = {"used": 0}
+def _fast_gather_report():
+  if fast_gather_counter["used"]: print(f"fast_gather: {fast_gather_counter['used']} used")
+atexit.register(_fast_gather_report)
 
 # import all pattern matchers here
 from tinygrad.codegen.gpudims import pm_add_gpudims
@@ -171,6 +176,66 @@ pm_to_program = PatternMatcher([
   (UPat(Ops.PROGRAM, src=(UPat(), UPat(Ops.DEVICE), UPat(Ops.LINEAR), UPat(Ops.SOURCE, name="source")), name="prg"), do_compile),
 ])
 
+def _flatten_adds(u:UOp) -> list[UOp]:
+  return _flatten_adds(u.src[0]) + _flatten_adds(u.src[1]) if u.op is Ops.ADD else [u]
+
+def _try_fast_gather_program(ast:UOp, renderer:Renderer) -> UOp|None:
+  if renderer.target.device not in {"AMD","NULL"} or ast.op is not Ops.SINK or len(ast.src) != 1: return None
+  end = ast.src[0]
+  if end.op is not Ops.END or len(end.src) < 1 or (store:=end.src[0]).op is not Ops.STORE or len(store.src) != 2: return None
+  idx, val = store.src
+  if idx.op is not Ops.INDEX or idx.src[0].op is not Ops.RESHAPE or (out:=idx.src[0].src[0]).op is not Ops.PARAM: return None
+  if out.dtype.base is not dtypes.bfloat16: return None
+
+  inps: list[UOp] = []
+  for term in _flatten_adds(val):
+    if term.op is not Ops.WHERE or len(term.src) != 3: return None
+    load = zero = None
+    if term.src[1].op is Ops.CONST and term.src[1].arg == 0: zero, load = term.src[1], term.src[2]
+    elif term.src[2].op is Ops.CONST and term.src[2].arg == 0: load, zero = term.src[1], term.src[2]
+    else: return None
+    if load.op is not Ops.INDEX or len(load.src) < 2: return None
+    inp, load_idx = load.src[0], load.src[1]
+    if inp.op is not Ops.PARAM or inp.dtype.base != out.dtype.base: return None
+    if load_idx.op is not Ops.WHERE: return None
+    inps.append(inp)
+
+  if not inps or sorted(x.arg.slot for x in inps) != list(range(1, len(inps)+1)): return None
+  in_size, out_size = inps[0].max_numel(), out.max_numel()
+  if any(x.max_numel() != in_size for x in inps) or out_size != in_size * len(inps): return None
+  elems_per_thread, threads = 16, 256
+  if in_size % (elems_per_thread * threads) != 0: return None
+
+  name = f"custom_gather_{out_size}_{in_size}"
+  fast_gather_counter["used"] += 1
+  args = ",\n    ".join([f"hip_bfloat16* data0_{out_size}"] + [f"hip_bfloat16* data{i}_{in_size}" for i in range(1, len(inps)+1)])
+  srcs = ", ".join(f"(u32x4*)data{i}_{in_size}" for i in range(1, len(inps)+1))
+  vecs_per_input = in_size // 8
+  groups_per_input = in_size // (elems_per_thread * threads)
+  source = f'''typedef long unsigned int size_t;
+typedef __bf16 hip_bfloat16;
+typedef unsigned int u32x4 __attribute__((ext_vector_type(4)));
+extern "C" __attribute__((device, const)) size_t __ockl_get_local_id(unsigned int);
+extern "C" __attribute__((device, const)) size_t __ockl_get_group_id(unsigned int);
+extern "C" __attribute__((global)) void __attribute__((amdgpu_flat_work_group_size(1, {threads}))) {name}(
+    {args}) {{
+  int tid = __ockl_get_local_id(0);
+  int gid = __ockl_get_group_id(0);
+  int shard = __ockl_get_group_id(1);
+  int local_v = (gid * {threads} + tid) * 2;
+  int v = shard * {vecs_per_input} + local_v;
+  u32x4 *dst = (u32x4*)data0_{out_size};
+  u32x4 *srcs[{len(inps)}] = {{{srcs}}};
+  u32x4 *src = srcs[shard];
+  dst[v] = src[local_v];
+  dst[v+1] = src[local_v+1];
+}}'''
+  sink = ast.replace(arg=replace(ast.arg, name=name, estimates=Estimates(ops=0, mem=out_size*out.dtype.itemsize*2)))
+  info = ProgramInfo(name=name, global_size=(groups_per_input, len(inps), 1), local_size=(threads, 1, 1), globals=tuple(range(len(inps)+1)),
+                     outs=(0,), ins=tuple(range(1, len(inps)+1)))
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=renderer.target.device), UOp(Ops.LINEAR, dtypes.void), UOp(Ops.SOURCE, arg=source),
+                             UOp(Ops.BINARY, arg=renderer.compiler.compile_cached(source))), arg=info)
+
 @track_rewrites(name=lambda ast,renderer,ret,**kwargs: TracingKey(ret.src[0].arg.name,(ret.src[0].arg.function_name, ast), ret=renderer), replay=True)
 @Context(ALLOW_DEVICE_USAGE=0)
 def do_to_program(ast:UOp, renderer:Renderer) -> UOp:
@@ -187,6 +252,7 @@ def do_to_program(ast:UOp, renderer:Renderer) -> UOp:
   if ast.op is Ops.PROGRAM: prg = ast
   elif ast.op is Ops.SINK:
     assert isinstance(ast.arg, KernelInfo), "requires KernelInfo on arg to to_program"
+    if (fast_prg:=_try_fast_gather_program(ast, renderer)) is not None: return fast_prg
     full_sink = full_rewrite_to_sink(ast, renderer, optimize=ast.tag is None)
     prog_info = ProgramInfo.from_sink(full_sink)
     # instruction selection
