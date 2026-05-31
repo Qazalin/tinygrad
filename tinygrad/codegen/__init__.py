@@ -2,7 +2,7 @@ from typing import cast
 from dataclasses import replace
 import itertools, atexit
 from tinygrad.helpers import DISABLE_FAST_IDIV, TRANSCENDENTAL, SPEC, DEBUG, VIZ, IMAGE, NOOPT, EMULATED_DTYPES, NOLOCALS, USE_TC
-from tinygrad.helpers import ALLOW_TF32, TracingKey, Context, panic
+from tinygrad.helpers import ALLOW_TF32, TracingKey, Context, panic, getenv
 from tinygrad.uop.ops import PatternMatcher, graph_rewrite, UOp, pm_lower_index_dtype, Ops, UPat, track_rewrites, KernelInfo, ProgramInfo
 from tinygrad.uop.render import pyrender
 from tinygrad.uop.spec import type_verify, spec_tensor, spec_program
@@ -10,10 +10,14 @@ from tinygrad.renderer import Renderer, Estimates
 from tinygrad.renderer.isa import ISARenderer, IselContext, PreRegAllocContext
 from tinygrad.dtype import dtypes
 
-fast_gather_counter = {"used": 0}
+fast_gather_counter = {"used": 0, "todos": []}
 def _fast_gather_report():
-  if fast_gather_counter["used"]: print(f"fast_gather: {fast_gather_counter['used']} used")
+  print(f"fast_gather: {fast_gather_counter['used']} used, {len(fast_gather_counter['todos'])} not used")
+  if DEBUG >= 2 and fast_gather_counter["todos"]:
+    from collections import Counter
+    for msg, cnt in Counter(fast_gather_counter["todos"]).most_common(): print(f"  {cnt:3d}x {msg}")
 atexit.register(_fast_gather_report)
+def _fast_gather_no(msg:str) -> None: fast_gather_counter["todos"].append(msg)
 
 # import all pattern matchers here
 from tinygrad.codegen.gpudims import pm_add_gpudims
@@ -180,31 +184,33 @@ def _flatten_adds(u:UOp) -> list[UOp]:
   return _flatten_adds(u.src[0]) + _flatten_adds(u.src[1]) if u.op is Ops.ADD else [u]
 
 def _try_fast_gather_program(ast:UOp, renderer:Renderer) -> UOp|None:
-  if renderer.target.device not in {"AMD","NULL"} or ast.op is not Ops.SINK or len(ast.src) != 1: return None
+  if not getenv("FAST_GATHER"): return None
+  if renderer.target.device not in {"AMD","NULL"}: _fast_gather_no(f"only AMD/NULL, got {renderer.target.device}"); return None
+  if ast.op is not Ops.SINK or len(ast.src) != 1: _fast_gather_no("ast must be single SINK"); return None
   end = ast.src[0]
-  if end.op is not Ops.END or len(end.src) < 1 or (store:=end.src[0]).op is not Ops.STORE or len(store.src) != 2: return None
+  if end.op is not Ops.END or len(end.src) < 1 or (store:=end.src[0]).op is not Ops.STORE or len(store.src) != 2: _fast_gather_no("sink must contain one store"); return None
   idx, val = store.src
-  if idx.op is not Ops.INDEX or idx.src[0].op is not Ops.RESHAPE or (out:=idx.src[0].src[0]).op is not Ops.PARAM: return None
-  if out.dtype.base is not dtypes.bfloat16: return None
+  if idx.op is not Ops.INDEX or idx.src[0].op is not Ops.RESHAPE or (out:=idx.src[0].src[0]).op is not Ops.PARAM: _fast_gather_no("output must be reshaped param index"); return None
+  if out.dtype.base is not dtypes.bfloat16: _fast_gather_no(f"output must be bf16, got {out.dtype.base}"); return None
 
   inps: list[UOp] = []
   for term in _flatten_adds(val):
-    if term.op is not Ops.WHERE or len(term.src) != 3: return None
+    if term.op is not Ops.WHERE or len(term.src) != 3: _fast_gather_no("terms must be where gates"); return None
     load = zero = None
     if term.src[1].op is Ops.CONST and term.src[1].arg == 0: zero, load = term.src[1], term.src[2]
     elif term.src[2].op is Ops.CONST and term.src[2].arg == 0: load, zero = term.src[1], term.src[2]
-    else: return None
-    if load.op is not Ops.INDEX or len(load.src) < 2: return None
+    else: _fast_gather_no("where gates must select load or zero"); return None
+    if load.op is not Ops.INDEX or len(load.src) < 2: _fast_gather_no("gated value must be index load"); return None
     inp, load_idx = load.src[0], load.src[1]
-    if inp.op is not Ops.PARAM or inp.dtype.base != out.dtype.base: return None
-    if load_idx.op is not Ops.WHERE: return None
+    if inp.op is not Ops.PARAM or inp.dtype.base != out.dtype.base: _fast_gather_no("input must be matching param"); return None
+    if load_idx.op is not Ops.WHERE: _fast_gather_no("load index must be gated"); return None
     inps.append(inp)
 
-  if not inps or sorted(x.arg.slot for x in inps) != list(range(1, len(inps)+1)): return None
+  if not inps or sorted(x.arg.slot for x in inps) != list(range(1, len(inps)+1)): _fast_gather_no("input slots must be dense from 1"); return None
   in_size, out_size = inps[0].max_numel(), out.max_numel()
-  if any(x.max_numel() != in_size for x in inps) or out_size != in_size * len(inps): return None
+  if any(x.max_numel() != in_size for x in inps) or out_size != in_size * len(inps): _fast_gather_no("output size must equal concat input sizes"); return None
   elems_per_thread, threads = 16, 256
-  if in_size % (elems_per_thread * threads) != 0: return None
+  if in_size % (elems_per_thread * threads) != 0: _fast_gather_no("input size must align to vectorized copy"); return None
 
   name = f"custom_gather_{out_size}_{in_size}"
   fast_gather_counter["used"] += 1
