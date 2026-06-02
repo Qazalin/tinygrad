@@ -39,7 +39,12 @@ def matmul(x:Tensor, w:Tensor, fp8:bool=True, amax_x:Tensor|None=None, w_inv_sca
            grad_amax_state:Tensor|None=None) -> tuple[Tensor,...]:
   if not fp8:
     if ASM_GEMM:
-      from extra.gemm.cdna_asm_gemm import can_use_asm_gemm, asm_gemm
+      from extra.gemm.cdna_asm_gemm import can_use_asm_gemm, asm_gemm, asm_gemm_a_bt
+      x_flat = x.reshape(-1, x.shape[-1])
+      x_local_shape = x_flat.uop.shard_shape if isinstance(x_flat.device, tuple) else x_flat.shape
+      w_local_shape = w.uop.shard_shape if isinstance(w.device, tuple) else w.shape
+      if x.dtype == w.dtype == dtypes.bfloat16 and x_local_shape == (128256, 4096) and w_local_shape == (16384, 4096):
+        return (asm_gemm_a_bt(x_flat, w).reshape(*x.shape[:-1], w.shape[0]),)
       if can_use_asm_gemm(x, w.T): return (asm_gemm(x, w.T),)
     return (x @ w.T,)
   assert w_inv_scale is not None, "fp8 matmul requires w_inv_scale (weights must be stored in fp8 with per-tensor scale)"

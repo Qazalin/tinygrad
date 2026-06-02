@@ -2683,18 +2683,46 @@ def _custom_bf16_gemm(D:UOp, C:UOp, A:UOp, B:UOp, WS:UOp, Flags:UOp, *, name:str
 def _asm_bf16_gemm(a:Tensor, b:Tensor, name:str) -> Tensor:
   entry = _BF16_GEMMS[name]
   assert a.dtype == b.dtype == dtypes.bfloat16, f"{name} only supports bf16, got {a.dtype=} {b.dtype=}"
-  assert a.shape == entry["a_shape"] and b.shape == entry["b_shape"], f"{name} only supports A{entry['a_shape']} B{entry['b_shape']}, got A{a.shape} B{b.shape}"
-  assert isinstance(a.device, str) and a.device == b.device, f"{name} requires same single device, got {a.device=} {b.device=}"
+  a_shape = a.uop.shard_shape if isinstance(a.device, tuple) else a.shape
+  b_shape = b.uop.shard_shape if isinstance(b.device, tuple) else b.shape
+  assert a_shape == entry["a_shape"] and b_shape == entry["b_shape"], f"{name} only supports local A{entry['a_shape']} B{entry['b_shape']}, got A{a_shape} B{b_shape}"
+  assert a.device == b.device, f"{name} requires same device, got {a.device=} {b.device=}"
   M, N = entry["out_shape"]
-  c = Tensor.empty(M*N, device=a.device, dtype=dtypes.bfloat16)
+  if isinstance(a.device, tuple) and b.uop.axis == 0:
+    N *= len(a.device)
+    c = Tensor.empty(N, M, device=a.device[0], dtype=dtypes.bfloat16).shard(a.device, axis=0).reshape(N*M)
+  else:
+    assert isinstance(a.device, str), f"{name} only supports tuple devices when B is sharded on axis 0, got axis={b.uop.axis}"
+    c = Tensor.empty(M*N, device=a.device, dtype=dtypes.bfloat16)
   ws = Tensor.zeros(1024 * 1024 * 1024, device=a.device, dtype=dtypes.uint8)
   flags = Tensor.zeros(1024 * 1024, device=a.device, dtype=dtypes.uint8)
-  fxn = functools.partial(_custom_bf16_gemm, name=name, dname=a.device)
-  return Tensor.custom_kernel(c, c, a, b, ws, flags, fxn=fxn)[0].reshape(N, M).T
+  fxn = functools.partial(_custom_bf16_gemm, name=name, dname=a.device[0] if isinstance(a.device, tuple) else a.device)
+  return Tensor.custom_kernel(c, c, a, b, ws, flags, fxn=fxn, grad_fxn=_custom_bf16_gemm_bw)[0].reshape(N, M).T
 
-def asm_gemm_a_bt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm(a, b, "custom_bf16_gemm_a_bt")
-def asm_gemm_at_bt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm(a, b, "custom_bf16_gemm_at_bt")
-def asm_gemm_at_b(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm(a, b, "custom_bf16_gemm_at_b")
+def _custom_bf16_gemm_bw(gradient:UOp, kernel:UOp):
+  name = kernel.src[0].arg.name
+  _, _, a, b, _, _ = kernel.src[1:]
+  a_t, b_t = Tensor(a, device=a.device), Tensor(b, device=a.device)
+  M, N = _BF16_GEMMS[name]["out_shape"]
+  g_t = Tensor(gradient, device=a.device).reshape(N, M).T
+  if name == "custom_bf16_gemm_a_bt":
+    grad_a, grad_b = g_t @ b_t, g_t.T @ a_t
+  elif name == "custom_bf16_gemm_at_bt":
+    grad_a, grad_b = b_t.T @ g_t.T, g_t.T @ a_t.T
+  elif name == "custom_bf16_gemm_at_b":
+    grad_a, grad_b = b_t @ g_t.T, a_t @ g_t
+  else: raise RuntimeError(f"unknown bf16 gemm {name}")
+  return (None, None, grad_a.uop, grad_b.uop, None, None)
+
+def asm_gemm_a_bt(a:Tensor, b:Tensor) -> Tensor:
+  _count_special_asm_gemm("a_bt")
+  return _asm_bf16_gemm(a, b, "custom_bf16_gemm_a_bt")
+def asm_gemm_at_bt(a:Tensor, b:Tensor) -> Tensor:
+  _count_special_asm_gemm("at_bt")
+  return _asm_bf16_gemm(a, b, "custom_bf16_gemm_at_bt")
+def asm_gemm_at_b(a:Tensor, b:Tensor) -> Tensor:
+  _count_special_asm_gemm("at_b")
+  return _asm_bf16_gemm(a, b, "custom_bf16_gemm_at_b")
 
 # ** FP8 GEMM custom kernel
 
@@ -2720,14 +2748,19 @@ def custom_hk_fp8_gemm(C:UOp, A:UOp, B:UOp, *args:UOp, dname:str, scale_mode:int
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
                                UOp(Ops.BINARY, arg=lib)))
 
-counters = {"used":0, "todos":[]}
+counters = {"used":0, "special_used":{}, "todos":[]}
 def todo(msg:str) -> bool: counters["todos"].append(msg); return False
 def _asm_gemm_report():
   print(f'asm_gemm: {counters["used"]} used, {len(counters["todos"])} not used')
+  if counters["special_used"]:
+    print('  special asm_gemm: ' + ', '.join(f'{name}={cnt}' for name, cnt in sorted(counters["special_used"].items())))
   if DEBUG >= 2 and counters["todos"]:
     from collections import Counter
     for msg, cnt in Counter(counters["todos"]).most_common(): print(f'  {cnt:3d}x {msg}')
 atexit.register(_asm_gemm_report)
+
+def _count_special_asm_gemm(name:str) -> None:
+  counters["special_used"][name] = counters["special_used"].get(name, 0) + 1
 
 def can_use_asm_gemm(a:Tensor, b:Tensor) -> bool:
   if a.dtype != b.dtype: return todo(f"dtypes must match {a.dtype} != {b.dtype}")
@@ -2816,10 +2849,17 @@ def custom_gemm_bw(gradient:UOp, kernel:UOp):
     assert all_same([gradient.device, a.device, b.device, out.device])
     a_t, b_t, g_t = Tensor(a, device=a.device), Tensor(b, device=a.device), Tensor(gradient, device=a.device)
     g_t = g_t[:a.shape[0]]
-    if can_use_asm_gemm(g_t, b_t.T): grad_a = asm_gemm(g_t, b_t.T).uop
+    g_t_flat = g_t.reshape(-1, g_t.shape[-1])
+    local_shape = lambda t: t.uop.shard_shape if isinstance(t.device, tuple) else t.shape
+    b_t_t = b_t.T
+    if local_shape(b_t_t) == _BF16_GEMMS["custom_bf16_gemm_at_bt"]["a_shape"] and local_shape(g_t_flat) == _BF16_GEMMS["custom_bf16_gemm_at_bt"]["b_shape"]:
+      grad_a = asm_gemm_at_bt(b_t_t, g_t_flat).T.reshape(a_t.shape).uop
+    elif can_use_asm_gemm(g_t, b_t.T): grad_a = asm_gemm(g_t, b_t.T).uop
     else: grad_a = (g_t @ b_t.T).uop
-    a_t_flat, g_t_flat = a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1), g_t.reshape(-1, g_t.shape[-1])
-    if can_use_asm_gemm(a_t_flat, g_t_flat): grad_b = asm_gemm(a_t_flat, g_t_flat).uop
+    a_t_flat = a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1)
+    if not isinstance(a_t_flat.device, tuple) and a_t_flat.shape == _BF16_GEMMS["custom_bf16_gemm_at_b"]["a_shape"] and g_t_flat.shape == _BF16_GEMMS["custom_bf16_gemm_at_b"]["b_shape"]:
+      grad_b = asm_gemm_at_b(a_t_flat, g_t_flat).uop
+    elif can_use_asm_gemm(a_t_flat, g_t_flat): grad_b = asm_gemm(a_t_flat, g_t_flat).uop
     else: grad_b = (a_t_flat @ g_t_flat).uop
     return (None, grad_a, grad_b)
 
