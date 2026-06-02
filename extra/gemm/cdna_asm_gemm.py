@@ -2625,7 +2625,7 @@ def custom_asm_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname),
                                 UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in insts]))))
 
-# ** Hardcoded BF16 Stream-K GEMMs from compact CDNA assembly
+# ** BF16 Stream-K GEMMs from CDNA assembly
 
 _CDNA_GEMM_DIR = pathlib.Path(__file__).parent / "cdna_gemm"
 _BF16_GEMMS = {
@@ -2680,37 +2680,25 @@ def _custom_bf16_gemm(D:UOp, C:UOp, A:UOp, B:UOp, WS:UOp, Flags:UOp, *, name:str
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
                                 UOp(Ops.SOURCE, arg=source), UOp(Ops.BINARY, arg=binary)))
 
-def _asm_bf16_gemm(a:Tensor, b:Tensor, name:str) -> Tensor:
+def _asm_bf16_gemm_dt(a:Tensor, b:Tensor, name:str) -> Tensor:
   entry = _BF16_GEMMS[name]
   assert a.dtype == b.dtype == dtypes.bfloat16, f"{name} only supports bf16, got {a.dtype=} {b.dtype=}"
-  a_shape = a.uop.shard_shape if isinstance(a.device, tuple) else a.shape
-  b_shape = b.uop.shard_shape if isinstance(b.device, tuple) else b.shape
-  assert a_shape == entry["a_shape"] and b_shape == entry["b_shape"], f"{name} only supports local A{entry['a_shape']} B{entry['b_shape']}, got A{a_shape} B{b_shape}"
+  assert isinstance(a.device, str) and isinstance(b.device, str), f"{name} does not support tuple devices yet"
+  assert a.shape == entry["a_shape"] and b.shape == entry["b_shape"], f"{name} only supports A{entry['a_shape']} B{entry['b_shape']}, got A{a.shape} B{b.shape}"
   assert a.device == b.device, f"{name} requires same device, got {a.device=} {b.device=}"
   M, N = entry["out_shape"]
   needs_zero_c = entry["args"][17] != 0.0 or name == "custom_bf16_gemm_a_bt"
-  reduce_shards = isinstance(a.device, tuple) and a.uop.axis == b.uop.axis == 0 and name == "custom_bf16_gemm_at_b"
-  def alloc_output(zero:bool) -> Tensor:
-    if reduce_shards:
-      init = (Tensor.zeros if zero else Tensor.invalids)(N, M, device=a.device, dtype=dtypes.bfloat16)
-      return Tensor(init.uop.multi(0), device=a.device)
-    if isinstance(a.device, tuple) and b.uop.axis == 0:
-      return (Tensor.zeros if zero else Tensor.empty)(N * len(a.device), M, device=a.device[0], dtype=dtypes.bfloat16).shard(a.device, axis=0).reshape(N*M*len(a.device))
-    assert isinstance(a.device, str), f"{name} only supports tuple devices when B is sharded on axis 0, got axis={b.uop.axis}"
-    return (Tensor.zeros if zero else Tensor.empty)(M*N, device=a.device, dtype=dtypes.bfloat16)
-  d = alloc_output(False)
-  c = alloc_output(True) if needs_zero_c else d
-  if isinstance(a.device, tuple) and b.uop.axis == 0 and not reduce_shards: N *= len(a.device)
+  d = Tensor.empty(M*N, device=a.device, dtype=dtypes.bfloat16)
+  c = Tensor.zeros(M*N, device=a.device, dtype=dtypes.bfloat16) if needs_zero_c else d
   ws = Tensor.zeros(1024 * 1024 * 1024, device=a.device, dtype=dtypes.uint8)
   flags = Tensor.zeros(1024 * 1024, device=a.device, dtype=dtypes.uint8)
-  fxn = functools.partial(_custom_bf16_gemm, name=name, dname=a.device[0] if isinstance(a.device, tuple) else a.device)
+  fxn = functools.partial(_custom_bf16_gemm, name=name, dname=a.device)
   out = Tensor.custom_kernel(d, c, a, b, ws, flags, fxn=fxn)[0]
-  if reduce_shards: return out.reshape(len(a.device), N, M).permute(0, 2, 1).sum(0)
-  return out.reshape(N, M).T
+  return out.reshape(N, M)
 
-def asm_gemm_a_bt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm(a, b, "custom_bf16_gemm_a_bt")
-def asm_gemm_at_bt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm(a, b, "custom_bf16_gemm_at_bt")
-def asm_gemm_at_b(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm(a, b, "custom_bf16_gemm_at_b")
+def asm_gemm_a_bt_dt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_a_bt")
+def asm_gemm_at_bt_dt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_bt")
+def asm_gemm_at_b_dt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_b")
 
 # ** FP8 GEMM custom kernel
 
