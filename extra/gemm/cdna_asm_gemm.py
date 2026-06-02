@@ -2620,7 +2620,7 @@ def custom_asm_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
   gidx = UOp.special(NUM_WG, "gidx0")
   insts = build_kernel(batch, M, N, K, A.dtype.base)
   lds = UOp(Ops.DEFINE_LOCAL, dtypes.uint8.ptr(size=133_120, addrspace=AddrSpace.LOCAL), (), 'lds')
-  name = "custom_bf16_gemm_a_bt" if (batch, M, N, K, A.dtype.base) == (2, 8192, 128256, 4096, dtypes.bfloat16) else f"gemm_{batch}_{M}_{N}_{K}"
+  name = "custom_bf16_gemm_a_bt" if (batch, M, N, K, A.dtype.base) == (1, 16384, 128256, 4096, dtypes.bfloat16) else f"gemm_{batch}_{M}_{N}_{K}"
   sink = UOp.sink(C.base, A.base, B.base, lds, lidx, gidx,
                   arg=KernelInfo(name=name, estimates=Estimates(ops=2*batch*M*N*K, mem=(batch*M*K + K*N + batch*M*N)*2)))
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname),
@@ -2689,7 +2689,7 @@ def _asm_bf16_gemm(a:Tensor, b:Tensor, name:str) -> Tensor:
   assert a_shape == entry["a_shape"] and b_shape == entry["b_shape"], f"{name} only supports local A{entry['a_shape']} B{entry['b_shape']}, got A{a_shape} B{b_shape}"
   assert a.device == b.device, f"{name} requires same device, got {a.device=} {b.device=}"
   M, N = entry["out_shape"]
-  needs_zero_c = entry["args"][17] != 0.0
+  needs_zero_c = entry["args"][17] != 0.0 or name == "custom_bf16_gemm_a_bt"
   reduce_shards = isinstance(a.device, tuple) and a.uop.axis == b.uop.axis == 0 and name == "custom_bf16_gemm_at_b"
   if reduce_shards:
     init = Tensor.zeros(N, M, device=a.device, dtype=dtypes.bfloat16) if needs_zero_c else Tensor.invalids(N, M, device=a.device, dtype=dtypes.bfloat16)
@@ -2728,10 +2728,7 @@ def _custom_bf16_gemm_bw(gradient:UOp, kernel:UOp):
 
 def asm_gemm_a_bt(a:Tensor, b:Tensor) -> Tensor:
   _count_special_asm_gemm("a_bt")
-  # The captured a_bt Stream-K kernel can leave invalid values in the final vocab projection path.
-  # Use the existing generated ASM GEMM for the same math: (B @ A.T).T == A @ B.T.
-  assert a.dtype == b.dtype == dtypes.bfloat16, f"asm_gemm_a_bt only supports bf16, got {a.dtype=} {b.dtype=}"
-  return asm_gemm(b, a.T).T
+  return _asm_bf16_gemm(a, b, "custom_bf16_gemm_a_bt")
 def asm_gemm_at_bt(a:Tensor, b:Tensor) -> Tensor:
   _count_special_asm_gemm("at_bt")
   return _asm_bf16_gemm(a, b, "custom_bf16_gemm_at_bt")
