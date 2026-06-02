@@ -1,9 +1,9 @@
-import atexit, functools, pathlib
+import atexit, functools, pathlib, subprocess, tempfile
 from tinygrad import Tensor, Device, dtypes
 from tinygrad.dtype import AddrSpace
 from tinygrad.uop.ops import UOp, Ops, KernelInfo, AxisType
 from tinygrad.renderer import Estimates
-from tinygrad.helpers import getenv, all_same, DEBUG
+from tinygrad.helpers import getenv, all_same, DEBUG, prod
 from tinygrad.runtime.support.compiler_amd import HIPCCCompiler
 from tinygrad.runtime.autogen.amd.cdna.ins import *
 from examples.mlperf.models.flat_llama import FP8_DTYPE, FP8_GRAD_DTYPE, quantize_fp8
@@ -2624,6 +2624,93 @@ def custom_asm_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
                   arg=KernelInfo(name=f"gemm_{batch}_{M}_{N}_{K}", estimates=Estimates(ops=2*batch*M*N*K, mem=(batch*M*K + K*N + batch*M*N)*2)))
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname),
                                 UOp(Ops.LINEAR, src=tuple([UOp(Ops.INS, arg=x) for x in insts]))))
+
+# ** Hardcoded BF16 Stream-K GEMMs from compact CDNA assembly
+
+_CDNA_GEMM_DIR = pathlib.Path(__file__).parent / "cdna_gemm"
+_BF16_GEMMS = {
+  "custom_bf16_gemm_a_bt": {
+    "asm_source": "custom_bf16_gemm_a_bt.s", "global_size": (65280, 1, 1), "block": (256, 1, 1),
+    "a_shape": (128256, 4096), "b_shape": (16384, 4096), "out_shape": (128256, 16384),
+    "args": (1,0,1073872912,255,128256,16384,1,4096,128256,0,128256,0,4096,0,4096,0,1.0,0.0,64,67108864,0,2052096,111,255,444,0,0,0.0,0.0,0)},
+  "custom_bf16_gemm_at_bt": {
+    "asm_source": "custom_bf16_gemm_at_bt.s", "global_size": (65536, 1, 1), "block": (256, 1, 1),
+    "a_shape": (128256, 4096), "b_shape": (16384, 128256), "out_shape": (4096, 16384),
+    "args": (1,0,1073872912,256,4096,16384,1,128256,4096,0,4096,0,4096,0,128256,0,1.0,0.0,2004,548658497,8,2052096,2004,256,256,0,0,0.0,0.0,0)},
+  "custom_bf16_gemm_at_b": {
+    "asm_source": "custom_bf16_gemm_at_b.s", "global_size": (2052096, 1, 1), "block": (256, 1, 1),
+    "a_shape": (16384, 4096), "b_shape": (16384, 128256), "out_shape": (4096, 128256),
+    "args": (1,0,1073872912,8016,4096,128256,1,16384,4096,0,4096,0,4096,0,128256,0,1.0,1.0,256,16777216,0,2052096,256,8016,8016,0,0,0.0,0.0,0)},
+}
+
+def _bf16_scalar_replacements(entry:dict) -> dict[str, str]:
+  import struct
+  x = entry["args"]
+  names = ["GEMM_INFO", "KERNEL_INFO0", "KERNEL_INFO1", "NUM_WG", "SIZES_FREE0", "SIZES_FREE1", "SIZES_FREE2", "SIZES_SUM0",
+           "STRIDE_D0", "STRIDE_D1", "STRIDE_C0", "STRIDE_C1", "STRIDE_A0", "STRIDE_A1", "STRIDE_B0", "STRIDE_B1"]
+  vals = dict(zip(names, x[:16]))
+  vals.update({
+    "ALPHA_BITS": struct.unpack("<I", struct.pack("<f", float(x[16])))[0],
+    "BETA_BITS": struct.unpack("<I", struct.pack("<f", float(x[17])))[0],
+    "ITERS_PER_TILE": x[18], "MAGIC_NUMBER_ITERS_PER_TILE": x[19], "MAGIC_SHIFT_ITERS_PER_TILE": x[20],
+    "TOTAL_ITERS": x[21], "SK_ITERS_PER_WG": x[22], "SK_GRID": x[23], "SK_TILES": x[24],
+  })
+  return {f"{{{k}}}": str(v) for k, v in vals.items()}
+
+@functools.cache
+def _load_bf16_gemm_source_and_binary(name:str) -> tuple[str, bytes]:
+  entry = _BF16_GEMMS[name]
+  text = (_CDNA_GEMM_DIR / entry["asm_source"]).read_text()
+  for k, v in _bf16_scalar_replacements(entry).items(): text = text.replace(k, v)
+  with tempfile.NamedTemporaryFile(suffix=".s", mode="w") as fsrc, tempfile.NamedTemporaryFile(suffix=".o") as fout:
+    fsrc.write(text); fsrc.flush()
+    subprocess.check_call(["llvm-mc-21", "-triple=amdgcn-amd-amdhsa", "-mcpu=gfx950", "-filetype=obj", fsrc.name, "-o", fout.name])
+    return text, pathlib.Path(fout.name).read_bytes()
+
+@functools.cache
+def _custom_bf16_gemm(D:UOp, C:UOp, A:UOp, B:UOp, WS:UOp, Flags:UOp, *, name:str, dname:str) -> UOp:
+  entry = _BF16_GEMMS[name]
+  M, N = entry["out_shape"]
+  K = entry["args"][7]
+  grid = tuple((g + l - 1) // l for g, l in zip(entry["global_size"], entry["block"]))
+  lidx, gidx = UOp.special(entry["block"][0], "lidx0"), UOp.special(grid[0], "gidx0")
+  sink = UOp.sink(D.base, C.base, A.base, B.base, WS.base, Flags.base, lidx, gidx,
+                  arg=KernelInfo(name, estimates=Estimates(ops=2*M*N*K, mem=(M*N + prod(A.shape) + prod(B.shape))*2)))
+  source, binary = _load_bf16_gemm_source_and_binary(name)
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                UOp(Ops.SOURCE, arg=source), UOp(Ops.BINARY, arg=binary)))
+
+def _asm_bf16_gemm(a:Tensor, b:Tensor, name:str) -> Tensor:
+  entry = _BF16_GEMMS[name]
+  assert a.dtype == b.dtype == dtypes.bfloat16, f"{name} only supports bf16, got {a.dtype=} {b.dtype=}"
+  a_shape = a.uop.shard_shape if isinstance(a.device, tuple) else a.shape
+  b_shape = b.uop.shard_shape if isinstance(b.device, tuple) else b.shape
+  assert a_shape == entry["a_shape"] and b_shape == entry["b_shape"], f"{name} only supports local A{entry['a_shape']} B{entry['b_shape']}, got A{a_shape} B{b_shape}"
+  assert a.device == b.device, f"{name} requires same device, got {a.device=} {b.device=}"
+  M, N = entry["out_shape"]
+  needs_zero_c = entry["args"][17] != 0.0 or name == "custom_bf16_gemm_a_bt"
+  reduce_shards = isinstance(a.device, tuple) and a.uop.axis == b.uop.axis == 0 and name == "custom_bf16_gemm_at_b"
+  def alloc_output(zero:bool) -> Tensor:
+    if reduce_shards:
+      init = (Tensor.zeros if zero else Tensor.invalids)(N, M, device=a.device, dtype=dtypes.bfloat16)
+      return Tensor(init.uop.multi(0), device=a.device)
+    if isinstance(a.device, tuple) and b.uop.axis == 0:
+      return (Tensor.zeros if zero else Tensor.empty)(N * len(a.device), M, device=a.device[0], dtype=dtypes.bfloat16).shard(a.device, axis=0).reshape(N*M*len(a.device))
+    assert isinstance(a.device, str), f"{name} only supports tuple devices when B is sharded on axis 0, got axis={b.uop.axis}"
+    return (Tensor.zeros if zero else Tensor.empty)(M*N, device=a.device, dtype=dtypes.bfloat16)
+  d = alloc_output(False)
+  c = alloc_output(True) if needs_zero_c else d
+  if isinstance(a.device, tuple) and b.uop.axis == 0 and not reduce_shards: N *= len(a.device)
+  ws = Tensor.zeros(1024 * 1024 * 1024, device=a.device, dtype=dtypes.uint8)
+  flags = Tensor.zeros(1024 * 1024, device=a.device, dtype=dtypes.uint8)
+  fxn = functools.partial(_custom_bf16_gemm, name=name, dname=a.device[0] if isinstance(a.device, tuple) else a.device)
+  out = Tensor.custom_kernel(d, c, a, b, ws, flags, fxn=fxn)[0]
+  if reduce_shards: return out.reshape(len(a.device), N, M).permute(0, 2, 1).sum(0)
+  return out.reshape(N, M).T
+
+def asm_gemm_a_bt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm(a, b, "custom_bf16_gemm_a_bt")
+def asm_gemm_at_bt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm(a, b, "custom_bf16_gemm_at_bt")
+def asm_gemm_at_b(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm(a, b, "custom_bf16_gemm_at_b")
 
 # ** FP8 GEMM custom kernel
 
