@@ -2640,7 +2640,7 @@ _BF16_GEMMS = {
   "custom_bf16_gemm_at_b": {
     "asm_source": "custom_bf16_gemm_at_b.s", "global_size": (2052096, 1, 1), "block": (256, 1, 1),
     "a_shape": (16384, 4096), "b_shape": (16384, 128256), "out_shape": (4096, 128256),
-    "args": (1,0,1073872912,8016,4096,128256,1,16384,4096,0,4096,0,4096,0,128256,0,1.0,1.0,256,16777216,0,2052096,256,8016,8016,0,0,0.0,0.0,0)},
+    "args": (1,0,1073872912,8016,4096,128256,1,16384,4096,0,4096,0,4096,0,128256,0,1.0,0.0,256,16777216,0,2052096,256,8016,8016,0,0,0.0,0.0,0)},
 }
 
 def _bf16_scalar_replacements(entry:dict) -> dict[str, str]:
@@ -2668,13 +2668,13 @@ def _load_bf16_gemm_source_and_binary(name:str) -> tuple[str, bytes]:
     return text, pathlib.Path(fout.name).read_bytes()
 
 @functools.cache
-def _custom_bf16_gemm(D:UOp, C:UOp, A:UOp, B:UOp, WS:UOp, Flags:UOp, *, name:str, dname:str) -> UOp:
+def _custom_bf16_gemm(D:UOp, A:UOp, B:UOp, WS:UOp, Flags:UOp, *, name:str, dname:str) -> UOp:
   entry = _BF16_GEMMS[name]
   M, N = entry["out_shape"]
   K = entry["args"][7]
   grid = tuple((g + l - 1) // l for g, l in zip(entry["global_size"], entry["block"]))
   lidx, gidx = UOp.special(entry["block"][0], "lidx0"), UOp.special(grid[0], "gidx0")
-  sink = UOp.sink(D.base, C.base, A.base, B.base, WS.base, Flags.base, lidx, gidx,
+  sink = UOp.sink(D.base, A.base, B.base, WS.base, Flags.base, lidx, gidx,
                   arg=KernelInfo(name, estimates=Estimates(ops=2*M*N*K, mem=(M*N + prod(A.shape) + prod(B.shape))*2)))
   source, binary = _load_bf16_gemm_source_and_binary(name)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
@@ -2687,13 +2687,11 @@ def _asm_bf16_gemm_dt(a:Tensor, b:Tensor, name:str) -> Tensor:
   assert a.shape == entry["a_shape"] and b.shape == entry["b_shape"], f"{name} only supports A{entry['a_shape']} B{entry['b_shape']}, got A{a.shape} B{b.shape}"
   assert a.device == b.device, f"{name} requires same device, got {a.device=} {b.device=}"
   M, N = entry["out_shape"]
-  needs_zero_c = entry["args"][17] != 0.0 or name == "custom_bf16_gemm_a_bt"
   d = Tensor.empty(M*N, device=a.device, dtype=dtypes.bfloat16)
-  c = Tensor.zeros(M*N, device=a.device, dtype=dtypes.bfloat16) if needs_zero_c else d
   ws = Tensor.zeros(1024 * 1024 * 1024, device=a.device, dtype=dtypes.uint8)
   flags = Tensor.zeros(1024 * 1024, device=a.device, dtype=dtypes.uint8)
   fxn = functools.partial(_custom_bf16_gemm, name=name, dname=a.device)
-  out = Tensor.custom_kernel(d, c, a, b, ws, flags, fxn=fxn)[0]
+  out = Tensor.custom_kernel(d, a, b, ws, flags, fxn=fxn)[0]
   return out.reshape(N, M)
 
 def asm_gemm_a_bt_dt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_a_bt")

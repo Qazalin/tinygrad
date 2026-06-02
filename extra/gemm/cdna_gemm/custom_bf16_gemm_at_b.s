@@ -7,14 +7,14 @@
 .p2align 8
 .type custom_bf16_gemm_at_b,@function
 custom_bf16_gemm_at_b:
-	// Compact direct-args prologue. Kernargs are only six runtime pointers:
-	//   [0] D, [8] C, [16] A, [24] B, [32] AddressWS, [40] AddressFlags.
+	// Compact direct-args prologue. Kernargs are only five runtime pointers:
+	//   [0] D, [8] A, [16] B, [24] AddressWS, [32] AddressFlags.
 	s_load_dwordx2 s[24:25], s[0:1], 0x0   // D
-	s_load_dwordx2 s[26:27], s[0:1], 0x8   // C
-	s_load_dwordx2 s[28:29], s[0:1], 0x10  // A
-	s_load_dwordx2 s[30:31], s[0:1], 0x18  // B
-	s_load_dwordx2 s[32:33], s[0:1], 0x20  // AddressWS
-	s_load_dwordx2 s[34:35], s[0:1], 0x28  // AddressFlags
+	s_load_dwordx2 s[26:27], s[0:1], 0x0   // unused C slot aliases D
+	s_load_dwordx2 s[28:29], s[0:1], 0x8   // A
+	s_load_dwordx2 s[30:31], s[0:1], 0x10  // B
+	s_load_dwordx2 s[32:33], s[0:1], 0x18  // AddressWS
+	s_load_dwordx2 s[34:35], s[0:1], 0x20  // AddressFlags
 	s_mov_b32 s64, {GEMM_INFO}
 	s_mov_b32 s65, 0
 	s_mov_b32 s66, {KERNEL_INFO0}
@@ -19313,7 +19313,8 @@ custom_bf16_gemm_at_b:
 	s_addc_u32 s9, s9, 0  // 000000021008: 82098009
 	s_branch 0  // 00000002100C: BF820000
 	v_add_lshl_u32 v36, v20, v18, 1  // 000000021010: D1FE0024 02062514
-	buffer_load_dwordx4 v[88:91], v36, s[16:19], 0 offen  // 000000021018: E05C1000 80045824
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000021020: 924A02FF 00000100
 	v_sub_u32_e64 v37, v18, s74  // 000000021028: D1350025 00009512
 	v_lshlrev_b32_e32 v37, 2, v37  // 000000021030: 244A4A82
@@ -19326,23 +19327,28 @@ custom_bf16_gemm_at_b:
 	s_lshl_b32 s74, s38, 1  // 00000002105C: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000021060: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000021064: 82118011
-	buffer_load_dwordx4 v[92:95], v36, s[16:19], 0 offen  // 000000021068: E05C1000 80045C24
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 000000021070: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000021074: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000021078: 82118011
-	buffer_load_dwordx4 v[112:115], v36, s[16:19], 0 offen  // 00000002107C: E05C1000 80047024
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 000000021084: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000021088: 80104A10
 	s_addc_u32 s17, s17, 0  // 00000002108C: 82118011
-	buffer_load_dwordx4 v[116:119], v36, s[16:19], 0 offen  // 000000021090: E05C1000 80047424
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 000000021098: 8E4A8126
 	s_add_u32 s16, s16, s74  // 00000002109C: 80104A10
 	s_addc_u32 s17, s17, 0  // 0000000210A0: 82118011
-	buffer_load_dwordx4 v[120:123], v36, s[16:19], 0 offen  // 0000000210A4: E05C1000 80047824
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 0000000210AC: 8E4A8126
 	s_add_u32 s16, s16, s74  // 0000000210B0: 80104A10
 	s_addc_u32 s17, s17, 0  // 0000000210B4: 82118011
-	buffer_load_dwordx4 v[124:127], v36, s[16:19], 0 offen  // 0000000210B8: E05C1000 80047C24
+	s_nop 0  // removed C load
+	s_nop 0
 	v_add_lshl_u32 v35, v21, v18, 1  // 0000000210C0: D1FE0023 02062515
 	v_accvgpr_read_b32 v40, a0  // 0000000210C8: D3D84028 18000100
 	v_accvgpr_read_b32 v41, a4  // 0000000210D0: D3D84029 18000104
@@ -19425,21 +19431,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[44:45], v[108:109], v[44:45]  // 000000021334: D3B1402C 1802596C
 	v_pk_mul_f32 v[46:47], v[110:111], v[46:47]  // 00000002133C: D3B1402E 18025D6E
 	v_cvt_f32_bf16_sdwa v22, v88 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021344: 7E2CB6F9 00041658
-	v_fmac_f32_e64 v40, v22, s45  // 00000002134C: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v88 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021354: 7E2CB6F9 00051658
-	v_fmac_f32_e64 v41, v22, s45  // 00000002135C: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021364: 7E2CB6F9 00041659
-	v_fmac_f32_e64 v42, v22, s45  // 00000002136C: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021374: 7E2CB6F9 00051659
-	v_fmac_f32_e64 v43, v22, s45  // 00000002137C: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v90 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021384: 7E2CB6F9 0004165A
-	v_fmac_f32_e64 v44, v22, s45  // 00000002138C: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v90 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021394: 7E2CB6F9 0005165A
-	v_fmac_f32_e64 v45, v22, s45  // 00000002139C: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v91 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000213A4: 7E2CB6F9 0004165B
-	v_fmac_f32_e64 v46, v22, s45  // 0000000213AC: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v91 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000213B4: 7E2CB6F9 0005165B
-	v_fmac_f32_e64 v47, v22, s45  // 0000000213BC: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[40:41]  // 0000000213C4: D3B24016 18025160
 	v_pk_add_f32 v[24:25], v[98:99], v[42:43]  // 0000000213CC: D3B24018 18025562
 	v_pk_add_f32 v[26:27], v[100:101], v[44:45]  // 0000000213D4: D3B2401A 18025964
@@ -19460,21 +19474,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[52:53], v[108:109], v[52:53]  // 000000021434: D3B14034 1802696C
 	v_pk_mul_f32 v[54:55], v[110:111], v[54:55]  // 00000002143C: D3B14036 18026D6E
 	v_cvt_f32_bf16_sdwa v22, v92 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021444: 7E2CB6F9 0004165C
-	v_fmac_f32_e64 v48, v22, s45  // 00000002144C: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v92 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021454: 7E2CB6F9 0005165C
-	v_fmac_f32_e64 v49, v22, s45  // 00000002145C: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v93 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021464: 7E2CB6F9 0004165D
-	v_fmac_f32_e64 v50, v22, s45  // 00000002146C: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v93 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021474: 7E2CB6F9 0005165D
-	v_fmac_f32_e64 v51, v22, s45  // 00000002147C: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021484: 7E2CB6F9 0004165E
-	v_fmac_f32_e64 v52, v22, s45  // 00000002148C: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021494: 7E2CB6F9 0005165E
-	v_fmac_f32_e64 v53, v22, s45  // 00000002149C: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v95 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000214A4: 7E2CB6F9 0004165F
-	v_fmac_f32_e64 v54, v22, s45  // 0000000214AC: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v95 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000214B4: 7E2CB6F9 0005165F
-	v_fmac_f32_e64 v55, v22, s45  // 0000000214BC: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[48:49]  // 0000000214C4: D3B24016 18026160
 	v_pk_add_f32 v[24:25], v[98:99], v[50:51]  // 0000000214CC: D3B24018 18026562
 	v_pk_add_f32 v[26:27], v[100:101], v[52:53]  // 0000000214D4: D3B2401A 18026964
@@ -19498,21 +19520,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[60:61], v[108:109], v[60:61]  // 000000021540: D3B1403C 1802796C
 	v_pk_mul_f32 v[62:63], v[110:111], v[62:63]  // 000000021548: D3B1403E 18027D6E
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021550: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v56, v22, s45  // 000000021558: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021560: 7E2CB6F9 00051670
-	v_fmac_f32_e64 v57, v22, s45  // 000000021568: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021570: 7E2CB6F9 00041671
-	v_fmac_f32_e64 v58, v22, s45  // 000000021578: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021580: 7E2CB6F9 00051671
-	v_fmac_f32_e64 v59, v22, s45  // 000000021588: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021590: 7E2CB6F9 00041672
-	v_fmac_f32_e64 v60, v22, s45  // 000000021598: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000215A0: 7E2CB6F9 00051672
-	v_fmac_f32_e64 v61, v22, s45  // 0000000215A8: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000215B0: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v62, v22, s45  // 0000000215B8: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000215C0: 7E2CB6F9 00051673
-	v_fmac_f32_e64 v63, v22, s45  // 0000000215C8: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[56:57]  // 0000000215D0: D3B24016 18027160
 	v_pk_add_f32 v[24:25], v[98:99], v[58:59]  // 0000000215D8: D3B24018 18027562
 	v_pk_add_f32 v[26:27], v[100:101], v[60:61]  // 0000000215E0: D3B2401A 18027964
@@ -19536,21 +19566,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[68:69], v[108:109], v[68:69]  // 00000002164C: D3B14044 1802896C
 	v_pk_mul_f32 v[70:71], v[110:111], v[70:71]  // 000000021654: D3B14046 18028D6E
 	v_cvt_f32_bf16_sdwa v22, v116 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002165C: 7E2CB6F9 00041674
-	v_fmac_f32_e64 v64, v22, s45  // 000000021664: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v116 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002166C: 7E2CB6F9 00051674
-	v_fmac_f32_e64 v65, v22, s45  // 000000021674: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v117 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002167C: 7E2CB6F9 00041675
-	v_fmac_f32_e64 v66, v22, s45  // 000000021684: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v117 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002168C: 7E2CB6F9 00051675
-	v_fmac_f32_e64 v67, v22, s45  // 000000021694: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002169C: 7E2CB6F9 00041676
-	v_fmac_f32_e64 v68, v22, s45  // 0000000216A4: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000216AC: 7E2CB6F9 00051676
-	v_fmac_f32_e64 v69, v22, s45  // 0000000216B4: D13B0045 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v119 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000216BC: 7E2CB6F9 00041677
-	v_fmac_f32_e64 v70, v22, s45  // 0000000216C4: D13B0046 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v119 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000216CC: 7E2CB6F9 00051677
-	v_fmac_f32_e64 v71, v22, s45  // 0000000216D4: D13B0047 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[64:65]  // 0000000216DC: D3B24016 18028160
 	v_pk_add_f32 v[24:25], v[98:99], v[66:67]  // 0000000216E4: D3B24018 18028562
 	v_pk_add_f32 v[26:27], v[100:101], v[68:69]  // 0000000216EC: D3B2401A 18028964
@@ -19574,21 +19612,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[76:77], v[108:109], v[76:77]  // 000000021758: D3B1404C 1802996C
 	v_pk_mul_f32 v[78:79], v[110:111], v[78:79]  // 000000021760: D3B1404E 18029D6E
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021768: 7E2CB6F9 00041678
-	v_fmac_f32_e64 v72, v22, s45  // 000000021770: D13B0048 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021778: 7E2CB6F9 00051678
-	v_fmac_f32_e64 v73, v22, s45  // 000000021780: D13B0049 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021788: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v74, v22, s45  // 000000021790: D13B004A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021798: 7E2CB6F9 00051679
-	v_fmac_f32_e64 v75, v22, s45  // 0000000217A0: D13B004B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000217A8: 7E2CB6F9 0004167A
-	v_fmac_f32_e64 v76, v22, s45  // 0000000217B0: D13B004C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000217B8: 7E2CB6F9 0005167A
-	v_fmac_f32_e64 v77, v22, s45  // 0000000217C0: D13B004D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000217C8: 7E2CB6F9 0004167B
-	v_fmac_f32_e64 v78, v22, s45  // 0000000217D0: D13B004E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000217D8: 7E2CB6F9 0005167B
-	v_fmac_f32_e64 v79, v22, s45  // 0000000217E0: D13B004F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[72:73]  // 0000000217E8: D3B24016 18029160
 	v_pk_add_f32 v[24:25], v[98:99], v[74:75]  // 0000000217F0: D3B24018 18029562
 	v_pk_add_f32 v[26:27], v[100:101], v[76:77]  // 0000000217F8: D3B2401A 18029964
@@ -19612,21 +19658,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[84:85], v[108:109], v[84:85]  // 000000021864: D3B14054 1802A96C
 	v_pk_mul_f32 v[86:87], v[110:111], v[86:87]  // 00000002186C: D3B14056 1802AD6E
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021874: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v80, v22, s45  // 00000002187C: D13B0050 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021884: 7E2CB6F9 0005167C
-	v_fmac_f32_e64 v81, v22, s45  // 00000002188C: D13B0051 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021894: 7E2CB6F9 0004167D
-	v_fmac_f32_e64 v82, v22, s45  // 00000002189C: D13B0052 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000218A4: 7E2CB6F9 0005167D
-	v_fmac_f32_e64 v83, v22, s45  // 0000000218AC: D13B0053 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000218B4: 7E2CB6F9 0004167E
-	v_fmac_f32_e64 v84, v22, s45  // 0000000218BC: D13B0054 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000218C4: 7E2CB6F9 0005167E
-	v_fmac_f32_e64 v85, v22, s45  // 0000000218CC: D13B0055 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000218D4: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v86, v22, s45  // 0000000218DC: D13B0056 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000218E4: 7E2CB6F9 0005167F
-	v_fmac_f32_e64 v87, v22, s45  // 0000000218EC: D13B0057 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[80:81]  // 0000000218F4: D3B24016 1802A160
 	v_pk_add_f32 v[24:25], v[98:99], v[82:83]  // 0000000218FC: D3B24018 1802A562
 	v_pk_add_f32 v[26:27], v[100:101], v[84:85]  // 000000021904: D3B2401A 1802A964
@@ -19648,7 +19702,8 @@ custom_bf16_gemm_at_b:
 	s_lshl_b32 s74, s38, 1  // 000000021960: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000021964: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000021968: 82118011
-	buffer_load_dwordx4 v[88:91], v36, s[16:19], 0 offen  // 00000002196C: E05C1000 80045824
+	s_nop 0  // removed C load
+	s_nop 0
 	ds_read_b128 v[96:99], v37  // 000000021974: D9FE0000 60000025
 	ds_read_b128 v[100:103], v37 offset:16  // 00000002197C: D9FE0010 64000025
 	ds_read_b128 v[104:107], v37 offset:1024  // 000000021984: D9FE0400 68000025
@@ -19656,23 +19711,28 @@ custom_bf16_gemm_at_b:
 	s_lshl_b32 s74, s38, 1  // 000000021994: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000021998: 80104A10
 	s_addc_u32 s17, s17, 0  // 00000002199C: 82118011
-	buffer_load_dwordx4 v[92:95], v36, s[16:19], 0 offen  // 0000000219A0: E05C1000 80045C24
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 0000000219A8: 8E4A8126
 	s_add_u32 s16, s16, s74  // 0000000219AC: 80104A10
 	s_addc_u32 s17, s17, 0  // 0000000219B0: 82118011
-	buffer_load_dwordx4 v[112:115], v36, s[16:19], 0 offen  // 0000000219B4: E05C1000 80047024
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 0000000219BC: 8E4A8126
 	s_add_u32 s16, s16, s74  // 0000000219C0: 80104A10
 	s_addc_u32 s17, s17, 0  // 0000000219C4: 82118011
-	buffer_load_dwordx4 v[116:119], v36, s[16:19], 0 offen  // 0000000219C8: E05C1000 80047424
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 0000000219D0: 8E4A8126
 	s_add_u32 s16, s16, s74  // 0000000219D4: 80104A10
 	s_addc_u32 s17, s17, 0  // 0000000219D8: 82118011
-	buffer_load_dwordx4 v[120:123], v36, s[16:19], 0 offen  // 0000000219DC: E05C1000 80047824
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 0000000219E4: 8E4A8126
 	s_add_u32 s16, s16, s74  // 0000000219E8: 80104A10
 	s_addc_u32 s17, s17, 0  // 0000000219EC: 82118011
-	buffer_load_dwordx4 v[124:127], v36, s[16:19], 0 offen  // 0000000219F0: E05C1000 80047C24
+	s_nop 0  // removed C load
+	s_nop 0
 	v_accvgpr_read_b32 v40, a192  // 0000000219F8: D3D84028 180001C0
 	v_accvgpr_read_b32 v41, a196  // 000000021A00: D3D84029 180001C4
 	v_accvgpr_read_b32 v42, a200  // 000000021A08: D3D8402A 180001C8
@@ -19754,21 +19814,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[44:45], v[108:109], v[44:45]  // 000000021C64: D3B1402C 1802596C
 	v_pk_mul_f32 v[46:47], v[110:111], v[46:47]  // 000000021C6C: D3B1402E 18025D6E
 	v_cvt_f32_bf16_sdwa v22, v88 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021C74: 7E2CB6F9 00041658
-	v_fmac_f32_e64 v40, v22, s45  // 000000021C7C: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v88 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021C84: 7E2CB6F9 00051658
-	v_fmac_f32_e64 v41, v22, s45  // 000000021C8C: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021C94: 7E2CB6F9 00041659
-	v_fmac_f32_e64 v42, v22, s45  // 000000021C9C: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021CA4: 7E2CB6F9 00051659
-	v_fmac_f32_e64 v43, v22, s45  // 000000021CAC: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v90 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021CB4: 7E2CB6F9 0004165A
-	v_fmac_f32_e64 v44, v22, s45  // 000000021CBC: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v90 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021CC4: 7E2CB6F9 0005165A
-	v_fmac_f32_e64 v45, v22, s45  // 000000021CCC: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v91 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021CD4: 7E2CB6F9 0004165B
-	v_fmac_f32_e64 v46, v22, s45  // 000000021CDC: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v91 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021CE4: 7E2CB6F9 0005165B
-	v_fmac_f32_e64 v47, v22, s45  // 000000021CEC: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[40:41]  // 000000021CF4: D3B24016 18025160
 	v_pk_add_f32 v[24:25], v[98:99], v[42:43]  // 000000021CFC: D3B24018 18025562
 	v_pk_add_f32 v[26:27], v[100:101], v[44:45]  // 000000021D04: D3B2401A 18025964
@@ -19792,21 +19860,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[52:53], v[108:109], v[52:53]  // 000000021D70: D3B14034 1802696C
 	v_pk_mul_f32 v[54:55], v[110:111], v[54:55]  // 000000021D78: D3B14036 18026D6E
 	v_cvt_f32_bf16_sdwa v22, v92 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021D80: 7E2CB6F9 0004165C
-	v_fmac_f32_e64 v48, v22, s45  // 000000021D88: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v92 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021D90: 7E2CB6F9 0005165C
-	v_fmac_f32_e64 v49, v22, s45  // 000000021D98: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v93 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021DA0: 7E2CB6F9 0004165D
-	v_fmac_f32_e64 v50, v22, s45  // 000000021DA8: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v93 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021DB0: 7E2CB6F9 0005165D
-	v_fmac_f32_e64 v51, v22, s45  // 000000021DB8: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021DC0: 7E2CB6F9 0004165E
-	v_fmac_f32_e64 v52, v22, s45  // 000000021DC8: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021DD0: 7E2CB6F9 0005165E
-	v_fmac_f32_e64 v53, v22, s45  // 000000021DD8: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v95 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021DE0: 7E2CB6F9 0004165F
-	v_fmac_f32_e64 v54, v22, s45  // 000000021DE8: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v95 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021DF0: 7E2CB6F9 0005165F
-	v_fmac_f32_e64 v55, v22, s45  // 000000021DF8: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[48:49]  // 000000021E00: D3B24016 18026160
 	v_pk_add_f32 v[24:25], v[98:99], v[50:51]  // 000000021E08: D3B24018 18026562
 	v_pk_add_f32 v[26:27], v[100:101], v[52:53]  // 000000021E10: D3B2401A 18026964
@@ -19830,21 +19906,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[60:61], v[108:109], v[60:61]  // 000000021E7C: D3B1403C 1802796C
 	v_pk_mul_f32 v[62:63], v[110:111], v[62:63]  // 000000021E84: D3B1403E 18027D6E
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021E8C: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v56, v22, s45  // 000000021E94: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021E9C: 7E2CB6F9 00051670
-	v_fmac_f32_e64 v57, v22, s45  // 000000021EA4: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021EAC: 7E2CB6F9 00041671
-	v_fmac_f32_e64 v58, v22, s45  // 000000021EB4: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021EBC: 7E2CB6F9 00051671
-	v_fmac_f32_e64 v59, v22, s45  // 000000021EC4: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021ECC: 7E2CB6F9 00041672
-	v_fmac_f32_e64 v60, v22, s45  // 000000021ED4: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021EDC: 7E2CB6F9 00051672
-	v_fmac_f32_e64 v61, v22, s45  // 000000021EE4: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021EEC: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v62, v22, s45  // 000000021EF4: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021EFC: 7E2CB6F9 00051673
-	v_fmac_f32_e64 v63, v22, s45  // 000000021F04: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[56:57]  // 000000021F0C: D3B24016 18027160
 	v_pk_add_f32 v[24:25], v[98:99], v[58:59]  // 000000021F14: D3B24018 18027562
 	v_pk_add_f32 v[26:27], v[100:101], v[60:61]  // 000000021F1C: D3B2401A 18027964
@@ -19868,21 +19952,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[68:69], v[108:109], v[68:69]  // 000000021F88: D3B14044 1802896C
 	v_pk_mul_f32 v[70:71], v[110:111], v[70:71]  // 000000021F90: D3B14046 18028D6E
 	v_cvt_f32_bf16_sdwa v22, v116 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021F98: 7E2CB6F9 00041674
-	v_fmac_f32_e64 v64, v22, s45  // 000000021FA0: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v116 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021FA8: 7E2CB6F9 00051674
-	v_fmac_f32_e64 v65, v22, s45  // 000000021FB0: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v117 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021FB8: 7E2CB6F9 00041675
-	v_fmac_f32_e64 v66, v22, s45  // 000000021FC0: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v117 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021FC8: 7E2CB6F9 00051675
-	v_fmac_f32_e64 v67, v22, s45  // 000000021FD0: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021FD8: 7E2CB6F9 00041676
-	v_fmac_f32_e64 v68, v22, s45  // 000000021FE0: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000021FE8: 7E2CB6F9 00051676
-	v_fmac_f32_e64 v69, v22, s45  // 000000021FF0: D13B0045 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v119 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000021FF8: 7E2CB6F9 00041677
-	v_fmac_f32_e64 v70, v22, s45  // 000000022000: D13B0046 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v119 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022008: 7E2CB6F9 00051677
-	v_fmac_f32_e64 v71, v22, s45  // 000000022010: D13B0047 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[64:65]  // 000000022018: D3B24016 18028160
 	v_pk_add_f32 v[24:25], v[98:99], v[66:67]  // 000000022020: D3B24018 18028562
 	v_pk_add_f32 v[26:27], v[100:101], v[68:69]  // 000000022028: D3B2401A 18028964
@@ -19906,21 +19998,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[76:77], v[108:109], v[76:77]  // 000000022094: D3B1404C 1802996C
 	v_pk_mul_f32 v[78:79], v[110:111], v[78:79]  // 00000002209C: D3B1404E 18029D6E
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000220A4: 7E2CB6F9 00041678
-	v_fmac_f32_e64 v72, v22, s45  // 0000000220AC: D13B0048 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000220B4: 7E2CB6F9 00051678
-	v_fmac_f32_e64 v73, v22, s45  // 0000000220BC: D13B0049 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000220C4: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v74, v22, s45  // 0000000220CC: D13B004A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000220D4: 7E2CB6F9 00051679
-	v_fmac_f32_e64 v75, v22, s45  // 0000000220DC: D13B004B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000220E4: 7E2CB6F9 0004167A
-	v_fmac_f32_e64 v76, v22, s45  // 0000000220EC: D13B004C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000220F4: 7E2CB6F9 0005167A
-	v_fmac_f32_e64 v77, v22, s45  // 0000000220FC: D13B004D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022104: 7E2CB6F9 0004167B
-	v_fmac_f32_e64 v78, v22, s45  // 00000002210C: D13B004E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022114: 7E2CB6F9 0005167B
-	v_fmac_f32_e64 v79, v22, s45  // 00000002211C: D13B004F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[72:73]  // 000000022124: D3B24016 18029160
 	v_pk_add_f32 v[24:25], v[98:99], v[74:75]  // 00000002212C: D3B24018 18029562
 	v_pk_add_f32 v[26:27], v[100:101], v[76:77]  // 000000022134: D3B2401A 18029964
@@ -19944,21 +20044,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[84:85], v[108:109], v[84:85]  // 0000000221A0: D3B14054 1802A96C
 	v_pk_mul_f32 v[86:87], v[110:111], v[86:87]  // 0000000221A8: D3B14056 1802AD6E
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000221B0: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v80, v22, s45  // 0000000221B8: D13B0050 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000221C0: 7E2CB6F9 0005167C
-	v_fmac_f32_e64 v81, v22, s45  // 0000000221C8: D13B0051 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000221D0: 7E2CB6F9 0004167D
-	v_fmac_f32_e64 v82, v22, s45  // 0000000221D8: D13B0052 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000221E0: 7E2CB6F9 0005167D
-	v_fmac_f32_e64 v83, v22, s45  // 0000000221E8: D13B0053 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000221F0: 7E2CB6F9 0004167E
-	v_fmac_f32_e64 v84, v22, s45  // 0000000221F8: D13B0054 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022200: 7E2CB6F9 0005167E
-	v_fmac_f32_e64 v85, v22, s45  // 000000022208: D13B0055 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022210: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v86, v22, s45  // 000000022218: D13B0056 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022220: 7E2CB6F9 0005167F
-	v_fmac_f32_e64 v87, v22, s45  // 000000022228: D13B0057 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[80:81]  // 000000022230: D3B24016 1802A160
 	v_pk_add_f32 v[24:25], v[98:99], v[82:83]  // 000000022238: D3B24018 1802A562
 	v_pk_add_f32 v[26:27], v[100:101], v[84:85]  // 000000022240: D3B2401A 1802A964
@@ -19980,7 +20088,8 @@ custom_bf16_gemm_at_b:
 	s_lshl_b32 s74, s38, 1  // 00000002229C: 8E4A8126
 	s_add_u32 s16, s16, s74  // 0000000222A0: 80104A10
 	s_addc_u32 s17, s17, 0  // 0000000222A4: 82118011
-	buffer_load_dwordx4 v[88:91], v36, s[16:19], 0 offen  // 0000000222A8: E05C1000 80045824
+	s_nop 0  // removed C load
+	s_nop 0
 	ds_read_b128 v[96:99], v37  // 0000000222B0: D9FE0000 60000025
 	ds_read_b128 v[100:103], v37 offset:16  // 0000000222B8: D9FE0010 64000025
 	ds_read_b128 v[104:107], v37 offset:1024  // 0000000222C0: D9FE0400 68000025
@@ -19988,23 +20097,28 @@ custom_bf16_gemm_at_b:
 	s_lshl_b32 s74, s38, 1  // 0000000222D0: 8E4A8126
 	s_add_u32 s16, s16, s74  // 0000000222D4: 80104A10
 	s_addc_u32 s17, s17, 0  // 0000000222D8: 82118011
-	buffer_load_dwordx4 v[92:95], v36, s[16:19], 0 offen  // 0000000222DC: E05C1000 80045C24
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 0000000222E4: 8E4A8126
 	s_add_u32 s16, s16, s74  // 0000000222E8: 80104A10
 	s_addc_u32 s17, s17, 0  // 0000000222EC: 82118011
-	buffer_load_dwordx4 v[112:115], v36, s[16:19], 0 offen  // 0000000222F0: E05C1000 80047024
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 0000000222F8: 8E4A8126
 	s_add_u32 s16, s16, s74  // 0000000222FC: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000022300: 82118011
-	buffer_load_dwordx4 v[116:119], v36, s[16:19], 0 offen  // 000000022304: E05C1000 80047424
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 00000002230C: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000022310: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000022314: 82118011
-	buffer_load_dwordx4 v[120:123], v36, s[16:19], 0 offen  // 000000022318: E05C1000 80047824
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 000000022320: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000022324: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000022328: 82118011
-	buffer_load_dwordx4 v[124:127], v36, s[16:19], 0 offen  // 00000002232C: E05C1000 80047C24
+	s_nop 0  // removed C load
+	s_nop 0
 	v_accvgpr_read_b32 v40, a129  // 000000022334: D3D84028 18000181
 	v_accvgpr_read_b32 v41, a133  // 00000002233C: D3D84029 18000185
 	v_accvgpr_read_b32 v42, a137  // 000000022344: D3D8402A 18000189
@@ -20086,21 +20200,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[44:45], v[108:109], v[44:45]  // 0000000225A0: D3B1402C 1802596C
 	v_pk_mul_f32 v[46:47], v[110:111], v[46:47]  // 0000000225A8: D3B1402E 18025D6E
 	v_cvt_f32_bf16_sdwa v22, v88 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000225B0: 7E2CB6F9 00041658
-	v_fmac_f32_e64 v40, v22, s45  // 0000000225B8: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v88 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000225C0: 7E2CB6F9 00051658
-	v_fmac_f32_e64 v41, v22, s45  // 0000000225C8: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000225D0: 7E2CB6F9 00041659
-	v_fmac_f32_e64 v42, v22, s45  // 0000000225D8: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000225E0: 7E2CB6F9 00051659
-	v_fmac_f32_e64 v43, v22, s45  // 0000000225E8: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v90 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000225F0: 7E2CB6F9 0004165A
-	v_fmac_f32_e64 v44, v22, s45  // 0000000225F8: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v90 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022600: 7E2CB6F9 0005165A
-	v_fmac_f32_e64 v45, v22, s45  // 000000022608: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v91 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022610: 7E2CB6F9 0004165B
-	v_fmac_f32_e64 v46, v22, s45  // 000000022618: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v91 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022620: 7E2CB6F9 0005165B
-	v_fmac_f32_e64 v47, v22, s45  // 000000022628: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[40:41]  // 000000022630: D3B24016 18025160
 	v_pk_add_f32 v[24:25], v[98:99], v[42:43]  // 000000022638: D3B24018 18025562
 	v_pk_add_f32 v[26:27], v[100:101], v[44:45]  // 000000022640: D3B2401A 18025964
@@ -20124,21 +20246,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[52:53], v[108:109], v[52:53]  // 0000000226AC: D3B14034 1802696C
 	v_pk_mul_f32 v[54:55], v[110:111], v[54:55]  // 0000000226B4: D3B14036 18026D6E
 	v_cvt_f32_bf16_sdwa v22, v92 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000226BC: 7E2CB6F9 0004165C
-	v_fmac_f32_e64 v48, v22, s45  // 0000000226C4: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v92 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000226CC: 7E2CB6F9 0005165C
-	v_fmac_f32_e64 v49, v22, s45  // 0000000226D4: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v93 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000226DC: 7E2CB6F9 0004165D
-	v_fmac_f32_e64 v50, v22, s45  // 0000000226E4: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v93 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000226EC: 7E2CB6F9 0005165D
-	v_fmac_f32_e64 v51, v22, s45  // 0000000226F4: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000226FC: 7E2CB6F9 0004165E
-	v_fmac_f32_e64 v52, v22, s45  // 000000022704: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002270C: 7E2CB6F9 0005165E
-	v_fmac_f32_e64 v53, v22, s45  // 000000022714: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v95 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002271C: 7E2CB6F9 0004165F
-	v_fmac_f32_e64 v54, v22, s45  // 000000022724: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v95 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002272C: 7E2CB6F9 0005165F
-	v_fmac_f32_e64 v55, v22, s45  // 000000022734: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[48:49]  // 00000002273C: D3B24016 18026160
 	v_pk_add_f32 v[24:25], v[98:99], v[50:51]  // 000000022744: D3B24018 18026562
 	v_pk_add_f32 v[26:27], v[100:101], v[52:53]  // 00000002274C: D3B2401A 18026964
@@ -20162,21 +20292,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[60:61], v[108:109], v[60:61]  // 0000000227B8: D3B1403C 1802796C
 	v_pk_mul_f32 v[62:63], v[110:111], v[62:63]  // 0000000227C0: D3B1403E 18027D6E
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000227C8: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v56, v22, s45  // 0000000227D0: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000227D8: 7E2CB6F9 00051670
-	v_fmac_f32_e64 v57, v22, s45  // 0000000227E0: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000227E8: 7E2CB6F9 00041671
-	v_fmac_f32_e64 v58, v22, s45  // 0000000227F0: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000227F8: 7E2CB6F9 00051671
-	v_fmac_f32_e64 v59, v22, s45  // 000000022800: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022808: 7E2CB6F9 00041672
-	v_fmac_f32_e64 v60, v22, s45  // 000000022810: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022818: 7E2CB6F9 00051672
-	v_fmac_f32_e64 v61, v22, s45  // 000000022820: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022828: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v62, v22, s45  // 000000022830: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022838: 7E2CB6F9 00051673
-	v_fmac_f32_e64 v63, v22, s45  // 000000022840: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[56:57]  // 000000022848: D3B24016 18027160
 	v_pk_add_f32 v[24:25], v[98:99], v[58:59]  // 000000022850: D3B24018 18027562
 	v_pk_add_f32 v[26:27], v[100:101], v[60:61]  // 000000022858: D3B2401A 18027964
@@ -20200,21 +20338,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[68:69], v[108:109], v[68:69]  // 0000000228C4: D3B14044 1802896C
 	v_pk_mul_f32 v[70:71], v[110:111], v[70:71]  // 0000000228CC: D3B14046 18028D6E
 	v_cvt_f32_bf16_sdwa v22, v116 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000228D4: 7E2CB6F9 00041674
-	v_fmac_f32_e64 v64, v22, s45  // 0000000228DC: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v116 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000228E4: 7E2CB6F9 00051674
-	v_fmac_f32_e64 v65, v22, s45  // 0000000228EC: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v117 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000228F4: 7E2CB6F9 00041675
-	v_fmac_f32_e64 v66, v22, s45  // 0000000228FC: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v117 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022904: 7E2CB6F9 00051675
-	v_fmac_f32_e64 v67, v22, s45  // 00000002290C: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022914: 7E2CB6F9 00041676
-	v_fmac_f32_e64 v68, v22, s45  // 00000002291C: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022924: 7E2CB6F9 00051676
-	v_fmac_f32_e64 v69, v22, s45  // 00000002292C: D13B0045 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v119 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022934: 7E2CB6F9 00041677
-	v_fmac_f32_e64 v70, v22, s45  // 00000002293C: D13B0046 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v119 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022944: 7E2CB6F9 00051677
-	v_fmac_f32_e64 v71, v22, s45  // 00000002294C: D13B0047 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[64:65]  // 000000022954: D3B24016 18028160
 	v_pk_add_f32 v[24:25], v[98:99], v[66:67]  // 00000002295C: D3B24018 18028562
 	v_pk_add_f32 v[26:27], v[100:101], v[68:69]  // 000000022964: D3B2401A 18028964
@@ -20238,21 +20384,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[76:77], v[108:109], v[76:77]  // 0000000229D0: D3B1404C 1802996C
 	v_pk_mul_f32 v[78:79], v[110:111], v[78:79]  // 0000000229D8: D3B1404E 18029D6E
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000229E0: 7E2CB6F9 00041678
-	v_fmac_f32_e64 v72, v22, s45  // 0000000229E8: D13B0048 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000229F0: 7E2CB6F9 00051678
-	v_fmac_f32_e64 v73, v22, s45  // 0000000229F8: D13B0049 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022A00: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v74, v22, s45  // 000000022A08: D13B004A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022A10: 7E2CB6F9 00051679
-	v_fmac_f32_e64 v75, v22, s45  // 000000022A18: D13B004B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022A20: 7E2CB6F9 0004167A
-	v_fmac_f32_e64 v76, v22, s45  // 000000022A28: D13B004C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022A30: 7E2CB6F9 0005167A
-	v_fmac_f32_e64 v77, v22, s45  // 000000022A38: D13B004D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022A40: 7E2CB6F9 0004167B
-	v_fmac_f32_e64 v78, v22, s45  // 000000022A48: D13B004E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022A50: 7E2CB6F9 0005167B
-	v_fmac_f32_e64 v79, v22, s45  // 000000022A58: D13B004F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[72:73]  // 000000022A60: D3B24016 18029160
 	v_pk_add_f32 v[24:25], v[98:99], v[74:75]  // 000000022A68: D3B24018 18029562
 	v_pk_add_f32 v[26:27], v[100:101], v[76:77]  // 000000022A70: D3B2401A 18029964
@@ -20276,21 +20430,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[84:85], v[108:109], v[84:85]  // 000000022ADC: D3B14054 1802A96C
 	v_pk_mul_f32 v[86:87], v[110:111], v[86:87]  // 000000022AE4: D3B14056 1802AD6E
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022AEC: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v80, v22, s45  // 000000022AF4: D13B0050 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022AFC: 7E2CB6F9 0005167C
-	v_fmac_f32_e64 v81, v22, s45  // 000000022B04: D13B0051 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022B0C: 7E2CB6F9 0004167D
-	v_fmac_f32_e64 v82, v22, s45  // 000000022B14: D13B0052 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022B1C: 7E2CB6F9 0005167D
-	v_fmac_f32_e64 v83, v22, s45  // 000000022B24: D13B0053 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022B2C: 7E2CB6F9 0004167E
-	v_fmac_f32_e64 v84, v22, s45  // 000000022B34: D13B0054 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022B3C: 7E2CB6F9 0005167E
-	v_fmac_f32_e64 v85, v22, s45  // 000000022B44: D13B0055 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022B4C: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v86, v22, s45  // 000000022B54: D13B0056 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022B5C: 7E2CB6F9 0005167F
-	v_fmac_f32_e64 v87, v22, s45  // 000000022B64: D13B0057 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[80:81]  // 000000022B6C: D3B24016 1802A160
 	v_pk_add_f32 v[24:25], v[98:99], v[82:83]  // 000000022B74: D3B24018 1802A562
 	v_pk_add_f32 v[26:27], v[100:101], v[84:85]  // 000000022B7C: D3B2401A 1802A964
@@ -20312,7 +20474,8 @@ custom_bf16_gemm_at_b:
 	s_lshl_b32 s74, s38, 1  // 000000022BD8: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000022BDC: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000022BE0: 82118011
-	buffer_load_dwordx4 v[88:91], v36, s[16:19], 0 offen  // 000000022BE4: E05C1000 80045824
+	s_nop 0  // removed C load
+	s_nop 0
 	ds_read_b128 v[96:99], v37  // 000000022BEC: D9FE0000 60000025
 	ds_read_b128 v[100:103], v37 offset:16  // 000000022BF4: D9FE0010 64000025
 	ds_read_b128 v[104:107], v37 offset:1024  // 000000022BFC: D9FE0400 68000025
@@ -20320,23 +20483,28 @@ custom_bf16_gemm_at_b:
 	s_lshl_b32 s74, s38, 1  // 000000022C0C: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000022C10: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000022C14: 82118011
-	buffer_load_dwordx4 v[92:95], v36, s[16:19], 0 offen  // 000000022C18: E05C1000 80045C24
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 000000022C20: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000022C24: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000022C28: 82118011
-	buffer_load_dwordx4 v[112:115], v36, s[16:19], 0 offen  // 000000022C2C: E05C1000 80047024
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 000000022C34: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000022C38: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000022C3C: 82118011
-	buffer_load_dwordx4 v[116:119], v36, s[16:19], 0 offen  // 000000022C40: E05C1000 80047424
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 000000022C48: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000022C4C: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000022C50: 82118011
-	buffer_load_dwordx4 v[120:123], v36, s[16:19], 0 offen  // 000000022C54: E05C1000 80047824
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 000000022C5C: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000022C60: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000022C64: 82118011
-	buffer_load_dwordx4 v[124:127], v36, s[16:19], 0 offen  // 000000022C68: E05C1000 80047C24
+	s_nop 0  // removed C load
+	s_nop 0
 	v_accvgpr_read_b32 v40, a66  // 000000022C70: D3D84028 18000142
 	v_accvgpr_read_b32 v41, a70  // 000000022C78: D3D84029 18000146
 	v_accvgpr_read_b32 v42, a74  // 000000022C80: D3D8402A 1800014A
@@ -20418,21 +20586,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[44:45], v[108:109], v[44:45]  // 000000022EDC: D3B1402C 1802596C
 	v_pk_mul_f32 v[46:47], v[110:111], v[46:47]  // 000000022EE4: D3B1402E 18025D6E
 	v_cvt_f32_bf16_sdwa v22, v88 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022EEC: 7E2CB6F9 00041658
-	v_fmac_f32_e64 v40, v22, s45  // 000000022EF4: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v88 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022EFC: 7E2CB6F9 00051658
-	v_fmac_f32_e64 v41, v22, s45  // 000000022F04: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022F0C: 7E2CB6F9 00041659
-	v_fmac_f32_e64 v42, v22, s45  // 000000022F14: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022F1C: 7E2CB6F9 00051659
-	v_fmac_f32_e64 v43, v22, s45  // 000000022F24: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v90 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022F2C: 7E2CB6F9 0004165A
-	v_fmac_f32_e64 v44, v22, s45  // 000000022F34: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v90 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022F3C: 7E2CB6F9 0005165A
-	v_fmac_f32_e64 v45, v22, s45  // 000000022F44: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v91 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022F4C: 7E2CB6F9 0004165B
-	v_fmac_f32_e64 v46, v22, s45  // 000000022F54: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v91 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000022F5C: 7E2CB6F9 0005165B
-	v_fmac_f32_e64 v47, v22, s45  // 000000022F64: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[40:41]  // 000000022F6C: D3B24016 18025160
 	v_pk_add_f32 v[24:25], v[98:99], v[42:43]  // 000000022F74: D3B24018 18025562
 	v_pk_add_f32 v[26:27], v[100:101], v[44:45]  // 000000022F7C: D3B2401A 18025964
@@ -20456,21 +20632,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[52:53], v[108:109], v[52:53]  // 000000022FE8: D3B14034 1802696C
 	v_pk_mul_f32 v[54:55], v[110:111], v[54:55]  // 000000022FF0: D3B14036 18026D6E
 	v_cvt_f32_bf16_sdwa v22, v92 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000022FF8: 7E2CB6F9 0004165C
-	v_fmac_f32_e64 v48, v22, s45  // 000000023000: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v92 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023008: 7E2CB6F9 0005165C
-	v_fmac_f32_e64 v49, v22, s45  // 000000023010: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v93 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023018: 7E2CB6F9 0004165D
-	v_fmac_f32_e64 v50, v22, s45  // 000000023020: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v93 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023028: 7E2CB6F9 0005165D
-	v_fmac_f32_e64 v51, v22, s45  // 000000023030: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023038: 7E2CB6F9 0004165E
-	v_fmac_f32_e64 v52, v22, s45  // 000000023040: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023048: 7E2CB6F9 0005165E
-	v_fmac_f32_e64 v53, v22, s45  // 000000023050: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v95 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023058: 7E2CB6F9 0004165F
-	v_fmac_f32_e64 v54, v22, s45  // 000000023060: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v95 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023068: 7E2CB6F9 0005165F
-	v_fmac_f32_e64 v55, v22, s45  // 000000023070: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[48:49]  // 000000023078: D3B24016 18026160
 	v_pk_add_f32 v[24:25], v[98:99], v[50:51]  // 000000023080: D3B24018 18026562
 	v_pk_add_f32 v[26:27], v[100:101], v[52:53]  // 000000023088: D3B2401A 18026964
@@ -20494,21 +20678,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[60:61], v[108:109], v[60:61]  // 0000000230F4: D3B1403C 1802796C
 	v_pk_mul_f32 v[62:63], v[110:111], v[62:63]  // 0000000230FC: D3B1403E 18027D6E
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023104: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v56, v22, s45  // 00000002310C: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023114: 7E2CB6F9 00051670
-	v_fmac_f32_e64 v57, v22, s45  // 00000002311C: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023124: 7E2CB6F9 00041671
-	v_fmac_f32_e64 v58, v22, s45  // 00000002312C: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023134: 7E2CB6F9 00051671
-	v_fmac_f32_e64 v59, v22, s45  // 00000002313C: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023144: 7E2CB6F9 00041672
-	v_fmac_f32_e64 v60, v22, s45  // 00000002314C: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023154: 7E2CB6F9 00051672
-	v_fmac_f32_e64 v61, v22, s45  // 00000002315C: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023164: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v62, v22, s45  // 00000002316C: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023174: 7E2CB6F9 00051673
-	v_fmac_f32_e64 v63, v22, s45  // 00000002317C: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[56:57]  // 000000023184: D3B24016 18027160
 	v_pk_add_f32 v[24:25], v[98:99], v[58:59]  // 00000002318C: D3B24018 18027562
 	v_pk_add_f32 v[26:27], v[100:101], v[60:61]  // 000000023194: D3B2401A 18027964
@@ -20532,21 +20724,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[68:69], v[108:109], v[68:69]  // 000000023200: D3B14044 1802896C
 	v_pk_mul_f32 v[70:71], v[110:111], v[70:71]  // 000000023208: D3B14046 18028D6E
 	v_cvt_f32_bf16_sdwa v22, v116 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023210: 7E2CB6F9 00041674
-	v_fmac_f32_e64 v64, v22, s45  // 000000023218: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v116 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023220: 7E2CB6F9 00051674
-	v_fmac_f32_e64 v65, v22, s45  // 000000023228: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v117 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023230: 7E2CB6F9 00041675
-	v_fmac_f32_e64 v66, v22, s45  // 000000023238: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v117 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023240: 7E2CB6F9 00051675
-	v_fmac_f32_e64 v67, v22, s45  // 000000023248: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023250: 7E2CB6F9 00041676
-	v_fmac_f32_e64 v68, v22, s45  // 000000023258: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023260: 7E2CB6F9 00051676
-	v_fmac_f32_e64 v69, v22, s45  // 000000023268: D13B0045 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v119 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023270: 7E2CB6F9 00041677
-	v_fmac_f32_e64 v70, v22, s45  // 000000023278: D13B0046 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v119 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023280: 7E2CB6F9 00051677
-	v_fmac_f32_e64 v71, v22, s45  // 000000023288: D13B0047 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[64:65]  // 000000023290: D3B24016 18028160
 	v_pk_add_f32 v[24:25], v[98:99], v[66:67]  // 000000023298: D3B24018 18028562
 	v_pk_add_f32 v[26:27], v[100:101], v[68:69]  // 0000000232A0: D3B2401A 18028964
@@ -20570,21 +20770,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[76:77], v[108:109], v[76:77]  // 00000002330C: D3B1404C 1802996C
 	v_pk_mul_f32 v[78:79], v[110:111], v[78:79]  // 000000023314: D3B1404E 18029D6E
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002331C: 7E2CB6F9 00041678
-	v_fmac_f32_e64 v72, v22, s45  // 000000023324: D13B0048 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002332C: 7E2CB6F9 00051678
-	v_fmac_f32_e64 v73, v22, s45  // 000000023334: D13B0049 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002333C: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v74, v22, s45  // 000000023344: D13B004A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002334C: 7E2CB6F9 00051679
-	v_fmac_f32_e64 v75, v22, s45  // 000000023354: D13B004B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002335C: 7E2CB6F9 0004167A
-	v_fmac_f32_e64 v76, v22, s45  // 000000023364: D13B004C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002336C: 7E2CB6F9 0005167A
-	v_fmac_f32_e64 v77, v22, s45  // 000000023374: D13B004D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002337C: 7E2CB6F9 0004167B
-	v_fmac_f32_e64 v78, v22, s45  // 000000023384: D13B004E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002338C: 7E2CB6F9 0005167B
-	v_fmac_f32_e64 v79, v22, s45  // 000000023394: D13B004F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[72:73]  // 00000002339C: D3B24016 18029160
 	v_pk_add_f32 v[24:25], v[98:99], v[74:75]  // 0000000233A4: D3B24018 18029562
 	v_pk_add_f32 v[26:27], v[100:101], v[76:77]  // 0000000233AC: D3B2401A 18029964
@@ -20608,21 +20816,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[84:85], v[108:109], v[84:85]  // 000000023418: D3B14054 1802A96C
 	v_pk_mul_f32 v[86:87], v[110:111], v[86:87]  // 000000023420: D3B14056 1802AD6E
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023428: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v80, v22, s45  // 000000023430: D13B0050 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023438: 7E2CB6F9 0005167C
-	v_fmac_f32_e64 v81, v22, s45  // 000000023440: D13B0051 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023448: 7E2CB6F9 0004167D
-	v_fmac_f32_e64 v82, v22, s45  // 000000023450: D13B0052 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023458: 7E2CB6F9 0005167D
-	v_fmac_f32_e64 v83, v22, s45  // 000000023460: D13B0053 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023468: 7E2CB6F9 0004167E
-	v_fmac_f32_e64 v84, v22, s45  // 000000023470: D13B0054 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023478: 7E2CB6F9 0005167E
-	v_fmac_f32_e64 v85, v22, s45  // 000000023480: D13B0055 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023488: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v86, v22, s45  // 000000023490: D13B0056 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023498: 7E2CB6F9 0005167F
-	v_fmac_f32_e64 v87, v22, s45  // 0000000234A0: D13B0057 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[80:81]  // 0000000234A8: D3B24016 1802A160
 	v_pk_add_f32 v[24:25], v[98:99], v[82:83]  // 0000000234B0: D3B24018 1802A562
 	v_pk_add_f32 v[26:27], v[100:101], v[84:85]  // 0000000234B8: D3B2401A 1802A964
@@ -20644,7 +20860,8 @@ custom_bf16_gemm_at_b:
 	s_lshl_b32 s74, s38, 1  // 000000023514: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000023518: 80104A10
 	s_addc_u32 s17, s17, 0  // 00000002351C: 82118011
-	buffer_load_dwordx4 v[88:91], v36, s[16:19], 0 offen  // 000000023520: E05C1000 80045824
+	s_nop 0  // removed C load
+	s_nop 0
 	ds_read_b128 v[96:99], v37  // 000000023528: D9FE0000 60000025
 	ds_read_b128 v[100:103], v37 offset:16  // 000000023530: D9FE0010 64000025
 	ds_read_b128 v[104:107], v37 offset:1024  // 000000023538: D9FE0400 68000025
@@ -20652,23 +20869,28 @@ custom_bf16_gemm_at_b:
 	s_lshl_b32 s74, s38, 1  // 000000023548: 8E4A8126
 	s_add_u32 s16, s16, s74  // 00000002354C: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000023550: 82118011
-	buffer_load_dwordx4 v[92:95], v36, s[16:19], 0 offen  // 000000023554: E05C1000 80045C24
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 00000002355C: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000023560: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000023564: 82118011
-	buffer_load_dwordx4 v[112:115], v36, s[16:19], 0 offen  // 000000023568: E05C1000 80047024
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 000000023570: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000023574: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000023578: 82118011
-	buffer_load_dwordx4 v[116:119], v36, s[16:19], 0 offen  // 00000002357C: E05C1000 80047424
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 000000023584: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000023588: 80104A10
 	s_addc_u32 s17, s17, 0  // 00000002358C: 82118011
-	buffer_load_dwordx4 v[120:123], v36, s[16:19], 0 offen  // 000000023590: E05C1000 80047824
+	s_nop 0  // removed C load
+	s_nop 0
 	s_lshl_b32 s74, s38, 1  // 000000023598: 8E4A8126
 	s_add_u32 s16, s16, s74  // 00000002359C: 80104A10
 	s_addc_u32 s17, s17, 0  // 0000000235A0: 82118011
-	buffer_load_dwordx4 v[124:127], v36, s[16:19], 0 offen  // 0000000235A4: E05C1000 80047C24
+	s_nop 0  // removed C load
+	s_nop 0
 	v_accvgpr_read_b32 v40, a3  // 0000000235AC: D3D84028 18000103
 	v_accvgpr_read_b32 v41, a7  // 0000000235B4: D3D84029 18000107
 	v_accvgpr_read_b32 v42, a11  // 0000000235BC: D3D8402A 1800010B
@@ -20750,21 +20972,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[44:45], v[108:109], v[44:45]  // 000000023818: D3B1402C 1802596C
 	v_pk_mul_f32 v[46:47], v[110:111], v[46:47]  // 000000023820: D3B1402E 18025D6E
 	v_cvt_f32_bf16_sdwa v22, v88 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023828: 7E2CB6F9 00041658
-	v_fmac_f32_e64 v40, v22, s45  // 000000023830: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v88 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023838: 7E2CB6F9 00051658
-	v_fmac_f32_e64 v41, v22, s45  // 000000023840: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023848: 7E2CB6F9 00041659
-	v_fmac_f32_e64 v42, v22, s45  // 000000023850: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023858: 7E2CB6F9 00051659
-	v_fmac_f32_e64 v43, v22, s45  // 000000023860: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v90 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023868: 7E2CB6F9 0004165A
-	v_fmac_f32_e64 v44, v22, s45  // 000000023870: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v90 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023878: 7E2CB6F9 0005165A
-	v_fmac_f32_e64 v45, v22, s45  // 000000023880: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v91 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023888: 7E2CB6F9 0004165B
-	v_fmac_f32_e64 v46, v22, s45  // 000000023890: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v91 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023898: 7E2CB6F9 0005165B
-	v_fmac_f32_e64 v47, v22, s45  // 0000000238A0: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[40:41]  // 0000000238A8: D3B24016 18025160
 	v_pk_add_f32 v[24:25], v[98:99], v[42:43]  // 0000000238B0: D3B24018 18025562
 	v_pk_add_f32 v[26:27], v[100:101], v[44:45]  // 0000000238B8: D3B2401A 18025964
@@ -20788,21 +21018,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[52:53], v[108:109], v[52:53]  // 000000023924: D3B14034 1802696C
 	v_pk_mul_f32 v[54:55], v[110:111], v[54:55]  // 00000002392C: D3B14036 18026D6E
 	v_cvt_f32_bf16_sdwa v22, v92 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023934: 7E2CB6F9 0004165C
-	v_fmac_f32_e64 v48, v22, s45  // 00000002393C: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v92 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023944: 7E2CB6F9 0005165C
-	v_fmac_f32_e64 v49, v22, s45  // 00000002394C: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v93 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023954: 7E2CB6F9 0004165D
-	v_fmac_f32_e64 v50, v22, s45  // 00000002395C: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v93 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023964: 7E2CB6F9 0005165D
-	v_fmac_f32_e64 v51, v22, s45  // 00000002396C: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023974: 7E2CB6F9 0004165E
-	v_fmac_f32_e64 v52, v22, s45  // 00000002397C: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023984: 7E2CB6F9 0005165E
-	v_fmac_f32_e64 v53, v22, s45  // 00000002398C: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v95 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023994: 7E2CB6F9 0004165F
-	v_fmac_f32_e64 v54, v22, s45  // 00000002399C: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v95 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000239A4: 7E2CB6F9 0005165F
-	v_fmac_f32_e64 v55, v22, s45  // 0000000239AC: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[48:49]  // 0000000239B4: D3B24016 18026160
 	v_pk_add_f32 v[24:25], v[98:99], v[50:51]  // 0000000239BC: D3B24018 18026562
 	v_pk_add_f32 v[26:27], v[100:101], v[52:53]  // 0000000239C4: D3B2401A 18026964
@@ -20826,21 +21064,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[60:61], v[108:109], v[60:61]  // 000000023A30: D3B1403C 1802796C
 	v_pk_mul_f32 v[62:63], v[110:111], v[62:63]  // 000000023A38: D3B1403E 18027D6E
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023A40: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v56, v22, s45  // 000000023A48: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023A50: 7E2CB6F9 00051670
-	v_fmac_f32_e64 v57, v22, s45  // 000000023A58: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023A60: 7E2CB6F9 00041671
-	v_fmac_f32_e64 v58, v22, s45  // 000000023A68: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023A70: 7E2CB6F9 00051671
-	v_fmac_f32_e64 v59, v22, s45  // 000000023A78: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023A80: 7E2CB6F9 00041672
-	v_fmac_f32_e64 v60, v22, s45  // 000000023A88: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023A90: 7E2CB6F9 00051672
-	v_fmac_f32_e64 v61, v22, s45  // 000000023A98: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023AA0: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v62, v22, s45  // 000000023AA8: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023AB0: 7E2CB6F9 00051673
-	v_fmac_f32_e64 v63, v22, s45  // 000000023AB8: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[56:57]  // 000000023AC0: D3B24016 18027160
 	v_pk_add_f32 v[24:25], v[98:99], v[58:59]  // 000000023AC8: D3B24018 18027562
 	v_pk_add_f32 v[26:27], v[100:101], v[60:61]  // 000000023AD0: D3B2401A 18027964
@@ -20864,21 +21110,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[68:69], v[108:109], v[68:69]  // 000000023B3C: D3B14044 1802896C
 	v_pk_mul_f32 v[70:71], v[110:111], v[70:71]  // 000000023B44: D3B14046 18028D6E
 	v_cvt_f32_bf16_sdwa v22, v116 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023B4C: 7E2CB6F9 00041674
-	v_fmac_f32_e64 v64, v22, s45  // 000000023B54: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v116 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023B5C: 7E2CB6F9 00051674
-	v_fmac_f32_e64 v65, v22, s45  // 000000023B64: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v117 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023B6C: 7E2CB6F9 00041675
-	v_fmac_f32_e64 v66, v22, s45  // 000000023B74: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v117 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023B7C: 7E2CB6F9 00051675
-	v_fmac_f32_e64 v67, v22, s45  // 000000023B84: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023B8C: 7E2CB6F9 00041676
-	v_fmac_f32_e64 v68, v22, s45  // 000000023B94: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023B9C: 7E2CB6F9 00051676
-	v_fmac_f32_e64 v69, v22, s45  // 000000023BA4: D13B0045 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v119 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023BAC: 7E2CB6F9 00041677
-	v_fmac_f32_e64 v70, v22, s45  // 000000023BB4: D13B0046 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v119 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023BBC: 7E2CB6F9 00051677
-	v_fmac_f32_e64 v71, v22, s45  // 000000023BC4: D13B0047 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[64:65]  // 000000023BCC: D3B24016 18028160
 	v_pk_add_f32 v[24:25], v[98:99], v[66:67]  // 000000023BD4: D3B24018 18028562
 	v_pk_add_f32 v[26:27], v[100:101], v[68:69]  // 000000023BDC: D3B2401A 18028964
@@ -20902,21 +21156,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[76:77], v[108:109], v[76:77]  // 000000023C48: D3B1404C 1802996C
 	v_pk_mul_f32 v[78:79], v[110:111], v[78:79]  // 000000023C50: D3B1404E 18029D6E
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023C58: 7E2CB6F9 00041678
-	v_fmac_f32_e64 v72, v22, s45  // 000000023C60: D13B0048 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023C68: 7E2CB6F9 00051678
-	v_fmac_f32_e64 v73, v22, s45  // 000000023C70: D13B0049 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023C78: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v74, v22, s45  // 000000023C80: D13B004A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023C88: 7E2CB6F9 00051679
-	v_fmac_f32_e64 v75, v22, s45  // 000000023C90: D13B004B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023C98: 7E2CB6F9 0004167A
-	v_fmac_f32_e64 v76, v22, s45  // 000000023CA0: D13B004C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023CA8: 7E2CB6F9 0005167A
-	v_fmac_f32_e64 v77, v22, s45  // 000000023CB0: D13B004D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023CB8: 7E2CB6F9 0004167B
-	v_fmac_f32_e64 v78, v22, s45  // 000000023CC0: D13B004E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023CC8: 7E2CB6F9 0005167B
-	v_fmac_f32_e64 v79, v22, s45  // 000000023CD0: D13B004F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[72:73]  // 000000023CD8: D3B24016 18029160
 	v_pk_add_f32 v[24:25], v[98:99], v[74:75]  // 000000023CE0: D3B24018 18029562
 	v_pk_add_f32 v[26:27], v[100:101], v[76:77]  // 000000023CE8: D3B2401A 18029964
@@ -20940,21 +21202,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[84:85], v[108:109], v[84:85]  // 000000023D54: D3B14054 1802A96C
 	v_pk_mul_f32 v[86:87], v[110:111], v[86:87]  // 000000023D5C: D3B14056 1802AD6E
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023D64: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v80, v22, s45  // 000000023D6C: D13B0050 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023D74: 7E2CB6F9 0005167C
-	v_fmac_f32_e64 v81, v22, s45  // 000000023D7C: D13B0051 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023D84: 7E2CB6F9 0004167D
-	v_fmac_f32_e64 v82, v22, s45  // 000000023D8C: D13B0052 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023D94: 7E2CB6F9 0005167D
-	v_fmac_f32_e64 v83, v22, s45  // 000000023D9C: D13B0053 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023DA4: 7E2CB6F9 0004167E
-	v_fmac_f32_e64 v84, v22, s45  // 000000023DAC: D13B0054 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023DB4: 7E2CB6F9 0005167E
-	v_fmac_f32_e64 v85, v22, s45  // 000000023DBC: D13B0055 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023DC4: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v86, v22, s45  // 000000023DCC: D13B0056 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023DD4: 7E2CB6F9 0005167F
-	v_fmac_f32_e64 v87, v22, s45  // 000000023DDC: D13B0057 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[96:97], v[80:81]  // 000000023DE4: D3B24016 1802A160
 	v_pk_add_f32 v[24:25], v[98:99], v[82:83]  // 000000023DEC: D3B24018 1802A562
 	v_pk_add_f32 v[26:27], v[100:101], v[84:85]  // 000000023DF4: D3B2401A 1802A964
@@ -20976,7 +21246,8 @@ custom_bf16_gemm_at_b:
 	s_lshl_b32 s74, s38, 1  // 000000023E50: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000023E54: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000023E58: 82118011
-	buffer_load_dwordx4 v[56:59], v36, s[16:19], 0 offen  // 000000023E5C: E05C1000 80043824
+	s_nop 0  // removed C load
+	s_nop 0
 	ds_read_b128 v[64:67], v37  // 000000023E64: D9FE0000 40000025
 	ds_read_b128 v[68:71], v37 offset:16  // 000000023E6C: D9FE0010 44000025
 	ds_read_b128 v[72:75], v37 offset:1024  // 000000023E74: D9FE0400 48000025
@@ -20984,7 +21255,8 @@ custom_bf16_gemm_at_b:
 	s_lshl_b32 s74, s38, 1  // 000000023E84: 8E4A8126
 	s_add_u32 s16, s16, s74  // 000000023E88: 80104A10
 	s_addc_u32 s17, s17, 0  // 000000023E8C: 82118011
-	buffer_load_dwordx4 v[60:63], v36, s[16:19], 0 offen  // 000000023E90: E05C1000 80043C24
+	s_nop 0  // removed C load
+	s_nop 0
 	v_accvgpr_read_b32 v40, a195  // 000000023E98: D3D84028 180001C3
 	v_accvgpr_read_b32 v41, a199  // 000000023EA0: D3D84029 180001C7
 	v_accvgpr_read_b32 v42, a203  // 000000023EA8: D3D8402A 180001CB
@@ -21018,21 +21290,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[44:45], v[76:77], v[44:45]  // 000000023F84: D3B1402C 1802594C
 	v_pk_mul_f32 v[46:47], v[78:79], v[46:47]  // 000000023F8C: D3B1402E 18025D4E
 	v_cvt_f32_bf16_sdwa v22, v56 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023F94: 7E2CB6F9 00041638
-	v_fmac_f32_e64 v40, v22, s45  // 000000023F9C: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v56 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023FA4: 7E2CB6F9 00051638
-	v_fmac_f32_e64 v41, v22, s45  // 000000023FAC: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v57 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023FB4: 7E2CB6F9 00041639
-	v_fmac_f32_e64 v42, v22, s45  // 000000023FBC: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v57 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023FC4: 7E2CB6F9 00051639
-	v_fmac_f32_e64 v43, v22, s45  // 000000023FCC: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v58 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023FD4: 7E2CB6F9 0004163A
-	v_fmac_f32_e64 v44, v22, s45  // 000000023FDC: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v58 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000023FE4: 7E2CB6F9 0005163A
-	v_fmac_f32_e64 v45, v22, s45  // 000000023FEC: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v59 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000023FF4: 7E2CB6F9 0004163B
-	v_fmac_f32_e64 v46, v22, s45  // 000000023FFC: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v59 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024004: 7E2CB6F9 0005163B
-	v_fmac_f32_e64 v47, v22, s45  // 00000002400C: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[64:65], v[40:41]  // 000000024014: D3B24016 18025140
 	v_pk_add_f32 v[24:25], v[66:67], v[42:43]  // 00000002401C: D3B24018 18025542
 	v_pk_add_f32 v[26:27], v[68:69], v[44:45]  // 000000024024: D3B2401A 18025944
@@ -21056,21 +21336,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[52:53], v[76:77], v[52:53]  // 000000024090: D3B14034 1802694C
 	v_pk_mul_f32 v[54:55], v[78:79], v[54:55]  // 000000024098: D3B14036 18026D4E
 	v_cvt_f32_bf16_sdwa v22, v60 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000240A0: 7E2CB6F9 0004163C
-	v_fmac_f32_e64 v48, v22, s45  // 0000000240A8: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v60 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000240B0: 7E2CB6F9 0005163C
-	v_fmac_f32_e64 v49, v22, s45  // 0000000240B8: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v61 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000240C0: 7E2CB6F9 0004163D
-	v_fmac_f32_e64 v50, v22, s45  // 0000000240C8: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v61 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000240D0: 7E2CB6F9 0005163D
-	v_fmac_f32_e64 v51, v22, s45  // 0000000240D8: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v62 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000240E0: 7E2CB6F9 0004163E
-	v_fmac_f32_e64 v52, v22, s45  // 0000000240E8: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v62 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000240F0: 7E2CB6F9 0005163E
-	v_fmac_f32_e64 v53, v22, s45  // 0000000240F8: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v63 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024100: 7E2CB6F9 0004163F
-	v_fmac_f32_e64 v54, v22, s45  // 000000024108: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v63 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024110: 7E2CB6F9 0005163F
-	v_fmac_f32_e64 v55, v22, s45  // 000000024118: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[64:65], v[48:49]  // 000000024120: D3B24016 18026140
 	v_pk_add_f32 v[24:25], v[66:67], v[50:51]  // 000000024128: D3B24018 18026542
 	v_pk_add_f32 v[26:27], v[68:69], v[52:53]  // 000000024130: D3B2401A 18026944
@@ -21129,7 +21417,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000024240: 86CE4E4A
 	v_add_lshl_u32 v35, v20, v18, 1  // 000000024244: D1FE0023 02062514
 	v_cndmask_b32_e64 v35, v30, v35, s[78:79]  // 00000002424C: D1000023 013A471E
-	buffer_load_dwordx4 v[36:39], v35, s[16:19], 0 offen  // 000000024254: E05C1000 80042423
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 00000002425C: 924A02FF 00000100
 	v_sub_u32_e64 v104, v18, s74  // 000000024264: D1350068 00009512
 	v_lshlrev_b32_e32 v104, 2, v104  // 00000002426C: 24D0D082
@@ -21149,7 +21438,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 0000000242D0: 86CE4E4A
 	v_add_lshl_u32 v105, v20, v18, 1  // 0000000242D4: D1FE0069 02062514
 	v_cndmask_b32_e64 v105, v30, v105, s[78:79]  // 0000000242DC: D1000069 013AD31E
-	buffer_load_dwordx4 v[108:111], v105, s[16:19], 0 offen  // 0000000242E4: E05C1000 80046C69
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 0000000242EC: 924A02FF 00000100
 	v_sub_u32_e64 v106, v18, s74  // 0000000242F4: D135006A 00009512
 	v_lshlrev_b32_e32 v106, 2, v106  // 0000000242FC: 24D4D482
@@ -21163,7 +21453,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000024338: 86CE4E4A
 	v_add_lshl_u32 v107, v20, v18, 1  // 00000002433C: D1FE006B 02062514
 	v_cndmask_b32_e64 v107, v30, v107, s[78:79]  // 000000024344: D100006B 013AD71E
-	buffer_load_dwordx4 v[112:115], v107, s[16:19], 0 offen  // 00000002434C: E05C1000 8004706B
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000024354: 924A02FF 00000100
 	v_sub_u32_e64 v116, v18, s74  // 00000002435C: D1350074 00009512
 	v_lshlrev_b32_e32 v116, 2, v116  // 000000024364: 24E8E882
@@ -21177,7 +21468,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 0000000243A0: 86CE4E4A
 	v_add_lshl_u32 v117, v20, v18, 1  // 0000000243A4: D1FE0075 02062514
 	v_cndmask_b32_e64 v117, v30, v117, s[78:79]  // 0000000243AC: D1000075 013AEB1E
-	buffer_load_dwordx4 v[120:123], v117, s[16:19], 0 offen  // 0000000243B4: E05C1000 80047875
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 0000000243BC: 924A02FF 00000100
 	v_sub_u32_e64 v118, v18, s74  // 0000000243C4: D1350076 00009512
 	v_lshlrev_b32_e32 v118, 2, v118  // 0000000243CC: 24ECEC82
@@ -21191,7 +21483,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000024408: 86CE4E4A
 	v_add_lshl_u32 v119, v20, v18, 1  // 00000002440C: D1FE0077 02062514
 	v_cndmask_b32_e64 v119, v30, v119, s[78:79]  // 000000024414: D1000077 013AEF1E
-	buffer_load_dwordx4 v[124:127], v119, s[16:19], 0 offen  // 00000002441C: E05C1000 80047C77
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000024424: 924A02FF 00000100
 	v_sub_u32_e64 v128, v18, s74  // 00000002442C: D1350080 00009512
 	v_lshlrev_b32_e32 v128, 2, v128  // 000000024434: 25010082
@@ -21205,7 +21498,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000024470: 86CE4E4A
 	v_add_lshl_u32 v129, v20, v18, 1  // 000000024474: D1FE0081 02062514
 	v_cndmask_b32_e64 v129, v30, v129, s[78:79]  // 00000002447C: D1000081 013B031E
-	buffer_load_dwordx4 v[132:135], v129, s[16:19], 0 offen  // 000000024484: E05C1000 80048481
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 00000002448C: 924A02FF 00000100
 	v_sub_u32_e64 v130, v18, s74  // 000000024494: D1350082 00009512
 	v_lshlrev_b32_e32 v130, 2, v130  // 00000002449C: 25050482
@@ -21292,21 +21586,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[44:45], v[100:101], v[44:45]  // 00000002471C: D3B1402C 18025964
 	v_pk_mul_f32 v[46:47], v[102:103], v[46:47]  // 000000024724: D3B1402E 18025D66
 	v_cvt_f32_bf16_sdwa v22, v36 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002472C: 7E2CB6F9 00041624
-	v_fmac_f32_e64 v40, v22, s45  // 000000024734: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v36 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002473C: 7E2CB6F9 00051624
-	v_fmac_f32_e64 v41, v22, s45  // 000000024744: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v37 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002474C: 7E2CB6F9 00041625
-	v_fmac_f32_e64 v42, v22, s45  // 000000024754: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v37 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002475C: 7E2CB6F9 00051625
-	v_fmac_f32_e64 v43, v22, s45  // 000000024764: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v38 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002476C: 7E2CB6F9 00041626
-	v_fmac_f32_e64 v44, v22, s45  // 000000024774: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v38 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002477C: 7E2CB6F9 00051626
-	v_fmac_f32_e64 v45, v22, s45  // 000000024784: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v39 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002478C: 7E2CB6F9 00041627
-	v_fmac_f32_e64 v46, v22, s45  // 000000024794: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v39 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002479C: 7E2CB6F9 00051627
-	v_fmac_f32_e64 v47, v22, s45  // 0000000247A4: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[40:41]  // 0000000247AC: D3B24016 18025158
 	v_pk_add_f32 v[24:25], v[90:91], v[42:43]  // 0000000247B4: D3B24018 1802555A
 	v_pk_add_f32 v[26:27], v[92:93], v[44:45]  // 0000000247BC: D3B2401A 1802595C
@@ -21326,21 +21628,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[52:53], v[100:101], v[52:53]  // 000000024818: D3B14034 18026964
 	v_pk_mul_f32 v[54:55], v[102:103], v[54:55]  // 000000024820: D3B14036 18026D66
 	v_cvt_f32_bf16_sdwa v22, v108 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024828: 7E2CB6F9 0004166C
-	v_fmac_f32_e64 v48, v22, s45  // 000000024830: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v108 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024838: 7E2CB6F9 0005166C
-	v_fmac_f32_e64 v49, v22, s45  // 000000024840: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024848: 7E2CB6F9 0004166D
-	v_fmac_f32_e64 v50, v22, s45  // 000000024850: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024858: 7E2CB6F9 0005166D
-	v_fmac_f32_e64 v51, v22, s45  // 000000024860: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v110 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024868: 7E2CB6F9 0004166E
-	v_fmac_f32_e64 v52, v22, s45  // 000000024870: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v110 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024878: 7E2CB6F9 0005166E
-	v_fmac_f32_e64 v53, v22, s45  // 000000024880: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v111 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024888: 7E2CB6F9 0004166F
-	v_fmac_f32_e64 v54, v22, s45  // 000000024890: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v111 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024898: 7E2CB6F9 0005166F
-	v_fmac_f32_e64 v55, v22, s45  // 0000000248A0: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[48:49]  // 0000000248A8: D3B24016 18026158
 	v_pk_add_f32 v[24:25], v[90:91], v[50:51]  // 0000000248B0: D3B24018 1802655A
 	v_pk_add_f32 v[26:27], v[92:93], v[52:53]  // 0000000248B8: D3B2401A 1802695C
@@ -21360,21 +21670,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[60:61], v[100:101], v[60:61]  // 000000024914: D3B1403C 18027964
 	v_pk_mul_f32 v[62:63], v[102:103], v[62:63]  // 00000002491C: D3B1403E 18027D66
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024924: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v56, v22, s45  // 00000002492C: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024934: 7E2CB6F9 00051670
-	v_fmac_f32_e64 v57, v22, s45  // 00000002493C: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024944: 7E2CB6F9 00041671
-	v_fmac_f32_e64 v58, v22, s45  // 00000002494C: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024954: 7E2CB6F9 00051671
-	v_fmac_f32_e64 v59, v22, s45  // 00000002495C: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024964: 7E2CB6F9 00041672
-	v_fmac_f32_e64 v60, v22, s45  // 00000002496C: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024974: 7E2CB6F9 00051672
-	v_fmac_f32_e64 v61, v22, s45  // 00000002497C: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024984: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v62, v22, s45  // 00000002498C: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024994: 7E2CB6F9 00051673
-	v_fmac_f32_e64 v63, v22, s45  // 00000002499C: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[56:57]  // 0000000249A4: D3B24016 18027158
 	v_pk_add_f32 v[24:25], v[90:91], v[58:59]  // 0000000249AC: D3B24018 1802755A
 	v_pk_add_f32 v[26:27], v[92:93], v[60:61]  // 0000000249B4: D3B2401A 1802795C
@@ -21394,21 +21712,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[68:69], v[100:101], v[68:69]  // 000000024A10: D3B14044 18028964
 	v_pk_mul_f32 v[70:71], v[102:103], v[70:71]  // 000000024A18: D3B14046 18028D66
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024A20: 7E2CB6F9 00041678
-	v_fmac_f32_e64 v64, v22, s45  // 000000024A28: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024A30: 7E2CB6F9 00051678
-	v_fmac_f32_e64 v65, v22, s45  // 000000024A38: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024A40: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v66, v22, s45  // 000000024A48: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024A50: 7E2CB6F9 00051679
-	v_fmac_f32_e64 v67, v22, s45  // 000000024A58: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024A60: 7E2CB6F9 0004167A
-	v_fmac_f32_e64 v68, v22, s45  // 000000024A68: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024A70: 7E2CB6F9 0005167A
-	v_fmac_f32_e64 v69, v22, s45  // 000000024A78: D13B0045 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024A80: 7E2CB6F9 0004167B
-	v_fmac_f32_e64 v70, v22, s45  // 000000024A88: D13B0046 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024A90: 7E2CB6F9 0005167B
-	v_fmac_f32_e64 v71, v22, s45  // 000000024A98: D13B0047 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[64:65]  // 000000024AA0: D3B24016 18028158
 	v_pk_add_f32 v[24:25], v[90:91], v[66:67]  // 000000024AA8: D3B24018 1802855A
 	v_pk_add_f32 v[26:27], v[92:93], v[68:69]  // 000000024AB0: D3B2401A 1802895C
@@ -21428,21 +21754,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[76:77], v[100:101], v[76:77]  // 000000024B0C: D3B1404C 18029964
 	v_pk_mul_f32 v[78:79], v[102:103], v[78:79]  // 000000024B14: D3B1404E 18029D66
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024B1C: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v72, v22, s45  // 000000024B24: D13B0048 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024B2C: 7E2CB6F9 0005167C
-	v_fmac_f32_e64 v73, v22, s45  // 000000024B34: D13B0049 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024B3C: 7E2CB6F9 0004167D
-	v_fmac_f32_e64 v74, v22, s45  // 000000024B44: D13B004A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024B4C: 7E2CB6F9 0005167D
-	v_fmac_f32_e64 v75, v22, s45  // 000000024B54: D13B004B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024B5C: 7E2CB6F9 0004167E
-	v_fmac_f32_e64 v76, v22, s45  // 000000024B64: D13B004C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024B6C: 7E2CB6F9 0005167E
-	v_fmac_f32_e64 v77, v22, s45  // 000000024B74: D13B004D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024B7C: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v78, v22, s45  // 000000024B84: D13B004E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024B8C: 7E2CB6F9 0005167F
-	v_fmac_f32_e64 v79, v22, s45  // 000000024B94: D13B004F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[72:73]  // 000000024B9C: D3B24016 18029158
 	v_pk_add_f32 v[24:25], v[90:91], v[74:75]  // 000000024BA4: D3B24018 1802955A
 	v_pk_add_f32 v[26:27], v[92:93], v[76:77]  // 000000024BAC: D3B2401A 1802995C
@@ -21462,21 +21796,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[84:85], v[100:101], v[84:85]  // 000000024C08: D3B14054 1802A964
 	v_pk_mul_f32 v[86:87], v[102:103], v[86:87]  // 000000024C10: D3B14056 1802AD66
 	v_cvt_f32_bf16_sdwa v22, v132 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024C18: 7E2CB6F9 00041684
-	v_fmac_f32_e64 v80, v22, s45  // 000000024C20: D13B0050 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v132 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024C28: 7E2CB6F9 00051684
-	v_fmac_f32_e64 v81, v22, s45  // 000000024C30: D13B0051 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024C38: 7E2CB6F9 00041685
-	v_fmac_f32_e64 v82, v22, s45  // 000000024C40: D13B0052 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024C48: 7E2CB6F9 00051685
-	v_fmac_f32_e64 v83, v22, s45  // 000000024C50: D13B0053 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v134 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024C58: 7E2CB6F9 00041686
-	v_fmac_f32_e64 v84, v22, s45  // 000000024C60: D13B0054 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v134 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024C68: 7E2CB6F9 00051686
-	v_fmac_f32_e64 v85, v22, s45  // 000000024C70: D13B0055 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v135 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000024C78: 7E2CB6F9 00041687
-	v_fmac_f32_e64 v86, v22, s45  // 000000024C80: D13B0056 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v135 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000024C88: 7E2CB6F9 00051687
-	v_fmac_f32_e64 v87, v22, s45  // 000000024C90: D13B0057 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[80:81]  // 000000024C98: D3B24016 1802A158
 	v_pk_add_f32 v[24:25], v[90:91], v[82:83]  // 000000024CA0: D3B24018 1802A55A
 	v_pk_add_f32 v[26:27], v[92:93], v[84:85]  // 000000024CA8: D3B2401A 1802A95C
@@ -21501,7 +21843,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000024D28: 86CE4E4A
 	v_add_lshl_u32 v35, v20, v18, 1  // 000000024D2C: D1FE0023 02062514
 	v_cndmask_b32_e64 v35, v30, v35, s[78:79]  // 000000024D34: D1000023 013A471E
-	buffer_load_dwordx4 v[36:39], v35, s[16:19], 0 offen  // 000000024D3C: E05C1000 80042423
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000024D44: 924A02FF 00000100
 	v_sub_u32_e64 v104, v18, s74  // 000000024D4C: D1350068 00009512
 	v_lshlrev_b32_e32 v104, 2, v104  // 000000024D54: 24D0D082
@@ -21519,7 +21862,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000024DB0: 86CE4E4A
 	v_add_lshl_u32 v105, v20, v18, 1  // 000000024DB4: D1FE0069 02062514
 	v_cndmask_b32_e64 v105, v30, v105, s[78:79]  // 000000024DBC: D1000069 013AD31E
-	buffer_load_dwordx4 v[108:111], v105, s[16:19], 0 offen  // 000000024DC4: E05C1000 80046C69
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000024DCC: 924A02FF 00000100
 	v_sub_u32_e64 v106, v18, s74  // 000000024DD4: D135006A 00009512
 	v_lshlrev_b32_e32 v106, 2, v106  // 000000024DDC: 24D4D482
@@ -21533,7 +21877,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000024E18: 86CE4E4A
 	v_add_lshl_u32 v107, v20, v18, 1  // 000000024E1C: D1FE006B 02062514
 	v_cndmask_b32_e64 v107, v30, v107, s[78:79]  // 000000024E24: D100006B 013AD71E
-	buffer_load_dwordx4 v[112:115], v107, s[16:19], 0 offen  // 000000024E2C: E05C1000 8004706B
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000024E34: 924A02FF 00000100
 	v_sub_u32_e64 v116, v18, s74  // 000000024E3C: D1350074 00009512
 	v_lshlrev_b32_e32 v116, 2, v116  // 000000024E44: 24E8E882
@@ -21547,7 +21892,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000024E80: 86CE4E4A
 	v_add_lshl_u32 v117, v20, v18, 1  // 000000024E84: D1FE0075 02062514
 	v_cndmask_b32_e64 v117, v30, v117, s[78:79]  // 000000024E8C: D1000075 013AEB1E
-	buffer_load_dwordx4 v[120:123], v117, s[16:19], 0 offen  // 000000024E94: E05C1000 80047875
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000024E9C: 924A02FF 00000100
 	v_sub_u32_e64 v118, v18, s74  // 000000024EA4: D1350076 00009512
 	v_lshlrev_b32_e32 v118, 2, v118  // 000000024EAC: 24ECEC82
@@ -21561,7 +21907,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000024EE8: 86CE4E4A
 	v_add_lshl_u32 v119, v20, v18, 1  // 000000024EEC: D1FE0077 02062514
 	v_cndmask_b32_e64 v119, v30, v119, s[78:79]  // 000000024EF4: D1000077 013AEF1E
-	buffer_load_dwordx4 v[124:127], v119, s[16:19], 0 offen  // 000000024EFC: E05C1000 80047C77
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000024F04: 924A02FF 00000100
 	v_sub_u32_e64 v128, v18, s74  // 000000024F0C: D1350080 00009512
 	v_lshlrev_b32_e32 v128, 2, v128  // 000000024F14: 25010082
@@ -21575,7 +21922,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000024F50: 86CE4E4A
 	v_add_lshl_u32 v129, v20, v18, 1  // 000000024F54: D1FE0081 02062514
 	v_cndmask_b32_e64 v129, v30, v129, s[78:79]  // 000000024F5C: D1000081 013B031E
-	buffer_load_dwordx4 v[132:135], v129, s[16:19], 0 offen  // 000000024F64: E05C1000 80048481
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000024F6C: 924A02FF 00000100
 	v_sub_u32_e64 v130, v18, s74  // 000000024F74: D1350082 00009512
 	v_lshlrev_b32_e32 v130, 2, v130  // 000000024F7C: 25050482
@@ -21662,21 +22010,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[44:45], v[100:101], v[44:45]  // 0000000251FC: D3B1402C 18025964
 	v_pk_mul_f32 v[46:47], v[102:103], v[46:47]  // 000000025204: D3B1402E 18025D66
 	v_cvt_f32_bf16_sdwa v22, v36 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002520C: 7E2CB6F9 00041624
-	v_fmac_f32_e64 v40, v22, s45  // 000000025214: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v36 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002521C: 7E2CB6F9 00051624
-	v_fmac_f32_e64 v41, v22, s45  // 000000025224: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v37 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002522C: 7E2CB6F9 00041625
-	v_fmac_f32_e64 v42, v22, s45  // 000000025234: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v37 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002523C: 7E2CB6F9 00051625
-	v_fmac_f32_e64 v43, v22, s45  // 000000025244: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v38 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002524C: 7E2CB6F9 00041626
-	v_fmac_f32_e64 v44, v22, s45  // 000000025254: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v38 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002525C: 7E2CB6F9 00051626
-	v_fmac_f32_e64 v45, v22, s45  // 000000025264: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v39 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002526C: 7E2CB6F9 00041627
-	v_fmac_f32_e64 v46, v22, s45  // 000000025274: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v39 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002527C: 7E2CB6F9 00051627
-	v_fmac_f32_e64 v47, v22, s45  // 000000025284: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[40:41]  // 00000002528C: D3B24016 18025158
 	v_pk_add_f32 v[24:25], v[90:91], v[42:43]  // 000000025294: D3B24018 1802555A
 	v_pk_add_f32 v[26:27], v[92:93], v[44:45]  // 00000002529C: D3B2401A 1802595C
@@ -21696,21 +22052,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[52:53], v[100:101], v[52:53]  // 0000000252F8: D3B14034 18026964
 	v_pk_mul_f32 v[54:55], v[102:103], v[54:55]  // 000000025300: D3B14036 18026D66
 	v_cvt_f32_bf16_sdwa v22, v108 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025308: 7E2CB6F9 0004166C
-	v_fmac_f32_e64 v48, v22, s45  // 000000025310: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v108 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025318: 7E2CB6F9 0005166C
-	v_fmac_f32_e64 v49, v22, s45  // 000000025320: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025328: 7E2CB6F9 0004166D
-	v_fmac_f32_e64 v50, v22, s45  // 000000025330: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025338: 7E2CB6F9 0005166D
-	v_fmac_f32_e64 v51, v22, s45  // 000000025340: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v110 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025348: 7E2CB6F9 0004166E
-	v_fmac_f32_e64 v52, v22, s45  // 000000025350: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v110 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025358: 7E2CB6F9 0005166E
-	v_fmac_f32_e64 v53, v22, s45  // 000000025360: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v111 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025368: 7E2CB6F9 0004166F
-	v_fmac_f32_e64 v54, v22, s45  // 000000025370: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v111 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025378: 7E2CB6F9 0005166F
-	v_fmac_f32_e64 v55, v22, s45  // 000000025380: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[48:49]  // 000000025388: D3B24016 18026158
 	v_pk_add_f32 v[24:25], v[90:91], v[50:51]  // 000000025390: D3B24018 1802655A
 	v_pk_add_f32 v[26:27], v[92:93], v[52:53]  // 000000025398: D3B2401A 1802695C
@@ -21730,21 +22094,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[60:61], v[100:101], v[60:61]  // 0000000253F4: D3B1403C 18027964
 	v_pk_mul_f32 v[62:63], v[102:103], v[62:63]  // 0000000253FC: D3B1403E 18027D66
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025404: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v56, v22, s45  // 00000002540C: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025414: 7E2CB6F9 00051670
-	v_fmac_f32_e64 v57, v22, s45  // 00000002541C: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025424: 7E2CB6F9 00041671
-	v_fmac_f32_e64 v58, v22, s45  // 00000002542C: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025434: 7E2CB6F9 00051671
-	v_fmac_f32_e64 v59, v22, s45  // 00000002543C: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025444: 7E2CB6F9 00041672
-	v_fmac_f32_e64 v60, v22, s45  // 00000002544C: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025454: 7E2CB6F9 00051672
-	v_fmac_f32_e64 v61, v22, s45  // 00000002545C: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025464: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v62, v22, s45  // 00000002546C: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025474: 7E2CB6F9 00051673
-	v_fmac_f32_e64 v63, v22, s45  // 00000002547C: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[56:57]  // 000000025484: D3B24016 18027158
 	v_pk_add_f32 v[24:25], v[90:91], v[58:59]  // 00000002548C: D3B24018 1802755A
 	v_pk_add_f32 v[26:27], v[92:93], v[60:61]  // 000000025494: D3B2401A 1802795C
@@ -21764,21 +22136,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[68:69], v[100:101], v[68:69]  // 0000000254F0: D3B14044 18028964
 	v_pk_mul_f32 v[70:71], v[102:103], v[70:71]  // 0000000254F8: D3B14046 18028D66
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025500: 7E2CB6F9 00041678
-	v_fmac_f32_e64 v64, v22, s45  // 000000025508: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025510: 7E2CB6F9 00051678
-	v_fmac_f32_e64 v65, v22, s45  // 000000025518: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025520: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v66, v22, s45  // 000000025528: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025530: 7E2CB6F9 00051679
-	v_fmac_f32_e64 v67, v22, s45  // 000000025538: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025540: 7E2CB6F9 0004167A
-	v_fmac_f32_e64 v68, v22, s45  // 000000025548: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025550: 7E2CB6F9 0005167A
-	v_fmac_f32_e64 v69, v22, s45  // 000000025558: D13B0045 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025560: 7E2CB6F9 0004167B
-	v_fmac_f32_e64 v70, v22, s45  // 000000025568: D13B0046 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025570: 7E2CB6F9 0005167B
-	v_fmac_f32_e64 v71, v22, s45  // 000000025578: D13B0047 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[64:65]  // 000000025580: D3B24016 18028158
 	v_pk_add_f32 v[24:25], v[90:91], v[66:67]  // 000000025588: D3B24018 1802855A
 	v_pk_add_f32 v[26:27], v[92:93], v[68:69]  // 000000025590: D3B2401A 1802895C
@@ -21798,21 +22178,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[76:77], v[100:101], v[76:77]  // 0000000255EC: D3B1404C 18029964
 	v_pk_mul_f32 v[78:79], v[102:103], v[78:79]  // 0000000255F4: D3B1404E 18029D66
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000255FC: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v72, v22, s45  // 000000025604: D13B0048 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002560C: 7E2CB6F9 0005167C
-	v_fmac_f32_e64 v73, v22, s45  // 000000025614: D13B0049 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002561C: 7E2CB6F9 0004167D
-	v_fmac_f32_e64 v74, v22, s45  // 000000025624: D13B004A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002562C: 7E2CB6F9 0005167D
-	v_fmac_f32_e64 v75, v22, s45  // 000000025634: D13B004B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002563C: 7E2CB6F9 0004167E
-	v_fmac_f32_e64 v76, v22, s45  // 000000025644: D13B004C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002564C: 7E2CB6F9 0005167E
-	v_fmac_f32_e64 v77, v22, s45  // 000000025654: D13B004D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002565C: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v78, v22, s45  // 000000025664: D13B004E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002566C: 7E2CB6F9 0005167F
-	v_fmac_f32_e64 v79, v22, s45  // 000000025674: D13B004F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[72:73]  // 00000002567C: D3B24016 18029158
 	v_pk_add_f32 v[24:25], v[90:91], v[74:75]  // 000000025684: D3B24018 1802955A
 	v_pk_add_f32 v[26:27], v[92:93], v[76:77]  // 00000002568C: D3B2401A 1802995C
@@ -21832,21 +22220,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[84:85], v[100:101], v[84:85]  // 0000000256E8: D3B14054 1802A964
 	v_pk_mul_f32 v[86:87], v[102:103], v[86:87]  // 0000000256F0: D3B14056 1802AD66
 	v_cvt_f32_bf16_sdwa v22, v132 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000256F8: 7E2CB6F9 00041684
-	v_fmac_f32_e64 v80, v22, s45  // 000000025700: D13B0050 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v132 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025708: 7E2CB6F9 00051684
-	v_fmac_f32_e64 v81, v22, s45  // 000000025710: D13B0051 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025718: 7E2CB6F9 00041685
-	v_fmac_f32_e64 v82, v22, s45  // 000000025720: D13B0052 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025728: 7E2CB6F9 00051685
-	v_fmac_f32_e64 v83, v22, s45  // 000000025730: D13B0053 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v134 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025738: 7E2CB6F9 00041686
-	v_fmac_f32_e64 v84, v22, s45  // 000000025740: D13B0054 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v134 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025748: 7E2CB6F9 00051686
-	v_fmac_f32_e64 v85, v22, s45  // 000000025750: D13B0055 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v135 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025758: 7E2CB6F9 00041687
-	v_fmac_f32_e64 v86, v22, s45  // 000000025760: D13B0056 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v135 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025768: 7E2CB6F9 00051687
-	v_fmac_f32_e64 v87, v22, s45  // 000000025770: D13B0057 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[80:81]  // 000000025778: D3B24016 1802A158
 	v_pk_add_f32 v[24:25], v[90:91], v[82:83]  // 000000025780: D3B24018 1802A55A
 	v_pk_add_f32 v[26:27], v[92:93], v[84:85]  // 000000025788: D3B2401A 1802A95C
@@ -21871,7 +22267,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000025808: 86CE4E4A
 	v_add_lshl_u32 v35, v20, v18, 1  // 00000002580C: D1FE0023 02062514
 	v_cndmask_b32_e64 v35, v30, v35, s[78:79]  // 000000025814: D1000023 013A471E
-	buffer_load_dwordx4 v[36:39], v35, s[16:19], 0 offen  // 00000002581C: E05C1000 80042423
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000025824: 924A02FF 00000100
 	v_sub_u32_e64 v104, v18, s74  // 00000002582C: D1350068 00009512
 	v_lshlrev_b32_e32 v104, 2, v104  // 000000025834: 24D0D082
@@ -21889,7 +22286,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000025890: 86CE4E4A
 	v_add_lshl_u32 v105, v20, v18, 1  // 000000025894: D1FE0069 02062514
 	v_cndmask_b32_e64 v105, v30, v105, s[78:79]  // 00000002589C: D1000069 013AD31E
-	buffer_load_dwordx4 v[108:111], v105, s[16:19], 0 offen  // 0000000258A4: E05C1000 80046C69
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 0000000258AC: 924A02FF 00000100
 	v_sub_u32_e64 v106, v18, s74  // 0000000258B4: D135006A 00009512
 	v_lshlrev_b32_e32 v106, 2, v106  // 0000000258BC: 24D4D482
@@ -21903,7 +22301,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 0000000258F8: 86CE4E4A
 	v_add_lshl_u32 v107, v20, v18, 1  // 0000000258FC: D1FE006B 02062514
 	v_cndmask_b32_e64 v107, v30, v107, s[78:79]  // 000000025904: D100006B 013AD71E
-	buffer_load_dwordx4 v[112:115], v107, s[16:19], 0 offen  // 00000002590C: E05C1000 8004706B
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000025914: 924A02FF 00000100
 	v_sub_u32_e64 v116, v18, s74  // 00000002591C: D1350074 00009512
 	v_lshlrev_b32_e32 v116, 2, v116  // 000000025924: 24E8E882
@@ -21917,7 +22316,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000025960: 86CE4E4A
 	v_add_lshl_u32 v117, v20, v18, 1  // 000000025964: D1FE0075 02062514
 	v_cndmask_b32_e64 v117, v30, v117, s[78:79]  // 00000002596C: D1000075 013AEB1E
-	buffer_load_dwordx4 v[120:123], v117, s[16:19], 0 offen  // 000000025974: E05C1000 80047875
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 00000002597C: 924A02FF 00000100
 	v_sub_u32_e64 v118, v18, s74  // 000000025984: D1350076 00009512
 	v_lshlrev_b32_e32 v118, 2, v118  // 00000002598C: 24ECEC82
@@ -21931,7 +22331,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 0000000259C8: 86CE4E4A
 	v_add_lshl_u32 v119, v20, v18, 1  // 0000000259CC: D1FE0077 02062514
 	v_cndmask_b32_e64 v119, v30, v119, s[78:79]  // 0000000259D4: D1000077 013AEF1E
-	buffer_load_dwordx4 v[124:127], v119, s[16:19], 0 offen  // 0000000259DC: E05C1000 80047C77
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 0000000259E4: 924A02FF 00000100
 	v_sub_u32_e64 v128, v18, s74  // 0000000259EC: D1350080 00009512
 	v_lshlrev_b32_e32 v128, 2, v128  // 0000000259F4: 25010082
@@ -21945,7 +22346,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000025A30: 86CE4E4A
 	v_add_lshl_u32 v129, v20, v18, 1  // 000000025A34: D1FE0081 02062514
 	v_cndmask_b32_e64 v129, v30, v129, s[78:79]  // 000000025A3C: D1000081 013B031E
-	buffer_load_dwordx4 v[132:135], v129, s[16:19], 0 offen  // 000000025A44: E05C1000 80048481
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000025A4C: 924A02FF 00000100
 	v_sub_u32_e64 v130, v18, s74  // 000000025A54: D1350082 00009512
 	v_lshlrev_b32_e32 v130, 2, v130  // 000000025A5C: 25050482
@@ -22032,21 +22434,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[44:45], v[100:101], v[44:45]  // 000000025CDC: D3B1402C 18025964
 	v_pk_mul_f32 v[46:47], v[102:103], v[46:47]  // 000000025CE4: D3B1402E 18025D66
 	v_cvt_f32_bf16_sdwa v22, v36 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025CEC: 7E2CB6F9 00041624
-	v_fmac_f32_e64 v40, v22, s45  // 000000025CF4: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v36 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025CFC: 7E2CB6F9 00051624
-	v_fmac_f32_e64 v41, v22, s45  // 000000025D04: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v37 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025D0C: 7E2CB6F9 00041625
-	v_fmac_f32_e64 v42, v22, s45  // 000000025D14: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v37 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025D1C: 7E2CB6F9 00051625
-	v_fmac_f32_e64 v43, v22, s45  // 000000025D24: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v38 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025D2C: 7E2CB6F9 00041626
-	v_fmac_f32_e64 v44, v22, s45  // 000000025D34: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v38 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025D3C: 7E2CB6F9 00051626
-	v_fmac_f32_e64 v45, v22, s45  // 000000025D44: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v39 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025D4C: 7E2CB6F9 00041627
-	v_fmac_f32_e64 v46, v22, s45  // 000000025D54: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v39 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025D5C: 7E2CB6F9 00051627
-	v_fmac_f32_e64 v47, v22, s45  // 000000025D64: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[40:41]  // 000000025D6C: D3B24016 18025158
 	v_pk_add_f32 v[24:25], v[90:91], v[42:43]  // 000000025D74: D3B24018 1802555A
 	v_pk_add_f32 v[26:27], v[92:93], v[44:45]  // 000000025D7C: D3B2401A 1802595C
@@ -22066,21 +22476,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[52:53], v[100:101], v[52:53]  // 000000025DD8: D3B14034 18026964
 	v_pk_mul_f32 v[54:55], v[102:103], v[54:55]  // 000000025DE0: D3B14036 18026D66
 	v_cvt_f32_bf16_sdwa v22, v108 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025DE8: 7E2CB6F9 0004166C
-	v_fmac_f32_e64 v48, v22, s45  // 000000025DF0: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v108 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025DF8: 7E2CB6F9 0005166C
-	v_fmac_f32_e64 v49, v22, s45  // 000000025E00: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025E08: 7E2CB6F9 0004166D
-	v_fmac_f32_e64 v50, v22, s45  // 000000025E10: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025E18: 7E2CB6F9 0005166D
-	v_fmac_f32_e64 v51, v22, s45  // 000000025E20: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v110 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025E28: 7E2CB6F9 0004166E
-	v_fmac_f32_e64 v52, v22, s45  // 000000025E30: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v110 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025E38: 7E2CB6F9 0005166E
-	v_fmac_f32_e64 v53, v22, s45  // 000000025E40: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v111 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025E48: 7E2CB6F9 0004166F
-	v_fmac_f32_e64 v54, v22, s45  // 000000025E50: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v111 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025E58: 7E2CB6F9 0005166F
-	v_fmac_f32_e64 v55, v22, s45  // 000000025E60: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[48:49]  // 000000025E68: D3B24016 18026158
 	v_pk_add_f32 v[24:25], v[90:91], v[50:51]  // 000000025E70: D3B24018 1802655A
 	v_pk_add_f32 v[26:27], v[92:93], v[52:53]  // 000000025E78: D3B2401A 1802695C
@@ -22100,21 +22518,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[60:61], v[100:101], v[60:61]  // 000000025ED4: D3B1403C 18027964
 	v_pk_mul_f32 v[62:63], v[102:103], v[62:63]  // 000000025EDC: D3B1403E 18027D66
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025EE4: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v56, v22, s45  // 000000025EEC: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025EF4: 7E2CB6F9 00051670
-	v_fmac_f32_e64 v57, v22, s45  // 000000025EFC: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025F04: 7E2CB6F9 00041671
-	v_fmac_f32_e64 v58, v22, s45  // 000000025F0C: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025F14: 7E2CB6F9 00051671
-	v_fmac_f32_e64 v59, v22, s45  // 000000025F1C: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025F24: 7E2CB6F9 00041672
-	v_fmac_f32_e64 v60, v22, s45  // 000000025F2C: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025F34: 7E2CB6F9 00051672
-	v_fmac_f32_e64 v61, v22, s45  // 000000025F3C: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025F44: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v62, v22, s45  // 000000025F4C: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025F54: 7E2CB6F9 00051673
-	v_fmac_f32_e64 v63, v22, s45  // 000000025F5C: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[56:57]  // 000000025F64: D3B24016 18027158
 	v_pk_add_f32 v[24:25], v[90:91], v[58:59]  // 000000025F6C: D3B24018 1802755A
 	v_pk_add_f32 v[26:27], v[92:93], v[60:61]  // 000000025F74: D3B2401A 1802795C
@@ -22134,21 +22560,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[68:69], v[100:101], v[68:69]  // 000000025FD0: D3B14044 18028964
 	v_pk_mul_f32 v[70:71], v[102:103], v[70:71]  // 000000025FD8: D3B14046 18028D66
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000025FE0: 7E2CB6F9 00041678
-	v_fmac_f32_e64 v64, v22, s45  // 000000025FE8: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000025FF0: 7E2CB6F9 00051678
-	v_fmac_f32_e64 v65, v22, s45  // 000000025FF8: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026000: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v66, v22, s45  // 000000026008: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026010: 7E2CB6F9 00051679
-	v_fmac_f32_e64 v67, v22, s45  // 000000026018: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026020: 7E2CB6F9 0004167A
-	v_fmac_f32_e64 v68, v22, s45  // 000000026028: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026030: 7E2CB6F9 0005167A
-	v_fmac_f32_e64 v69, v22, s45  // 000000026038: D13B0045 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026040: 7E2CB6F9 0004167B
-	v_fmac_f32_e64 v70, v22, s45  // 000000026048: D13B0046 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026050: 7E2CB6F9 0005167B
-	v_fmac_f32_e64 v71, v22, s45  // 000000026058: D13B0047 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[64:65]  // 000000026060: D3B24016 18028158
 	v_pk_add_f32 v[24:25], v[90:91], v[66:67]  // 000000026068: D3B24018 1802855A
 	v_pk_add_f32 v[26:27], v[92:93], v[68:69]  // 000000026070: D3B2401A 1802895C
@@ -22168,21 +22602,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[76:77], v[100:101], v[76:77]  // 0000000260CC: D3B1404C 18029964
 	v_pk_mul_f32 v[78:79], v[102:103], v[78:79]  // 0000000260D4: D3B1404E 18029D66
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000260DC: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v72, v22, s45  // 0000000260E4: D13B0048 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000260EC: 7E2CB6F9 0005167C
-	v_fmac_f32_e64 v73, v22, s45  // 0000000260F4: D13B0049 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000260FC: 7E2CB6F9 0004167D
-	v_fmac_f32_e64 v74, v22, s45  // 000000026104: D13B004A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002610C: 7E2CB6F9 0005167D
-	v_fmac_f32_e64 v75, v22, s45  // 000000026114: D13B004B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002611C: 7E2CB6F9 0004167E
-	v_fmac_f32_e64 v76, v22, s45  // 000000026124: D13B004C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002612C: 7E2CB6F9 0005167E
-	v_fmac_f32_e64 v77, v22, s45  // 000000026134: D13B004D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002613C: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v78, v22, s45  // 000000026144: D13B004E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002614C: 7E2CB6F9 0005167F
-	v_fmac_f32_e64 v79, v22, s45  // 000000026154: D13B004F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[72:73]  // 00000002615C: D3B24016 18029158
 	v_pk_add_f32 v[24:25], v[90:91], v[74:75]  // 000000026164: D3B24018 1802955A
 	v_pk_add_f32 v[26:27], v[92:93], v[76:77]  // 00000002616C: D3B2401A 1802995C
@@ -22202,21 +22644,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[84:85], v[100:101], v[84:85]  // 0000000261C8: D3B14054 1802A964
 	v_pk_mul_f32 v[86:87], v[102:103], v[86:87]  // 0000000261D0: D3B14056 1802AD66
 	v_cvt_f32_bf16_sdwa v22, v132 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000261D8: 7E2CB6F9 00041684
-	v_fmac_f32_e64 v80, v22, s45  // 0000000261E0: D13B0050 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v132 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000261E8: 7E2CB6F9 00051684
-	v_fmac_f32_e64 v81, v22, s45  // 0000000261F0: D13B0051 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000261F8: 7E2CB6F9 00041685
-	v_fmac_f32_e64 v82, v22, s45  // 000000026200: D13B0052 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026208: 7E2CB6F9 00051685
-	v_fmac_f32_e64 v83, v22, s45  // 000000026210: D13B0053 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v134 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026218: 7E2CB6F9 00041686
-	v_fmac_f32_e64 v84, v22, s45  // 000000026220: D13B0054 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v134 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026228: 7E2CB6F9 00051686
-	v_fmac_f32_e64 v85, v22, s45  // 000000026230: D13B0055 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v135 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026238: 7E2CB6F9 00041687
-	v_fmac_f32_e64 v86, v22, s45  // 000000026240: D13B0056 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v135 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026248: 7E2CB6F9 00051687
-	v_fmac_f32_e64 v87, v22, s45  // 000000026250: D13B0057 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[80:81]  // 000000026258: D3B24016 1802A158
 	v_pk_add_f32 v[24:25], v[90:91], v[82:83]  // 000000026260: D3B24018 1802A55A
 	v_pk_add_f32 v[26:27], v[92:93], v[84:85]  // 000000026268: D3B2401A 1802A95C
@@ -22241,7 +22691,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 0000000262E8: 86CE4E4A
 	v_add_lshl_u32 v35, v20, v18, 1  // 0000000262EC: D1FE0023 02062514
 	v_cndmask_b32_e64 v35, v30, v35, s[78:79]  // 0000000262F4: D1000023 013A471E
-	buffer_load_dwordx4 v[36:39], v35, s[16:19], 0 offen  // 0000000262FC: E05C1000 80042423
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000026304: 924A02FF 00000100
 	v_sub_u32_e64 v104, v18, s74  // 00000002630C: D1350068 00009512
 	v_lshlrev_b32_e32 v104, 2, v104  // 000000026314: 24D0D082
@@ -22259,7 +22710,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000026370: 86CE4E4A
 	v_add_lshl_u32 v105, v20, v18, 1  // 000000026374: D1FE0069 02062514
 	v_cndmask_b32_e64 v105, v30, v105, s[78:79]  // 00000002637C: D1000069 013AD31E
-	buffer_load_dwordx4 v[108:111], v105, s[16:19], 0 offen  // 000000026384: E05C1000 80046C69
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 00000002638C: 924A02FF 00000100
 	v_sub_u32_e64 v106, v18, s74  // 000000026394: D135006A 00009512
 	v_lshlrev_b32_e32 v106, 2, v106  // 00000002639C: 24D4D482
@@ -22273,7 +22725,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 0000000263D8: 86CE4E4A
 	v_add_lshl_u32 v107, v20, v18, 1  // 0000000263DC: D1FE006B 02062514
 	v_cndmask_b32_e64 v107, v30, v107, s[78:79]  // 0000000263E4: D100006B 013AD71E
-	buffer_load_dwordx4 v[112:115], v107, s[16:19], 0 offen  // 0000000263EC: E05C1000 8004706B
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 0000000263F4: 924A02FF 00000100
 	v_sub_u32_e64 v116, v18, s74  // 0000000263FC: D1350074 00009512
 	v_lshlrev_b32_e32 v116, 2, v116  // 000000026404: 24E8E882
@@ -22287,7 +22740,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000026440: 86CE4E4A
 	v_add_lshl_u32 v117, v20, v18, 1  // 000000026444: D1FE0075 02062514
 	v_cndmask_b32_e64 v117, v30, v117, s[78:79]  // 00000002644C: D1000075 013AEB1E
-	buffer_load_dwordx4 v[120:123], v117, s[16:19], 0 offen  // 000000026454: E05C1000 80047875
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 00000002645C: 924A02FF 00000100
 	v_sub_u32_e64 v118, v18, s74  // 000000026464: D1350076 00009512
 	v_lshlrev_b32_e32 v118, 2, v118  // 00000002646C: 24ECEC82
@@ -22301,7 +22755,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 0000000264A8: 86CE4E4A
 	v_add_lshl_u32 v119, v20, v18, 1  // 0000000264AC: D1FE0077 02062514
 	v_cndmask_b32_e64 v119, v30, v119, s[78:79]  // 0000000264B4: D1000077 013AEF1E
-	buffer_load_dwordx4 v[124:127], v119, s[16:19], 0 offen  // 0000000264BC: E05C1000 80047C77
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 0000000264C4: 924A02FF 00000100
 	v_sub_u32_e64 v128, v18, s74  // 0000000264CC: D1350080 00009512
 	v_lshlrev_b32_e32 v128, 2, v128  // 0000000264D4: 25010082
@@ -22315,7 +22770,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000026510: 86CE4E4A
 	v_add_lshl_u32 v129, v20, v18, 1  // 000000026514: D1FE0081 02062514
 	v_cndmask_b32_e64 v129, v30, v129, s[78:79]  // 00000002651C: D1000081 013B031E
-	buffer_load_dwordx4 v[132:135], v129, s[16:19], 0 offen  // 000000026524: E05C1000 80048481
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 00000002652C: 924A02FF 00000100
 	v_sub_u32_e64 v130, v18, s74  // 000000026534: D1350082 00009512
 	v_lshlrev_b32_e32 v130, 2, v130  // 00000002653C: 25050482
@@ -22402,21 +22858,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[44:45], v[100:101], v[44:45]  // 0000000267BC: D3B1402C 18025964
 	v_pk_mul_f32 v[46:47], v[102:103], v[46:47]  // 0000000267C4: D3B1402E 18025D66
 	v_cvt_f32_bf16_sdwa v22, v36 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000267CC: 7E2CB6F9 00041624
-	v_fmac_f32_e64 v40, v22, s45  // 0000000267D4: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v36 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000267DC: 7E2CB6F9 00051624
-	v_fmac_f32_e64 v41, v22, s45  // 0000000267E4: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v37 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000267EC: 7E2CB6F9 00041625
-	v_fmac_f32_e64 v42, v22, s45  // 0000000267F4: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v37 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000267FC: 7E2CB6F9 00051625
-	v_fmac_f32_e64 v43, v22, s45  // 000000026804: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v38 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002680C: 7E2CB6F9 00041626
-	v_fmac_f32_e64 v44, v22, s45  // 000000026814: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v38 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002681C: 7E2CB6F9 00051626
-	v_fmac_f32_e64 v45, v22, s45  // 000000026824: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v39 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002682C: 7E2CB6F9 00041627
-	v_fmac_f32_e64 v46, v22, s45  // 000000026834: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v39 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002683C: 7E2CB6F9 00051627
-	v_fmac_f32_e64 v47, v22, s45  // 000000026844: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[40:41]  // 00000002684C: D3B24016 18025158
 	v_pk_add_f32 v[24:25], v[90:91], v[42:43]  // 000000026854: D3B24018 1802555A
 	v_pk_add_f32 v[26:27], v[92:93], v[44:45]  // 00000002685C: D3B2401A 1802595C
@@ -22436,21 +22900,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[52:53], v[100:101], v[52:53]  // 0000000268B8: D3B14034 18026964
 	v_pk_mul_f32 v[54:55], v[102:103], v[54:55]  // 0000000268C0: D3B14036 18026D66
 	v_cvt_f32_bf16_sdwa v22, v108 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000268C8: 7E2CB6F9 0004166C
-	v_fmac_f32_e64 v48, v22, s45  // 0000000268D0: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v108 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000268D8: 7E2CB6F9 0005166C
-	v_fmac_f32_e64 v49, v22, s45  // 0000000268E0: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000268E8: 7E2CB6F9 0004166D
-	v_fmac_f32_e64 v50, v22, s45  // 0000000268F0: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000268F8: 7E2CB6F9 0005166D
-	v_fmac_f32_e64 v51, v22, s45  // 000000026900: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v110 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026908: 7E2CB6F9 0004166E
-	v_fmac_f32_e64 v52, v22, s45  // 000000026910: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v110 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026918: 7E2CB6F9 0005166E
-	v_fmac_f32_e64 v53, v22, s45  // 000000026920: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v111 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026928: 7E2CB6F9 0004166F
-	v_fmac_f32_e64 v54, v22, s45  // 000000026930: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v111 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026938: 7E2CB6F9 0005166F
-	v_fmac_f32_e64 v55, v22, s45  // 000000026940: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[48:49]  // 000000026948: D3B24016 18026158
 	v_pk_add_f32 v[24:25], v[90:91], v[50:51]  // 000000026950: D3B24018 1802655A
 	v_pk_add_f32 v[26:27], v[92:93], v[52:53]  // 000000026958: D3B2401A 1802695C
@@ -22470,21 +22942,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[60:61], v[100:101], v[60:61]  // 0000000269B4: D3B1403C 18027964
 	v_pk_mul_f32 v[62:63], v[102:103], v[62:63]  // 0000000269BC: D3B1403E 18027D66
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000269C4: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v56, v22, s45  // 0000000269CC: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000269D4: 7E2CB6F9 00051670
-	v_fmac_f32_e64 v57, v22, s45  // 0000000269DC: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000269E4: 7E2CB6F9 00041671
-	v_fmac_f32_e64 v58, v22, s45  // 0000000269EC: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000269F4: 7E2CB6F9 00051671
-	v_fmac_f32_e64 v59, v22, s45  // 0000000269FC: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026A04: 7E2CB6F9 00041672
-	v_fmac_f32_e64 v60, v22, s45  // 000000026A0C: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026A14: 7E2CB6F9 00051672
-	v_fmac_f32_e64 v61, v22, s45  // 000000026A1C: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026A24: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v62, v22, s45  // 000000026A2C: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026A34: 7E2CB6F9 00051673
-	v_fmac_f32_e64 v63, v22, s45  // 000000026A3C: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[56:57]  // 000000026A44: D3B24016 18027158
 	v_pk_add_f32 v[24:25], v[90:91], v[58:59]  // 000000026A4C: D3B24018 1802755A
 	v_pk_add_f32 v[26:27], v[92:93], v[60:61]  // 000000026A54: D3B2401A 1802795C
@@ -22504,21 +22984,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[68:69], v[100:101], v[68:69]  // 000000026AB0: D3B14044 18028964
 	v_pk_mul_f32 v[70:71], v[102:103], v[70:71]  // 000000026AB8: D3B14046 18028D66
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026AC0: 7E2CB6F9 00041678
-	v_fmac_f32_e64 v64, v22, s45  // 000000026AC8: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026AD0: 7E2CB6F9 00051678
-	v_fmac_f32_e64 v65, v22, s45  // 000000026AD8: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026AE0: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v66, v22, s45  // 000000026AE8: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026AF0: 7E2CB6F9 00051679
-	v_fmac_f32_e64 v67, v22, s45  // 000000026AF8: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026B00: 7E2CB6F9 0004167A
-	v_fmac_f32_e64 v68, v22, s45  // 000000026B08: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026B10: 7E2CB6F9 0005167A
-	v_fmac_f32_e64 v69, v22, s45  // 000000026B18: D13B0045 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026B20: 7E2CB6F9 0004167B
-	v_fmac_f32_e64 v70, v22, s45  // 000000026B28: D13B0046 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026B30: 7E2CB6F9 0005167B
-	v_fmac_f32_e64 v71, v22, s45  // 000000026B38: D13B0047 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[64:65]  // 000000026B40: D3B24016 18028158
 	v_pk_add_f32 v[24:25], v[90:91], v[66:67]  // 000000026B48: D3B24018 1802855A
 	v_pk_add_f32 v[26:27], v[92:93], v[68:69]  // 000000026B50: D3B2401A 1802895C
@@ -22538,21 +23026,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[76:77], v[100:101], v[76:77]  // 000000026BAC: D3B1404C 18029964
 	v_pk_mul_f32 v[78:79], v[102:103], v[78:79]  // 000000026BB4: D3B1404E 18029D66
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026BBC: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v72, v22, s45  // 000000026BC4: D13B0048 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026BCC: 7E2CB6F9 0005167C
-	v_fmac_f32_e64 v73, v22, s45  // 000000026BD4: D13B0049 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026BDC: 7E2CB6F9 0004167D
-	v_fmac_f32_e64 v74, v22, s45  // 000000026BE4: D13B004A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026BEC: 7E2CB6F9 0005167D
-	v_fmac_f32_e64 v75, v22, s45  // 000000026BF4: D13B004B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026BFC: 7E2CB6F9 0004167E
-	v_fmac_f32_e64 v76, v22, s45  // 000000026C04: D13B004C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026C0C: 7E2CB6F9 0005167E
-	v_fmac_f32_e64 v77, v22, s45  // 000000026C14: D13B004D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026C1C: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v78, v22, s45  // 000000026C24: D13B004E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026C2C: 7E2CB6F9 0005167F
-	v_fmac_f32_e64 v79, v22, s45  // 000000026C34: D13B004F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[72:73]  // 000000026C3C: D3B24016 18029158
 	v_pk_add_f32 v[24:25], v[90:91], v[74:75]  // 000000026C44: D3B24018 1802955A
 	v_pk_add_f32 v[26:27], v[92:93], v[76:77]  // 000000026C4C: D3B2401A 1802995C
@@ -22572,21 +23068,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[84:85], v[100:101], v[84:85]  // 000000026CA8: D3B14054 1802A964
 	v_pk_mul_f32 v[86:87], v[102:103], v[86:87]  // 000000026CB0: D3B14056 1802AD66
 	v_cvt_f32_bf16_sdwa v22, v132 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026CB8: 7E2CB6F9 00041684
-	v_fmac_f32_e64 v80, v22, s45  // 000000026CC0: D13B0050 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v132 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026CC8: 7E2CB6F9 00051684
-	v_fmac_f32_e64 v81, v22, s45  // 000000026CD0: D13B0051 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026CD8: 7E2CB6F9 00041685
-	v_fmac_f32_e64 v82, v22, s45  // 000000026CE0: D13B0052 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026CE8: 7E2CB6F9 00051685
-	v_fmac_f32_e64 v83, v22, s45  // 000000026CF0: D13B0053 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v134 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026CF8: 7E2CB6F9 00041686
-	v_fmac_f32_e64 v84, v22, s45  // 000000026D00: D13B0054 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v134 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026D08: 7E2CB6F9 00051686
-	v_fmac_f32_e64 v85, v22, s45  // 000000026D10: D13B0055 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v135 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000026D18: 7E2CB6F9 00041687
-	v_fmac_f32_e64 v86, v22, s45  // 000000026D20: D13B0056 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v135 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000026D28: 7E2CB6F9 00051687
-	v_fmac_f32_e64 v87, v22, s45  // 000000026D30: D13B0057 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[80:81]  // 000000026D38: D3B24016 1802A158
 	v_pk_add_f32 v[24:25], v[90:91], v[82:83]  // 000000026D40: D3B24018 1802A55A
 	v_pk_add_f32 v[26:27], v[92:93], v[84:85]  // 000000026D48: D3B2401A 1802A95C
@@ -22611,7 +23115,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000026DC8: 86CE4E4A
 	v_add_lshl_u32 v35, v20, v18, 1  // 000000026DCC: D1FE0023 02062514
 	v_cndmask_b32_e64 v35, v30, v35, s[78:79]  // 000000026DD4: D1000023 013A471E
-	buffer_load_dwordx4 v[36:39], v35, s[16:19], 0 offen  // 000000026DDC: E05C1000 80042423
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000026DE4: 924A02FF 00000100
 	v_sub_u32_e64 v104, v18, s74  // 000000026DEC: D1350068 00009512
 	v_lshlrev_b32_e32 v104, 2, v104  // 000000026DF4: 24D0D082
@@ -22629,7 +23134,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000026E50: 86CE4E4A
 	v_add_lshl_u32 v105, v20, v18, 1  // 000000026E54: D1FE0069 02062514
 	v_cndmask_b32_e64 v105, v30, v105, s[78:79]  // 000000026E5C: D1000069 013AD31E
-	buffer_load_dwordx4 v[108:111], v105, s[16:19], 0 offen  // 000000026E64: E05C1000 80046C69
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000026E6C: 924A02FF 00000100
 	v_sub_u32_e64 v106, v18, s74  // 000000026E74: D135006A 00009512
 	v_lshlrev_b32_e32 v106, 2, v106  // 000000026E7C: 24D4D482
@@ -22643,7 +23149,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000026EB8: 86CE4E4A
 	v_add_lshl_u32 v107, v20, v18, 1  // 000000026EBC: D1FE006B 02062514
 	v_cndmask_b32_e64 v107, v30, v107, s[78:79]  // 000000026EC4: D100006B 013AD71E
-	buffer_load_dwordx4 v[112:115], v107, s[16:19], 0 offen  // 000000026ECC: E05C1000 8004706B
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000026ED4: 924A02FF 00000100
 	v_sub_u32_e64 v116, v18, s74  // 000000026EDC: D1350074 00009512
 	v_lshlrev_b32_e32 v116, 2, v116  // 000000026EE4: 24E8E882
@@ -22657,7 +23164,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000026F20: 86CE4E4A
 	v_add_lshl_u32 v117, v20, v18, 1  // 000000026F24: D1FE0075 02062514
 	v_cndmask_b32_e64 v117, v30, v117, s[78:79]  // 000000026F2C: D1000075 013AEB1E
-	buffer_load_dwordx4 v[120:123], v117, s[16:19], 0 offen  // 000000026F34: E05C1000 80047875
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000026F3C: 924A02FF 00000100
 	v_sub_u32_e64 v118, v18, s74  // 000000026F44: D1350076 00009512
 	v_lshlrev_b32_e32 v118, 2, v118  // 000000026F4C: 24ECEC82
@@ -22671,7 +23179,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000026F88: 86CE4E4A
 	v_add_lshl_u32 v119, v20, v18, 1  // 000000026F8C: D1FE0077 02062514
 	v_cndmask_b32_e64 v119, v30, v119, s[78:79]  // 000000026F94: D1000077 013AEF1E
-	buffer_load_dwordx4 v[124:127], v119, s[16:19], 0 offen  // 000000026F9C: E05C1000 80047C77
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 000000026FA4: 924A02FF 00000100
 	v_sub_u32_e64 v128, v18, s74  // 000000026FAC: D1350080 00009512
 	v_lshlrev_b32_e32 v128, 2, v128  // 000000026FB4: 25010082
@@ -22685,7 +23194,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000026FF0: 86CE4E4A
 	v_add_lshl_u32 v129, v20, v18, 1  // 000000026FF4: D1FE0081 02062514
 	v_cndmask_b32_e64 v129, v30, v129, s[78:79]  // 000000026FFC: D1000081 013B031E
-	buffer_load_dwordx4 v[132:135], v129, s[16:19], 0 offen  // 000000027004: E05C1000 80048481
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 00000002700C: 924A02FF 00000100
 	v_sub_u32_e64 v130, v18, s74  // 000000027014: D1350082 00009512
 	v_lshlrev_b32_e32 v130, 2, v130  // 00000002701C: 25050482
@@ -22772,21 +23282,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[44:45], v[100:101], v[44:45]  // 00000002729C: D3B1402C 18025964
 	v_pk_mul_f32 v[46:47], v[102:103], v[46:47]  // 0000000272A4: D3B1402E 18025D66
 	v_cvt_f32_bf16_sdwa v22, v36 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000272AC: 7E2CB6F9 00041624
-	v_fmac_f32_e64 v40, v22, s45  // 0000000272B4: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v36 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000272BC: 7E2CB6F9 00051624
-	v_fmac_f32_e64 v41, v22, s45  // 0000000272C4: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v37 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000272CC: 7E2CB6F9 00041625
-	v_fmac_f32_e64 v42, v22, s45  // 0000000272D4: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v37 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000272DC: 7E2CB6F9 00051625
-	v_fmac_f32_e64 v43, v22, s45  // 0000000272E4: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v38 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000272EC: 7E2CB6F9 00041626
-	v_fmac_f32_e64 v44, v22, s45  // 0000000272F4: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v38 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000272FC: 7E2CB6F9 00051626
-	v_fmac_f32_e64 v45, v22, s45  // 000000027304: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v39 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002730C: 7E2CB6F9 00041627
-	v_fmac_f32_e64 v46, v22, s45  // 000000027314: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v39 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002731C: 7E2CB6F9 00051627
-	v_fmac_f32_e64 v47, v22, s45  // 000000027324: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[40:41]  // 00000002732C: D3B24016 18025158
 	v_pk_add_f32 v[24:25], v[90:91], v[42:43]  // 000000027334: D3B24018 1802555A
 	v_pk_add_f32 v[26:27], v[92:93], v[44:45]  // 00000002733C: D3B2401A 1802595C
@@ -22806,21 +23324,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[52:53], v[100:101], v[52:53]  // 000000027398: D3B14034 18026964
 	v_pk_mul_f32 v[54:55], v[102:103], v[54:55]  // 0000000273A0: D3B14036 18026D66
 	v_cvt_f32_bf16_sdwa v22, v108 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000273A8: 7E2CB6F9 0004166C
-	v_fmac_f32_e64 v48, v22, s45  // 0000000273B0: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v108 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000273B8: 7E2CB6F9 0005166C
-	v_fmac_f32_e64 v49, v22, s45  // 0000000273C0: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000273C8: 7E2CB6F9 0004166D
-	v_fmac_f32_e64 v50, v22, s45  // 0000000273D0: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000273D8: 7E2CB6F9 0005166D
-	v_fmac_f32_e64 v51, v22, s45  // 0000000273E0: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v110 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000273E8: 7E2CB6F9 0004166E
-	v_fmac_f32_e64 v52, v22, s45  // 0000000273F0: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v110 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000273F8: 7E2CB6F9 0005166E
-	v_fmac_f32_e64 v53, v22, s45  // 000000027400: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v111 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000027408: 7E2CB6F9 0004166F
-	v_fmac_f32_e64 v54, v22, s45  // 000000027410: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v111 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000027418: 7E2CB6F9 0005166F
-	v_fmac_f32_e64 v55, v22, s45  // 000000027420: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[48:49]  // 000000027428: D3B24016 18026158
 	v_pk_add_f32 v[24:25], v[90:91], v[50:51]  // 000000027430: D3B24018 1802655A
 	v_pk_add_f32 v[26:27], v[92:93], v[52:53]  // 000000027438: D3B2401A 1802695C
@@ -22840,21 +23366,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[60:61], v[100:101], v[60:61]  // 000000027494: D3B1403C 18027964
 	v_pk_mul_f32 v[62:63], v[102:103], v[62:63]  // 00000002749C: D3B1403E 18027D66
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000274A4: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v56, v22, s45  // 0000000274AC: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000274B4: 7E2CB6F9 00051670
-	v_fmac_f32_e64 v57, v22, s45  // 0000000274BC: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000274C4: 7E2CB6F9 00041671
-	v_fmac_f32_e64 v58, v22, s45  // 0000000274CC: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v113 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000274D4: 7E2CB6F9 00051671
-	v_fmac_f32_e64 v59, v22, s45  // 0000000274DC: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000274E4: 7E2CB6F9 00041672
-	v_fmac_f32_e64 v60, v22, s45  // 0000000274EC: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000274F4: 7E2CB6F9 00051672
-	v_fmac_f32_e64 v61, v22, s45  // 0000000274FC: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000027504: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v62, v22, s45  // 00000002750C: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000027514: 7E2CB6F9 00051673
-	v_fmac_f32_e64 v63, v22, s45  // 00000002751C: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[56:57]  // 000000027524: D3B24016 18027158
 	v_pk_add_f32 v[24:25], v[90:91], v[58:59]  // 00000002752C: D3B24018 1802755A
 	v_pk_add_f32 v[26:27], v[92:93], v[60:61]  // 000000027534: D3B2401A 1802795C
@@ -22874,21 +23408,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[68:69], v[100:101], v[68:69]  // 000000027590: D3B14044 18028964
 	v_pk_mul_f32 v[70:71], v[102:103], v[70:71]  // 000000027598: D3B14046 18028D66
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000275A0: 7E2CB6F9 00041678
-	v_fmac_f32_e64 v64, v22, s45  // 0000000275A8: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000275B0: 7E2CB6F9 00051678
-	v_fmac_f32_e64 v65, v22, s45  // 0000000275B8: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000275C0: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v66, v22, s45  // 0000000275C8: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000275D0: 7E2CB6F9 00051679
-	v_fmac_f32_e64 v67, v22, s45  // 0000000275D8: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000275E0: 7E2CB6F9 0004167A
-	v_fmac_f32_e64 v68, v22, s45  // 0000000275E8: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v122 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000275F0: 7E2CB6F9 0005167A
-	v_fmac_f32_e64 v69, v22, s45  // 0000000275F8: D13B0045 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000027600: 7E2CB6F9 0004167B
-	v_fmac_f32_e64 v70, v22, s45  // 000000027608: D13B0046 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v123 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000027610: 7E2CB6F9 0005167B
-	v_fmac_f32_e64 v71, v22, s45  // 000000027618: D13B0047 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[64:65]  // 000000027620: D3B24016 18028158
 	v_pk_add_f32 v[24:25], v[90:91], v[66:67]  // 000000027628: D3B24018 1802855A
 	v_pk_add_f32 v[26:27], v[92:93], v[68:69]  // 000000027630: D3B2401A 1802895C
@@ -22908,21 +23450,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[76:77], v[100:101], v[76:77]  // 00000002768C: D3B1404C 18029964
 	v_pk_mul_f32 v[78:79], v[102:103], v[78:79]  // 000000027694: D3B1404E 18029D66
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002769C: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v72, v22, s45  // 0000000276A4: D13B0048 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000276AC: 7E2CB6F9 0005167C
-	v_fmac_f32_e64 v73, v22, s45  // 0000000276B4: D13B0049 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000276BC: 7E2CB6F9 0004167D
-	v_fmac_f32_e64 v74, v22, s45  // 0000000276C4: D13B004A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v125 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000276CC: 7E2CB6F9 0005167D
-	v_fmac_f32_e64 v75, v22, s45  // 0000000276D4: D13B004B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000276DC: 7E2CB6F9 0004167E
-	v_fmac_f32_e64 v76, v22, s45  // 0000000276E4: D13B004C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v126 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000276EC: 7E2CB6F9 0005167E
-	v_fmac_f32_e64 v77, v22, s45  // 0000000276F4: D13B004D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000276FC: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v78, v22, s45  // 000000027704: D13B004E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 00000002770C: 7E2CB6F9 0005167F
-	v_fmac_f32_e64 v79, v22, s45  // 000000027714: D13B004F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[72:73]  // 00000002771C: D3B24016 18029158
 	v_pk_add_f32 v[24:25], v[90:91], v[74:75]  // 000000027724: D3B24018 1802955A
 	v_pk_add_f32 v[26:27], v[92:93], v[76:77]  // 00000002772C: D3B2401A 1802995C
@@ -22942,21 +23492,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[84:85], v[100:101], v[84:85]  // 000000027788: D3B14054 1802A964
 	v_pk_mul_f32 v[86:87], v[102:103], v[86:87]  // 000000027790: D3B14056 1802AD66
 	v_cvt_f32_bf16_sdwa v22, v132 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000027798: 7E2CB6F9 00041684
-	v_fmac_f32_e64 v80, v22, s45  // 0000000277A0: D13B0050 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v132 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000277A8: 7E2CB6F9 00051684
-	v_fmac_f32_e64 v81, v22, s45  // 0000000277B0: D13B0051 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000277B8: 7E2CB6F9 00041685
-	v_fmac_f32_e64 v82, v22, s45  // 0000000277C0: D13B0052 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000277C8: 7E2CB6F9 00051685
-	v_fmac_f32_e64 v83, v22, s45  // 0000000277D0: D13B0053 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v134 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000277D8: 7E2CB6F9 00041686
-	v_fmac_f32_e64 v84, v22, s45  // 0000000277E0: D13B0054 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v134 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 0000000277E8: 7E2CB6F9 00051686
-	v_fmac_f32_e64 v85, v22, s45  // 0000000277F0: D13B0055 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v135 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000277F8: 7E2CB6F9 00041687
-	v_fmac_f32_e64 v86, v22, s45  // 000000027800: D13B0056 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v135 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000027808: 7E2CB6F9 00051687
-	v_fmac_f32_e64 v87, v22, s45  // 000000027810: D13B0057 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[88:89], v[80:81]  // 000000027818: D3B24016 1802A158
 	v_pk_add_f32 v[24:25], v[90:91], v[82:83]  // 000000027820: D3B24018 1802A55A
 	v_pk_add_f32 v[26:27], v[92:93], v[84:85]  // 000000027828: D3B2401A 1802A95C
@@ -22981,7 +23539,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 0000000278A8: 86CE4E4A
 	v_add_lshl_u32 v35, v20, v18, 1  // 0000000278AC: D1FE0023 02062514
 	v_cndmask_b32_e64 v35, v30, v35, s[78:79]  // 0000000278B4: D1000023 013A471E
-	buffer_load_dwordx4 v[36:39], v35, s[16:19], 0 offen  // 0000000278BC: E05C1000 80042423
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 0000000278C4: 924A02FF 00000100
 	v_sub_u32_e64 v72, v18, s74  // 0000000278CC: D1350048 00009512
 	v_lshlrev_b32_e32 v72, 2, v72  // 0000000278D4: 24909082
@@ -22999,7 +23558,8 @@ custom_bf16_gemm_at_b:
 	s_and_b64 s[78:79], s[74:75], s[78:79]  // 000000027930: 86CE4E4A
 	v_add_lshl_u32 v73, v20, v18, 1  // 000000027934: D1FE0049 02062514
 	v_cndmask_b32_e64 v73, v30, v73, s[78:79]  // 00000002793C: D1000049 013A931E
-	buffer_load_dwordx4 v[76:79], v73, s[16:19], 0 offen  // 000000027944: E05C1000 80044C49
+	s_nop 0  // removed C load
+	s_nop 0
 	s_mul_i32 s74, 0x100, s2  // 00000002794C: 924A02FF 00000100
 	v_sub_u32_e64 v74, v18, s74  // 000000027954: D135004A 00009512
 	v_lshlrev_b32_e32 v74, 2, v74  // 00000002795C: 24949482
@@ -23038,21 +23598,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[44:45], v[68:69], v[44:45]  // 000000027A5C: D3B1402C 18025944
 	v_pk_mul_f32 v[46:47], v[70:71], v[46:47]  // 000000027A64: D3B1402E 18025D46
 	v_cvt_f32_bf16_sdwa v22, v36 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000027A6C: 7E2CB6F9 00041624
-	v_fmac_f32_e64 v40, v22, s45  // 000000027A74: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v36 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000027A7C: 7E2CB6F9 00051624
-	v_fmac_f32_e64 v41, v22, s45  // 000000027A84: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v37 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000027A8C: 7E2CB6F9 00041625
-	v_fmac_f32_e64 v42, v22, s45  // 000000027A94: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v37 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000027A9C: 7E2CB6F9 00051625
-	v_fmac_f32_e64 v43, v22, s45  // 000000027AA4: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v38 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000027AAC: 7E2CB6F9 00041626
-	v_fmac_f32_e64 v44, v22, s45  // 000000027AB4: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v38 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000027ABC: 7E2CB6F9 00051626
-	v_fmac_f32_e64 v45, v22, s45  // 000000027AC4: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v39 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000027ACC: 7E2CB6F9 00041627
-	v_fmac_f32_e64 v46, v22, s45  // 000000027AD4: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v39 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000027ADC: 7E2CB6F9 00051627
-	v_fmac_f32_e64 v47, v22, s45  // 000000027AE4: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[56:57], v[40:41]  // 000000027AEC: D3B24016 18025138
 	v_pk_add_f32 v[24:25], v[58:59], v[42:43]  // 000000027AF4: D3B24018 1802553A
 	v_pk_add_f32 v[26:27], v[60:61], v[44:45]  // 000000027AFC: D3B2401A 1802593C
@@ -23072,21 +23640,29 @@ custom_bf16_gemm_at_b:
 	v_pk_mul_f32 v[52:53], v[68:69], v[52:53]  // 000000027B58: D3B14034 18026944
 	v_pk_mul_f32 v[54:55], v[70:71], v[54:55]  // 000000027B60: D3B14036 18026D46
 	v_cvt_f32_bf16_sdwa v22, v76 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000027B68: 7E2CB6F9 0004164C
-	v_fmac_f32_e64 v48, v22, s45  // 000000027B70: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v76 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000027B78: 7E2CB6F9 0005164C
-	v_fmac_f32_e64 v49, v22, s45  // 000000027B80: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v77 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000027B88: 7E2CB6F9 0004164D
-	v_fmac_f32_e64 v50, v22, s45  // 000000027B90: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v77 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000027B98: 7E2CB6F9 0005164D
-	v_fmac_f32_e64 v51, v22, s45  // 000000027BA0: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v78 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000027BA8: 7E2CB6F9 0004164E
-	v_fmac_f32_e64 v52, v22, s45  // 000000027BB0: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v78 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000027BB8: 7E2CB6F9 0005164E
-	v_fmac_f32_e64 v53, v22, s45  // 000000027BC0: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v79 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000027BC8: 7E2CB6F9 0004164F
-	v_fmac_f32_e64 v54, v22, s45  // 000000027BD0: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_cvt_f32_bf16_sdwa v22, v79 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_1  // 000000027BD8: 7E2CB6F9 0005164F
-	v_fmac_f32_e64 v55, v22, s45  // 000000027BE0: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_pk_add_f32 v[22:23], v[56:57], v[48:49]  // 000000027BE8: D3B24016 18026138
 	v_pk_add_f32 v[24:25], v[58:59], v[50:51]  // 000000027BF0: D3B24018 1802653A
 	v_pk_add_f32 v[26:27], v[60:61], v[52:53]  // 000000027BF8: D3B2401A 1802693C
@@ -23628,7 +24204,8 @@ custom_bf16_gemm_at_b:
 	v_mov_b32_e32 v34, 0x7fff  // 000000028B08: 7E4402FF 00007FFF
 	v_mul_f32_e32 v35, v71, v35  // 000000028B10: 0A464747
 	v_cvt_f32_bf16_sdwa v22, v69 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028B14: 7E2CB6F9 00041645
-	v_fmac_f32_e64 v35, v22, s45  // 000000028B1C: D13B0023 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v35  // 000000028B24: 022C4746
 	s_nop 0  // removed activation call  // 000000028B28: BEC01E08
 	v_mov_b32_e32 v35, v22  // 000000028B2C: 7E460316
@@ -23636,7 +24213,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v35, v72, s[12:15], 0 offen nt  // 000000028B38: E06A1000 80032348
 	v_mul_f32_e32 v36, v76, v36  // 000000028B40: 0A48494C
 	v_cvt_f32_bf16_sdwa v22, v74 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028B44: 7E2CB6F9 0004164A
-	v_fmac_f32_e64 v36, v22, s45  // 000000028B4C: D13B0024 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v36  // 000000028B54: 022C494B
 	s_nop 0  // removed activation call  // 000000028B58: BEC01E08
 	v_mov_b32_e32 v36, v22  // 000000028B5C: 7E480316
@@ -23644,7 +24222,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v36, v77, s[12:15], 0 offen nt  // 000000028B68: E06A1000 8003244D
 	v_mul_f32_e32 v37, v81, v37  // 000000028B70: 0A4A4B51
 	v_cvt_f32_bf16_sdwa v22, v79 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028B74: 7E2CB6F9 0004164F
-	v_fmac_f32_e64 v37, v22, s45  // 000000028B7C: D13B0025 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v37  // 000000028B84: 022C4B50
 	s_nop 0  // removed activation call  // 000000028B88: BEC01E08
 	v_mov_b32_e32 v37, v22  // 000000028B8C: 7E4A0316
@@ -23652,7 +24231,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v37, v82, s[12:15], 0 offen nt  // 000000028B98: E06A1000 80032552
 	v_mul_f32_e32 v38, v86, v38  // 000000028BA0: 0A4C4D56
 	v_cvt_f32_bf16_sdwa v22, v84 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028BA4: 7E2CB6F9 00041654
-	v_fmac_f32_e64 v38, v22, s45  // 000000028BAC: D13B0026 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v38  // 000000028BB4: 022C4D55
 	s_nop 0  // removed activation call  // 000000028BB8: BEC01E08
 	v_mov_b32_e32 v38, v22  // 000000028BBC: 7E4C0316
@@ -23660,7 +24240,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v38, v87, s[12:15], 0 offen nt  // 000000028BC8: E06A1000 80032657
 	v_mul_f32_e32 v39, v91, v39  // 000000028BD0: 0A4E4F5B
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028BD4: 7E2CB6F9 00041659
-	v_fmac_f32_e64 v39, v22, s45  // 000000028BDC: D13B0027 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v39  // 000000028BE4: 022C4F5A
 	s_nop 0  // removed activation call  // 000000028BE8: BEC01E08
 	v_mov_b32_e32 v39, v22  // 000000028BEC: 7E4E0316
@@ -23668,7 +24249,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v39, v92, s[12:15], 0 offen nt  // 000000028BF8: E06A1000 8003275C
 	v_mul_f32_e32 v40, v96, v40  // 000000028C00: 0A505160
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028C04: 7E2CB6F9 0004165E
-	v_fmac_f32_e64 v40, v22, s45  // 000000028C0C: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v40  // 000000028C14: 022C515F
 	s_nop 0  // removed activation call  // 000000028C18: BEC01E08
 	v_mov_b32_e32 v40, v22  // 000000028C1C: 7E500316
@@ -23676,7 +24258,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v40, v97, s[12:15], 0 offen nt  // 000000028C28: E06A1000 80032861
 	v_mul_f32_e32 v41, v101, v41  // 000000028C30: 0A525365
 	v_cvt_f32_bf16_sdwa v22, v99 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028C34: 7E2CB6F9 00041663
-	v_fmac_f32_e64 v41, v22, s45  // 000000028C3C: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v41  // 000000028C44: 022C5364
 	s_nop 0  // removed activation call  // 000000028C48: BEC01E08
 	v_mov_b32_e32 v41, v22  // 000000028C4C: 7E520316
@@ -23684,7 +24267,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v41, v102, s[12:15], 0 offen nt  // 000000028C58: E06A1000 80032966
 	v_mul_f32_e32 v42, v106, v42  // 000000028C60: 0A54556A
 	v_cvt_f32_bf16_sdwa v22, v104 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028C64: 7E2CB6F9 00041668
-	v_fmac_f32_e64 v42, v22, s45  // 000000028C6C: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v42  // 000000028C74: 022C5569
 	s_nop 0  // removed activation call  // 000000028C78: BEC01E08
 	v_mov_b32_e32 v42, v22  // 000000028C7C: 7E540316
@@ -23692,7 +24276,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v42, v107, s[12:15], 0 offen nt  // 000000028C88: E06A1000 80032A6B
 	v_mul_f32_e32 v43, v71, v43  // 000000028C90: 0A565747
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028C94: 7E2CB6F9 0004166D
-	v_fmac_f32_e64 v43, v22, s45  // 000000028C9C: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v43  // 000000028CA4: 022C5746
 	s_nop 0  // removed activation call  // 000000028CA8: BEC01E08
 	v_mov_b32_e32 v43, v22  // 000000028CAC: 7E560316
@@ -23700,7 +24285,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v43, v110, s[12:15], 0 offen nt  // 000000028CB8: E06A1000 80032B6E
 	v_mul_f32_e32 v44, v76, v44  // 000000028CC0: 0A58594C
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028CC4: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v44, v22, s45  // 000000028CCC: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v44  // 000000028CD4: 022C594B
 	s_nop 0  // removed activation call  // 000000028CD8: BEC01E08
 	v_mov_b32_e32 v44, v22  // 000000028CDC: 7E580316
@@ -23708,7 +24294,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v44, v113, s[12:15], 0 offen nt  // 000000028CE8: E06A1000 80032C71
 	v_mul_f32_e32 v45, v81, v45  // 000000028CF0: 0A5A5B51
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028CF4: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v45, v22, s45  // 000000028CFC: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v45  // 000000028D04: 022C5B50
 	s_nop 0  // removed activation call  // 000000028D08: BEC01E08
 	v_mov_b32_e32 v45, v22  // 000000028D0C: 7E5A0316
@@ -23716,7 +24303,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v45, v116, s[12:15], 0 offen nt  // 000000028D18: E06A1000 80032D74
 	v_mul_f32_e32 v46, v86, v46  // 000000028D20: 0A5C5D56
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028D24: 7E2CB6F9 00041676
-	v_fmac_f32_e64 v46, v22, s45  // 000000028D2C: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v46  // 000000028D34: 022C5D55
 	s_nop 0  // removed activation call  // 000000028D38: BEC01E08
 	v_mov_b32_e32 v46, v22  // 000000028D3C: 7E5C0316
@@ -23724,7 +24312,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v46, v119, s[12:15], 0 offen nt  // 000000028D48: E06A1000 80032E77
 	v_mul_f32_e32 v47, v91, v47  // 000000028D50: 0A5E5F5B
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028D54: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v47, v22, s45  // 000000028D5C: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v47  // 000000028D64: 022C5F5A
 	s_nop 0  // removed activation call  // 000000028D68: BEC01E08
 	v_mov_b32_e32 v47, v22  // 000000028D6C: 7E5E0316
@@ -23732,7 +24321,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v47, v122, s[12:15], 0 offen nt  // 000000028D78: E06A1000 80032F7A
 	v_mul_f32_e32 v48, v96, v48  // 000000028D80: 0A606160
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028D84: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v48, v22, s45  // 000000028D8C: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v48  // 000000028D94: 022C615F
 	s_nop 0  // removed activation call  // 000000028D98: BEC01E08
 	v_mov_b32_e32 v48, v22  // 000000028D9C: 7E600316
@@ -23740,7 +24330,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v48, v125, s[12:15], 0 offen nt  // 000000028DA8: E06A1000 8003307D
 	v_mul_f32_e32 v49, v101, v49  // 000000028DB0: 0A626365
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028DB4: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v49, v22, s45  // 000000028DBC: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v49  // 000000028DC4: 022C6364
 	s_nop 0  // removed activation call  // 000000028DC8: BEC01E08
 	v_mov_b32_e32 v49, v22  // 000000028DCC: 7E620316
@@ -23748,7 +24339,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v49, v128, s[12:15], 0 offen nt  // 000000028DD8: E06A1000 80033180
 	v_mul_f32_e32 v50, v106, v50  // 000000028DE0: 0A64656A
 	v_cvt_f32_bf16_sdwa v22, v130 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028DE4: 7E2CB6F9 00041682
-	v_fmac_f32_e64 v50, v22, s45  // 000000028DEC: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v50  // 000000028DF4: 022C6569
 	s_nop 0  // removed activation call  // 000000028DF8: BEC01E08
 	v_mov_b32_e32 v50, v22  // 000000028DFC: 7E640316
@@ -23756,7 +24348,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v50, v131, s[12:15], 0 offen nt  // 000000028E08: E06A1000 80033283
 	v_mul_f32_e32 v51, v71, v51  // 000000028E10: 0A666747
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028E14: 7E2CB6F9 00041685
-	v_fmac_f32_e64 v51, v22, s45  // 000000028E1C: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v51  // 000000028E24: 022C6746
 	s_nop 0  // removed activation call  // 000000028E28: BEC01E08
 	v_mov_b32_e32 v51, v22  // 000000028E2C: 7E660316
@@ -23764,7 +24357,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v51, v134, s[12:15], 0 offen nt  // 000000028E38: E06A1000 80033386
 	v_mul_f32_e32 v52, v76, v52  // 000000028E40: 0A68694C
 	v_cvt_f32_bf16_sdwa v22, v136 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028E44: 7E2CB6F9 00041688
-	v_fmac_f32_e64 v52, v22, s45  // 000000028E4C: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v52  // 000000028E54: 022C694B
 	s_nop 0  // removed activation call  // 000000028E58: BEC01E08
 	v_mov_b32_e32 v52, v22  // 000000028E5C: 7E680316
@@ -23772,7 +24366,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v52, v137, s[12:15], 0 offen nt  // 000000028E68: E06A1000 80033489
 	v_mul_f32_e32 v53, v81, v53  // 000000028E70: 0A6A6B51
 	v_cvt_f32_bf16_sdwa v22, v139 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028E74: 7E2CB6F9 0004168B
-	v_fmac_f32_e64 v53, v22, s45  // 000000028E7C: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v53  // 000000028E84: 022C6B50
 	s_nop 0  // removed activation call  // 000000028E88: BEC01E08
 	v_mov_b32_e32 v53, v22  // 000000028E8C: 7E6A0316
@@ -23780,7 +24375,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v53, v140, s[12:15], 0 offen nt  // 000000028E98: E06A1000 8003358C
 	v_mul_f32_e32 v54, v86, v54  // 000000028EA0: 0A6C6D56
 	v_cvt_f32_bf16_sdwa v22, v142 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028EA4: 7E2CB6F9 0004168E
-	v_fmac_f32_e64 v54, v22, s45  // 000000028EAC: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v54  // 000000028EB4: 022C6D55
 	s_nop 0  // removed activation call  // 000000028EB8: BEC01E08
 	v_mov_b32_e32 v54, v22  // 000000028EBC: 7E6C0316
@@ -23788,7 +24384,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v54, v143, s[12:15], 0 offen nt  // 000000028EC8: E06A1000 8003368F
 	v_mul_f32_e32 v55, v91, v55  // 000000028ED0: 0A6E6F5B
 	v_cvt_f32_bf16_sdwa v22, v145 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028ED4: 7E2CB6F9 00041691
-	v_fmac_f32_e64 v55, v22, s45  // 000000028EDC: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v55  // 000000028EE4: 022C6F5A
 	s_nop 0  // removed activation call  // 000000028EE8: BEC01E08
 	v_mov_b32_e32 v55, v22  // 000000028EEC: 7E6E0316
@@ -23796,7 +24393,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v55, v146, s[12:15], 0 offen nt  // 000000028EF8: E06A1000 80033792
 	v_mul_f32_e32 v56, v96, v56  // 000000028F00: 0A707160
 	v_cvt_f32_bf16_sdwa v22, v148 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028F04: 7E2CB6F9 00041694
-	v_fmac_f32_e64 v56, v22, s45  // 000000028F0C: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v56  // 000000028F14: 022C715F
 	s_nop 0  // removed activation call  // 000000028F18: BEC01E08
 	v_mov_b32_e32 v56, v22  // 000000028F1C: 7E700316
@@ -23804,7 +24402,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v56, v149, s[12:15], 0 offen nt  // 000000028F28: E06A1000 80033895
 	v_mul_f32_e32 v57, v101, v57  // 000000028F30: 0A727365
 	v_cvt_f32_bf16_sdwa v22, v151 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028F34: 7E2CB6F9 00041697
-	v_fmac_f32_e64 v57, v22, s45  // 000000028F3C: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v57  // 000000028F44: 022C7364
 	s_nop 0  // removed activation call  // 000000028F48: BEC01E08
 	v_mov_b32_e32 v57, v22  // 000000028F4C: 7E720316
@@ -23812,7 +24411,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v57, v152, s[12:15], 0 offen nt  // 000000028F58: E06A1000 80033998
 	v_mul_f32_e32 v58, v106, v58  // 000000028F60: 0A74756A
 	v_cvt_f32_bf16_sdwa v22, v154 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028F64: 7E2CB6F9 0004169A
-	v_fmac_f32_e64 v58, v22, s45  // 000000028F6C: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v58  // 000000028F74: 022C7569
 	s_nop 0  // removed activation call  // 000000028F78: BEC01E08
 	v_mov_b32_e32 v58, v22  // 000000028F7C: 7E740316
@@ -23820,7 +24420,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v58, v155, s[12:15], 0 offen nt  // 000000028F88: E06A1000 80033A9B
 	v_mul_f32_e32 v59, v71, v59  // 000000028F90: 0A767747
 	v_cvt_f32_bf16_sdwa v22, v157 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028F94: 7E2CB6F9 0004169D
-	v_fmac_f32_e64 v59, v22, s45  // 000000028F9C: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v59  // 000000028FA4: 022C7746
 	s_nop 0  // removed activation call  // 000000028FA8: BEC01E08
 	v_mov_b32_e32 v59, v22  // 000000028FAC: 7E760316
@@ -23828,7 +24429,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v59, v158, s[12:15], 0 offen nt  // 000000028FB8: E06A1000 80033B9E
 	v_mul_f32_e32 v60, v76, v60  // 000000028FC0: 0A78794C
 	v_cvt_f32_bf16_sdwa v22, v160 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028FC4: 7E2CB6F9 000416A0
-	v_fmac_f32_e64 v60, v22, s45  // 000000028FCC: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v60  // 000000028FD4: 022C794B
 	s_nop 0  // removed activation call  // 000000028FD8: BEC01E08
 	v_mov_b32_e32 v60, v22  // 000000028FDC: 7E780316
@@ -23836,7 +24438,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v60, v161, s[12:15], 0 offen nt  // 000000028FE8: E06A1000 80033CA1
 	v_mul_f32_e32 v61, v81, v61  // 000000028FF0: 0A7A7B51
 	v_cvt_f32_bf16_sdwa v22, v163 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000028FF4: 7E2CB6F9 000416A3
-	v_fmac_f32_e64 v61, v22, s45  // 000000028FFC: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v61  // 000000029004: 022C7B50
 	s_nop 0  // removed activation call  // 000000029008: BEC01E08
 	v_mov_b32_e32 v61, v22  // 00000002900C: 7E7A0316
@@ -23844,7 +24447,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v61, v164, s[12:15], 0 offen nt  // 000000029018: E06A1000 80033DA4
 	v_mul_f32_e32 v62, v86, v62  // 000000029020: 0A7C7D56
 	v_cvt_f32_bf16_sdwa v22, v166 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000029024: 7E2CB6F9 000416A6
-	v_fmac_f32_e64 v62, v22, s45  // 00000002902C: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v62  // 000000029034: 022C7D55
 	s_nop 0  // removed activation call  // 000000029038: BEC01E08
 	v_mov_b32_e32 v62, v22  // 00000002903C: 7E7C0316
@@ -23852,7 +24456,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v62, v167, s[12:15], 0 offen nt  // 000000029048: E06A1000 80033EA7
 	v_mul_f32_e32 v63, v91, v63  // 000000029050: 0A7E7F5B
 	v_cvt_f32_bf16_sdwa v22, v169 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000029054: 7E2CB6F9 000416A9
-	v_fmac_f32_e64 v63, v22, s45  // 00000002905C: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v63  // 000000029064: 022C7F5A
 	s_nop 0  // removed activation call  // 000000029068: BEC01E08
 	v_mov_b32_e32 v63, v22  // 00000002906C: 7E7E0316
@@ -23860,7 +24465,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v63, v170, s[12:15], 0 offen nt  // 000000029078: E06A1000 80033FAA
 	v_mul_f32_e32 v64, v96, v64  // 000000029080: 0A808160
 	v_cvt_f32_bf16_sdwa v22, v172 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000029084: 7E2CB6F9 000416AC
-	v_fmac_f32_e64 v64, v22, s45  // 00000002908C: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v64  // 000000029094: 022C815F
 	s_nop 0  // removed activation call  // 000000029098: BEC01E08
 	v_mov_b32_e32 v64, v22  // 00000002909C: 7E800316
@@ -23868,7 +24474,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v64, v173, s[12:15], 0 offen nt  // 0000000290A8: E06A1000 800340AD
 	v_mul_f32_e32 v65, v101, v65  // 0000000290B0: 0A828365
 	v_cvt_f32_bf16_sdwa v22, v175 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000290B4: 7E2CB6F9 000416AF
-	v_fmac_f32_e64 v65, v22, s45  // 0000000290BC: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v65  // 0000000290C4: 022C8364
 	s_nop 0  // removed activation call  // 0000000290C8: BEC01E08
 	v_mov_b32_e32 v65, v22  // 0000000290CC: 7E820316
@@ -23876,7 +24483,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v65, v176, s[12:15], 0 offen nt  // 0000000290D8: E06A1000 800341B0
 	v_mul_f32_e32 v66, v106, v66  // 0000000290E0: 0A84856A
 	v_cvt_f32_bf16_sdwa v22, v178 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000290E4: 7E2CB6F9 000416B2
-	v_fmac_f32_e64 v66, v22, s45  // 0000000290EC: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v66  // 0000000290F4: 022C8569
 	s_nop 0  // removed activation call  // 0000000290F8: BEC01E08
 	v_mov_b32_e32 v66, v22  // 0000000290FC: 7E840316
@@ -23884,7 +24492,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v66, v179, s[12:15], 0 offen nt  // 000000029108: E06A1000 800342B3
 	v_mul_f32_e32 v67, v71, v67  // 000000029110: 0A868747
 	v_cvt_f32_bf16_sdwa v22, v181 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000029114: 7E2CB6F9 000416B5
-	v_fmac_f32_e64 v67, v22, s45  // 00000002911C: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v67  // 000000029124: 022C8746
 	s_nop 0  // removed activation call  // 000000029128: BEC01E08
 	v_mov_b32_e32 v67, v22  // 00000002912C: 7E860316
@@ -23892,7 +24501,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v67, v182, s[12:15], 0 offen nt  // 000000029138: E06A1000 800343B6
 	v_mul_f32_e32 v68, v76, v68  // 000000029140: 0A88894C
 	v_cvt_f32_bf16_sdwa v22, v184 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000029144: 7E2CB6F9 000416B8
-	v_fmac_f32_e64 v68, v22, s45  // 00000002914C: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v68  // 000000029154: 022C894B
 	s_nop 0  // removed activation call  // 000000029158: BEC01E08
 	v_mov_b32_e32 v68, v22  // 00000002915C: 7E880316
@@ -24390,7 +25000,8 @@ custom_bf16_gemm_at_b:
 	v_mov_b32_e32 v34, 0x7fff  // 000000029F98: 7E4402FF 00007FFF
 	v_mul_f32_e32 v35, v71, v35  // 000000029FA0: 0A464747
 	v_cvt_f32_bf16_sdwa v22, v69 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000029FA4: 7E2CB6F9 00041645
-	v_fmac_f32_e64 v35, v22, s45  // 000000029FAC: D13B0023 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v35  // 000000029FB4: 022C4746
 	s_nop 0  // removed activation call  // 000000029FB8: BEC01E08
 	v_mov_b32_e32 v35, v22  // 000000029FBC: 7E460316
@@ -24398,7 +25009,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v35, v72, s[12:15], 0 offen nt  // 000000029FC8: E06A1000 80032348
 	v_mul_f32_e32 v36, v76, v36  // 000000029FD0: 0A48494C
 	v_cvt_f32_bf16_sdwa v22, v74 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000029FD4: 7E2CB6F9 0004164A
-	v_fmac_f32_e64 v36, v22, s45  // 000000029FDC: D13B0024 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v36  // 000000029FE4: 022C494B
 	s_nop 0  // removed activation call  // 000000029FE8: BEC01E08
 	v_mov_b32_e32 v36, v22  // 000000029FEC: 7E480316
@@ -24406,7 +25018,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v36, v77, s[12:15], 0 offen nt  // 000000029FF8: E06A1000 8003244D
 	v_mul_f32_e32 v37, v81, v37  // 00000002A000: 0A4A4B51
 	v_cvt_f32_bf16_sdwa v22, v79 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A004: 7E2CB6F9 0004164F
-	v_fmac_f32_e64 v37, v22, s45  // 00000002A00C: D13B0025 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v37  // 00000002A014: 022C4B50
 	s_nop 0  // removed activation call  // 00000002A018: BEC01E08
 	v_mov_b32_e32 v37, v22  // 00000002A01C: 7E4A0316
@@ -24414,7 +25027,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v37, v82, s[12:15], 0 offen nt  // 00000002A028: E06A1000 80032552
 	v_mul_f32_e32 v38, v86, v38  // 00000002A030: 0A4C4D56
 	v_cvt_f32_bf16_sdwa v22, v84 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A034: 7E2CB6F9 00041654
-	v_fmac_f32_e64 v38, v22, s45  // 00000002A03C: D13B0026 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v38  // 00000002A044: 022C4D55
 	s_nop 0  // removed activation call  // 00000002A048: BEC01E08
 	v_mov_b32_e32 v38, v22  // 00000002A04C: 7E4C0316
@@ -24422,7 +25036,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v38, v87, s[12:15], 0 offen nt  // 00000002A058: E06A1000 80032657
 	v_mul_f32_e32 v39, v91, v39  // 00000002A060: 0A4E4F5B
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A064: 7E2CB6F9 00041659
-	v_fmac_f32_e64 v39, v22, s45  // 00000002A06C: D13B0027 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v39  // 00000002A074: 022C4F5A
 	s_nop 0  // removed activation call  // 00000002A078: BEC01E08
 	v_mov_b32_e32 v39, v22  // 00000002A07C: 7E4E0316
@@ -24430,7 +25045,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v39, v92, s[12:15], 0 offen nt  // 00000002A088: E06A1000 8003275C
 	v_mul_f32_e32 v40, v96, v40  // 00000002A090: 0A505160
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A094: 7E2CB6F9 0004165E
-	v_fmac_f32_e64 v40, v22, s45  // 00000002A09C: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v40  // 00000002A0A4: 022C515F
 	s_nop 0  // removed activation call  // 00000002A0A8: BEC01E08
 	v_mov_b32_e32 v40, v22  // 00000002A0AC: 7E500316
@@ -24438,7 +25054,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v40, v97, s[12:15], 0 offen nt  // 00000002A0B8: E06A1000 80032861
 	v_mul_f32_e32 v41, v101, v41  // 00000002A0C0: 0A525365
 	v_cvt_f32_bf16_sdwa v22, v99 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A0C4: 7E2CB6F9 00041663
-	v_fmac_f32_e64 v41, v22, s45  // 00000002A0CC: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v41  // 00000002A0D4: 022C5364
 	s_nop 0  // removed activation call  // 00000002A0D8: BEC01E08
 	v_mov_b32_e32 v41, v22  // 00000002A0DC: 7E520316
@@ -24446,7 +25063,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v41, v102, s[12:15], 0 offen nt  // 00000002A0E8: E06A1000 80032966
 	v_mul_f32_e32 v42, v106, v42  // 00000002A0F0: 0A54556A
 	v_cvt_f32_bf16_sdwa v22, v104 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A0F4: 7E2CB6F9 00041668
-	v_fmac_f32_e64 v42, v22, s45  // 00000002A0FC: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v42  // 00000002A104: 022C5569
 	s_nop 0  // removed activation call  // 00000002A108: BEC01E08
 	v_mov_b32_e32 v42, v22  // 00000002A10C: 7E540316
@@ -24454,7 +25072,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v42, v107, s[12:15], 0 offen nt  // 00000002A118: E06A1000 80032A6B
 	v_mul_f32_e32 v43, v71, v43  // 00000002A120: 0A565747
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A124: 7E2CB6F9 0004166D
-	v_fmac_f32_e64 v43, v22, s45  // 00000002A12C: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v43  // 00000002A134: 022C5746
 	s_nop 0  // removed activation call  // 00000002A138: BEC01E08
 	v_mov_b32_e32 v43, v22  // 00000002A13C: 7E560316
@@ -24462,7 +25081,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v43, v110, s[12:15], 0 offen nt  // 00000002A148: E06A1000 80032B6E
 	v_mul_f32_e32 v44, v76, v44  // 00000002A150: 0A58594C
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A154: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v44, v22, s45  // 00000002A15C: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v44  // 00000002A164: 022C594B
 	s_nop 0  // removed activation call  // 00000002A168: BEC01E08
 	v_mov_b32_e32 v44, v22  // 00000002A16C: 7E580316
@@ -24470,7 +25090,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v44, v113, s[12:15], 0 offen nt  // 00000002A178: E06A1000 80032C71
 	v_mul_f32_e32 v45, v81, v45  // 00000002A180: 0A5A5B51
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A184: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v45, v22, s45  // 00000002A18C: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v45  // 00000002A194: 022C5B50
 	s_nop 0  // removed activation call  // 00000002A198: BEC01E08
 	v_mov_b32_e32 v45, v22  // 00000002A19C: 7E5A0316
@@ -24478,7 +25099,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v45, v116, s[12:15], 0 offen nt  // 00000002A1A8: E06A1000 80032D74
 	v_mul_f32_e32 v46, v86, v46  // 00000002A1B0: 0A5C5D56
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A1B4: 7E2CB6F9 00041676
-	v_fmac_f32_e64 v46, v22, s45  // 00000002A1BC: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v46  // 00000002A1C4: 022C5D55
 	s_nop 0  // removed activation call  // 00000002A1C8: BEC01E08
 	v_mov_b32_e32 v46, v22  // 00000002A1CC: 7E5C0316
@@ -24486,7 +25108,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v46, v119, s[12:15], 0 offen nt  // 00000002A1D8: E06A1000 80032E77
 	v_mul_f32_e32 v47, v91, v47  // 00000002A1E0: 0A5E5F5B
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A1E4: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v47, v22, s45  // 00000002A1EC: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v47  // 00000002A1F4: 022C5F5A
 	s_nop 0  // removed activation call  // 00000002A1F8: BEC01E08
 	v_mov_b32_e32 v47, v22  // 00000002A1FC: 7E5E0316
@@ -24494,7 +25117,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v47, v122, s[12:15], 0 offen nt  // 00000002A208: E06A1000 80032F7A
 	v_mul_f32_e32 v48, v96, v48  // 00000002A210: 0A606160
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A214: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v48, v22, s45  // 00000002A21C: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v48  // 00000002A224: 022C615F
 	s_nop 0  // removed activation call  // 00000002A228: BEC01E08
 	v_mov_b32_e32 v48, v22  // 00000002A22C: 7E600316
@@ -24502,7 +25126,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v48, v125, s[12:15], 0 offen nt  // 00000002A238: E06A1000 8003307D
 	v_mul_f32_e32 v49, v101, v49  // 00000002A240: 0A626365
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A244: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v49, v22, s45  // 00000002A24C: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v49  // 00000002A254: 022C6364
 	s_nop 0  // removed activation call  // 00000002A258: BEC01E08
 	v_mov_b32_e32 v49, v22  // 00000002A25C: 7E620316
@@ -24510,7 +25135,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v49, v128, s[12:15], 0 offen nt  // 00000002A268: E06A1000 80033180
 	v_mul_f32_e32 v50, v106, v50  // 00000002A270: 0A64656A
 	v_cvt_f32_bf16_sdwa v22, v130 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A274: 7E2CB6F9 00041682
-	v_fmac_f32_e64 v50, v22, s45  // 00000002A27C: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v50  // 00000002A284: 022C6569
 	s_nop 0  // removed activation call  // 00000002A288: BEC01E08
 	v_mov_b32_e32 v50, v22  // 00000002A28C: 7E640316
@@ -24518,7 +25144,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v50, v131, s[12:15], 0 offen nt  // 00000002A298: E06A1000 80033283
 	v_mul_f32_e32 v51, v71, v51  // 00000002A2A0: 0A666747
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A2A4: 7E2CB6F9 00041685
-	v_fmac_f32_e64 v51, v22, s45  // 00000002A2AC: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v51  // 00000002A2B4: 022C6746
 	s_nop 0  // removed activation call  // 00000002A2B8: BEC01E08
 	v_mov_b32_e32 v51, v22  // 00000002A2BC: 7E660316
@@ -24526,7 +25153,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v51, v134, s[12:15], 0 offen nt  // 00000002A2C8: E06A1000 80033386
 	v_mul_f32_e32 v52, v76, v52  // 00000002A2D0: 0A68694C
 	v_cvt_f32_bf16_sdwa v22, v136 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A2D4: 7E2CB6F9 00041688
-	v_fmac_f32_e64 v52, v22, s45  // 00000002A2DC: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v52  // 00000002A2E4: 022C694B
 	s_nop 0  // removed activation call  // 00000002A2E8: BEC01E08
 	v_mov_b32_e32 v52, v22  // 00000002A2EC: 7E680316
@@ -24534,7 +25162,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v52, v137, s[12:15], 0 offen nt  // 00000002A2F8: E06A1000 80033489
 	v_mul_f32_e32 v53, v81, v53  // 00000002A300: 0A6A6B51
 	v_cvt_f32_bf16_sdwa v22, v139 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A304: 7E2CB6F9 0004168B
-	v_fmac_f32_e64 v53, v22, s45  // 00000002A30C: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v53  // 00000002A314: 022C6B50
 	s_nop 0  // removed activation call  // 00000002A318: BEC01E08
 	v_mov_b32_e32 v53, v22  // 00000002A31C: 7E6A0316
@@ -24542,7 +25171,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v53, v140, s[12:15], 0 offen nt  // 00000002A328: E06A1000 8003358C
 	v_mul_f32_e32 v54, v86, v54  // 00000002A330: 0A6C6D56
 	v_cvt_f32_bf16_sdwa v22, v142 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A334: 7E2CB6F9 0004168E
-	v_fmac_f32_e64 v54, v22, s45  // 00000002A33C: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v54  // 00000002A344: 022C6D55
 	s_nop 0  // removed activation call  // 00000002A348: BEC01E08
 	v_mov_b32_e32 v54, v22  // 00000002A34C: 7E6C0316
@@ -24550,7 +25180,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v54, v143, s[12:15], 0 offen nt  // 00000002A358: E06A1000 8003368F
 	v_mul_f32_e32 v55, v91, v55  // 00000002A360: 0A6E6F5B
 	v_cvt_f32_bf16_sdwa v22, v145 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A364: 7E2CB6F9 00041691
-	v_fmac_f32_e64 v55, v22, s45  // 00000002A36C: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v55  // 00000002A374: 022C6F5A
 	s_nop 0  // removed activation call  // 00000002A378: BEC01E08
 	v_mov_b32_e32 v55, v22  // 00000002A37C: 7E6E0316
@@ -24558,7 +25189,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v55, v146, s[12:15], 0 offen nt  // 00000002A388: E06A1000 80033792
 	v_mul_f32_e32 v56, v96, v56  // 00000002A390: 0A707160
 	v_cvt_f32_bf16_sdwa v22, v148 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A394: 7E2CB6F9 00041694
-	v_fmac_f32_e64 v56, v22, s45  // 00000002A39C: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v56  // 00000002A3A4: 022C715F
 	s_nop 0  // removed activation call  // 00000002A3A8: BEC01E08
 	v_mov_b32_e32 v56, v22  // 00000002A3AC: 7E700316
@@ -24566,7 +25198,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v56, v149, s[12:15], 0 offen nt  // 00000002A3B8: E06A1000 80033895
 	v_mul_f32_e32 v57, v101, v57  // 00000002A3C0: 0A727365
 	v_cvt_f32_bf16_sdwa v22, v151 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A3C4: 7E2CB6F9 00041697
-	v_fmac_f32_e64 v57, v22, s45  // 00000002A3CC: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v57  // 00000002A3D4: 022C7364
 	s_nop 0  // removed activation call  // 00000002A3D8: BEC01E08
 	v_mov_b32_e32 v57, v22  // 00000002A3DC: 7E720316
@@ -24574,7 +25207,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v57, v152, s[12:15], 0 offen nt  // 00000002A3E8: E06A1000 80033998
 	v_mul_f32_e32 v58, v106, v58  // 00000002A3F0: 0A74756A
 	v_cvt_f32_bf16_sdwa v22, v154 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A3F4: 7E2CB6F9 0004169A
-	v_fmac_f32_e64 v58, v22, s45  // 00000002A3FC: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v58  // 00000002A404: 022C7569
 	s_nop 0  // removed activation call  // 00000002A408: BEC01E08
 	v_mov_b32_e32 v58, v22  // 00000002A40C: 7E740316
@@ -24582,7 +25216,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v58, v155, s[12:15], 0 offen nt  // 00000002A418: E06A1000 80033A9B
 	v_mul_f32_e32 v59, v71, v59  // 00000002A420: 0A767747
 	v_cvt_f32_bf16_sdwa v22, v157 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A424: 7E2CB6F9 0004169D
-	v_fmac_f32_e64 v59, v22, s45  // 00000002A42C: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v59  // 00000002A434: 022C7746
 	s_nop 0  // removed activation call  // 00000002A438: BEC01E08
 	v_mov_b32_e32 v59, v22  // 00000002A43C: 7E760316
@@ -24590,7 +25225,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v59, v158, s[12:15], 0 offen nt  // 00000002A448: E06A1000 80033B9E
 	v_mul_f32_e32 v60, v76, v60  // 00000002A450: 0A78794C
 	v_cvt_f32_bf16_sdwa v22, v160 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A454: 7E2CB6F9 000416A0
-	v_fmac_f32_e64 v60, v22, s45  // 00000002A45C: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v60  // 00000002A464: 022C794B
 	s_nop 0  // removed activation call  // 00000002A468: BEC01E08
 	v_mov_b32_e32 v60, v22  // 00000002A46C: 7E780316
@@ -24598,7 +25234,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v60, v161, s[12:15], 0 offen nt  // 00000002A478: E06A1000 80033CA1
 	v_mul_f32_e32 v61, v81, v61  // 00000002A480: 0A7A7B51
 	v_cvt_f32_bf16_sdwa v22, v163 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A484: 7E2CB6F9 000416A3
-	v_fmac_f32_e64 v61, v22, s45  // 00000002A48C: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v61  // 00000002A494: 022C7B50
 	s_nop 0  // removed activation call  // 00000002A498: BEC01E08
 	v_mov_b32_e32 v61, v22  // 00000002A49C: 7E7A0316
@@ -24606,7 +25243,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v61, v164, s[12:15], 0 offen nt  // 00000002A4A8: E06A1000 80033DA4
 	v_mul_f32_e32 v62, v86, v62  // 00000002A4B0: 0A7C7D56
 	v_cvt_f32_bf16_sdwa v22, v166 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A4B4: 7E2CB6F9 000416A6
-	v_fmac_f32_e64 v62, v22, s45  // 00000002A4BC: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v62  // 00000002A4C4: 022C7D55
 	s_nop 0  // removed activation call  // 00000002A4C8: BEC01E08
 	v_mov_b32_e32 v62, v22  // 00000002A4CC: 7E7C0316
@@ -24614,7 +25252,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v62, v167, s[12:15], 0 offen nt  // 00000002A4D8: E06A1000 80033EA7
 	v_mul_f32_e32 v63, v91, v63  // 00000002A4E0: 0A7E7F5B
 	v_cvt_f32_bf16_sdwa v22, v169 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A4E4: 7E2CB6F9 000416A9
-	v_fmac_f32_e64 v63, v22, s45  // 00000002A4EC: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v63  // 00000002A4F4: 022C7F5A
 	s_nop 0  // removed activation call  // 00000002A4F8: BEC01E08
 	v_mov_b32_e32 v63, v22  // 00000002A4FC: 7E7E0316
@@ -24622,7 +25261,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v63, v170, s[12:15], 0 offen nt  // 00000002A508: E06A1000 80033FAA
 	v_mul_f32_e32 v64, v96, v64  // 00000002A510: 0A808160
 	v_cvt_f32_bf16_sdwa v22, v172 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A514: 7E2CB6F9 000416AC
-	v_fmac_f32_e64 v64, v22, s45  // 00000002A51C: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v64  // 00000002A524: 022C815F
 	s_nop 0  // removed activation call  // 00000002A528: BEC01E08
 	v_mov_b32_e32 v64, v22  // 00000002A52C: 7E800316
@@ -24630,7 +25270,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v64, v173, s[12:15], 0 offen nt  // 00000002A538: E06A1000 800340AD
 	v_mul_f32_e32 v65, v101, v65  // 00000002A540: 0A828365
 	v_cvt_f32_bf16_sdwa v22, v175 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A544: 7E2CB6F9 000416AF
-	v_fmac_f32_e64 v65, v22, s45  // 00000002A54C: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v65  // 00000002A554: 022C8364
 	s_nop 0  // removed activation call  // 00000002A558: BEC01E08
 	v_mov_b32_e32 v65, v22  // 00000002A55C: 7E820316
@@ -24638,7 +25279,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v65, v176, s[12:15], 0 offen nt  // 00000002A568: E06A1000 800341B0
 	v_mul_f32_e32 v66, v106, v66  // 00000002A570: 0A84856A
 	v_cvt_f32_bf16_sdwa v22, v178 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A574: 7E2CB6F9 000416B2
-	v_fmac_f32_e64 v66, v22, s45  // 00000002A57C: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v66  // 00000002A584: 022C8569
 	s_nop 0  // removed activation call  // 00000002A588: BEC01E08
 	v_mov_b32_e32 v66, v22  // 00000002A58C: 7E840316
@@ -24646,7 +25288,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v66, v179, s[12:15], 0 offen nt  // 00000002A598: E06A1000 800342B3
 	v_mul_f32_e32 v67, v71, v67  // 00000002A5A0: 0A868747
 	v_cvt_f32_bf16_sdwa v22, v181 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A5A4: 7E2CB6F9 000416B5
-	v_fmac_f32_e64 v67, v22, s45  // 00000002A5AC: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v67  // 00000002A5B4: 022C8746
 	s_nop 0  // removed activation call  // 00000002A5B8: BEC01E08
 	v_mov_b32_e32 v67, v22  // 00000002A5BC: 7E860316
@@ -24654,7 +25297,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v67, v182, s[12:15], 0 offen nt  // 00000002A5C8: E06A1000 800343B6
 	v_mul_f32_e32 v68, v76, v68  // 00000002A5D0: 0A88894C
 	v_cvt_f32_bf16_sdwa v22, v184 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002A5D4: 7E2CB6F9 000416B8
-	v_fmac_f32_e64 v68, v22, s45  // 00000002A5DC: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v68  // 00000002A5E4: 022C894B
 	s_nop 0  // removed activation call  // 00000002A5E8: BEC01E08
 	v_mov_b32_e32 v68, v22  // 00000002A5EC: 7E880316
@@ -25152,7 +25796,8 @@ custom_bf16_gemm_at_b:
 	v_mov_b32_e32 v34, 0x7fff  // 00000002B428: 7E4402FF 00007FFF
 	v_mul_f32_e32 v35, v71, v35  // 00000002B430: 0A464747
 	v_cvt_f32_bf16_sdwa v22, v69 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B434: 7E2CB6F9 00041645
-	v_fmac_f32_e64 v35, v22, s45  // 00000002B43C: D13B0023 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v35  // 00000002B444: 022C4746
 	s_nop 0  // removed activation call  // 00000002B448: BEC01E08
 	v_mov_b32_e32 v35, v22  // 00000002B44C: 7E460316
@@ -25160,7 +25805,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v35, v72, s[12:15], 0 offen nt  // 00000002B458: E06A1000 80032348
 	v_mul_f32_e32 v36, v76, v36  // 00000002B460: 0A48494C
 	v_cvt_f32_bf16_sdwa v22, v74 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B464: 7E2CB6F9 0004164A
-	v_fmac_f32_e64 v36, v22, s45  // 00000002B46C: D13B0024 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v36  // 00000002B474: 022C494B
 	s_nop 0  // removed activation call  // 00000002B478: BEC01E08
 	v_mov_b32_e32 v36, v22  // 00000002B47C: 7E480316
@@ -25168,7 +25814,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v36, v77, s[12:15], 0 offen nt  // 00000002B488: E06A1000 8003244D
 	v_mul_f32_e32 v37, v81, v37  // 00000002B490: 0A4A4B51
 	v_cvt_f32_bf16_sdwa v22, v79 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B494: 7E2CB6F9 0004164F
-	v_fmac_f32_e64 v37, v22, s45  // 00000002B49C: D13B0025 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v37  // 00000002B4A4: 022C4B50
 	s_nop 0  // removed activation call  // 00000002B4A8: BEC01E08
 	v_mov_b32_e32 v37, v22  // 00000002B4AC: 7E4A0316
@@ -25176,7 +25823,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v37, v82, s[12:15], 0 offen nt  // 00000002B4B8: E06A1000 80032552
 	v_mul_f32_e32 v38, v86, v38  // 00000002B4C0: 0A4C4D56
 	v_cvt_f32_bf16_sdwa v22, v84 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B4C4: 7E2CB6F9 00041654
-	v_fmac_f32_e64 v38, v22, s45  // 00000002B4CC: D13B0026 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v38  // 00000002B4D4: 022C4D55
 	s_nop 0  // removed activation call  // 00000002B4D8: BEC01E08
 	v_mov_b32_e32 v38, v22  // 00000002B4DC: 7E4C0316
@@ -25184,7 +25832,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v38, v87, s[12:15], 0 offen nt  // 00000002B4E8: E06A1000 80032657
 	v_mul_f32_e32 v39, v91, v39  // 00000002B4F0: 0A4E4F5B
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B4F4: 7E2CB6F9 00041659
-	v_fmac_f32_e64 v39, v22, s45  // 00000002B4FC: D13B0027 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v39  // 00000002B504: 022C4F5A
 	s_nop 0  // removed activation call  // 00000002B508: BEC01E08
 	v_mov_b32_e32 v39, v22  // 00000002B50C: 7E4E0316
@@ -25192,7 +25841,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v39, v92, s[12:15], 0 offen nt  // 00000002B518: E06A1000 8003275C
 	v_mul_f32_e32 v40, v96, v40  // 00000002B520: 0A505160
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B524: 7E2CB6F9 0004165E
-	v_fmac_f32_e64 v40, v22, s45  // 00000002B52C: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v40  // 00000002B534: 022C515F
 	s_nop 0  // removed activation call  // 00000002B538: BEC01E08
 	v_mov_b32_e32 v40, v22  // 00000002B53C: 7E500316
@@ -25200,7 +25850,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v40, v97, s[12:15], 0 offen nt  // 00000002B548: E06A1000 80032861
 	v_mul_f32_e32 v41, v101, v41  // 00000002B550: 0A525365
 	v_cvt_f32_bf16_sdwa v22, v99 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B554: 7E2CB6F9 00041663
-	v_fmac_f32_e64 v41, v22, s45  // 00000002B55C: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v41  // 00000002B564: 022C5364
 	s_nop 0  // removed activation call  // 00000002B568: BEC01E08
 	v_mov_b32_e32 v41, v22  // 00000002B56C: 7E520316
@@ -25208,7 +25859,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v41, v102, s[12:15], 0 offen nt  // 00000002B578: E06A1000 80032966
 	v_mul_f32_e32 v42, v106, v42  // 00000002B580: 0A54556A
 	v_cvt_f32_bf16_sdwa v22, v104 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B584: 7E2CB6F9 00041668
-	v_fmac_f32_e64 v42, v22, s45  // 00000002B58C: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v42  // 00000002B594: 022C5569
 	s_nop 0  // removed activation call  // 00000002B598: BEC01E08
 	v_mov_b32_e32 v42, v22  // 00000002B59C: 7E540316
@@ -25216,7 +25868,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v42, v107, s[12:15], 0 offen nt  // 00000002B5A8: E06A1000 80032A6B
 	v_mul_f32_e32 v43, v71, v43  // 00000002B5B0: 0A565747
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B5B4: 7E2CB6F9 0004166D
-	v_fmac_f32_e64 v43, v22, s45  // 00000002B5BC: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v43  // 00000002B5C4: 022C5746
 	s_nop 0  // removed activation call  // 00000002B5C8: BEC01E08
 	v_mov_b32_e32 v43, v22  // 00000002B5CC: 7E560316
@@ -25224,7 +25877,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v43, v110, s[12:15], 0 offen nt  // 00000002B5D8: E06A1000 80032B6E
 	v_mul_f32_e32 v44, v76, v44  // 00000002B5E0: 0A58594C
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B5E4: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v44, v22, s45  // 00000002B5EC: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v44  // 00000002B5F4: 022C594B
 	s_nop 0  // removed activation call  // 00000002B5F8: BEC01E08
 	v_mov_b32_e32 v44, v22  // 00000002B5FC: 7E580316
@@ -25232,7 +25886,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v44, v113, s[12:15], 0 offen nt  // 00000002B608: E06A1000 80032C71
 	v_mul_f32_e32 v45, v81, v45  // 00000002B610: 0A5A5B51
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B614: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v45, v22, s45  // 00000002B61C: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v45  // 00000002B624: 022C5B50
 	s_nop 0  // removed activation call  // 00000002B628: BEC01E08
 	v_mov_b32_e32 v45, v22  // 00000002B62C: 7E5A0316
@@ -25240,7 +25895,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v45, v116, s[12:15], 0 offen nt  // 00000002B638: E06A1000 80032D74
 	v_mul_f32_e32 v46, v86, v46  // 00000002B640: 0A5C5D56
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B644: 7E2CB6F9 00041676
-	v_fmac_f32_e64 v46, v22, s45  // 00000002B64C: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v46  // 00000002B654: 022C5D55
 	s_nop 0  // removed activation call  // 00000002B658: BEC01E08
 	v_mov_b32_e32 v46, v22  // 00000002B65C: 7E5C0316
@@ -25248,7 +25904,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v46, v119, s[12:15], 0 offen nt  // 00000002B668: E06A1000 80032E77
 	v_mul_f32_e32 v47, v91, v47  // 00000002B670: 0A5E5F5B
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B674: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v47, v22, s45  // 00000002B67C: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v47  // 00000002B684: 022C5F5A
 	s_nop 0  // removed activation call  // 00000002B688: BEC01E08
 	v_mov_b32_e32 v47, v22  // 00000002B68C: 7E5E0316
@@ -25256,7 +25913,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v47, v122, s[12:15], 0 offen nt  // 00000002B698: E06A1000 80032F7A
 	v_mul_f32_e32 v48, v96, v48  // 00000002B6A0: 0A606160
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B6A4: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v48, v22, s45  // 00000002B6AC: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v48  // 00000002B6B4: 022C615F
 	s_nop 0  // removed activation call  // 00000002B6B8: BEC01E08
 	v_mov_b32_e32 v48, v22  // 00000002B6BC: 7E600316
@@ -25264,7 +25922,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v48, v125, s[12:15], 0 offen nt  // 00000002B6C8: E06A1000 8003307D
 	v_mul_f32_e32 v49, v101, v49  // 00000002B6D0: 0A626365
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B6D4: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v49, v22, s45  // 00000002B6DC: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v49  // 00000002B6E4: 022C6364
 	s_nop 0  // removed activation call  // 00000002B6E8: BEC01E08
 	v_mov_b32_e32 v49, v22  // 00000002B6EC: 7E620316
@@ -25272,7 +25931,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v49, v128, s[12:15], 0 offen nt  // 00000002B6F8: E06A1000 80033180
 	v_mul_f32_e32 v50, v106, v50  // 00000002B700: 0A64656A
 	v_cvt_f32_bf16_sdwa v22, v130 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B704: 7E2CB6F9 00041682
-	v_fmac_f32_e64 v50, v22, s45  // 00000002B70C: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v50  // 00000002B714: 022C6569
 	s_nop 0  // removed activation call  // 00000002B718: BEC01E08
 	v_mov_b32_e32 v50, v22  // 00000002B71C: 7E640316
@@ -25280,7 +25940,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v50, v131, s[12:15], 0 offen nt  // 00000002B728: E06A1000 80033283
 	v_mul_f32_e32 v51, v71, v51  // 00000002B730: 0A666747
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B734: 7E2CB6F9 00041685
-	v_fmac_f32_e64 v51, v22, s45  // 00000002B73C: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v51  // 00000002B744: 022C6746
 	s_nop 0  // removed activation call  // 00000002B748: BEC01E08
 	v_mov_b32_e32 v51, v22  // 00000002B74C: 7E660316
@@ -25288,7 +25949,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v51, v134, s[12:15], 0 offen nt  // 00000002B758: E06A1000 80033386
 	v_mul_f32_e32 v52, v76, v52  // 00000002B760: 0A68694C
 	v_cvt_f32_bf16_sdwa v22, v136 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B764: 7E2CB6F9 00041688
-	v_fmac_f32_e64 v52, v22, s45  // 00000002B76C: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v52  // 00000002B774: 022C694B
 	s_nop 0  // removed activation call  // 00000002B778: BEC01E08
 	v_mov_b32_e32 v52, v22  // 00000002B77C: 7E680316
@@ -25296,7 +25958,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v52, v137, s[12:15], 0 offen nt  // 00000002B788: E06A1000 80033489
 	v_mul_f32_e32 v53, v81, v53  // 00000002B790: 0A6A6B51
 	v_cvt_f32_bf16_sdwa v22, v139 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B794: 7E2CB6F9 0004168B
-	v_fmac_f32_e64 v53, v22, s45  // 00000002B79C: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v53  // 00000002B7A4: 022C6B50
 	s_nop 0  // removed activation call  // 00000002B7A8: BEC01E08
 	v_mov_b32_e32 v53, v22  // 00000002B7AC: 7E6A0316
@@ -25304,7 +25967,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v53, v140, s[12:15], 0 offen nt  // 00000002B7B8: E06A1000 8003358C
 	v_mul_f32_e32 v54, v86, v54  // 00000002B7C0: 0A6C6D56
 	v_cvt_f32_bf16_sdwa v22, v142 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B7C4: 7E2CB6F9 0004168E
-	v_fmac_f32_e64 v54, v22, s45  // 00000002B7CC: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v54  // 00000002B7D4: 022C6D55
 	s_nop 0  // removed activation call  // 00000002B7D8: BEC01E08
 	v_mov_b32_e32 v54, v22  // 00000002B7DC: 7E6C0316
@@ -25312,7 +25976,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v54, v143, s[12:15], 0 offen nt  // 00000002B7E8: E06A1000 8003368F
 	v_mul_f32_e32 v55, v91, v55  // 00000002B7F0: 0A6E6F5B
 	v_cvt_f32_bf16_sdwa v22, v145 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B7F4: 7E2CB6F9 00041691
-	v_fmac_f32_e64 v55, v22, s45  // 00000002B7FC: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v55  // 00000002B804: 022C6F5A
 	s_nop 0  // removed activation call  // 00000002B808: BEC01E08
 	v_mov_b32_e32 v55, v22  // 00000002B80C: 7E6E0316
@@ -25320,7 +25985,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v55, v146, s[12:15], 0 offen nt  // 00000002B818: E06A1000 80033792
 	v_mul_f32_e32 v56, v96, v56  // 00000002B820: 0A707160
 	v_cvt_f32_bf16_sdwa v22, v148 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B824: 7E2CB6F9 00041694
-	v_fmac_f32_e64 v56, v22, s45  // 00000002B82C: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v56  // 00000002B834: 022C715F
 	s_nop 0  // removed activation call  // 00000002B838: BEC01E08
 	v_mov_b32_e32 v56, v22  // 00000002B83C: 7E700316
@@ -25328,7 +25994,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v56, v149, s[12:15], 0 offen nt  // 00000002B848: E06A1000 80033895
 	v_mul_f32_e32 v57, v101, v57  // 00000002B850: 0A727365
 	v_cvt_f32_bf16_sdwa v22, v151 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B854: 7E2CB6F9 00041697
-	v_fmac_f32_e64 v57, v22, s45  // 00000002B85C: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v57  // 00000002B864: 022C7364
 	s_nop 0  // removed activation call  // 00000002B868: BEC01E08
 	v_mov_b32_e32 v57, v22  // 00000002B86C: 7E720316
@@ -25336,7 +26003,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v57, v152, s[12:15], 0 offen nt  // 00000002B878: E06A1000 80033998
 	v_mul_f32_e32 v58, v106, v58  // 00000002B880: 0A74756A
 	v_cvt_f32_bf16_sdwa v22, v154 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B884: 7E2CB6F9 0004169A
-	v_fmac_f32_e64 v58, v22, s45  // 00000002B88C: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v58  // 00000002B894: 022C7569
 	s_nop 0  // removed activation call  // 00000002B898: BEC01E08
 	v_mov_b32_e32 v58, v22  // 00000002B89C: 7E740316
@@ -25344,7 +26012,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v58, v155, s[12:15], 0 offen nt  // 00000002B8A8: E06A1000 80033A9B
 	v_mul_f32_e32 v59, v71, v59  // 00000002B8B0: 0A767747
 	v_cvt_f32_bf16_sdwa v22, v157 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B8B4: 7E2CB6F9 0004169D
-	v_fmac_f32_e64 v59, v22, s45  // 00000002B8BC: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v59  // 00000002B8C4: 022C7746
 	s_nop 0  // removed activation call  // 00000002B8C8: BEC01E08
 	v_mov_b32_e32 v59, v22  // 00000002B8CC: 7E760316
@@ -25352,7 +26021,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v59, v158, s[12:15], 0 offen nt  // 00000002B8D8: E06A1000 80033B9E
 	v_mul_f32_e32 v60, v76, v60  // 00000002B8E0: 0A78794C
 	v_cvt_f32_bf16_sdwa v22, v160 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B8E4: 7E2CB6F9 000416A0
-	v_fmac_f32_e64 v60, v22, s45  // 00000002B8EC: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v60  // 00000002B8F4: 022C794B
 	s_nop 0  // removed activation call  // 00000002B8F8: BEC01E08
 	v_mov_b32_e32 v60, v22  // 00000002B8FC: 7E780316
@@ -25360,7 +26030,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v60, v161, s[12:15], 0 offen nt  // 00000002B908: E06A1000 80033CA1
 	v_mul_f32_e32 v61, v81, v61  // 00000002B910: 0A7A7B51
 	v_cvt_f32_bf16_sdwa v22, v163 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B914: 7E2CB6F9 000416A3
-	v_fmac_f32_e64 v61, v22, s45  // 00000002B91C: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v61  // 00000002B924: 022C7B50
 	s_nop 0  // removed activation call  // 00000002B928: BEC01E08
 	v_mov_b32_e32 v61, v22  // 00000002B92C: 7E7A0316
@@ -25368,7 +26039,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v61, v164, s[12:15], 0 offen nt  // 00000002B938: E06A1000 80033DA4
 	v_mul_f32_e32 v62, v86, v62  // 00000002B940: 0A7C7D56
 	v_cvt_f32_bf16_sdwa v22, v166 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B944: 7E2CB6F9 000416A6
-	v_fmac_f32_e64 v62, v22, s45  // 00000002B94C: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v62  // 00000002B954: 022C7D55
 	s_nop 0  // removed activation call  // 00000002B958: BEC01E08
 	v_mov_b32_e32 v62, v22  // 00000002B95C: 7E7C0316
@@ -25376,7 +26048,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v62, v167, s[12:15], 0 offen nt  // 00000002B968: E06A1000 80033EA7
 	v_mul_f32_e32 v63, v91, v63  // 00000002B970: 0A7E7F5B
 	v_cvt_f32_bf16_sdwa v22, v169 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B974: 7E2CB6F9 000416A9
-	v_fmac_f32_e64 v63, v22, s45  // 00000002B97C: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v63  // 00000002B984: 022C7F5A
 	s_nop 0  // removed activation call  // 00000002B988: BEC01E08
 	v_mov_b32_e32 v63, v22  // 00000002B98C: 7E7E0316
@@ -25384,7 +26057,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v63, v170, s[12:15], 0 offen nt  // 00000002B998: E06A1000 80033FAA
 	v_mul_f32_e32 v64, v96, v64  // 00000002B9A0: 0A808160
 	v_cvt_f32_bf16_sdwa v22, v172 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B9A4: 7E2CB6F9 000416AC
-	v_fmac_f32_e64 v64, v22, s45  // 00000002B9AC: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v64  // 00000002B9B4: 022C815F
 	s_nop 0  // removed activation call  // 00000002B9B8: BEC01E08
 	v_mov_b32_e32 v64, v22  // 00000002B9BC: 7E800316
@@ -25392,7 +26066,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v64, v173, s[12:15], 0 offen nt  // 00000002B9C8: E06A1000 800340AD
 	v_mul_f32_e32 v65, v101, v65  // 00000002B9D0: 0A828365
 	v_cvt_f32_bf16_sdwa v22, v175 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002B9D4: 7E2CB6F9 000416AF
-	v_fmac_f32_e64 v65, v22, s45  // 00000002B9DC: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v65  // 00000002B9E4: 022C8364
 	s_nop 0  // removed activation call  // 00000002B9E8: BEC01E08
 	v_mov_b32_e32 v65, v22  // 00000002B9EC: 7E820316
@@ -25400,7 +26075,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v65, v176, s[12:15], 0 offen nt  // 00000002B9F8: E06A1000 800341B0
 	v_mul_f32_e32 v66, v106, v66  // 00000002BA00: 0A84856A
 	v_cvt_f32_bf16_sdwa v22, v178 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002BA04: 7E2CB6F9 000416B2
-	v_fmac_f32_e64 v66, v22, s45  // 00000002BA0C: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v66  // 00000002BA14: 022C8569
 	s_nop 0  // removed activation call  // 00000002BA18: BEC01E08
 	v_mov_b32_e32 v66, v22  // 00000002BA1C: 7E840316
@@ -25408,7 +26084,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v66, v179, s[12:15], 0 offen nt  // 00000002BA28: E06A1000 800342B3
 	v_mul_f32_e32 v67, v71, v67  // 00000002BA30: 0A868747
 	v_cvt_f32_bf16_sdwa v22, v181 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002BA34: 7E2CB6F9 000416B5
-	v_fmac_f32_e64 v67, v22, s45  // 00000002BA3C: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v67  // 00000002BA44: 022C8746
 	s_nop 0  // removed activation call  // 00000002BA48: BEC01E08
 	v_mov_b32_e32 v67, v22  // 00000002BA4C: 7E860316
@@ -25416,7 +26093,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v67, v182, s[12:15], 0 offen nt  // 00000002BA58: E06A1000 800343B6
 	v_mul_f32_e32 v68, v76, v68  // 00000002BA60: 0A88894C
 	v_cvt_f32_bf16_sdwa v22, v184 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002BA64: 7E2CB6F9 000416B8
-	v_fmac_f32_e64 v68, v22, s45  // 00000002BA6C: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v68  // 00000002BA74: 022C894B
 	s_nop 0  // removed activation call  // 00000002BA78: BEC01E08
 	v_mov_b32_e32 v68, v22  // 00000002BA7C: 7E880316
@@ -25914,7 +26592,8 @@ custom_bf16_gemm_at_b:
 	v_mov_b32_e32 v34, 0x7fff  // 00000002C8B8: 7E4402FF 00007FFF
 	v_mul_f32_e32 v35, v71, v35  // 00000002C8C0: 0A464747
 	v_cvt_f32_bf16_sdwa v22, v69 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002C8C4: 7E2CB6F9 00041645
-	v_fmac_f32_e64 v35, v22, s45  // 00000002C8CC: D13B0023 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v35  // 00000002C8D4: 022C4746
 	s_nop 0  // removed activation call  // 00000002C8D8: BEC01E08
 	v_mov_b32_e32 v35, v22  // 00000002C8DC: 7E460316
@@ -25922,7 +26601,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v35, v72, s[12:15], 0 offen nt  // 00000002C8E8: E06A1000 80032348
 	v_mul_f32_e32 v36, v76, v36  // 00000002C8F0: 0A48494C
 	v_cvt_f32_bf16_sdwa v22, v74 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002C8F4: 7E2CB6F9 0004164A
-	v_fmac_f32_e64 v36, v22, s45  // 00000002C8FC: D13B0024 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v36  // 00000002C904: 022C494B
 	s_nop 0  // removed activation call  // 00000002C908: BEC01E08
 	v_mov_b32_e32 v36, v22  // 00000002C90C: 7E480316
@@ -25930,7 +26610,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v36, v77, s[12:15], 0 offen nt  // 00000002C918: E06A1000 8003244D
 	v_mul_f32_e32 v37, v81, v37  // 00000002C920: 0A4A4B51
 	v_cvt_f32_bf16_sdwa v22, v79 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002C924: 7E2CB6F9 0004164F
-	v_fmac_f32_e64 v37, v22, s45  // 00000002C92C: D13B0025 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v37  // 00000002C934: 022C4B50
 	s_nop 0  // removed activation call  // 00000002C938: BEC01E08
 	v_mov_b32_e32 v37, v22  // 00000002C93C: 7E4A0316
@@ -25938,7 +26619,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v37, v82, s[12:15], 0 offen nt  // 00000002C948: E06A1000 80032552
 	v_mul_f32_e32 v38, v86, v38  // 00000002C950: 0A4C4D56
 	v_cvt_f32_bf16_sdwa v22, v84 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002C954: 7E2CB6F9 00041654
-	v_fmac_f32_e64 v38, v22, s45  // 00000002C95C: D13B0026 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v38  // 00000002C964: 022C4D55
 	s_nop 0  // removed activation call  // 00000002C968: BEC01E08
 	v_mov_b32_e32 v38, v22  // 00000002C96C: 7E4C0316
@@ -25946,7 +26628,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v38, v87, s[12:15], 0 offen nt  // 00000002C978: E06A1000 80032657
 	v_mul_f32_e32 v39, v91, v39  // 00000002C980: 0A4E4F5B
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002C984: 7E2CB6F9 00041659
-	v_fmac_f32_e64 v39, v22, s45  // 00000002C98C: D13B0027 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v39  // 00000002C994: 022C4F5A
 	s_nop 0  // removed activation call  // 00000002C998: BEC01E08
 	v_mov_b32_e32 v39, v22  // 00000002C99C: 7E4E0316
@@ -25954,7 +26637,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v39, v92, s[12:15], 0 offen nt  // 00000002C9A8: E06A1000 8003275C
 	v_mul_f32_e32 v40, v96, v40  // 00000002C9B0: 0A505160
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002C9B4: 7E2CB6F9 0004165E
-	v_fmac_f32_e64 v40, v22, s45  // 00000002C9BC: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v40  // 00000002C9C4: 022C515F
 	s_nop 0  // removed activation call  // 00000002C9C8: BEC01E08
 	v_mov_b32_e32 v40, v22  // 00000002C9CC: 7E500316
@@ -25962,7 +26646,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v40, v97, s[12:15], 0 offen nt  // 00000002C9D8: E06A1000 80032861
 	v_mul_f32_e32 v41, v101, v41  // 00000002C9E0: 0A525365
 	v_cvt_f32_bf16_sdwa v22, v99 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002C9E4: 7E2CB6F9 00041663
-	v_fmac_f32_e64 v41, v22, s45  // 00000002C9EC: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v41  // 00000002C9F4: 022C5364
 	s_nop 0  // removed activation call  // 00000002C9F8: BEC01E08
 	v_mov_b32_e32 v41, v22  // 00000002C9FC: 7E520316
@@ -25970,7 +26655,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v41, v102, s[12:15], 0 offen nt  // 00000002CA08: E06A1000 80032966
 	v_mul_f32_e32 v42, v106, v42  // 00000002CA10: 0A54556A
 	v_cvt_f32_bf16_sdwa v22, v104 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CA14: 7E2CB6F9 00041668
-	v_fmac_f32_e64 v42, v22, s45  // 00000002CA1C: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v42  // 00000002CA24: 022C5569
 	s_nop 0  // removed activation call  // 00000002CA28: BEC01E08
 	v_mov_b32_e32 v42, v22  // 00000002CA2C: 7E540316
@@ -25978,7 +26664,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v42, v107, s[12:15], 0 offen nt  // 00000002CA38: E06A1000 80032A6B
 	v_mul_f32_e32 v43, v71, v43  // 00000002CA40: 0A565747
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CA44: 7E2CB6F9 0004166D
-	v_fmac_f32_e64 v43, v22, s45  // 00000002CA4C: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v43  // 00000002CA54: 022C5746
 	s_nop 0  // removed activation call  // 00000002CA58: BEC01E08
 	v_mov_b32_e32 v43, v22  // 00000002CA5C: 7E560316
@@ -25986,7 +26673,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v43, v110, s[12:15], 0 offen nt  // 00000002CA68: E06A1000 80032B6E
 	v_mul_f32_e32 v44, v76, v44  // 00000002CA70: 0A58594C
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CA74: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v44, v22, s45  // 00000002CA7C: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v44  // 00000002CA84: 022C594B
 	s_nop 0  // removed activation call  // 00000002CA88: BEC01E08
 	v_mov_b32_e32 v44, v22  // 00000002CA8C: 7E580316
@@ -25994,7 +26682,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v44, v113, s[12:15], 0 offen nt  // 00000002CA98: E06A1000 80032C71
 	v_mul_f32_e32 v45, v81, v45  // 00000002CAA0: 0A5A5B51
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CAA4: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v45, v22, s45  // 00000002CAAC: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v45  // 00000002CAB4: 022C5B50
 	s_nop 0  // removed activation call  // 00000002CAB8: BEC01E08
 	v_mov_b32_e32 v45, v22  // 00000002CABC: 7E5A0316
@@ -26002,7 +26691,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v45, v116, s[12:15], 0 offen nt  // 00000002CAC8: E06A1000 80032D74
 	v_mul_f32_e32 v46, v86, v46  // 00000002CAD0: 0A5C5D56
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CAD4: 7E2CB6F9 00041676
-	v_fmac_f32_e64 v46, v22, s45  // 00000002CADC: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v46  // 00000002CAE4: 022C5D55
 	s_nop 0  // removed activation call  // 00000002CAE8: BEC01E08
 	v_mov_b32_e32 v46, v22  // 00000002CAEC: 7E5C0316
@@ -26010,7 +26700,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v46, v119, s[12:15], 0 offen nt  // 00000002CAF8: E06A1000 80032E77
 	v_mul_f32_e32 v47, v91, v47  // 00000002CB00: 0A5E5F5B
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CB04: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v47, v22, s45  // 00000002CB0C: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v47  // 00000002CB14: 022C5F5A
 	s_nop 0  // removed activation call  // 00000002CB18: BEC01E08
 	v_mov_b32_e32 v47, v22  // 00000002CB1C: 7E5E0316
@@ -26018,7 +26709,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v47, v122, s[12:15], 0 offen nt  // 00000002CB28: E06A1000 80032F7A
 	v_mul_f32_e32 v48, v96, v48  // 00000002CB30: 0A606160
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CB34: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v48, v22, s45  // 00000002CB3C: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v48  // 00000002CB44: 022C615F
 	s_nop 0  // removed activation call  // 00000002CB48: BEC01E08
 	v_mov_b32_e32 v48, v22  // 00000002CB4C: 7E600316
@@ -26026,7 +26718,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v48, v125, s[12:15], 0 offen nt  // 00000002CB58: E06A1000 8003307D
 	v_mul_f32_e32 v49, v101, v49  // 00000002CB60: 0A626365
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CB64: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v49, v22, s45  // 00000002CB6C: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v49  // 00000002CB74: 022C6364
 	s_nop 0  // removed activation call  // 00000002CB78: BEC01E08
 	v_mov_b32_e32 v49, v22  // 00000002CB7C: 7E620316
@@ -26034,7 +26727,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v49, v128, s[12:15], 0 offen nt  // 00000002CB88: E06A1000 80033180
 	v_mul_f32_e32 v50, v106, v50  // 00000002CB90: 0A64656A
 	v_cvt_f32_bf16_sdwa v22, v130 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CB94: 7E2CB6F9 00041682
-	v_fmac_f32_e64 v50, v22, s45  // 00000002CB9C: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v50  // 00000002CBA4: 022C6569
 	s_nop 0  // removed activation call  // 00000002CBA8: BEC01E08
 	v_mov_b32_e32 v50, v22  // 00000002CBAC: 7E640316
@@ -26042,7 +26736,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v50, v131, s[12:15], 0 offen nt  // 00000002CBB8: E06A1000 80033283
 	v_mul_f32_e32 v51, v71, v51  // 00000002CBC0: 0A666747
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CBC4: 7E2CB6F9 00041685
-	v_fmac_f32_e64 v51, v22, s45  // 00000002CBCC: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v51  // 00000002CBD4: 022C6746
 	s_nop 0  // removed activation call  // 00000002CBD8: BEC01E08
 	v_mov_b32_e32 v51, v22  // 00000002CBDC: 7E660316
@@ -26050,7 +26745,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v51, v134, s[12:15], 0 offen nt  // 00000002CBE8: E06A1000 80033386
 	v_mul_f32_e32 v52, v76, v52  // 00000002CBF0: 0A68694C
 	v_cvt_f32_bf16_sdwa v22, v136 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CBF4: 7E2CB6F9 00041688
-	v_fmac_f32_e64 v52, v22, s45  // 00000002CBFC: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v52  // 00000002CC04: 022C694B
 	s_nop 0  // removed activation call  // 00000002CC08: BEC01E08
 	v_mov_b32_e32 v52, v22  // 00000002CC0C: 7E680316
@@ -26058,7 +26754,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v52, v137, s[12:15], 0 offen nt  // 00000002CC18: E06A1000 80033489
 	v_mul_f32_e32 v53, v81, v53  // 00000002CC20: 0A6A6B51
 	v_cvt_f32_bf16_sdwa v22, v139 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CC24: 7E2CB6F9 0004168B
-	v_fmac_f32_e64 v53, v22, s45  // 00000002CC2C: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v53  // 00000002CC34: 022C6B50
 	s_nop 0  // removed activation call  // 00000002CC38: BEC01E08
 	v_mov_b32_e32 v53, v22  // 00000002CC3C: 7E6A0316
@@ -26066,7 +26763,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v53, v140, s[12:15], 0 offen nt  // 00000002CC48: E06A1000 8003358C
 	v_mul_f32_e32 v54, v86, v54  // 00000002CC50: 0A6C6D56
 	v_cvt_f32_bf16_sdwa v22, v142 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CC54: 7E2CB6F9 0004168E
-	v_fmac_f32_e64 v54, v22, s45  // 00000002CC5C: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v54  // 00000002CC64: 022C6D55
 	s_nop 0  // removed activation call  // 00000002CC68: BEC01E08
 	v_mov_b32_e32 v54, v22  // 00000002CC6C: 7E6C0316
@@ -26074,7 +26772,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v54, v143, s[12:15], 0 offen nt  // 00000002CC78: E06A1000 8003368F
 	v_mul_f32_e32 v55, v91, v55  // 00000002CC80: 0A6E6F5B
 	v_cvt_f32_bf16_sdwa v22, v145 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CC84: 7E2CB6F9 00041691
-	v_fmac_f32_e64 v55, v22, s45  // 00000002CC8C: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v55  // 00000002CC94: 022C6F5A
 	s_nop 0  // removed activation call  // 00000002CC98: BEC01E08
 	v_mov_b32_e32 v55, v22  // 00000002CC9C: 7E6E0316
@@ -26082,7 +26781,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v55, v146, s[12:15], 0 offen nt  // 00000002CCA8: E06A1000 80033792
 	v_mul_f32_e32 v56, v96, v56  // 00000002CCB0: 0A707160
 	v_cvt_f32_bf16_sdwa v22, v148 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CCB4: 7E2CB6F9 00041694
-	v_fmac_f32_e64 v56, v22, s45  // 00000002CCBC: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v56  // 00000002CCC4: 022C715F
 	s_nop 0  // removed activation call  // 00000002CCC8: BEC01E08
 	v_mov_b32_e32 v56, v22  // 00000002CCCC: 7E700316
@@ -26090,7 +26790,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v56, v149, s[12:15], 0 offen nt  // 00000002CCD8: E06A1000 80033895
 	v_mul_f32_e32 v57, v101, v57  // 00000002CCE0: 0A727365
 	v_cvt_f32_bf16_sdwa v22, v151 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CCE4: 7E2CB6F9 00041697
-	v_fmac_f32_e64 v57, v22, s45  // 00000002CCEC: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v57  // 00000002CCF4: 022C7364
 	s_nop 0  // removed activation call  // 00000002CCF8: BEC01E08
 	v_mov_b32_e32 v57, v22  // 00000002CCFC: 7E720316
@@ -26098,7 +26799,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v57, v152, s[12:15], 0 offen nt  // 00000002CD08: E06A1000 80033998
 	v_mul_f32_e32 v58, v106, v58  // 00000002CD10: 0A74756A
 	v_cvt_f32_bf16_sdwa v22, v154 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CD14: 7E2CB6F9 0004169A
-	v_fmac_f32_e64 v58, v22, s45  // 00000002CD1C: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v58  // 00000002CD24: 022C7569
 	s_nop 0  // removed activation call  // 00000002CD28: BEC01E08
 	v_mov_b32_e32 v58, v22  // 00000002CD2C: 7E740316
@@ -26106,7 +26808,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v58, v155, s[12:15], 0 offen nt  // 00000002CD38: E06A1000 80033A9B
 	v_mul_f32_e32 v59, v71, v59  // 00000002CD40: 0A767747
 	v_cvt_f32_bf16_sdwa v22, v157 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CD44: 7E2CB6F9 0004169D
-	v_fmac_f32_e64 v59, v22, s45  // 00000002CD4C: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v59  // 00000002CD54: 022C7746
 	s_nop 0  // removed activation call  // 00000002CD58: BEC01E08
 	v_mov_b32_e32 v59, v22  // 00000002CD5C: 7E760316
@@ -26114,7 +26817,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v59, v158, s[12:15], 0 offen nt  // 00000002CD68: E06A1000 80033B9E
 	v_mul_f32_e32 v60, v76, v60  // 00000002CD70: 0A78794C
 	v_cvt_f32_bf16_sdwa v22, v160 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CD74: 7E2CB6F9 000416A0
-	v_fmac_f32_e64 v60, v22, s45  // 00000002CD7C: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v60  // 00000002CD84: 022C794B
 	s_nop 0  // removed activation call  // 00000002CD88: BEC01E08
 	v_mov_b32_e32 v60, v22  // 00000002CD8C: 7E780316
@@ -26122,7 +26826,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v60, v161, s[12:15], 0 offen nt  // 00000002CD98: E06A1000 80033CA1
 	v_mul_f32_e32 v61, v81, v61  // 00000002CDA0: 0A7A7B51
 	v_cvt_f32_bf16_sdwa v22, v163 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CDA4: 7E2CB6F9 000416A3
-	v_fmac_f32_e64 v61, v22, s45  // 00000002CDAC: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v61  // 00000002CDB4: 022C7B50
 	s_nop 0  // removed activation call  // 00000002CDB8: BEC01E08
 	v_mov_b32_e32 v61, v22  // 00000002CDBC: 7E7A0316
@@ -26130,7 +26835,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v61, v164, s[12:15], 0 offen nt  // 00000002CDC8: E06A1000 80033DA4
 	v_mul_f32_e32 v62, v86, v62  // 00000002CDD0: 0A7C7D56
 	v_cvt_f32_bf16_sdwa v22, v166 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CDD4: 7E2CB6F9 000416A6
-	v_fmac_f32_e64 v62, v22, s45  // 00000002CDDC: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v62  // 00000002CDE4: 022C7D55
 	s_nop 0  // removed activation call  // 00000002CDE8: BEC01E08
 	v_mov_b32_e32 v62, v22  // 00000002CDEC: 7E7C0316
@@ -26138,7 +26844,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v62, v167, s[12:15], 0 offen nt  // 00000002CDF8: E06A1000 80033EA7
 	v_mul_f32_e32 v63, v91, v63  // 00000002CE00: 0A7E7F5B
 	v_cvt_f32_bf16_sdwa v22, v169 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CE04: 7E2CB6F9 000416A9
-	v_fmac_f32_e64 v63, v22, s45  // 00000002CE0C: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v63  // 00000002CE14: 022C7F5A
 	s_nop 0  // removed activation call  // 00000002CE18: BEC01E08
 	v_mov_b32_e32 v63, v22  // 00000002CE1C: 7E7E0316
@@ -26146,7 +26853,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v63, v170, s[12:15], 0 offen nt  // 00000002CE28: E06A1000 80033FAA
 	v_mul_f32_e32 v64, v96, v64  // 00000002CE30: 0A808160
 	v_cvt_f32_bf16_sdwa v22, v172 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CE34: 7E2CB6F9 000416AC
-	v_fmac_f32_e64 v64, v22, s45  // 00000002CE3C: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v64  // 00000002CE44: 022C815F
 	s_nop 0  // removed activation call  // 00000002CE48: BEC01E08
 	v_mov_b32_e32 v64, v22  // 00000002CE4C: 7E800316
@@ -26154,7 +26862,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v64, v173, s[12:15], 0 offen nt  // 00000002CE58: E06A1000 800340AD
 	v_mul_f32_e32 v65, v101, v65  // 00000002CE60: 0A828365
 	v_cvt_f32_bf16_sdwa v22, v175 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CE64: 7E2CB6F9 000416AF
-	v_fmac_f32_e64 v65, v22, s45  // 00000002CE6C: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v65  // 00000002CE74: 022C8364
 	s_nop 0  // removed activation call  // 00000002CE78: BEC01E08
 	v_mov_b32_e32 v65, v22  // 00000002CE7C: 7E820316
@@ -26162,7 +26871,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v65, v176, s[12:15], 0 offen nt  // 00000002CE88: E06A1000 800341B0
 	v_mul_f32_e32 v66, v106, v66  // 00000002CE90: 0A84856A
 	v_cvt_f32_bf16_sdwa v22, v178 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CE94: 7E2CB6F9 000416B2
-	v_fmac_f32_e64 v66, v22, s45  // 00000002CE9C: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v66  // 00000002CEA4: 022C8569
 	s_nop 0  // removed activation call  // 00000002CEA8: BEC01E08
 	v_mov_b32_e32 v66, v22  // 00000002CEAC: 7E840316
@@ -26170,7 +26880,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v66, v179, s[12:15], 0 offen nt  // 00000002CEB8: E06A1000 800342B3
 	v_mul_f32_e32 v67, v71, v67  // 00000002CEC0: 0A868747
 	v_cvt_f32_bf16_sdwa v22, v181 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CEC4: 7E2CB6F9 000416B5
-	v_fmac_f32_e64 v67, v22, s45  // 00000002CECC: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v67  // 00000002CED4: 022C8746
 	s_nop 0  // removed activation call  // 00000002CED8: BEC01E08
 	v_mov_b32_e32 v67, v22  // 00000002CEDC: 7E860316
@@ -26178,7 +26889,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v67, v182, s[12:15], 0 offen nt  // 00000002CEE8: E06A1000 800343B6
 	v_mul_f32_e32 v68, v76, v68  // 00000002CEF0: 0A88894C
 	v_cvt_f32_bf16_sdwa v22, v184 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002CEF4: 7E2CB6F9 000416B8
-	v_fmac_f32_e64 v68, v22, s45  // 00000002CEFC: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v68  // 00000002CF04: 022C894B
 	s_nop 0  // removed activation call  // 00000002CF08: BEC01E08
 	v_mov_b32_e32 v68, v22  // 00000002CF0C: 7E880316
@@ -26678,7 +27390,8 @@ custom_bf16_gemm_at_b:
 	v_mov_b32_e32 v34, 0x7fff  // 00000002DD58: 7E4402FF 00007FFF
 	v_mul_f32_e32 v35, v71, v35  // 00000002DD60: 0A464747
 	v_cvt_f32_bf16_sdwa v22, v69 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DD64: 7E2CB6F9 00041645
-	v_fmac_f32_e64 v35, v22, s45  // 00000002DD6C: D13B0023 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v35  // 00000002DD74: 022C4746
 	s_nop 0  // removed activation call  // 00000002DD78: BEC01E08
 	v_mov_b32_e32 v35, v22  // 00000002DD7C: 7E460316
@@ -26686,7 +27399,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v35, v72, s[12:15], 0 offen nt  // 00000002DD88: E06A1000 80032348
 	v_mul_f32_e32 v36, v76, v36  // 00000002DD90: 0A48494C
 	v_cvt_f32_bf16_sdwa v22, v74 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DD94: 7E2CB6F9 0004164A
-	v_fmac_f32_e64 v36, v22, s45  // 00000002DD9C: D13B0024 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v36  // 00000002DDA4: 022C494B
 	s_nop 0  // removed activation call  // 00000002DDA8: BEC01E08
 	v_mov_b32_e32 v36, v22  // 00000002DDAC: 7E480316
@@ -26694,7 +27408,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v36, v77, s[12:15], 0 offen nt  // 00000002DDB8: E06A1000 8003244D
 	v_mul_f32_e32 v37, v81, v37  // 00000002DDC0: 0A4A4B51
 	v_cvt_f32_bf16_sdwa v22, v79 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DDC4: 7E2CB6F9 0004164F
-	v_fmac_f32_e64 v37, v22, s45  // 00000002DDCC: D13B0025 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v37  // 00000002DDD4: 022C4B50
 	s_nop 0  // removed activation call  // 00000002DDD8: BEC01E08
 	v_mov_b32_e32 v37, v22  // 00000002DDDC: 7E4A0316
@@ -26702,7 +27417,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v37, v82, s[12:15], 0 offen nt  // 00000002DDE8: E06A1000 80032552
 	v_mul_f32_e32 v38, v86, v38  // 00000002DDF0: 0A4C4D56
 	v_cvt_f32_bf16_sdwa v22, v84 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DDF4: 7E2CB6F9 00041654
-	v_fmac_f32_e64 v38, v22, s45  // 00000002DDFC: D13B0026 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v38  // 00000002DE04: 022C4D55
 	s_nop 0  // removed activation call  // 00000002DE08: BEC01E08
 	v_mov_b32_e32 v38, v22  // 00000002DE0C: 7E4C0316
@@ -26710,7 +27426,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v38, v87, s[12:15], 0 offen nt  // 00000002DE18: E06A1000 80032657
 	v_mul_f32_e32 v39, v91, v39  // 00000002DE20: 0A4E4F5B
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DE24: 7E2CB6F9 00041659
-	v_fmac_f32_e64 v39, v22, s45  // 00000002DE2C: D13B0027 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v39  // 00000002DE34: 022C4F5A
 	s_nop 0  // removed activation call  // 00000002DE38: BEC01E08
 	v_mov_b32_e32 v39, v22  // 00000002DE3C: 7E4E0316
@@ -26718,7 +27435,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v39, v92, s[12:15], 0 offen nt  // 00000002DE48: E06A1000 8003275C
 	v_mul_f32_e32 v40, v96, v40  // 00000002DE50: 0A505160
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DE54: 7E2CB6F9 0004165E
-	v_fmac_f32_e64 v40, v22, s45  // 00000002DE5C: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v40  // 00000002DE64: 022C515F
 	s_nop 0  // removed activation call  // 00000002DE68: BEC01E08
 	v_mov_b32_e32 v40, v22  // 00000002DE6C: 7E500316
@@ -26726,7 +27444,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v40, v97, s[12:15], 0 offen nt  // 00000002DE78: E06A1000 80032861
 	v_mul_f32_e32 v41, v101, v41  // 00000002DE80: 0A525365
 	v_cvt_f32_bf16_sdwa v22, v99 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DE84: 7E2CB6F9 00041663
-	v_fmac_f32_e64 v41, v22, s45  // 00000002DE8C: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v41  // 00000002DE94: 022C5364
 	s_nop 0  // removed activation call  // 00000002DE98: BEC01E08
 	v_mov_b32_e32 v41, v22  // 00000002DE9C: 7E520316
@@ -26734,7 +27453,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v41, v102, s[12:15], 0 offen nt  // 00000002DEA8: E06A1000 80032966
 	v_mul_f32_e32 v42, v106, v42  // 00000002DEB0: 0A54556A
 	v_cvt_f32_bf16_sdwa v22, v104 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DEB4: 7E2CB6F9 00041668
-	v_fmac_f32_e64 v42, v22, s45  // 00000002DEBC: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v42  // 00000002DEC4: 022C5569
 	s_nop 0  // removed activation call  // 00000002DEC8: BEC01E08
 	v_mov_b32_e32 v42, v22  // 00000002DECC: 7E540316
@@ -26742,7 +27462,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v42, v107, s[12:15], 0 offen nt  // 00000002DED8: E06A1000 80032A6B
 	v_mul_f32_e32 v43, v71, v43  // 00000002DEE0: 0A565747
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DEE4: 7E2CB6F9 0004166D
-	v_fmac_f32_e64 v43, v22, s45  // 00000002DEEC: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v43  // 00000002DEF4: 022C5746
 	s_nop 0  // removed activation call  // 00000002DEF8: BEC01E08
 	v_mov_b32_e32 v43, v22  // 00000002DEFC: 7E560316
@@ -26750,7 +27471,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v43, v110, s[12:15], 0 offen nt  // 00000002DF08: E06A1000 80032B6E
 	v_mul_f32_e32 v44, v76, v44  // 00000002DF10: 0A58594C
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DF14: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v44, v22, s45  // 00000002DF1C: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v44  // 00000002DF24: 022C594B
 	s_nop 0  // removed activation call  // 00000002DF28: BEC01E08
 	v_mov_b32_e32 v44, v22  // 00000002DF2C: 7E580316
@@ -26758,7 +27480,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v44, v113, s[12:15], 0 offen nt  // 00000002DF38: E06A1000 80032C71
 	v_mul_f32_e32 v45, v81, v45  // 00000002DF40: 0A5A5B51
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DF44: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v45, v22, s45  // 00000002DF4C: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v45  // 00000002DF54: 022C5B50
 	s_nop 0  // removed activation call  // 00000002DF58: BEC01E08
 	v_mov_b32_e32 v45, v22  // 00000002DF5C: 7E5A0316
@@ -26766,7 +27489,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v45, v116, s[12:15], 0 offen nt  // 00000002DF68: E06A1000 80032D74
 	v_mul_f32_e32 v46, v86, v46  // 00000002DF70: 0A5C5D56
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DF74: 7E2CB6F9 00041676
-	v_fmac_f32_e64 v46, v22, s45  // 00000002DF7C: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v46  // 00000002DF84: 022C5D55
 	s_nop 0  // removed activation call  // 00000002DF88: BEC01E08
 	v_mov_b32_e32 v46, v22  // 00000002DF8C: 7E5C0316
@@ -26774,7 +27498,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v46, v119, s[12:15], 0 offen nt  // 00000002DF98: E06A1000 80032E77
 	v_mul_f32_e32 v47, v91, v47  // 00000002DFA0: 0A5E5F5B
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DFA4: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v47, v22, s45  // 00000002DFAC: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v47  // 00000002DFB4: 022C5F5A
 	s_nop 0  // removed activation call  // 00000002DFB8: BEC01E08
 	v_mov_b32_e32 v47, v22  // 00000002DFBC: 7E5E0316
@@ -26782,7 +27507,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v47, v122, s[12:15], 0 offen nt  // 00000002DFC8: E06A1000 80032F7A
 	v_mul_f32_e32 v48, v96, v48  // 00000002DFD0: 0A606160
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002DFD4: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v48, v22, s45  // 00000002DFDC: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v48  // 00000002DFE4: 022C615F
 	s_nop 0  // removed activation call  // 00000002DFE8: BEC01E08
 	v_mov_b32_e32 v48, v22  // 00000002DFEC: 7E600316
@@ -26790,7 +27516,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v48, v125, s[12:15], 0 offen nt  // 00000002DFF8: E06A1000 8003307D
 	v_mul_f32_e32 v49, v101, v49  // 00000002E000: 0A626365
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E004: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v49, v22, s45  // 00000002E00C: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v49  // 00000002E014: 022C6364
 	s_nop 0  // removed activation call  // 00000002E018: BEC01E08
 	v_mov_b32_e32 v49, v22  // 00000002E01C: 7E620316
@@ -26798,7 +27525,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v49, v128, s[12:15], 0 offen nt  // 00000002E028: E06A1000 80033180
 	v_mul_f32_e32 v50, v106, v50  // 00000002E030: 0A64656A
 	v_cvt_f32_bf16_sdwa v22, v130 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E034: 7E2CB6F9 00041682
-	v_fmac_f32_e64 v50, v22, s45  // 00000002E03C: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v50  // 00000002E044: 022C6569
 	s_nop 0  // removed activation call  // 00000002E048: BEC01E08
 	v_mov_b32_e32 v50, v22  // 00000002E04C: 7E640316
@@ -26806,7 +27534,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v50, v131, s[12:15], 0 offen nt  // 00000002E058: E06A1000 80033283
 	v_mul_f32_e32 v51, v71, v51  // 00000002E060: 0A666747
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E064: 7E2CB6F9 00041685
-	v_fmac_f32_e64 v51, v22, s45  // 00000002E06C: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v51  // 00000002E074: 022C6746
 	s_nop 0  // removed activation call  // 00000002E078: BEC01E08
 	v_mov_b32_e32 v51, v22  // 00000002E07C: 7E660316
@@ -26814,7 +27543,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v51, v134, s[12:15], 0 offen nt  // 00000002E088: E06A1000 80033386
 	v_mul_f32_e32 v52, v76, v52  // 00000002E090: 0A68694C
 	v_cvt_f32_bf16_sdwa v22, v136 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E094: 7E2CB6F9 00041688
-	v_fmac_f32_e64 v52, v22, s45  // 00000002E09C: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v52  // 00000002E0A4: 022C694B
 	s_nop 0  // removed activation call  // 00000002E0A8: BEC01E08
 	v_mov_b32_e32 v52, v22  // 00000002E0AC: 7E680316
@@ -26822,7 +27552,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v52, v137, s[12:15], 0 offen nt  // 00000002E0B8: E06A1000 80033489
 	v_mul_f32_e32 v53, v81, v53  // 00000002E0C0: 0A6A6B51
 	v_cvt_f32_bf16_sdwa v22, v139 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E0C4: 7E2CB6F9 0004168B
-	v_fmac_f32_e64 v53, v22, s45  // 00000002E0CC: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v53  // 00000002E0D4: 022C6B50
 	s_nop 0  // removed activation call  // 00000002E0D8: BEC01E08
 	v_mov_b32_e32 v53, v22  // 00000002E0DC: 7E6A0316
@@ -26830,7 +27561,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v53, v140, s[12:15], 0 offen nt  // 00000002E0E8: E06A1000 8003358C
 	v_mul_f32_e32 v54, v86, v54  // 00000002E0F0: 0A6C6D56
 	v_cvt_f32_bf16_sdwa v22, v142 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E0F4: 7E2CB6F9 0004168E
-	v_fmac_f32_e64 v54, v22, s45  // 00000002E0FC: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v54  // 00000002E104: 022C6D55
 	s_nop 0  // removed activation call  // 00000002E108: BEC01E08
 	v_mov_b32_e32 v54, v22  // 00000002E10C: 7E6C0316
@@ -26838,7 +27570,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v54, v143, s[12:15], 0 offen nt  // 00000002E118: E06A1000 8003368F
 	v_mul_f32_e32 v55, v91, v55  // 00000002E120: 0A6E6F5B
 	v_cvt_f32_bf16_sdwa v22, v145 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E124: 7E2CB6F9 00041691
-	v_fmac_f32_e64 v55, v22, s45  // 00000002E12C: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v55  // 00000002E134: 022C6F5A
 	s_nop 0  // removed activation call  // 00000002E138: BEC01E08
 	v_mov_b32_e32 v55, v22  // 00000002E13C: 7E6E0316
@@ -26846,7 +27579,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v55, v146, s[12:15], 0 offen nt  // 00000002E148: E06A1000 80033792
 	v_mul_f32_e32 v56, v96, v56  // 00000002E150: 0A707160
 	v_cvt_f32_bf16_sdwa v22, v148 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E154: 7E2CB6F9 00041694
-	v_fmac_f32_e64 v56, v22, s45  // 00000002E15C: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v56  // 00000002E164: 022C715F
 	s_nop 0  // removed activation call  // 00000002E168: BEC01E08
 	v_mov_b32_e32 v56, v22  // 00000002E16C: 7E700316
@@ -26854,7 +27588,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v56, v149, s[12:15], 0 offen nt  // 00000002E178: E06A1000 80033895
 	v_mul_f32_e32 v57, v101, v57  // 00000002E180: 0A727365
 	v_cvt_f32_bf16_sdwa v22, v151 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E184: 7E2CB6F9 00041697
-	v_fmac_f32_e64 v57, v22, s45  // 00000002E18C: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v57  // 00000002E194: 022C7364
 	s_nop 0  // removed activation call  // 00000002E198: BEC01E08
 	v_mov_b32_e32 v57, v22  // 00000002E19C: 7E720316
@@ -26862,7 +27597,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v57, v152, s[12:15], 0 offen nt  // 00000002E1A8: E06A1000 80033998
 	v_mul_f32_e32 v58, v106, v58  // 00000002E1B0: 0A74756A
 	v_cvt_f32_bf16_sdwa v22, v154 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E1B4: 7E2CB6F9 0004169A
-	v_fmac_f32_e64 v58, v22, s45  // 00000002E1BC: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v58  // 00000002E1C4: 022C7569
 	s_nop 0  // removed activation call  // 00000002E1C8: BEC01E08
 	v_mov_b32_e32 v58, v22  // 00000002E1CC: 7E740316
@@ -26870,7 +27606,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v58, v155, s[12:15], 0 offen nt  // 00000002E1D8: E06A1000 80033A9B
 	v_mul_f32_e32 v59, v71, v59  // 00000002E1E0: 0A767747
 	v_cvt_f32_bf16_sdwa v22, v157 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E1E4: 7E2CB6F9 0004169D
-	v_fmac_f32_e64 v59, v22, s45  // 00000002E1EC: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v59  // 00000002E1F4: 022C7746
 	s_nop 0  // removed activation call  // 00000002E1F8: BEC01E08
 	v_mov_b32_e32 v59, v22  // 00000002E1FC: 7E760316
@@ -26878,7 +27615,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v59, v158, s[12:15], 0 offen nt  // 00000002E208: E06A1000 80033B9E
 	v_mul_f32_e32 v60, v76, v60  // 00000002E210: 0A78794C
 	v_cvt_f32_bf16_sdwa v22, v160 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E214: 7E2CB6F9 000416A0
-	v_fmac_f32_e64 v60, v22, s45  // 00000002E21C: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v60  // 00000002E224: 022C794B
 	s_nop 0  // removed activation call  // 00000002E228: BEC01E08
 	v_mov_b32_e32 v60, v22  // 00000002E22C: 7E780316
@@ -26886,7 +27624,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v60, v161, s[12:15], 0 offen nt  // 00000002E238: E06A1000 80033CA1
 	v_mul_f32_e32 v61, v81, v61  // 00000002E240: 0A7A7B51
 	v_cvt_f32_bf16_sdwa v22, v163 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E244: 7E2CB6F9 000416A3
-	v_fmac_f32_e64 v61, v22, s45  // 00000002E24C: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v61  // 00000002E254: 022C7B50
 	s_nop 0  // removed activation call  // 00000002E258: BEC01E08
 	v_mov_b32_e32 v61, v22  // 00000002E25C: 7E7A0316
@@ -26894,7 +27633,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v61, v164, s[12:15], 0 offen nt  // 00000002E268: E06A1000 80033DA4
 	v_mul_f32_e32 v62, v86, v62  // 00000002E270: 0A7C7D56
 	v_cvt_f32_bf16_sdwa v22, v166 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E274: 7E2CB6F9 000416A6
-	v_fmac_f32_e64 v62, v22, s45  // 00000002E27C: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v62  // 00000002E284: 022C7D55
 	s_nop 0  // removed activation call  // 00000002E288: BEC01E08
 	v_mov_b32_e32 v62, v22  // 00000002E28C: 7E7C0316
@@ -26902,7 +27642,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v62, v167, s[12:15], 0 offen nt  // 00000002E298: E06A1000 80033EA7
 	v_mul_f32_e32 v63, v91, v63  // 00000002E2A0: 0A7E7F5B
 	v_cvt_f32_bf16_sdwa v22, v169 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E2A4: 7E2CB6F9 000416A9
-	v_fmac_f32_e64 v63, v22, s45  // 00000002E2AC: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v63  // 00000002E2B4: 022C7F5A
 	s_nop 0  // removed activation call  // 00000002E2B8: BEC01E08
 	v_mov_b32_e32 v63, v22  // 00000002E2BC: 7E7E0316
@@ -26910,7 +27651,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v63, v170, s[12:15], 0 offen nt  // 00000002E2C8: E06A1000 80033FAA
 	v_mul_f32_e32 v64, v96, v64  // 00000002E2D0: 0A808160
 	v_cvt_f32_bf16_sdwa v22, v172 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E2D4: 7E2CB6F9 000416AC
-	v_fmac_f32_e64 v64, v22, s45  // 00000002E2DC: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v64  // 00000002E2E4: 022C815F
 	s_nop 0  // removed activation call  // 00000002E2E8: BEC01E08
 	v_mov_b32_e32 v64, v22  // 00000002E2EC: 7E800316
@@ -26918,7 +27660,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v64, v173, s[12:15], 0 offen nt  // 00000002E2F8: E06A1000 800340AD
 	v_mul_f32_e32 v65, v101, v65  // 00000002E300: 0A828365
 	v_cvt_f32_bf16_sdwa v22, v175 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E304: 7E2CB6F9 000416AF
-	v_fmac_f32_e64 v65, v22, s45  // 00000002E30C: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v65  // 00000002E314: 022C8364
 	s_nop 0  // removed activation call  // 00000002E318: BEC01E08
 	v_mov_b32_e32 v65, v22  // 00000002E31C: 7E820316
@@ -26926,7 +27669,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v65, v176, s[12:15], 0 offen nt  // 00000002E328: E06A1000 800341B0
 	v_mul_f32_e32 v66, v106, v66  // 00000002E330: 0A84856A
 	v_cvt_f32_bf16_sdwa v22, v178 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E334: 7E2CB6F9 000416B2
-	v_fmac_f32_e64 v66, v22, s45  // 00000002E33C: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v66  // 00000002E344: 022C8569
 	s_nop 0  // removed activation call  // 00000002E348: BEC01E08
 	v_mov_b32_e32 v66, v22  // 00000002E34C: 7E840316
@@ -26934,7 +27678,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v66, v179, s[12:15], 0 offen nt  // 00000002E358: E06A1000 800342B3
 	v_mul_f32_e32 v67, v71, v67  // 00000002E360: 0A868747
 	v_cvt_f32_bf16_sdwa v22, v181 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E364: 7E2CB6F9 000416B5
-	v_fmac_f32_e64 v67, v22, s45  // 00000002E36C: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v67  // 00000002E374: 022C8746
 	s_nop 0  // removed activation call  // 00000002E378: BEC01E08
 	v_mov_b32_e32 v67, v22  // 00000002E37C: 7E860316
@@ -26942,7 +27687,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v67, v182, s[12:15], 0 offen nt  // 00000002E388: E06A1000 800343B6
 	v_mul_f32_e32 v68, v76, v68  // 00000002E390: 0A88894C
 	v_cvt_f32_bf16_sdwa v22, v184 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002E394: 7E2CB6F9 000416B8
-	v_fmac_f32_e64 v68, v22, s45  // 00000002E39C: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v68  // 00000002E3A4: 022C894B
 	s_nop 0  // removed activation call  // 00000002E3A8: BEC01E08
 	v_mov_b32_e32 v68, v22  // 00000002E3AC: 7E880316
@@ -27440,7 +28186,8 @@ custom_bf16_gemm_at_b:
 	v_mov_b32_e32 v34, 0x7fff  // 00000002F1E8: 7E4402FF 00007FFF
 	v_mul_f32_e32 v35, v71, v35  // 00000002F1F0: 0A464747
 	v_cvt_f32_bf16_sdwa v22, v69 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F1F4: 7E2CB6F9 00041645
-	v_fmac_f32_e64 v35, v22, s45  // 00000002F1FC: D13B0023 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v35  // 00000002F204: 022C4746
 	s_nop 0  // removed activation call  // 00000002F208: BEC01E08
 	v_mov_b32_e32 v35, v22  // 00000002F20C: 7E460316
@@ -27448,7 +28195,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v35, v72, s[12:15], 0 offen nt  // 00000002F218: E06A1000 80032348
 	v_mul_f32_e32 v36, v76, v36  // 00000002F220: 0A48494C
 	v_cvt_f32_bf16_sdwa v22, v74 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F224: 7E2CB6F9 0004164A
-	v_fmac_f32_e64 v36, v22, s45  // 00000002F22C: D13B0024 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v36  // 00000002F234: 022C494B
 	s_nop 0  // removed activation call  // 00000002F238: BEC01E08
 	v_mov_b32_e32 v36, v22  // 00000002F23C: 7E480316
@@ -27456,7 +28204,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v36, v77, s[12:15], 0 offen nt  // 00000002F248: E06A1000 8003244D
 	v_mul_f32_e32 v37, v81, v37  // 00000002F250: 0A4A4B51
 	v_cvt_f32_bf16_sdwa v22, v79 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F254: 7E2CB6F9 0004164F
-	v_fmac_f32_e64 v37, v22, s45  // 00000002F25C: D13B0025 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v37  // 00000002F264: 022C4B50
 	s_nop 0  // removed activation call  // 00000002F268: BEC01E08
 	v_mov_b32_e32 v37, v22  // 00000002F26C: 7E4A0316
@@ -27464,7 +28213,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v37, v82, s[12:15], 0 offen nt  // 00000002F278: E06A1000 80032552
 	v_mul_f32_e32 v38, v86, v38  // 00000002F280: 0A4C4D56
 	v_cvt_f32_bf16_sdwa v22, v84 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F284: 7E2CB6F9 00041654
-	v_fmac_f32_e64 v38, v22, s45  // 00000002F28C: D13B0026 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v38  // 00000002F294: 022C4D55
 	s_nop 0  // removed activation call  // 00000002F298: BEC01E08
 	v_mov_b32_e32 v38, v22  // 00000002F29C: 7E4C0316
@@ -27472,7 +28222,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v38, v87, s[12:15], 0 offen nt  // 00000002F2A8: E06A1000 80032657
 	v_mul_f32_e32 v39, v91, v39  // 00000002F2B0: 0A4E4F5B
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F2B4: 7E2CB6F9 00041659
-	v_fmac_f32_e64 v39, v22, s45  // 00000002F2BC: D13B0027 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v39  // 00000002F2C4: 022C4F5A
 	s_nop 0  // removed activation call  // 00000002F2C8: BEC01E08
 	v_mov_b32_e32 v39, v22  // 00000002F2CC: 7E4E0316
@@ -27480,7 +28231,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v39, v92, s[12:15], 0 offen nt  // 00000002F2D8: E06A1000 8003275C
 	v_mul_f32_e32 v40, v96, v40  // 00000002F2E0: 0A505160
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F2E4: 7E2CB6F9 0004165E
-	v_fmac_f32_e64 v40, v22, s45  // 00000002F2EC: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v40  // 00000002F2F4: 022C515F
 	s_nop 0  // removed activation call  // 00000002F2F8: BEC01E08
 	v_mov_b32_e32 v40, v22  // 00000002F2FC: 7E500316
@@ -27488,7 +28240,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v40, v97, s[12:15], 0 offen nt  // 00000002F308: E06A1000 80032861
 	v_mul_f32_e32 v41, v101, v41  // 00000002F310: 0A525365
 	v_cvt_f32_bf16_sdwa v22, v99 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F314: 7E2CB6F9 00041663
-	v_fmac_f32_e64 v41, v22, s45  // 00000002F31C: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v41  // 00000002F324: 022C5364
 	s_nop 0  // removed activation call  // 00000002F328: BEC01E08
 	v_mov_b32_e32 v41, v22  // 00000002F32C: 7E520316
@@ -27496,7 +28249,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v41, v102, s[12:15], 0 offen nt  // 00000002F338: E06A1000 80032966
 	v_mul_f32_e32 v42, v106, v42  // 00000002F340: 0A54556A
 	v_cvt_f32_bf16_sdwa v22, v104 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F344: 7E2CB6F9 00041668
-	v_fmac_f32_e64 v42, v22, s45  // 00000002F34C: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v42  // 00000002F354: 022C5569
 	s_nop 0  // removed activation call  // 00000002F358: BEC01E08
 	v_mov_b32_e32 v42, v22  // 00000002F35C: 7E540316
@@ -27504,7 +28258,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v42, v107, s[12:15], 0 offen nt  // 00000002F368: E06A1000 80032A6B
 	v_mul_f32_e32 v43, v71, v43  // 00000002F370: 0A565747
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F374: 7E2CB6F9 0004166D
-	v_fmac_f32_e64 v43, v22, s45  // 00000002F37C: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v43  // 00000002F384: 022C5746
 	s_nop 0  // removed activation call  // 00000002F388: BEC01E08
 	v_mov_b32_e32 v43, v22  // 00000002F38C: 7E560316
@@ -27512,7 +28267,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v43, v110, s[12:15], 0 offen nt  // 00000002F398: E06A1000 80032B6E
 	v_mul_f32_e32 v44, v76, v44  // 00000002F3A0: 0A58594C
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F3A4: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v44, v22, s45  // 00000002F3AC: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v44  // 00000002F3B4: 022C594B
 	s_nop 0  // removed activation call  // 00000002F3B8: BEC01E08
 	v_mov_b32_e32 v44, v22  // 00000002F3BC: 7E580316
@@ -27520,7 +28276,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v44, v113, s[12:15], 0 offen nt  // 00000002F3C8: E06A1000 80032C71
 	v_mul_f32_e32 v45, v81, v45  // 00000002F3D0: 0A5A5B51
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F3D4: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v45, v22, s45  // 00000002F3DC: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v45  // 00000002F3E4: 022C5B50
 	s_nop 0  // removed activation call  // 00000002F3E8: BEC01E08
 	v_mov_b32_e32 v45, v22  // 00000002F3EC: 7E5A0316
@@ -27528,7 +28285,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v45, v116, s[12:15], 0 offen nt  // 00000002F3F8: E06A1000 80032D74
 	v_mul_f32_e32 v46, v86, v46  // 00000002F400: 0A5C5D56
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F404: 7E2CB6F9 00041676
-	v_fmac_f32_e64 v46, v22, s45  // 00000002F40C: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v46  // 00000002F414: 022C5D55
 	s_nop 0  // removed activation call  // 00000002F418: BEC01E08
 	v_mov_b32_e32 v46, v22  // 00000002F41C: 7E5C0316
@@ -27536,7 +28294,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v46, v119, s[12:15], 0 offen nt  // 00000002F428: E06A1000 80032E77
 	v_mul_f32_e32 v47, v91, v47  // 00000002F430: 0A5E5F5B
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F434: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v47, v22, s45  // 00000002F43C: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v47  // 00000002F444: 022C5F5A
 	s_nop 0  // removed activation call  // 00000002F448: BEC01E08
 	v_mov_b32_e32 v47, v22  // 00000002F44C: 7E5E0316
@@ -27544,7 +28303,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v47, v122, s[12:15], 0 offen nt  // 00000002F458: E06A1000 80032F7A
 	v_mul_f32_e32 v48, v96, v48  // 00000002F460: 0A606160
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F464: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v48, v22, s45  // 00000002F46C: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v48  // 00000002F474: 022C615F
 	s_nop 0  // removed activation call  // 00000002F478: BEC01E08
 	v_mov_b32_e32 v48, v22  // 00000002F47C: 7E600316
@@ -27552,7 +28312,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v48, v125, s[12:15], 0 offen nt  // 00000002F488: E06A1000 8003307D
 	v_mul_f32_e32 v49, v101, v49  // 00000002F490: 0A626365
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F494: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v49, v22, s45  // 00000002F49C: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v49  // 00000002F4A4: 022C6364
 	s_nop 0  // removed activation call  // 00000002F4A8: BEC01E08
 	v_mov_b32_e32 v49, v22  // 00000002F4AC: 7E620316
@@ -27560,7 +28321,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v49, v128, s[12:15], 0 offen nt  // 00000002F4B8: E06A1000 80033180
 	v_mul_f32_e32 v50, v106, v50  // 00000002F4C0: 0A64656A
 	v_cvt_f32_bf16_sdwa v22, v130 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F4C4: 7E2CB6F9 00041682
-	v_fmac_f32_e64 v50, v22, s45  // 00000002F4CC: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v50  // 00000002F4D4: 022C6569
 	s_nop 0  // removed activation call  // 00000002F4D8: BEC01E08
 	v_mov_b32_e32 v50, v22  // 00000002F4DC: 7E640316
@@ -27568,7 +28330,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v50, v131, s[12:15], 0 offen nt  // 00000002F4E8: E06A1000 80033283
 	v_mul_f32_e32 v51, v71, v51  // 00000002F4F0: 0A666747
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F4F4: 7E2CB6F9 00041685
-	v_fmac_f32_e64 v51, v22, s45  // 00000002F4FC: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v51  // 00000002F504: 022C6746
 	s_nop 0  // removed activation call  // 00000002F508: BEC01E08
 	v_mov_b32_e32 v51, v22  // 00000002F50C: 7E660316
@@ -27576,7 +28339,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v51, v134, s[12:15], 0 offen nt  // 00000002F518: E06A1000 80033386
 	v_mul_f32_e32 v52, v76, v52  // 00000002F520: 0A68694C
 	v_cvt_f32_bf16_sdwa v22, v136 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F524: 7E2CB6F9 00041688
-	v_fmac_f32_e64 v52, v22, s45  // 00000002F52C: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v52  // 00000002F534: 022C694B
 	s_nop 0  // removed activation call  // 00000002F538: BEC01E08
 	v_mov_b32_e32 v52, v22  // 00000002F53C: 7E680316
@@ -27584,7 +28348,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v52, v137, s[12:15], 0 offen nt  // 00000002F548: E06A1000 80033489
 	v_mul_f32_e32 v53, v81, v53  // 00000002F550: 0A6A6B51
 	v_cvt_f32_bf16_sdwa v22, v139 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F554: 7E2CB6F9 0004168B
-	v_fmac_f32_e64 v53, v22, s45  // 00000002F55C: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v53  // 00000002F564: 022C6B50
 	s_nop 0  // removed activation call  // 00000002F568: BEC01E08
 	v_mov_b32_e32 v53, v22  // 00000002F56C: 7E6A0316
@@ -27592,7 +28357,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v53, v140, s[12:15], 0 offen nt  // 00000002F578: E06A1000 8003358C
 	v_mul_f32_e32 v54, v86, v54  // 00000002F580: 0A6C6D56
 	v_cvt_f32_bf16_sdwa v22, v142 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F584: 7E2CB6F9 0004168E
-	v_fmac_f32_e64 v54, v22, s45  // 00000002F58C: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v54  // 00000002F594: 022C6D55
 	s_nop 0  // removed activation call  // 00000002F598: BEC01E08
 	v_mov_b32_e32 v54, v22  // 00000002F59C: 7E6C0316
@@ -27600,7 +28366,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v54, v143, s[12:15], 0 offen nt  // 00000002F5A8: E06A1000 8003368F
 	v_mul_f32_e32 v55, v91, v55  // 00000002F5B0: 0A6E6F5B
 	v_cvt_f32_bf16_sdwa v22, v145 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F5B4: 7E2CB6F9 00041691
-	v_fmac_f32_e64 v55, v22, s45  // 00000002F5BC: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v55  // 00000002F5C4: 022C6F5A
 	s_nop 0  // removed activation call  // 00000002F5C8: BEC01E08
 	v_mov_b32_e32 v55, v22  // 00000002F5CC: 7E6E0316
@@ -27608,7 +28375,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v55, v146, s[12:15], 0 offen nt  // 00000002F5D8: E06A1000 80033792
 	v_mul_f32_e32 v56, v96, v56  // 00000002F5E0: 0A707160
 	v_cvt_f32_bf16_sdwa v22, v148 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F5E4: 7E2CB6F9 00041694
-	v_fmac_f32_e64 v56, v22, s45  // 00000002F5EC: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v56  // 00000002F5F4: 022C715F
 	s_nop 0  // removed activation call  // 00000002F5F8: BEC01E08
 	v_mov_b32_e32 v56, v22  // 00000002F5FC: 7E700316
@@ -27616,7 +28384,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v56, v149, s[12:15], 0 offen nt  // 00000002F608: E06A1000 80033895
 	v_mul_f32_e32 v57, v101, v57  // 00000002F610: 0A727365
 	v_cvt_f32_bf16_sdwa v22, v151 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F614: 7E2CB6F9 00041697
-	v_fmac_f32_e64 v57, v22, s45  // 00000002F61C: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v57  // 00000002F624: 022C7364
 	s_nop 0  // removed activation call  // 00000002F628: BEC01E08
 	v_mov_b32_e32 v57, v22  // 00000002F62C: 7E720316
@@ -27624,7 +28393,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v57, v152, s[12:15], 0 offen nt  // 00000002F638: E06A1000 80033998
 	v_mul_f32_e32 v58, v106, v58  // 00000002F640: 0A74756A
 	v_cvt_f32_bf16_sdwa v22, v154 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F644: 7E2CB6F9 0004169A
-	v_fmac_f32_e64 v58, v22, s45  // 00000002F64C: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v58  // 00000002F654: 022C7569
 	s_nop 0  // removed activation call  // 00000002F658: BEC01E08
 	v_mov_b32_e32 v58, v22  // 00000002F65C: 7E740316
@@ -27632,7 +28402,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v58, v155, s[12:15], 0 offen nt  // 00000002F668: E06A1000 80033A9B
 	v_mul_f32_e32 v59, v71, v59  // 00000002F670: 0A767747
 	v_cvt_f32_bf16_sdwa v22, v157 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F674: 7E2CB6F9 0004169D
-	v_fmac_f32_e64 v59, v22, s45  // 00000002F67C: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v59  // 00000002F684: 022C7746
 	s_nop 0  // removed activation call  // 00000002F688: BEC01E08
 	v_mov_b32_e32 v59, v22  // 00000002F68C: 7E760316
@@ -27640,7 +28411,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v59, v158, s[12:15], 0 offen nt  // 00000002F698: E06A1000 80033B9E
 	v_mul_f32_e32 v60, v76, v60  // 00000002F6A0: 0A78794C
 	v_cvt_f32_bf16_sdwa v22, v160 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F6A4: 7E2CB6F9 000416A0
-	v_fmac_f32_e64 v60, v22, s45  // 00000002F6AC: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v60  // 00000002F6B4: 022C794B
 	s_nop 0  // removed activation call  // 00000002F6B8: BEC01E08
 	v_mov_b32_e32 v60, v22  // 00000002F6BC: 7E780316
@@ -27648,7 +28420,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v60, v161, s[12:15], 0 offen nt  // 00000002F6C8: E06A1000 80033CA1
 	v_mul_f32_e32 v61, v81, v61  // 00000002F6D0: 0A7A7B51
 	v_cvt_f32_bf16_sdwa v22, v163 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F6D4: 7E2CB6F9 000416A3
-	v_fmac_f32_e64 v61, v22, s45  // 00000002F6DC: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v61  // 00000002F6E4: 022C7B50
 	s_nop 0  // removed activation call  // 00000002F6E8: BEC01E08
 	v_mov_b32_e32 v61, v22  // 00000002F6EC: 7E7A0316
@@ -27656,7 +28429,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v61, v164, s[12:15], 0 offen nt  // 00000002F6F8: E06A1000 80033DA4
 	v_mul_f32_e32 v62, v86, v62  // 00000002F700: 0A7C7D56
 	v_cvt_f32_bf16_sdwa v22, v166 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F704: 7E2CB6F9 000416A6
-	v_fmac_f32_e64 v62, v22, s45  // 00000002F70C: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v62  // 00000002F714: 022C7D55
 	s_nop 0  // removed activation call  // 00000002F718: BEC01E08
 	v_mov_b32_e32 v62, v22  // 00000002F71C: 7E7C0316
@@ -27664,7 +28438,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v62, v167, s[12:15], 0 offen nt  // 00000002F728: E06A1000 80033EA7
 	v_mul_f32_e32 v63, v91, v63  // 00000002F730: 0A7E7F5B
 	v_cvt_f32_bf16_sdwa v22, v169 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F734: 7E2CB6F9 000416A9
-	v_fmac_f32_e64 v63, v22, s45  // 00000002F73C: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v63  // 00000002F744: 022C7F5A
 	s_nop 0  // removed activation call  // 00000002F748: BEC01E08
 	v_mov_b32_e32 v63, v22  // 00000002F74C: 7E7E0316
@@ -27672,7 +28447,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v63, v170, s[12:15], 0 offen nt  // 00000002F758: E06A1000 80033FAA
 	v_mul_f32_e32 v64, v96, v64  // 00000002F760: 0A808160
 	v_cvt_f32_bf16_sdwa v22, v172 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F764: 7E2CB6F9 000416AC
-	v_fmac_f32_e64 v64, v22, s45  // 00000002F76C: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v64  // 00000002F774: 022C815F
 	s_nop 0  // removed activation call  // 00000002F778: BEC01E08
 	v_mov_b32_e32 v64, v22  // 00000002F77C: 7E800316
@@ -27680,7 +28456,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v64, v173, s[12:15], 0 offen nt  // 00000002F788: E06A1000 800340AD
 	v_mul_f32_e32 v65, v101, v65  // 00000002F790: 0A828365
 	v_cvt_f32_bf16_sdwa v22, v175 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F794: 7E2CB6F9 000416AF
-	v_fmac_f32_e64 v65, v22, s45  // 00000002F79C: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v65  // 00000002F7A4: 022C8364
 	s_nop 0  // removed activation call  // 00000002F7A8: BEC01E08
 	v_mov_b32_e32 v65, v22  // 00000002F7AC: 7E820316
@@ -27688,7 +28465,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v65, v176, s[12:15], 0 offen nt  // 00000002F7B8: E06A1000 800341B0
 	v_mul_f32_e32 v66, v106, v66  // 00000002F7C0: 0A84856A
 	v_cvt_f32_bf16_sdwa v22, v178 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F7C4: 7E2CB6F9 000416B2
-	v_fmac_f32_e64 v66, v22, s45  // 00000002F7CC: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v66  // 00000002F7D4: 022C8569
 	s_nop 0  // removed activation call  // 00000002F7D8: BEC01E08
 	v_mov_b32_e32 v66, v22  // 00000002F7DC: 7E840316
@@ -27696,7 +28474,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v66, v179, s[12:15], 0 offen nt  // 00000002F7E8: E06A1000 800342B3
 	v_mul_f32_e32 v67, v71, v67  // 00000002F7F0: 0A868747
 	v_cvt_f32_bf16_sdwa v22, v181 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F7F4: 7E2CB6F9 000416B5
-	v_fmac_f32_e64 v67, v22, s45  // 00000002F7FC: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v67  // 00000002F804: 022C8746
 	s_nop 0  // removed activation call  // 00000002F808: BEC01E08
 	v_mov_b32_e32 v67, v22  // 00000002F80C: 7E860316
@@ -27704,7 +28483,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v67, v182, s[12:15], 0 offen nt  // 00000002F818: E06A1000 800343B6
 	v_mul_f32_e32 v68, v76, v68  // 00000002F820: 0A88894C
 	v_cvt_f32_bf16_sdwa v22, v184 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 00000002F824: 7E2CB6F9 000416B8
-	v_fmac_f32_e64 v68, v22, s45  // 00000002F82C: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v68  // 00000002F834: 022C894B
 	s_nop 0  // removed activation call  // 00000002F838: BEC01E08
 	v_mov_b32_e32 v68, v22  // 00000002F83C: 7E880316
@@ -28202,7 +28982,8 @@ custom_bf16_gemm_at_b:
 	v_mov_b32_e32 v34, 0x7fff  // 000000030678: 7E4402FF 00007FFF
 	v_mul_f32_e32 v35, v71, v35  // 000000030680: 0A464747
 	v_cvt_f32_bf16_sdwa v22, v69 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030684: 7E2CB6F9 00041645
-	v_fmac_f32_e64 v35, v22, s45  // 00000003068C: D13B0023 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v35  // 000000030694: 022C4746
 	s_nop 0  // removed activation call  // 000000030698: BEC01E08
 	v_mov_b32_e32 v35, v22  // 00000003069C: 7E460316
@@ -28210,7 +28991,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v35, v72, s[12:15], 0 offen nt  // 0000000306A8: E06A1000 80032348
 	v_mul_f32_e32 v36, v76, v36  // 0000000306B0: 0A48494C
 	v_cvt_f32_bf16_sdwa v22, v74 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000306B4: 7E2CB6F9 0004164A
-	v_fmac_f32_e64 v36, v22, s45  // 0000000306BC: D13B0024 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v36  // 0000000306C4: 022C494B
 	s_nop 0  // removed activation call  // 0000000306C8: BEC01E08
 	v_mov_b32_e32 v36, v22  // 0000000306CC: 7E480316
@@ -28218,7 +29000,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v36, v77, s[12:15], 0 offen nt  // 0000000306D8: E06A1000 8003244D
 	v_mul_f32_e32 v37, v81, v37  // 0000000306E0: 0A4A4B51
 	v_cvt_f32_bf16_sdwa v22, v79 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000306E4: 7E2CB6F9 0004164F
-	v_fmac_f32_e64 v37, v22, s45  // 0000000306EC: D13B0025 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v37  // 0000000306F4: 022C4B50
 	s_nop 0  // removed activation call  // 0000000306F8: BEC01E08
 	v_mov_b32_e32 v37, v22  // 0000000306FC: 7E4A0316
@@ -28226,7 +29009,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v37, v82, s[12:15], 0 offen nt  // 000000030708: E06A1000 80032552
 	v_mul_f32_e32 v38, v86, v38  // 000000030710: 0A4C4D56
 	v_cvt_f32_bf16_sdwa v22, v84 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030714: 7E2CB6F9 00041654
-	v_fmac_f32_e64 v38, v22, s45  // 00000003071C: D13B0026 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v38  // 000000030724: 022C4D55
 	s_nop 0  // removed activation call  // 000000030728: BEC01E08
 	v_mov_b32_e32 v38, v22  // 00000003072C: 7E4C0316
@@ -28234,7 +29018,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v38, v87, s[12:15], 0 offen nt  // 000000030738: E06A1000 80032657
 	v_mul_f32_e32 v39, v91, v39  // 000000030740: 0A4E4F5B
 	v_cvt_f32_bf16_sdwa v22, v89 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030744: 7E2CB6F9 00041659
-	v_fmac_f32_e64 v39, v22, s45  // 00000003074C: D13B0027 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v39  // 000000030754: 022C4F5A
 	s_nop 0  // removed activation call  // 000000030758: BEC01E08
 	v_mov_b32_e32 v39, v22  // 00000003075C: 7E4E0316
@@ -28242,7 +29027,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v39, v92, s[12:15], 0 offen nt  // 000000030768: E06A1000 8003275C
 	v_mul_f32_e32 v40, v96, v40  // 000000030770: 0A505160
 	v_cvt_f32_bf16_sdwa v22, v94 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030774: 7E2CB6F9 0004165E
-	v_fmac_f32_e64 v40, v22, s45  // 00000003077C: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v40  // 000000030784: 022C515F
 	s_nop 0  // removed activation call  // 000000030788: BEC01E08
 	v_mov_b32_e32 v40, v22  // 00000003078C: 7E500316
@@ -28250,7 +29036,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v40, v97, s[12:15], 0 offen nt  // 000000030798: E06A1000 80032861
 	v_mul_f32_e32 v41, v101, v41  // 0000000307A0: 0A525365
 	v_cvt_f32_bf16_sdwa v22, v99 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000307A4: 7E2CB6F9 00041663
-	v_fmac_f32_e64 v41, v22, s45  // 0000000307AC: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v41  // 0000000307B4: 022C5364
 	s_nop 0  // removed activation call  // 0000000307B8: BEC01E08
 	v_mov_b32_e32 v41, v22  // 0000000307BC: 7E520316
@@ -28258,7 +29045,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v41, v102, s[12:15], 0 offen nt  // 0000000307C8: E06A1000 80032966
 	v_mul_f32_e32 v42, v106, v42  // 0000000307D0: 0A54556A
 	v_cvt_f32_bf16_sdwa v22, v104 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000307D4: 7E2CB6F9 00041668
-	v_fmac_f32_e64 v42, v22, s45  // 0000000307DC: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v42  // 0000000307E4: 022C5569
 	s_nop 0  // removed activation call  // 0000000307E8: BEC01E08
 	v_mov_b32_e32 v42, v22  // 0000000307EC: 7E540316
@@ -28266,7 +29054,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v42, v107, s[12:15], 0 offen nt  // 0000000307F8: E06A1000 80032A6B
 	v_mul_f32_e32 v43, v71, v43  // 000000030800: 0A565747
 	v_cvt_f32_bf16_sdwa v22, v109 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030804: 7E2CB6F9 0004166D
-	v_fmac_f32_e64 v43, v22, s45  // 00000003080C: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v43  // 000000030814: 022C5746
 	s_nop 0  // removed activation call  // 000000030818: BEC01E08
 	v_mov_b32_e32 v43, v22  // 00000003081C: 7E560316
@@ -28274,7 +29063,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v43, v110, s[12:15], 0 offen nt  // 000000030828: E06A1000 80032B6E
 	v_mul_f32_e32 v44, v76, v44  // 000000030830: 0A58594C
 	v_cvt_f32_bf16_sdwa v22, v112 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030834: 7E2CB6F9 00041670
-	v_fmac_f32_e64 v44, v22, s45  // 00000003083C: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v44  // 000000030844: 022C594B
 	s_nop 0  // removed activation call  // 000000030848: BEC01E08
 	v_mov_b32_e32 v44, v22  // 00000003084C: 7E580316
@@ -28282,7 +29072,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v44, v113, s[12:15], 0 offen nt  // 000000030858: E06A1000 80032C71
 	v_mul_f32_e32 v45, v81, v45  // 000000030860: 0A5A5B51
 	v_cvt_f32_bf16_sdwa v22, v115 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030864: 7E2CB6F9 00041673
-	v_fmac_f32_e64 v45, v22, s45  // 00000003086C: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v45  // 000000030874: 022C5B50
 	s_nop 0  // removed activation call  // 000000030878: BEC01E08
 	v_mov_b32_e32 v45, v22  // 00000003087C: 7E5A0316
@@ -28290,7 +29081,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v45, v116, s[12:15], 0 offen nt  // 000000030888: E06A1000 80032D74
 	v_mul_f32_e32 v46, v86, v46  // 000000030890: 0A5C5D56
 	v_cvt_f32_bf16_sdwa v22, v118 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030894: 7E2CB6F9 00041676
-	v_fmac_f32_e64 v46, v22, s45  // 00000003089C: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v46  // 0000000308A4: 022C5D55
 	s_nop 0  // removed activation call  // 0000000308A8: BEC01E08
 	v_mov_b32_e32 v46, v22  // 0000000308AC: 7E5C0316
@@ -28298,7 +29090,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v46, v119, s[12:15], 0 offen nt  // 0000000308B8: E06A1000 80032E77
 	v_mul_f32_e32 v47, v91, v47  // 0000000308C0: 0A5E5F5B
 	v_cvt_f32_bf16_sdwa v22, v121 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000308C4: 7E2CB6F9 00041679
-	v_fmac_f32_e64 v47, v22, s45  // 0000000308CC: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v47  // 0000000308D4: 022C5F5A
 	s_nop 0  // removed activation call  // 0000000308D8: BEC01E08
 	v_mov_b32_e32 v47, v22  // 0000000308DC: 7E5E0316
@@ -28306,7 +29099,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v47, v122, s[12:15], 0 offen nt  // 0000000308E8: E06A1000 80032F7A
 	v_mul_f32_e32 v48, v96, v48  // 0000000308F0: 0A606160
 	v_cvt_f32_bf16_sdwa v22, v124 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000308F4: 7E2CB6F9 0004167C
-	v_fmac_f32_e64 v48, v22, s45  // 0000000308FC: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v48  // 000000030904: 022C615F
 	s_nop 0  // removed activation call  // 000000030908: BEC01E08
 	v_mov_b32_e32 v48, v22  // 00000003090C: 7E600316
@@ -28314,7 +29108,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v48, v125, s[12:15], 0 offen nt  // 000000030918: E06A1000 8003307D
 	v_mul_f32_e32 v49, v101, v49  // 000000030920: 0A626365
 	v_cvt_f32_bf16_sdwa v22, v127 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030924: 7E2CB6F9 0004167F
-	v_fmac_f32_e64 v49, v22, s45  // 00000003092C: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v49  // 000000030934: 022C6364
 	s_nop 0  // removed activation call  // 000000030938: BEC01E08
 	v_mov_b32_e32 v49, v22  // 00000003093C: 7E620316
@@ -28322,7 +29117,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v49, v128, s[12:15], 0 offen nt  // 000000030948: E06A1000 80033180
 	v_mul_f32_e32 v50, v106, v50  // 000000030950: 0A64656A
 	v_cvt_f32_bf16_sdwa v22, v130 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030954: 7E2CB6F9 00041682
-	v_fmac_f32_e64 v50, v22, s45  // 00000003095C: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v50  // 000000030964: 022C6569
 	s_nop 0  // removed activation call  // 000000030968: BEC01E08
 	v_mov_b32_e32 v50, v22  // 00000003096C: 7E640316
@@ -28330,7 +29126,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v50, v131, s[12:15], 0 offen nt  // 000000030978: E06A1000 80033283
 	v_mul_f32_e32 v51, v71, v51  // 000000030980: 0A666747
 	v_cvt_f32_bf16_sdwa v22, v133 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030984: 7E2CB6F9 00041685
-	v_fmac_f32_e64 v51, v22, s45  // 00000003098C: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v51  // 000000030994: 022C6746
 	s_nop 0  // removed activation call  // 000000030998: BEC01E08
 	v_mov_b32_e32 v51, v22  // 00000003099C: 7E660316
@@ -28338,7 +29135,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v51, v134, s[12:15], 0 offen nt  // 0000000309A8: E06A1000 80033386
 	v_mul_f32_e32 v52, v76, v52  // 0000000309B0: 0A68694C
 	v_cvt_f32_bf16_sdwa v22, v136 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000309B4: 7E2CB6F9 00041688
-	v_fmac_f32_e64 v52, v22, s45  // 0000000309BC: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v52  // 0000000309C4: 022C694B
 	s_nop 0  // removed activation call  // 0000000309C8: BEC01E08
 	v_mov_b32_e32 v52, v22  // 0000000309CC: 7E680316
@@ -28346,7 +29144,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v52, v137, s[12:15], 0 offen nt  // 0000000309D8: E06A1000 80033489
 	v_mul_f32_e32 v53, v81, v53  // 0000000309E0: 0A6A6B51
 	v_cvt_f32_bf16_sdwa v22, v139 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000309E4: 7E2CB6F9 0004168B
-	v_fmac_f32_e64 v53, v22, s45  // 0000000309EC: D13B0035 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v53  // 0000000309F4: 022C6B50
 	s_nop 0  // removed activation call  // 0000000309F8: BEC01E08
 	v_mov_b32_e32 v53, v22  // 0000000309FC: 7E6A0316
@@ -28354,7 +29153,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v53, v140, s[12:15], 0 offen nt  // 000000030A08: E06A1000 8003358C
 	v_mul_f32_e32 v54, v86, v54  // 000000030A10: 0A6C6D56
 	v_cvt_f32_bf16_sdwa v22, v142 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030A14: 7E2CB6F9 0004168E
-	v_fmac_f32_e64 v54, v22, s45  // 000000030A1C: D13B0036 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v54  // 000000030A24: 022C6D55
 	s_nop 0  // removed activation call  // 000000030A28: BEC01E08
 	v_mov_b32_e32 v54, v22  // 000000030A2C: 7E6C0316
@@ -28362,7 +29162,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v54, v143, s[12:15], 0 offen nt  // 000000030A38: E06A1000 8003368F
 	v_mul_f32_e32 v55, v91, v55  // 000000030A40: 0A6E6F5B
 	v_cvt_f32_bf16_sdwa v22, v145 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030A44: 7E2CB6F9 00041691
-	v_fmac_f32_e64 v55, v22, s45  // 000000030A4C: D13B0037 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v55  // 000000030A54: 022C6F5A
 	s_nop 0  // removed activation call  // 000000030A58: BEC01E08
 	v_mov_b32_e32 v55, v22  // 000000030A5C: 7E6E0316
@@ -28370,7 +29171,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v55, v146, s[12:15], 0 offen nt  // 000000030A68: E06A1000 80033792
 	v_mul_f32_e32 v56, v96, v56  // 000000030A70: 0A707160
 	v_cvt_f32_bf16_sdwa v22, v148 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030A74: 7E2CB6F9 00041694
-	v_fmac_f32_e64 v56, v22, s45  // 000000030A7C: D13B0038 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v56  // 000000030A84: 022C715F
 	s_nop 0  // removed activation call  // 000000030A88: BEC01E08
 	v_mov_b32_e32 v56, v22  // 000000030A8C: 7E700316
@@ -28378,7 +29180,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v56, v149, s[12:15], 0 offen nt  // 000000030A98: E06A1000 80033895
 	v_mul_f32_e32 v57, v101, v57  // 000000030AA0: 0A727365
 	v_cvt_f32_bf16_sdwa v22, v151 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030AA4: 7E2CB6F9 00041697
-	v_fmac_f32_e64 v57, v22, s45  // 000000030AAC: D13B0039 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v57  // 000000030AB4: 022C7364
 	s_nop 0  // removed activation call  // 000000030AB8: BEC01E08
 	v_mov_b32_e32 v57, v22  // 000000030ABC: 7E720316
@@ -28386,7 +29189,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v57, v152, s[12:15], 0 offen nt  // 000000030AC8: E06A1000 80033998
 	v_mul_f32_e32 v58, v106, v58  // 000000030AD0: 0A74756A
 	v_cvt_f32_bf16_sdwa v22, v154 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030AD4: 7E2CB6F9 0004169A
-	v_fmac_f32_e64 v58, v22, s45  // 000000030ADC: D13B003A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v58  // 000000030AE4: 022C7569
 	s_nop 0  // removed activation call  // 000000030AE8: BEC01E08
 	v_mov_b32_e32 v58, v22  // 000000030AEC: 7E740316
@@ -28394,7 +29198,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v58, v155, s[12:15], 0 offen nt  // 000000030AF8: E06A1000 80033A9B
 	v_mul_f32_e32 v59, v71, v59  // 000000030B00: 0A767747
 	v_cvt_f32_bf16_sdwa v22, v157 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030B04: 7E2CB6F9 0004169D
-	v_fmac_f32_e64 v59, v22, s45  // 000000030B0C: D13B003B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v59  // 000000030B14: 022C7746
 	s_nop 0  // removed activation call  // 000000030B18: BEC01E08
 	v_mov_b32_e32 v59, v22  // 000000030B1C: 7E760316
@@ -28402,7 +29207,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v59, v158, s[12:15], 0 offen nt  // 000000030B28: E06A1000 80033B9E
 	v_mul_f32_e32 v60, v76, v60  // 000000030B30: 0A78794C
 	v_cvt_f32_bf16_sdwa v22, v160 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030B34: 7E2CB6F9 000416A0
-	v_fmac_f32_e64 v60, v22, s45  // 000000030B3C: D13B003C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v60  // 000000030B44: 022C794B
 	s_nop 0  // removed activation call  // 000000030B48: BEC01E08
 	v_mov_b32_e32 v60, v22  // 000000030B4C: 7E780316
@@ -28410,7 +29216,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v60, v161, s[12:15], 0 offen nt  // 000000030B58: E06A1000 80033CA1
 	v_mul_f32_e32 v61, v81, v61  // 000000030B60: 0A7A7B51
 	v_cvt_f32_bf16_sdwa v22, v163 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030B64: 7E2CB6F9 000416A3
-	v_fmac_f32_e64 v61, v22, s45  // 000000030B6C: D13B003D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v80, v61  // 000000030B74: 022C7B50
 	s_nop 0  // removed activation call  // 000000030B78: BEC01E08
 	v_mov_b32_e32 v61, v22  // 000000030B7C: 7E7A0316
@@ -28418,7 +29225,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v61, v164, s[12:15], 0 offen nt  // 000000030B88: E06A1000 80033DA4
 	v_mul_f32_e32 v62, v86, v62  // 000000030B90: 0A7C7D56
 	v_cvt_f32_bf16_sdwa v22, v166 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030B94: 7E2CB6F9 000416A6
-	v_fmac_f32_e64 v62, v22, s45  // 000000030B9C: D13B003E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v85, v62  // 000000030BA4: 022C7D55
 	s_nop 0  // removed activation call  // 000000030BA8: BEC01E08
 	v_mov_b32_e32 v62, v22  // 000000030BAC: 7E7C0316
@@ -28426,7 +29234,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v62, v167, s[12:15], 0 offen nt  // 000000030BB8: E06A1000 80033EA7
 	v_mul_f32_e32 v63, v91, v63  // 000000030BC0: 0A7E7F5B
 	v_cvt_f32_bf16_sdwa v22, v169 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030BC4: 7E2CB6F9 000416A9
-	v_fmac_f32_e64 v63, v22, s45  // 000000030BCC: D13B003F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v90, v63  // 000000030BD4: 022C7F5A
 	s_nop 0  // removed activation call  // 000000030BD8: BEC01E08
 	v_mov_b32_e32 v63, v22  // 000000030BDC: 7E7E0316
@@ -28434,7 +29243,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v63, v170, s[12:15], 0 offen nt  // 000000030BE8: E06A1000 80033FAA
 	v_mul_f32_e32 v64, v96, v64  // 000000030BF0: 0A808160
 	v_cvt_f32_bf16_sdwa v22, v172 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030BF4: 7E2CB6F9 000416AC
-	v_fmac_f32_e64 v64, v22, s45  // 000000030BFC: D13B0040 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v95, v64  // 000000030C04: 022C815F
 	s_nop 0  // removed activation call  // 000000030C08: BEC01E08
 	v_mov_b32_e32 v64, v22  // 000000030C0C: 7E800316
@@ -28442,7 +29252,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v64, v173, s[12:15], 0 offen nt  // 000000030C18: E06A1000 800340AD
 	v_mul_f32_e32 v65, v101, v65  // 000000030C20: 0A828365
 	v_cvt_f32_bf16_sdwa v22, v175 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030C24: 7E2CB6F9 000416AF
-	v_fmac_f32_e64 v65, v22, s45  // 000000030C2C: D13B0041 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v100, v65  // 000000030C34: 022C8364
 	s_nop 0  // removed activation call  // 000000030C38: BEC01E08
 	v_mov_b32_e32 v65, v22  // 000000030C3C: 7E820316
@@ -28450,7 +29261,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v65, v176, s[12:15], 0 offen nt  // 000000030C48: E06A1000 800341B0
 	v_mul_f32_e32 v66, v106, v66  // 000000030C50: 0A84856A
 	v_cvt_f32_bf16_sdwa v22, v178 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030C54: 7E2CB6F9 000416B2
-	v_fmac_f32_e64 v66, v22, s45  // 000000030C5C: D13B0042 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v105, v66  // 000000030C64: 022C8569
 	s_nop 0  // removed activation call  // 000000030C68: BEC01E08
 	v_mov_b32_e32 v66, v22  // 000000030C6C: 7E840316
@@ -28458,7 +29270,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v66, v179, s[12:15], 0 offen nt  // 000000030C78: E06A1000 800342B3
 	v_mul_f32_e32 v67, v71, v67  // 000000030C80: 0A868747
 	v_cvt_f32_bf16_sdwa v22, v181 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030C84: 7E2CB6F9 000416B5
-	v_fmac_f32_e64 v67, v22, s45  // 000000030C8C: D13B0043 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v70, v67  // 000000030C94: 022C8746
 	s_nop 0  // removed activation call  // 000000030C98: BEC01E08
 	v_mov_b32_e32 v67, v22  // 000000030C9C: 7E860316
@@ -28466,7 +29279,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v67, v182, s[12:15], 0 offen nt  // 000000030CA8: E06A1000 800343B6
 	v_mul_f32_e32 v68, v76, v68  // 000000030CB0: 0A88894C
 	v_cvt_f32_bf16_sdwa v22, v184 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000030CB4: 7E2CB6F9 000416B8
-	v_fmac_f32_e64 v68, v22, s45  // 000000030CBC: D13B0044 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v75, v68  // 000000030CC4: 022C894B
 	s_nop 0  // removed activation call  // 000000030CC8: BEC01E08
 	v_mov_b32_e32 v68, v22  // 000000030CCC: 7E880316
@@ -28744,7 +29558,8 @@ custom_bf16_gemm_at_b:
 	v_mov_b32_e32 v34, 0x7fff  // 0000000314A8: 7E4402FF 00007FFF
 	v_mul_f32_e32 v35, v55, v35  // 0000000314B0: 0A464737
 	v_cvt_f32_bf16_sdwa v22, v53 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000314B4: 7E2CB6F9 00041635
-	v_fmac_f32_e64 v35, v22, s45  // 0000000314BC: D13B0023 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v54, v35  // 0000000314C4: 022C4736
 	s_nop 0  // removed activation call  // 0000000314C8: BEC01E08
 	v_mov_b32_e32 v35, v22  // 0000000314CC: 7E460316
@@ -28752,7 +29567,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v35, v56, s[12:15], 0 offen nt  // 0000000314D8: E06A1000 80032338
 	v_mul_f32_e32 v36, v60, v36  // 0000000314E0: 0A48493C
 	v_cvt_f32_bf16_sdwa v22, v58 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000314E4: 7E2CB6F9 0004163A
-	v_fmac_f32_e64 v36, v22, s45  // 0000000314EC: D13B0024 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v59, v36  // 0000000314F4: 022C493B
 	s_nop 0  // removed activation call  // 0000000314F8: BEC01E08
 	v_mov_b32_e32 v36, v22  // 0000000314FC: 7E480316
@@ -28760,7 +29576,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v36, v61, s[12:15], 0 offen nt  // 000000031508: E06A1000 8003243D
 	v_mul_f32_e32 v37, v65, v37  // 000000031510: 0A4A4B41
 	v_cvt_f32_bf16_sdwa v22, v63 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000031514: 7E2CB6F9 0004163F
-	v_fmac_f32_e64 v37, v22, s45  // 00000003151C: D13B0025 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v64, v37  // 000000031524: 022C4B40
 	s_nop 0  // removed activation call  // 000000031528: BEC01E08
 	v_mov_b32_e32 v37, v22  // 00000003152C: 7E4A0316
@@ -28768,7 +29585,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v37, v66, s[12:15], 0 offen nt  // 000000031538: E06A1000 80032542
 	v_mul_f32_e32 v38, v70, v38  // 000000031540: 0A4C4D46
 	v_cvt_f32_bf16_sdwa v22, v68 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000031544: 7E2CB6F9 00041644
-	v_fmac_f32_e64 v38, v22, s45  // 00000003154C: D13B0026 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v69, v38  // 000000031554: 022C4D45
 	s_nop 0  // removed activation call  // 000000031558: BEC01E08
 	v_mov_b32_e32 v38, v22  // 00000003155C: 7E4C0316
@@ -28776,7 +29594,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v38, v71, s[12:15], 0 offen nt  // 000000031568: E06A1000 80032647
 	v_mul_f32_e32 v39, v75, v39  // 000000031570: 0A4E4F4B
 	v_cvt_f32_bf16_sdwa v22, v73 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000031574: 7E2CB6F9 00041649
-	v_fmac_f32_e64 v39, v22, s45  // 00000003157C: D13B0027 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v74, v39  // 000000031584: 022C4F4A
 	s_nop 0  // removed activation call  // 000000031588: BEC01E08
 	v_mov_b32_e32 v39, v22  // 00000003158C: 7E4E0316
@@ -28784,7 +29603,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v39, v76, s[12:15], 0 offen nt  // 000000031598: E06A1000 8003274C
 	v_mul_f32_e32 v40, v80, v40  // 0000000315A0: 0A505150
 	v_cvt_f32_bf16_sdwa v22, v78 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000315A4: 7E2CB6F9 0004164E
-	v_fmac_f32_e64 v40, v22, s45  // 0000000315AC: D13B0028 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v79, v40  // 0000000315B4: 022C514F
 	s_nop 0  // removed activation call  // 0000000315B8: BEC01E08
 	v_mov_b32_e32 v40, v22  // 0000000315BC: 7E500316
@@ -28792,7 +29612,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v40, v81, s[12:15], 0 offen nt  // 0000000315C8: E06A1000 80032851
 	v_mul_f32_e32 v41, v85, v41  // 0000000315D0: 0A525355
 	v_cvt_f32_bf16_sdwa v22, v83 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000315D4: 7E2CB6F9 00041653
-	v_fmac_f32_e64 v41, v22, s45  // 0000000315DC: D13B0029 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v84, v41  // 0000000315E4: 022C5354
 	s_nop 0  // removed activation call  // 0000000315E8: BEC01E08
 	v_mov_b32_e32 v41, v22  // 0000000315EC: 7E520316
@@ -28800,7 +29621,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v41, v86, s[12:15], 0 offen nt  // 0000000315F8: E06A1000 80032956
 	v_mul_f32_e32 v42, v90, v42  // 000000031600: 0A54555A
 	v_cvt_f32_bf16_sdwa v22, v88 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000031604: 7E2CB6F9 00041658
-	v_fmac_f32_e64 v42, v22, s45  // 00000003160C: D13B002A 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v89, v42  // 000000031614: 022C5559
 	s_nop 0  // removed activation call  // 000000031618: BEC01E08
 	v_mov_b32_e32 v42, v22  // 00000003161C: 7E540316
@@ -28808,7 +29630,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v42, v91, s[12:15], 0 offen nt  // 000000031628: E06A1000 80032A5B
 	v_mul_f32_e32 v43, v55, v43  // 000000031630: 0A565737
 	v_cvt_f32_bf16_sdwa v22, v93 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000031634: 7E2CB6F9 0004165D
-	v_fmac_f32_e64 v43, v22, s45  // 00000003163C: D13B002B 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v54, v43  // 000000031644: 022C5736
 	s_nop 0  // removed activation call  // 000000031648: BEC01E08
 	v_mov_b32_e32 v43, v22  // 00000003164C: 7E560316
@@ -28816,7 +29639,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v43, v94, s[12:15], 0 offen nt  // 000000031658: E06A1000 80032B5E
 	v_mul_f32_e32 v44, v60, v44  // 000000031660: 0A58593C
 	v_cvt_f32_bf16_sdwa v22, v96 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000031664: 7E2CB6F9 00041660
-	v_fmac_f32_e64 v44, v22, s45  // 00000003166C: D13B002C 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v59, v44  // 000000031674: 022C593B
 	s_nop 0  // removed activation call  // 000000031678: BEC01E08
 	v_mov_b32_e32 v44, v22  // 00000003167C: 7E580316
@@ -28824,7 +29648,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v44, v97, s[12:15], 0 offen nt  // 000000031688: E06A1000 80032C61
 	v_mul_f32_e32 v45, v65, v45  // 000000031690: 0A5A5B41
 	v_cvt_f32_bf16_sdwa v22, v99 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000031694: 7E2CB6F9 00041663
-	v_fmac_f32_e64 v45, v22, s45  // 00000003169C: D13B002D 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v64, v45  // 0000000316A4: 022C5B40
 	s_nop 0  // removed activation call  // 0000000316A8: BEC01E08
 	v_mov_b32_e32 v45, v22  // 0000000316AC: 7E5A0316
@@ -28832,7 +29657,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v45, v100, s[12:15], 0 offen nt  // 0000000316B8: E06A1000 80032D64
 	v_mul_f32_e32 v46, v70, v46  // 0000000316C0: 0A5C5D46
 	v_cvt_f32_bf16_sdwa v22, v102 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000316C4: 7E2CB6F9 00041666
-	v_fmac_f32_e64 v46, v22, s45  // 0000000316CC: D13B002E 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v69, v46  // 0000000316D4: 022C5D45
 	s_nop 0  // removed activation call  // 0000000316D8: BEC01E08
 	v_mov_b32_e32 v46, v22  // 0000000316DC: 7E5C0316
@@ -28840,7 +29666,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v46, v103, s[12:15], 0 offen nt  // 0000000316E8: E06A1000 80032E67
 	v_mul_f32_e32 v47, v75, v47  // 0000000316F0: 0A5E5F4B
 	v_cvt_f32_bf16_sdwa v22, v105 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000316F4: 7E2CB6F9 00041669
-	v_fmac_f32_e64 v47, v22, s45  // 0000000316FC: D13B002F 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v74, v47  // 000000031704: 022C5F4A
 	s_nop 0  // removed activation call  // 000000031708: BEC01E08
 	v_mov_b32_e32 v47, v22  // 00000003170C: 7E5E0316
@@ -28848,7 +29675,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v47, v106, s[12:15], 0 offen nt  // 000000031718: E06A1000 80032F6A
 	v_mul_f32_e32 v48, v80, v48  // 000000031720: 0A606150
 	v_cvt_f32_bf16_sdwa v22, v108 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000031724: 7E2CB6F9 0004166C
-	v_fmac_f32_e64 v48, v22, s45  // 00000003172C: D13B0030 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v79, v48  // 000000031734: 022C614F
 	s_nop 0  // removed activation call  // 000000031738: BEC01E08
 	v_mov_b32_e32 v48, v22  // 00000003173C: 7E600316
@@ -28856,7 +29684,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v48, v109, s[12:15], 0 offen nt  // 000000031748: E06A1000 8003306D
 	v_mul_f32_e32 v49, v85, v49  // 000000031750: 0A626355
 	v_cvt_f32_bf16_sdwa v22, v111 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000031754: 7E2CB6F9 0004166F
-	v_fmac_f32_e64 v49, v22, s45  // 00000003175C: D13B0031 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v84, v49  // 000000031764: 022C6354
 	s_nop 0  // removed activation call  // 000000031768: BEC01E08
 	v_mov_b32_e32 v49, v22  // 00000003176C: 7E620316
@@ -28864,7 +29693,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v49, v112, s[12:15], 0 offen nt  // 000000031778: E06A1000 80033170
 	v_mul_f32_e32 v50, v90, v50  // 000000031780: 0A64655A
 	v_cvt_f32_bf16_sdwa v22, v114 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 000000031784: 7E2CB6F9 00041672
-	v_fmac_f32_e64 v50, v22, s45  // 00000003178C: D13B0032 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v89, v50  // 000000031794: 022C6559
 	s_nop 0  // removed activation call  // 000000031798: BEC01E08
 	v_mov_b32_e32 v50, v22  // 00000003179C: 7E640316
@@ -28872,7 +29702,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v50, v115, s[12:15], 0 offen nt  // 0000000317A8: E06A1000 80033273
 	v_mul_f32_e32 v51, v55, v51  // 0000000317B0: 0A666737
 	v_cvt_f32_bf16_sdwa v22, v117 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000317B4: 7E2CB6F9 00041675
-	v_fmac_f32_e64 v51, v22, s45  // 0000000317BC: D13B0033 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v54, v51  // 0000000317C4: 022C6736
 	s_nop 0  // removed activation call  // 0000000317C8: BEC01E08
 	v_mov_b32_e32 v51, v22  // 0000000317CC: 7E660316
@@ -28880,7 +29711,8 @@ custom_bf16_gemm_at_b:
 	buffer_store_short v51, v118, s[12:15], 0 offen nt  // 0000000317D8: E06A1000 80033376
 	v_mul_f32_e32 v52, v60, v52  // 0000000317E0: 0A68693C
 	v_cvt_f32_bf16_sdwa v22, v120 dst_sel:DWORD dst_unused:UNUSED_PRESERVE src0_sel:WORD_0  // 0000000317E4: 7E2CB6F9 00041678
-	v_fmac_f32_e64 v52, v22, s45  // 0000000317EC: D13B0034 00005B16
+	s_nop 0  // removed beta C fmac
+	s_nop 0
 	v_add_f32_e32 v22, v59, v52  // 0000000317F4: 022C693B
 	s_nop 0  // removed activation call  // 0000000317F8: BEC01E08
 	v_mov_b32_e32 v52, v22  // 0000000317FC: 7E680316
