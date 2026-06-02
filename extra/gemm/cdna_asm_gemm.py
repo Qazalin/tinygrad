@@ -2688,7 +2688,10 @@ def _asm_bf16_gemm(a:Tensor, b:Tensor, name:str) -> Tensor:
   assert a_shape == entry["a_shape"] and b_shape == entry["b_shape"], f"{name} only supports local A{entry['a_shape']} B{entry['b_shape']}, got A{a_shape} B{b_shape}"
   assert a.device == b.device, f"{name} requires same device, got {a.device=} {b.device=}"
   M, N = entry["out_shape"]
-  if isinstance(a.device, tuple) and b.uop.axis == 0:
+  reduce_shards = isinstance(a.device, tuple) and a.uop.axis == b.uop.axis == 0 and name == "custom_bf16_gemm_at_b"
+  if reduce_shards:
+    c = Tensor(Tensor.invalids(N, M, device=a.device, dtype=dtypes.bfloat16).uop.multi(0), device=a.device)
+  elif isinstance(a.device, tuple) and b.uop.axis == 0:
     N *= len(a.device)
     c = Tensor.empty(N, M, device=a.device[0], dtype=dtypes.bfloat16).shard(a.device, axis=0).reshape(N*M)
   else:
@@ -2697,16 +2700,20 @@ def _asm_bf16_gemm(a:Tensor, b:Tensor, name:str) -> Tensor:
   ws = Tensor.zeros(1024 * 1024 * 1024, device=a.device, dtype=dtypes.uint8)
   flags = Tensor.zeros(1024 * 1024, device=a.device, dtype=dtypes.uint8)
   fxn = functools.partial(_custom_bf16_gemm, name=name, dname=a.device[0] if isinstance(a.device, tuple) else a.device)
-  return Tensor.custom_kernel(c, c, a, b, ws, flags, fxn=fxn, grad_fxn=_custom_bf16_gemm_bw)[0].reshape(N, M).T
+  out = Tensor.custom_kernel(c, c, a, b, ws, flags, fxn=fxn, grad_fxn=_custom_bf16_gemm_bw)[0]
+  if reduce_shards: return out.reshape(len(a.device), N, M).permute(0, 2, 1).sum(0)
+  return out.reshape(N, M).T
 
 def _custom_bf16_gemm_bw(gradient:UOp, kernel:UOp):
-  name = kernel.src[0].arg.name
+  prg = kernel.src[0]
+  name = prg.arg.name if prg.arg is not None else prg.src[0].arg.name
   _, _, a, b, _, _ = kernel.src[1:]
   a_t, b_t = Tensor(a, device=a.device), Tensor(b, device=a.device)
-  M, N = _BF16_GEMMS[name]["out_shape"]
+  M, _ = _BF16_GEMMS[name]["out_shape"]
+  N = prod(gradient.shape) // M
   g_t = Tensor(gradient, device=a.device).reshape(N, M).T
   if name == "custom_bf16_gemm_a_bt":
-    grad_a, grad_b = g_t @ b_t, g_t.T @ a_t
+    grad_a, grad_b = asm_gemm_at_b(b_t, g_t.T).T, asm_gemm_at_bt(a_t, g_t.T).T
   elif name == "custom_bf16_gemm_at_bt":
     grad_a, grad_b = b_t.T @ g_t.T, g_t.T @ a_t.T
   elif name == "custom_bf16_gemm_at_b":
@@ -2856,11 +2863,15 @@ def custom_gemm_bw(gradient:UOp, kernel:UOp):
       grad_a = asm_gemm_at_bt(b_t_t, g_t_flat).T.reshape(a_t.shape).uop
     elif can_use_asm_gemm(g_t, b_t.T): grad_a = asm_gemm(g_t, b_t.T).uop
     else: grad_a = (g_t @ b_t.T).uop
-    a_t_flat = a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1)
-    if not isinstance(a_t_flat.device, tuple) and a_t_flat.shape == _BF16_GEMMS["custom_bf16_gemm_at_b"]["a_shape"] and g_t_flat.shape == _BF16_GEMMS["custom_bf16_gemm_at_b"]["b_shape"]:
-      grad_b = asm_gemm_at_b(a_t_flat, g_t_flat).uop
-    elif can_use_asm_gemm(a_t_flat, g_t_flat): grad_b = asm_gemm(a_t_flat, g_t_flat).uop
-    else: grad_b = (a_t_flat @ g_t_flat).uop
+    a_t_hidden_flat = a_t.reshape(-1, a_t.shape[-1])
+    if not isinstance(a_t_hidden_flat.device, tuple) and a_t_hidden_flat.shape == _BF16_GEMMS["custom_bf16_gemm_at_b"]["a_shape"] and g_t_flat.shape == _BF16_GEMMS["custom_bf16_gemm_at_b"]["b_shape"]:
+      grad_b = asm_gemm_at_b(a_t_hidden_flat, g_t_flat).uop
+    elif isinstance(a_t_hidden_flat.device, tuple) and local_shape(a_t_hidden_flat) == _BF16_GEMMS["custom_bf16_gemm_at_b"]["a_shape"] and local_shape(g_t_flat) == _BF16_GEMMS["custom_bf16_gemm_at_b"]["b_shape"]:
+      grad_b = asm_gemm_at_b(a_t_hidden_flat, g_t_flat).uop
+    else:
+      a_t_flat = a_t.permute(2, 0, 1).reshape(a_t.shape[2], -1)
+      if can_use_asm_gemm(a_t_flat, g_t_flat): grad_b = asm_gemm(a_t_flat, g_t_flat).uop
+      else: grad_b = (a_t_flat @ g_t_flat).uop
     return (None, grad_a, grad_b)
 
 # ** main gemm function
