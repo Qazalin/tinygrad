@@ -27697,7 +27697,7 @@ custom_bf16_gemm_at_bt:
   # basic memory requirements
   .amdhsa_group_segment_fixed_size 133120
   .amdhsa_private_segment_fixed_size 0
-  .amdhsa_kernarg_size 48
+  .amdhsa_kernarg_size 40
   # register usage (RSRC1)
   .amdhsa_next_free_vgpr 512
   .amdhsa_next_free_sgpr 93
@@ -27731,7 +27731,7 @@ amdhsa.kernels:
     .group_segment_fixed_size: 133120
     .private_segment_fixed_size: 0
     .kernarg_segment_align: 8
-    .kernarg_segment_size: 48
+    .kernarg_segment_size: 40
     .max_flat_workgroup_size: 256
     .sgpr_count: 93
     .sgpr_spill_count: 0
