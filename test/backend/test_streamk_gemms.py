@@ -29,6 +29,13 @@ def ref_at_bt_dt(a:Tensor, b:Tensor) -> Tensor:
     ret = (ret + b[:, st:st+8192] @ a[st:st+8192, :]).realize()
   return ret
 
+def ref_at_b_dt(a:Tensor, b:Tensor) -> Tensor:
+  # Chunk the reference over K to avoid one very large tinygrad matmul hitting the HCQ wait timeout.
+  ret = b[:8192, :].T @ a[:8192, :]
+  for st in range(8192, a.shape[0], 8192):
+    ret = (ret + b[st:st+8192, :].T @ a[st:st+8192, :]).realize()
+  return ret
+
 class TestStreamKGEMMs(unittest.TestCase):
   def setUp(self):
     if not is_cdna4() or DEV.interface.startswith("MOCK"):
@@ -41,7 +48,7 @@ class TestStreamKGEMMs(unittest.TestCase):
     run_streamk_gemm((128256, 4096), (16384, 128256), asm_gemm_at_bt_dt, ref_at_bt_dt, rtol=5e-2)
 
   def test_at_b_dt(self):
-    run_streamk_gemm((16384, 4096), (16384, 128256), asm_gemm_at_b_dt, lambda a, b: b.T @ a)
+    run_streamk_gemm((16384, 4096), (16384, 128256), asm_gemm_at_b_dt, ref_at_b_dt)
 
 if __name__ == "__main__":
   unittest.main()
