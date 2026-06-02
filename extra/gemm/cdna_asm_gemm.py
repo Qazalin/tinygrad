@@ -2714,19 +2714,24 @@ def _custom_bf16_gemm_bw(gradient:UOp, kernel:UOp):
   a_t, b_t = Tensor(a, device=a.device), Tensor(b, device=a.device)
   M, _ = _BF16_GEMMS[name]["out_shape"]
   N = prod(gradient.shape) // M
-  g_t = Tensor(gradient, device=a.device).reshape(N, M).T
   if name == "custom_bf16_gemm_a_bt":
+    g_t = Tensor(gradient, device=a.device).reshape(N, M).T
     grad_a, grad_b = asm_gemm_at_b(b_t, g_t.T).T, asm_gemm_at_bt(a_t, g_t.T).T
   elif name == "custom_bf16_gemm_at_bt":
+    g_t = Tensor(gradient, device=a.device).reshape(N, M).T
     grad_a, grad_b = b_t.T @ g_t.T, g_t.T @ a_t.T
   elif name == "custom_bf16_gemm_at_b":
+    g_t = Tensor(gradient, device=a.device).reshape(N, M).T
     grad_a, grad_b = b_t @ g_t.T, a_t @ g_t
   else: raise RuntimeError(f"unknown bf16 gemm {name}")
   return (None, None, grad_a.uop, grad_b.uop, None, None)
 
 def asm_gemm_a_bt(a:Tensor, b:Tensor) -> Tensor:
   _count_special_asm_gemm("a_bt")
-  return _asm_bf16_gemm(a, b, "custom_bf16_gemm_a_bt")
+  # The captured a_bt Stream-K kernel can leave invalid values in the final vocab projection path.
+  # Use the existing generated ASM GEMM for the same math: (B @ A.T).T == A @ B.T.
+  assert a.dtype == b.dtype == dtypes.bfloat16, f"asm_gemm_a_bt only supports bf16, got {a.dtype=} {b.dtype=}"
+  return asm_gemm(b, a.T).T
 def asm_gemm_at_bt(a:Tensor, b:Tensor) -> Tensor:
   _count_special_asm_gemm("at_bt")
   return _asm_bf16_gemm(a, b, "custom_bf16_gemm_at_bt")
