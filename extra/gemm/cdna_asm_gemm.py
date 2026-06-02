@@ -2691,19 +2691,21 @@ def _asm_bf16_gemm(a:Tensor, b:Tensor, name:str) -> Tensor:
   M, N = entry["out_shape"]
   needs_zero_c = entry["args"][17] != 0.0 or name == "custom_bf16_gemm_a_bt"
   reduce_shards = isinstance(a.device, tuple) and a.uop.axis == b.uop.axis == 0 and name == "custom_bf16_gemm_at_b"
-  if reduce_shards:
-    init = Tensor.zeros(N, M, device=a.device, dtype=dtypes.bfloat16) if needs_zero_c else Tensor.invalids(N, M, device=a.device, dtype=dtypes.bfloat16)
-    c = Tensor(init.uop.multi(0), device=a.device)
-  elif isinstance(a.device, tuple) and b.uop.axis == 0:
-    N *= len(a.device)
-    c = (Tensor.zeros if needs_zero_c else Tensor.empty)(N, M, device=a.device[0], dtype=dtypes.bfloat16).shard(a.device, axis=0).reshape(N*M)
-  else:
+  def alloc_output(zero:bool) -> Tensor:
+    if reduce_shards:
+      init = (Tensor.zeros if zero else Tensor.invalids)(N, M, device=a.device, dtype=dtypes.bfloat16)
+      return Tensor(init.uop.multi(0), device=a.device)
+    if isinstance(a.device, tuple) and b.uop.axis == 0:
+      return (Tensor.zeros if zero else Tensor.empty)(N * len(a.device), M, device=a.device[0], dtype=dtypes.bfloat16).shard(a.device, axis=0).reshape(N*M*len(a.device))
     assert isinstance(a.device, str), f"{name} only supports tuple devices when B is sharded on axis 0, got axis={b.uop.axis}"
-    c = (Tensor.zeros if needs_zero_c else Tensor.empty)(M*N, device=a.device, dtype=dtypes.bfloat16)
+    return (Tensor.zeros if zero else Tensor.empty)(M*N, device=a.device, dtype=dtypes.bfloat16)
+  d = alloc_output(False)
+  c = alloc_output(True) if needs_zero_c else d
+  if isinstance(a.device, tuple) and b.uop.axis == 0 and not reduce_shards: N *= len(a.device)
   ws = Tensor.zeros(1024 * 1024 * 1024, device=a.device, dtype=dtypes.uint8)
   flags = Tensor.zeros(1024 * 1024, device=a.device, dtype=dtypes.uint8)
   fxn = functools.partial(_custom_bf16_gemm, name=name, dname=a.device[0] if isinstance(a.device, tuple) else a.device)
-  out = Tensor.custom_kernel(c, c, a, b, ws, flags, fxn=fxn, grad_fxn=_custom_bf16_gemm_bw)[0]
+  out = Tensor.custom_kernel(d, c, a, b, ws, flags, fxn=fxn, grad_fxn=_custom_bf16_gemm_bw)[0]
   if reduce_shards: return out.reshape(len(a.device), N, M).permute(0, 2, 1).sum(0)
   return out.reshape(N, M).T
 
