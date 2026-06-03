@@ -2613,6 +2613,7 @@ def build_kernel(batch, M, N, K, dtype):
 
 @functools.cache
 def custom_asm_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
+  print(A.shape, B.shape)
   batch, M, K = A.shape
   K2, N = B.shape[(1 if B.ndim == 3 else 0):]
   assert K == K2
@@ -2691,8 +2692,31 @@ def _asm_bf16_gemm_dt(a:Tensor, b:Tensor, name:str) -> Tensor:
   ws = Tensor.zeros(1024 * 1024 * 1024, device=a.device, dtype=dtypes.uint8)
   flags = Tensor.zeros(1024 * 1024, device=a.device, dtype=dtypes.uint8)
   fxn = functools.partial(_custom_bf16_gemm, name=name, dname=a.device)
-  out = Tensor.custom_kernel(d, a, b, ws, flags, fxn=fxn)[0]
+  out = Tensor.custom_kernel(d, a, b, ws, flags, fxn=fxn, grad_fxn=functools.partial(_asm_bf16_gemm_dt_bw, name=name))[0]
   return out.reshape(N, M)
+
+def _bw_gemm(a:Tensor, b:Tensor) -> Tensor:
+  return asm_gemm(a, b) if can_use_asm_gemm(a, b) else a @ b
+
+def _asm_bf16_gemm_dt_bw(gradient:UOp, call:UOp, *, name:str):
+  _, a, b, _, _ = call.src[1:]
+  assert all_same([gradient.device, a.device, b.device]), f"{name} backward requires same-device inputs"
+  entry = _BF16_GEMMS[name]
+  M, N = entry["out_shape"]
+  g = Tensor(gradient, device=gradient.device).reshape(N, M)
+  a_t, b_t = Tensor(a, device=a.device), Tensor(b, device=b.device)
+  match name:
+    case "custom_bf16_gemm_a_bt":
+      # y = (a @ b.T).T, so da = g.T @ b and db = g @ a.
+      grad_a, grad_b = _bw_gemm(g.T, b_t), _bw_gemm(g, a_t)
+    case "custom_bf16_gemm_at_bt":
+      # y = b @ a, so da = b.T @ g and db = g @ a.T.
+      grad_a, grad_b = _bw_gemm(b_t.T, g), _bw_gemm(g, a_t.T)
+    case "custom_bf16_gemm_at_b":
+      # y = b.T @ a, so da = b @ g and db = a @ g.T.
+      grad_a, grad_b = _bw_gemm(b_t, g), _bw_gemm(a_t, g.T)
+    case _: raise AssertionError(f"unknown Stream-K GEMM {name}")
+  return (None, grad_a.uop, grad_b.uop, None, None)
 
 def asm_gemm_a_bt_dt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_a_bt")
 def asm_gemm_at_bt_dt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_bt")
