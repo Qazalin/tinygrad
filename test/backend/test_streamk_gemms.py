@@ -50,23 +50,23 @@ class TestStreamKGEMMs(unittest.TestCase):
       self.skipTest("stream-k gemms are only for real cdna4")
 
   def test_a_bt_dt(self):
-    run_streamk_gemm((128256, 4096), (16384, 4096), asm_gemm_a_bt_dt, lambda a, b: (a @ b.T).T)
+    run_streamk_gemm((16384, 4096), (128256, 4096), asm_gemm_a_bt_dt, lambda a, b: (a @ b.T).T)
 
   @needs_second_gpu
   def test_a_bt_dt_multi_b_axis0(self):
     Tensor.manual_seed(0)
     devs = tuple(f"{Device.DEFAULT}:{i}" for i in range(2))
-    a0 = Tensor.randn((128256, 4096), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16)
-    b0 = Tensor.randn((2 * 16384, 4096), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16)
+    a0 = Tensor.randn((2 * 16384, 4096), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16)
+    b0 = Tensor.randn((128256, 4096), dtype=dtypes.float).sub(0.5).cast(dtypes.bfloat16)
     with Context(DEBUG=0): Tensor.realize(a0, b0)
-    a, b = a0.shard(devs, axis=None), b0.shard(devs, axis=0)
+    a, b = a0.shard(devs, axis=0), b0.shard(devs, axis=None)
     y = asm_gemm_a_bt_dt(a, b)
-    ref = asm_gemm(b, a.T)
+    ref = asm_gemm(a, b.T).T
     Tensor.realize(y, ref)
     assert y.allclose(ref, atol=2e-1, rtol=1e-2).item()
 
   def test_a_bt_dt_bw(self):
-    run_streamk_gemm_bw((128256, 4096), (16384, 4096), asm_gemm_a_bt_dt, lambda a, b: (a @ b.T).T, ref_bw_a_bt_dt)
+    run_streamk_gemm_bw((16384, 4096), (128256, 4096), asm_gemm_a_bt_dt, lambda a, b: (a @ b.T).T, ref_bw_a_bt_dt)
 
 if __name__ == "__main__":
   unittest.main()
