@@ -2735,7 +2735,8 @@ def _asm_bf16_gemm_dt(a:Tensor, b:Tensor, name:str) -> Tensor:
   ws = Tensor.empty(1024 * 1024 * 1024, device=a.device, dtype=dtypes.uint8)
   fxn = functools.partial(_custom_bf16_gemm, name=name, dname=dname)
   flags = Tensor.custom_kernel(Tensor.empty(1024 * 1024, device=a.device, dtype=dtypes.uint8), fxn=_zero_kernel)[0]
-  out = Tensor.custom_kernel(d, a, b, ws, flags, fxn=fxn, grad_fxn=functools.partial(_asm_bf16_gemm_dt_bw, name=name))[0]
+  out = Tensor.custom_kernel(d, a, b, ws, flags, fxn=fxn, grad_fxn=functools.partial(_asm_bf16_gemm_dt_bw, name=name))[0] if STREAMK_USE_BINARY.value else \
+    Tensor.custom_kernel(d, logical_a, logical_b, fxn=functools.partial(custom_asm_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
   if k_sharded: out = out.sum(0)
   out = out.squeeze(0) if squeeze else out
   if unfold_batch: out = out.reshape(orig_batch, -1, out.shape[-1])
@@ -2766,13 +2767,12 @@ def _asm_bf16_gemm_dt_bw(gradient:UOp, call:UOp, *, name:str):
   return (None, grad_a.uop, grad_b.uop, None, None)
 
 def asm_gemm_a_bt_dt(a:Tensor, b:Tensor) -> Tensor:
-  if not STREAMK_USE_BINARY.value: return asm_gemm(a, b.T).T
   a_flat = a.reshape(-1, a.shape[-1]) if a.ndim == 3 else a
   return _asm_bf16_gemm_dt(b, a_flat, "custom_bf16_gemm_a_bt").T
 def asm_gemm_at_bt_dt(a:Tensor, b:Tensor) -> Tensor:
-  return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_bt") if STREAMK_USE_BINARY.value else asm_gemm(b, a)
+  return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_bt")
 def asm_gemm_at_b_dt(a:Tensor, b:Tensor) -> Tensor:
-  return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_b") if STREAMK_USE_BINARY.value else asm_gemm(b.T, a)
+  return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_b")
 
 # ** FP8 GEMM custom kernel
 
