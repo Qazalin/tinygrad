@@ -2679,7 +2679,27 @@ def _custom_bf16_gemm(D:UOp, A:UOp, B:UOp, WS:UOp, Flags:UOp, *, name:str, dname
                   arg=KernelInfo(name, estimates=Estimates(ops=2*M*N*K, mem=(M*N + prod(A.shape) + prod(B.shape))*2)))
   source, binary = _load_bf16_gemm_source_and_binary(name)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
-                                UOp(Ops.SOURCE, arg=source), UOp(Ops.BINARY, arg=binary)))
+                                 UOp(Ops.SOURCE, arg=source), UOp(Ops.BINARY, arg=binary)))
+
+@functools.cache
+def _custom_bf16_gemm_a_bt_logical(D:UOp, A:UOp, B:UOp, WS:UOp, Flags:UOp, *, dname:str) -> UOp:
+  # Logical asm_gemm is A @ B. This Stream-K kernel computes B.T @ A.T with the transposes baked in,
+  # storing the same row-major physical output for the LLaMA logits shape.
+  entry = _BF16_GEMMS["custom_bf16_gemm_a_bt"]
+  M, N = entry["out_shape"]
+  K = entry["args"][7]
+  assert A.shape == (1, N, K), A.shape
+  assert B.shape[0] == K and B.shape[1] % len(D.device if isinstance(D.device, tuple) else (D.device,)) == 0, B.shape
+  grid = tuple((g + l - 1) // l for g, l in zip(entry["global_size"], entry["block"]))
+  lidx, gidx = UOp.special(entry["block"][0], "lidx0"), UOp.special(grid[0], "gidx0")
+  sink = UOp.sink(D.base, B.base, A.base, WS.base, Flags.base, lidx, gidx,
+                  arg=KernelInfo("custom_bf16_gemm_a_bt", estimates=Estimates(ops=2*M*N*K, mem=(M*N + prod(A.shape) + prod(B.shape))*2)))
+  source, binary = _load_bf16_gemm_source_and_binary("custom_bf16_gemm_a_bt")
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                 UOp(Ops.SOURCE, arg=source), UOp(Ops.BINARY, arg=binary)))
+
+def _custom_gemm_bw_with_ws_flags(gradient:UOp, kernel:UOp):
+  return custom_gemm_bw(gradient, kernel.replace(src=kernel.src[:4])) + (None, None)
 
 def _asm_bf16_gemm_dt(a:Tensor, b:Tensor, name:str) -> Tensor:
   entry = _BF16_GEMMS[name]
@@ -2911,7 +2931,14 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
       bw = functools.partial(custom_gemm_bw, n_scales=len(scales), has_grad_amax=grad_amax_state is not None, has_w_post=w_post_scale is not None)
       out = Tensor.custom_kernel(out, a, b.T, *scales, *extra, fxn=fxn, grad_fxn=bw)[0]
     else:
-      out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_asm_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
+      local_N = N//len(a.device) if n_sharded else N
+      if a.dtype == dtypes.bfloat16 and batch == 1 and M == 16384 and K == 4096 and local_N == 128256 and not k_sharded and not m_sharded:
+        ws = Tensor.zeros(1024 * 1024 * 1024, device=a.device, dtype=dtypes.uint8)
+        flags = Tensor.zeros(1024 * 1024, device=a.device, dtype=dtypes.uint8)
+        out = Tensor.custom_kernel(out, a, b, ws, flags, fxn=functools.partial(_custom_bf16_gemm_a_bt_logical, dname=dname),
+                                   grad_fxn=_custom_gemm_bw_with_ws_flags)[0]
+      else:
+        out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_asm_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
   else:
     out = Tensor.custom_kernel(out, a, b, fxn=custom_uop_gemm, grad_fxn=custom_gemm_bw)[0]
   if k_sharded: out = out.sum(0)
