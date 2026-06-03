@@ -2613,7 +2613,7 @@ def build_kernel(batch, M, N, K, dtype):
 
 @functools.cache
 def custom_asm_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
-  print(A.shape, B.shape)
+  print("using bf16 gemm for", A.shape, B.shape)
   batch, M, K = A.shape
   K2, N = B.shape[(1 if B.ndim == 3 else 0):]
   assert K == K2
