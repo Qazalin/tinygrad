@@ -269,8 +269,8 @@ class FlatTransformer:
     x = rmsnorm_weighted(h, self.norm.weight, self.norm.eps)
     y = self.output[0]
     if ASM_GEMM and x.dtype == y.dtype == dtypes.bfloat16 and x.uop.shard_shape == (2, 8192, 4096) and y.uop.shard_shape == (128256, 4096):
-      from extra.gemm.cdna_asm_gemm import asm_gemm
-      logits = asm_gemm(x.reshape(-1, x.shape[-1]), y.T).reshape(*x.shape[:-1], y.shape[0])
+      from extra.gemm.cdna_asm_gemm import asm_gemm_a_bt_dt
+      logits = asm_gemm_a_bt_dt(y, x.reshape(-1, x.shape[-1])).reshape(*x.shape[:-1], y.shape[0])
     else:
       logits = matmul(x, y, fp8=False)[0]
     return logits
