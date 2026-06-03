@@ -2670,13 +2670,13 @@ def _load_bf16_gemm_source_and_binary(name:str) -> tuple[str, bytes]:
     return text, pathlib.Path(fout.name).read_bytes()
 
 @functools.cache
-def _custom_bf16_gemm(D:UOp, A:UOp, B:UOp, WS:UOp, Flags:UOp, *, name:str, dname:str) -> UOp:
+def _custom_bf16_gemm(D:UOp, A:UOp, B:UOp, WS:UOp, *rest:UOp, name:str, dname:str) -> UOp:
   entry = _BF16_GEMMS[name]
   M, N = entry["out_shape"]
   K = entry["args"][7]
   grid = tuple((g + l - 1) // l for g, l in zip(entry["global_size"], entry["block"]))
   lidx, gidx = UOp.special(entry["block"][0], "lidx0"), UOp.special(grid[0], "gidx0")
-  sink = UOp.sink(D.base, A.base, B.base, WS.base, Flags.base, lidx, gidx,
+  sink = UOp.sink(D.base, A.base, B.base, WS.base, *(x.base for x in rest), lidx, gidx,
                   arg=KernelInfo(name, estimates=Estimates(ops=2*M*N*K, mem=(M*N + prod(A.shape) + prod(B.shape))*2)))
   source, binary = _load_bf16_gemm_source_and_binary(name)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
@@ -2733,8 +2733,8 @@ def _asm_bf16_gemm_dt(a:Tensor, b:Tensor, name:str) -> Tensor:
     assert a.shape == entry["a_shape"] and b.shape == entry["b_shape"], f"{name} only supports A{entry['a_shape']} B{entry['b_shape']}, got A{a.shape} B{b.shape}"
     dname = a.device
   ws = Tensor.empty(1024 * 1024 * 1024, device=a.device, dtype=dtypes.uint8)
-  flags = Tensor.custom_kernel(Tensor.empty(1024 * 1024, device=a.device, dtype=dtypes.uint8), fxn=_zero_kernel)[0]
   fxn = functools.partial(_custom_bf16_gemm, name=name, dname=dname)
+  flags = Tensor.custom_kernel(Tensor.empty(1024 * 1024, device=a.device, dtype=dtypes.uint8), fxn=_zero_kernel)[0]
   out = Tensor.custom_kernel(d, a, b, ws, flags, fxn=fxn, grad_fxn=functools.partial(_asm_bf16_gemm_dt_bw, name=name))[0]
   if k_sharded: out = out.sum(0)
   out = out.squeeze(0) if squeeze else out
@@ -2745,7 +2745,7 @@ def _bw_gemm(a:Tensor, b:Tensor) -> Tensor:
   return asm_gemm(a, b) if can_use_asm_gemm(a, b) else a @ b
 
 def _asm_bf16_gemm_dt_bw(gradient:UOp, call:UOp, *, name:str):
-  _, a, b, _, _ = call.src[1:]
+  _, a, b, *_ = call.src[1:]
   assert all_same([gradient.device, a.device, b.device]), f"{name} backward requires same-device inputs"
   entry = _BF16_GEMMS[name]
   M, N = entry["out_shape"]
