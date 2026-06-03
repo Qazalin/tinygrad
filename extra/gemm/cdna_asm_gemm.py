@@ -2711,7 +2711,7 @@ def _asm_bf16_gemm_dt_bw(gradient:UOp, call:UOp, *, name:str):
   assert all_same([gradient.device, a.device, b.device]), f"{name} backward requires same-device inputs"
   entry = _BF16_GEMMS[name]
   M, N = entry["out_shape"]
-  g = Tensor(gradient, device=gradient.device).reshape(N, M)
+  g = Tensor(gradient, device=gradient.device) if isinstance(gradient.device, tuple) else Tensor(gradient, device=gradient.device).reshape(N, M)
   a_t, b_t = Tensor(a, device=a.device), Tensor(b, device=b.device)
   match name:
     case "custom_bf16_gemm_a_bt":
