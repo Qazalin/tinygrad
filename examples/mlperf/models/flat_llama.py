@@ -266,7 +266,9 @@ class FlatTransformer:
       for name, new_val in zip(amax_names, ret[:len(amax_names)]):
         a[name][i].assign(new_val)
 
-    logits = matmul(rmsnorm_weighted(h, self.norm.weight, self.norm.eps), self.output[0], fp8=False)[0]
+    x = rmsnorm_weighted(h, self.norm.weight, self.norm.eps)
+    y = self.output[0]
+    logits = matmul(x, y, fp8=False)[0]
     return logits
 
 def _get_pads(uop:UOp) -> list[UOp]:

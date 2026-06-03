@@ -2684,16 +2684,24 @@ def _custom_bf16_gemm(D:UOp, A:UOp, B:UOp, WS:UOp, Flags:UOp, *, name:str, dname
 def _asm_bf16_gemm_dt(a:Tensor, b:Tensor, name:str) -> Tensor:
   entry = _BF16_GEMMS[name]
   assert a.dtype == b.dtype == dtypes.bfloat16, f"{name} only supports bf16, got {a.dtype=} {b.dtype=}"
-  assert isinstance(a.device, str) and isinstance(b.device, str), f"{name} does not support tuple devices yet"
-  assert a.shape == entry["a_shape"] and b.shape == entry["b_shape"], f"{name} only supports A{entry['a_shape']} B{entry['b_shape']}, got A{a.shape} B{b.shape}"
   assert a.device == b.device, f"{name} requires same device, got {a.device=} {b.device=}"
   M, N = entry["out_shape"]
-  d = Tensor.empty(M*N, device=a.device, dtype=dtypes.bfloat16)
+  if isinstance(a.device, tuple):
+    assert name == "custom_bf16_gemm_a_bt", f"{name} does not support tuple devices yet"
+    assert a.uop.axis is None and b.uop.axis == 0, f"{name} only supports replicated A and axis-0 sharded B, got {a.uop.axis=} {b.uop.axis=}"
+    assert a.shape == entry["a_shape"] and b.shape == (entry["b_shape"][0] * len(b.device), entry["b_shape"][1]), \
+      f"{name} only supports A{entry['a_shape']} B{(entry['b_shape'][0] * len(b.device), entry['b_shape'][1])}, got A{a.shape} B{b.shape}"
+    d = Tensor(Tensor.invalids(N, M, dtype=dtypes.bfloat16, device=a.device).uop.multi(0), device=a.device)
+    dname = a.device[0]
+  else:
+    assert a.shape == entry["a_shape"] and b.shape == entry["b_shape"], f"{name} only supports A{entry['a_shape']} B{entry['b_shape']}, got A{a.shape} B{b.shape}"
+    d = Tensor.empty(M*N, device=a.device, dtype=dtypes.bfloat16)
+    dname = a.device
   ws = Tensor.zeros(1024 * 1024 * 1024, device=a.device, dtype=dtypes.uint8)
   flags = Tensor.zeros(1024 * 1024, device=a.device, dtype=dtypes.uint8)
-  fxn = functools.partial(_custom_bf16_gemm, name=name, dname=a.device)
+  fxn = functools.partial(_custom_bf16_gemm, name=name, dname=dname)
   out = Tensor.custom_kernel(d, a, b, ws, flags, fxn=fxn, grad_fxn=functools.partial(_asm_bf16_gemm_dt_bw, name=name))[0]
-  return out.reshape(N, M)
+  return out if isinstance(a.device, tuple) else out.reshape(N, M)
 
 def _bw_gemm(a:Tensor, b:Tensor) -> Tensor:
   return asm_gemm(a, b) if can_use_asm_gemm(a, b) else a @ b
