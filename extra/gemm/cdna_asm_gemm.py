@@ -3,7 +3,7 @@ from tinygrad import Tensor, Device, dtypes
 from tinygrad.dtype import AddrSpace
 from tinygrad.uop.ops import UOp, Ops, KernelInfo, AxisType
 from tinygrad.renderer import Estimates
-from tinygrad.helpers import getenv, all_same, DEBUG, prod
+from tinygrad.helpers import getenv, all_same, DEBUG, prod, ContextVar
 from tinygrad.runtime.support.compiler_amd import HIPCCCompiler
 from tinygrad.runtime.autogen.amd.cdna.ins import *
 from examples.mlperf.models.flat_llama import FP8_DTYPE, FP8_GRAD_DTYPE, quantize_fp8
@@ -2643,6 +2643,7 @@ _BF16_GEMMS = {
     "a_shape": (16384, 4096), "b_shape": (16384, 128256), "out_shape": (4096, 128256),
     "args": (1,0,1073872912,8016,4096,128256,1,16384,4096,0,4096,0,4096,0,128256,0,1.0,0.0,256,16777216,0,2052096,256,8016,8016,0,0,0.0,0.0,0)},
 }
+STREAMK_USE_BINARY = ContextVar("STREAMK_USE_BINARY", getenv("STREAMK_USE_BINARY", 0))
 
 def _bf16_scalar_replacements(entry:dict) -> dict[str, str]:
   import struct
@@ -2680,6 +2681,10 @@ def _custom_bf16_gemm(D:UOp, A:UOp, B:UOp, WS:UOp, Flags:UOp, *, name:str, dname
   source, binary = _load_bf16_gemm_source_and_binary(name)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.DEVICE, arg=dname), UOp(Ops.LINEAR, src=(*sink.src, sink)),
                                  UOp(Ops.SOURCE, arg=source), UOp(Ops.BINARY, arg=binary)))
+
+def _zero_kernel(out:UOp) -> UOp:
+  i = UOp.range(out.numel(), 0)
+  return out.flatten()[i].store(0).end(i).sink(arg=KernelInfo(name="zero"))
 
 def _asm_bf16_gemm_dt(a:Tensor, b:Tensor, name:str) -> Tensor:
   entry = _BF16_GEMMS[name]
@@ -2727,8 +2732,8 @@ def _asm_bf16_gemm_dt(a:Tensor, b:Tensor, name:str) -> Tensor:
   else:
     assert a.shape == entry["a_shape"] and b.shape == entry["b_shape"], f"{name} only supports A{entry['a_shape']} B{entry['b_shape']}, got A{a.shape} B{b.shape}"
     dname = a.device
-  ws = Tensor.zeros(1024 * 1024 * 1024, device=a.device, dtype=dtypes.uint8)
-  flags = Tensor.zeros(1024 * 1024, device=a.device, dtype=dtypes.uint8)
+  ws = Tensor.empty(1024 * 1024 * 1024, device=a.device, dtype=dtypes.uint8)
+  flags = Tensor.custom_kernel(Tensor.empty(1024 * 1024, device=a.device, dtype=dtypes.uint8), fxn=_zero_kernel)[0]
   fxn = functools.partial(_custom_bf16_gemm, name=name, dname=dname)
   out = Tensor.custom_kernel(d, a, b, ws, flags, fxn=fxn, grad_fxn=functools.partial(_asm_bf16_gemm_dt_bw, name=name))[0]
   if k_sharded: out = out.sum(0)
@@ -2761,13 +2766,13 @@ def _asm_bf16_gemm_dt_bw(gradient:UOp, call:UOp, *, name:str):
   return (None, grad_a.uop, grad_b.uop, None, None)
 
 def asm_gemm_a_bt_dt(a:Tensor, b:Tensor) -> Tensor:
-  if not getenv("STREAMK_USE_BINARY", 0): return asm_gemm(a, b.T).T
+  if not STREAMK_USE_BINARY.value: return asm_gemm(a, b.T).T
   a_flat = a.reshape(-1, a.shape[-1]) if a.ndim == 3 else a
-  return _asm_bf16_gemm_dt(b, a_flat, "custom_bf16_gemm_a_bt")
+  return _asm_bf16_gemm_dt(b, a_flat, "custom_bf16_gemm_a_bt").T
 def asm_gemm_at_bt_dt(a:Tensor, b:Tensor) -> Tensor:
-  return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_bt") if getenv("STREAMK_USE_BINARY", 0) else asm_gemm(b, a)
+  return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_bt") if STREAMK_USE_BINARY.value else asm_gemm(b, a)
 def asm_gemm_at_b_dt(a:Tensor, b:Tensor) -> Tensor:
-  return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_b") if getenv("STREAMK_USE_BINARY", 0) else asm_gemm(b.T, a)
+  return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_b") if STREAMK_USE_BINARY.value else asm_gemm(b.T, a)
 
 # ** FP8 GEMM custom kernel
 
