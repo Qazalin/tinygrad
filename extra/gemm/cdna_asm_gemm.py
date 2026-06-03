@@ -2760,9 +2760,12 @@ def _asm_bf16_gemm_dt_bw(gradient:UOp, call:UOp, *, name:str):
     case _: raise AssertionError(f"unknown Stream-K GEMM {name}")
   return (None, grad_a.uop, grad_b.uop, None, None)
 
-def asm_gemm_a_bt_dt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_a_bt")
-def asm_gemm_at_bt_dt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_bt")
-def asm_gemm_at_b_dt(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_b")
+def asm_gemm_a_bt_dt(a:Tensor, b:Tensor) -> Tensor:
+  return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_a_bt") if getenv("STREAMK_USE_BINARY", 0) else asm_gemm(b, a.T)
+def asm_gemm_at_bt_dt(a:Tensor, b:Tensor) -> Tensor:
+  return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_bt") if getenv("STREAMK_USE_BINARY", 0) else asm_gemm(b, a)
+def asm_gemm_at_b_dt(a:Tensor, b:Tensor) -> Tensor:
+  return _asm_bf16_gemm_dt(a, b, "custom_bf16_gemm_at_b") if getenv("STREAMK_USE_BINARY", 0) else asm_gemm(b.T, a)
 
 # ** FP8 GEMM custom kernel
 
