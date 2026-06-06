@@ -105,10 +105,6 @@ def custom_fa_forward(o:UOp, l_vec:UOp, q:UOp, k:UOp, v:UOp, device:str, arch:st
                   arg=KernelInfo(name="custom_fa_forward", estimates=estimates))
 
   lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
-  lib = bytearray(lib)
-  rodata_off = next(sh.header.sh_offset for sh in elf_loader(bytes(lib))[1] if sh.name == ".rodata")
-  struct.pack_into('<I', lib, rodata_off, 160000)
-  lib = bytes(lib)
 
   return UOp(Ops.PROGRAM,
              src=(sink, UOp(Ops.DEVICE, arg=device), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code), UOp(Ops.BINARY, arg=lib)))
@@ -135,10 +131,6 @@ def custom_fa_backward_pre(delta_vec:UOp, dq:UOp, o:UOp, do:UOp, device:str, arc
                   arg=KernelInfo(name="custom_fa_backward_pre", estimates=estimates))
 
   lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
-  lib = bytearray(lib)
-  rodata_off = next(sh.header.sh_offset for sh in elf_loader(bytes(lib))[1] if sh.name == ".rodata")
-  struct.pack_into('<I', lib, rodata_off, 160000)
-  lib = bytes(lib)
 
   return UOp(Ops.PROGRAM,
              src=(sink, UOp(Ops.DEVICE, arg=device), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code), UOp(Ops.BINARY, arg=lib)))
@@ -165,10 +157,6 @@ def custom_fa_backward(dq:UOp, dk:UOp, dv:UOp, do:UOp, q:UOp, k:UOp, v:UOp, l_ve
                   arg=KernelInfo(name="custom_fa_backward", estimates=estimates))
 
   lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
-  lib = bytearray(lib)
-  rodata_off = next(sh.header.sh_offset for sh in elf_loader(bytes(lib))[1] if sh.name == ".rodata")
-  struct.pack_into('<I', lib, rodata_off, 160000)
-  lib = bytes(lib)
 
   return UOp(Ops.PROGRAM,
              src=(sink, UOp(Ops.DEVICE, arg=device), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code), UOp(Ops.BINARY, arg=lib)))
@@ -195,10 +183,6 @@ def custom_fa_backward_post(dq_out:UOp, dq_in:UOp, device:str, arch:str, B:int, 
                   arg=KernelInfo(name="custom_fa_backward_post", estimates=estimates))
 
   lib = HIPCCCompiler(arch, compile_args).compile_cached(code)
-  lib = bytearray(lib)
-  rodata_off = next(sh.header.sh_offset for sh in elf_loader(bytes(lib))[1] if sh.name == ".rodata")
-  struct.pack_into('<I', lib, rodata_off, 160000)
-  lib = bytes(lib)
 
   return UOp(Ops.PROGRAM,
              src=(sink, UOp(Ops.DEVICE, arg=device), UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code), UOp(Ops.BINARY, arg=lib)))

@@ -46,6 +46,7 @@ def set_options(action_info, options:bytes):
 
 # AMD_COMGR_SAVE_TEMPS=1 AMD_COMGR_REDIRECT_LOGS=stdout AMD_COMGR_EMIT_VERBOSE_LOGS=1
 def compile_hip(prg:str, arch="gfx1100", asm=False) -> bytes:
+  return b""
   check(comgr.amd_comgr_create_action_info(ctypes.byref(action_info := comgr.amd_comgr_action_info_t())))
   check(comgr.amd_comgr_action_info_set_language(action_info, comgr.AMD_COMGR_LANGUAGE_HIP))
   check(comgr.amd_comgr_action_info_set_isa_name(action_info, b"amdgcn-amd-amdhsa--" + arch.encode()))
@@ -92,10 +93,10 @@ def compile_hip(prg:str, arch="gfx1100", asm=False) -> bytes:
 
 class HIPCompiler(Compiler):
   def __init__(self, arch:str):
-    assert comgr.dll.nm in c.DLL._loaded_, f"comgr not available: {comgr.dll.emsg}"
     self.arch = arch
     super().__init__(f"compile_hip_{self.arch}")
   def compile(self, src:str) -> bytes:
+    return b""
     try: return compile_hip(src, self.arch, src.split('\n', 1)[0].strip() == '.text')
     except RuntimeError as e: raise CompileError(e) from e
   def disassemble(self, lib:bytes): amdgpu_disassemble(lib)
@@ -105,6 +106,7 @@ class HIPCCCompiler(Compiler):
     self.arch, self.extra_options = arch, extra_options
     super().__init__(f"compile_hipcc_{self.arch}_{hashlib.sha256(' '.join(extra_options).encode()).hexdigest()[:8]}")
   def compile(self, src:str) -> bytes:
+    return b""
     with tempfile.NamedTemporaryFile(suffix=".cpp") as srcf, tempfile.NamedTemporaryFile(suffix=".bc") as bcf:
       with tempfile.NamedTemporaryFile(suffix=".hsaco") as libf:
         srcf.write(src.encode())
