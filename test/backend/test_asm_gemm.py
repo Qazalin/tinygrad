@@ -148,7 +148,10 @@ class TestGemmLlama(unittest.TestCase):
     if not is_cdna4() or DEV.interface.startswith("MOCK"):
       self.skipTest("very slow on non mi350x")
 
-  def test_empty(self): asm_gemm(Tensor.empty(N:=getenv("N", 4096), N, dtype=self.dtype), Tensor.empty(N, N, dtype=self.dtype)).realize()
+  def test_empty(self):
+    x = Tensor.empty(M:=getenv("M", 4096), K:=getenv("K", 4096), dtype=self.dtype)
+    y = Tensor.empty(K, N:=getenv("N", 4096), dtype=self.dtype)
+    asm_gemm(x, y).realize()
 
   def test_empty_bw(self):
     x = Tensor.empty(1, N:=getenv("N", 4096), N, dtype=self.dtype)
