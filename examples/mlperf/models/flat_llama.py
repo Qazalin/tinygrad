@@ -14,6 +14,7 @@ if __name__ == "__main__":
 from tinygrad import Tensor, nn, function, getenv, dtypes, TinyJit
 from tinygrad.helpers import Timing, colored, GlobalCounters, profile_marker, round_up
 from tinygrad.uop.ops import Ops, UOp
+from tinygrad.schedule.allreduce import handle_reduce_multi_accumulate
 from extra.models.llama import apply_rotary_emb, precompute_freqs_cis
 from extra.llama_kernels.rmsnorm import rmsnorm
 from extra.llama_kernels import FP8_MAX, local_abs_max
@@ -284,6 +285,9 @@ def apply_grad(grad_buf:Tensor, new_grad:UOp):
   pads = _get_pads(new_grad)
   if len(pads) <= 1:
     new_grad = new_grad.cast(grad_buf.dtype)
+    if (accumulated:=handle_reduce_multi_accumulate(grad_buf.uop, new_grad)) is not None:
+      grad_buf.uop = accumulated
+      return
     grad_buf.uop = grad_buf.uop.after(grad_buf.uop.store(grad_buf.uop + new_grad))
     return
   cur = grad_buf.uop
