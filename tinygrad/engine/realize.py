@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace, field
 from tinygrad.helpers import colored, DEBUG, GlobalCounters, ansilen, all_int, TRACEMETA, prod, flatten, Context, getenv
 from tinygrad.helpers import BEAM, size_to_str, time_to_str, VALIDATE_WITH_CPU, PROFILE, ProfilePointEvent, cpu_events
 from tinygrad.dtype import dtypes
-from tinygrad.uop.ops import Ops, PatternMatcher, UOp, UPat, sym_infer, buffers, graph_rewrite, ProgramInfo
+from tinygrad.uop.ops import Ops, PatternMatcher, UOp, UPat, GroupOp, sym_infer, buffers, graph_rewrite, ProgramInfo
 from tinygrad.device import Device, Buffer, MultiBuffer
 from tinygrad.renderer import Estimates
 from tinygrad.codegen import to_program
@@ -160,6 +160,7 @@ def exec_copy(ctx:ExecContext, call:UOp, ast:UOp) -> float|None:
     dest, src = bufs[0].ensure_allocated(), bufs[1].ensure_allocated()
     copy_src = ast.src[0]
     if copy_src.op is Ops.INDEX: copy_src = copy_src.src[0]
+    while copy_src.op in GroupOp.Movement: copy_src = copy_src.src[0]
     if copy_src.op is Ops.SLICE:
       src = src.view(copy_src.arg, ast.dtype, copy_src.src[1].arg*src.dtype.itemsize).ensure_allocated()
     with track_stats(ctx, call, dest.device, [dest, src], ctx.var_vals):

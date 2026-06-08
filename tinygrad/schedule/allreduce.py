@@ -34,7 +34,7 @@ def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
   reduced_chunks:list[UOp] = []
   for i,(s,e) in enumerate(chunks):
     if use_all2all:
-      chunks_on_i = [(buf.mselect(j).reshape((numel,)).shrink(((s,e),)) if j == i else _slice_flat(buf.mselect(j), s, e)).copy_to_device(buf.device[i]) for j in range(ndev)]
+      chunks_on_i = [_slice_flat(buf.mselect(j), s, e).copy_to_device(buf.device[i]) for j in range(ndev)]
       reduced_chunks.append(functools.reduce(lambda x,y: x.alu(red.arg, y), chunks_on_i))
     else:
       chunk, reduced = buf.reshape((numel,)).shrink(((s,e),)), buf.reshape((numel,)).shrink(((s,e),))
