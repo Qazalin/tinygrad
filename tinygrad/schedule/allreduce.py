@@ -1,8 +1,12 @@
 import functools, itertools
 from tinygrad.helpers import all_int, prod, DEBUG, RING, ALL2ALL, getenv
-from tinygrad.uop.ops import UOp, Invalid
+from tinygrad.dtype import dtypes
+from tinygrad.uop.ops import UOp, Invalid, Ops
 
 # *** allreduce implementation ***
+def _slice_flat(buf:UOp, start:int, end:int) -> UOp:
+  return UOp(Ops.SLICE, buf.dtype, (buf, UOp.const(dtypes.weakint, start)), end-start).reshape((end-start,))
+
 def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
   if not isinstance(buf.device, tuple): return None
   assert all_int(buf.shape), f"does not support symbolic shape {buf.shape}"
@@ -30,7 +34,7 @@ def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
   reduced_chunks:list[UOp] = []
   for i,(s,e) in enumerate(chunks):
     if use_all2all:
-      chunks_on_i = [buf.mselect(j).reshape((numel,)).shrink(((s,e),)).copy_to_device(buf.device[i]) for j in range(ndev)]
+      chunks_on_i = [(buf.mselect(j).reshape((numel,)).shrink(((s,e),)) if j == i else _slice_flat(buf.mselect(j), s, e)).copy_to_device(buf.device[i]) for j in range(ndev)]
       reduced_chunks.append(functools.reduce(lambda x,y: x.alu(red.arg, y), chunks_on_i))
     else:
       chunk, reduced = buf.reshape((numel,)).shrink(((s,e),)), buf.reshape((numel,)).shrink(((s,e),))
@@ -44,7 +48,7 @@ def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
   copied_chunks:list[UOp] = []
   for i,rc in enumerate(reduced_chunks):
     if isinstance(red.src[1].arg, str): copied_chunks.append(rc.copy_to_device(red.src[1].arg))
-    elif use_all2all: copied_chunks.append(UOp.mstack(*(rc.copy_to_device(buf.device[j]) for j in range(ndev))))
+    elif use_all2all: copied_chunks.append(UOp.mstack(*(rc if j == i else rc.copy_to_device(buf.device[j]) for j in range(ndev))))
     else:
       chain:list[UOp] = [rc]
       for step in range(ndev-1):

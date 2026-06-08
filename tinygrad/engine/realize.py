@@ -158,6 +158,10 @@ def exec_view(ctx:ExecContext, call:UOp, ast:UOp) -> float|None:
 def exec_copy(ctx:ExecContext, call:UOp, ast:UOp) -> float|None:
   for bufs, device_vars in unwrap_multi(call, resolve_params(call, ctx.input_uops)):
     dest, src = bufs[0].ensure_allocated(), bufs[1].ensure_allocated()
+    copy_src = ast.src[0]
+    if copy_src.op is Ops.INDEX: copy_src = copy_src.src[0]
+    if copy_src.op is Ops.SLICE:
+      src = src.view(copy_src.arg, ast.dtype, copy_src.src[1].arg*src.dtype.itemsize).ensure_allocated()
     with track_stats(ctx, call, dest.device, [dest, src], ctx.var_vals):
       if hasattr(dest.allocator,'_transfer') and dest.allocator.supports_transfer and dest.device.split(":")[0] == src.device.split(":")[0]:
         dest.allocator._transfer(dest._buf, src._buf, dest.nbytes, src_dev=src.allocator.dev, dest_dev=dest.allocator.dev) # type:ignore[attr-defined]
