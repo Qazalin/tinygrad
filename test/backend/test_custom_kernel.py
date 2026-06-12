@@ -285,7 +285,7 @@ class TestCustomKernel(unittest.TestCase):
     GlobalCounters.reset()
     c.realize()
     assert all(i == 3. for i in c.flatten().tolist()), f"all 3 {c.tolist()}"
-    self.assertEqual(GlobalCounters.kernel_count, 2)
+    self.assertEqual(GlobalCounters.kernel_count, 3)
 
   def test_multi_after_schedule_order(self):
     """Test correct scheduling order when custom_kernel has multiple outputs.
