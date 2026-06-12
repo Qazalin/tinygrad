@@ -69,9 +69,14 @@ def _make_buffer_view(src:UOp) -> UOp|None:
 
 def contiguous_mops_to_view(c:UOp, src:UOp):
   """CONTIGUOUS(MOPS(BUFFER)) → CONTIGUOUS(SLICE) when movement ops collapse to a contiguous range."""
+  deps:tuple[UOp, ...] = ()
+  if src.op is Ops.RESHAPE and src.src[0].op is Ops.AFTER:
+    deps = src.src[0].src[1:]
+    src = src.substitute({src.src[0]: src.src[0].src[0]})
+
   buf = src.base
   if buf.op not in {Ops.BUFFER, Ops.SLICE}: return None
-  if src.op is Ops.RESHAPE and src.src[0].op in {Ops.BUFFER, Ops.SLICE}: return None
+  if not deps and src.op is Ops.RESHAPE and src.src[0].op in {Ops.BUFFER, Ops.SLICE}: return None
 
   # no symbolic shape
   if not all_int(c.shape): return None
@@ -86,7 +91,7 @@ def contiguous_mops_to_view(c:UOp, src:UOp):
   while x.op in GroupOp.Movement: x = x.src[0]
   # NOTE: this contiguous is removed because this SLICE/RESHAPE has_buffer_identity
   if x.op is not Ops.MULTI and (view := _make_buffer_view(src)) is not None:
-    return view.contiguous(tag=c.tag)
+    return view.after(*deps, tag=c.tag) if deps else view.contiguous(tag=c.tag)
 
   # for MULTI tensors, use multi_pm to resolve per-shard movement ops, then create SLICE on the resolved result
   if not isinstance(c.device, str):
@@ -94,7 +99,8 @@ def contiguous_mops_to_view(c:UOp, src:UOp):
     resolved = graph_rewrite(src, multi_pm, name="multi_buffer_view")
     if resolved.op is not Ops.MULTI: return None
     if (view := _make_buffer_view(resolved.src[0])) is None: return None
-    return view.multi(resolved.arg).contiguous(tag=c.tag)
+    view = view.multi(resolved.arg)
+    return view.after(*deps, tag=c.tag) if deps else view.contiguous(tag=c.tag)
 
   return None
 
