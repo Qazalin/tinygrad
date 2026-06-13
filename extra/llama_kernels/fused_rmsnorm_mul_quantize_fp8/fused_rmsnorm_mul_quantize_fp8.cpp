@@ -45,6 +45,7 @@ constexpr int VECS_PER_THREAD = ELEMS_PER_THREAD / VEC;    // number of 8-wide v
 extern "C" __global__ __launch_bounds__(THREADS_PER_WG) void
 fused_add_rmsnorm_mul_quantize_fp8(
     __hip_fp8_storage_t*  __restrict__ fp8_out,         // fp8, ROWS*HIDDEN
+    float*                __restrict__ inv_scale_out,
     __hip_bfloat16*       __restrict__ h_out,           // bf16, ROWS*HIDDEN — x + residual (saved for downstream)
     __hip_bfloat16*       __restrict__ x_normed_out,    // bf16, ROWS*HIDDEN
     float*                __restrict__ rrms_out,        // fp32, ROWS
@@ -58,6 +59,7 @@ fused_add_rmsnorm_mul_quantize_fp8(
 extern "C" __global__ __launch_bounds__(THREADS_PER_WG) void
 fused_rmsnorm_mul_quantize_fp8(
     __hip_fp8_storage_t*  __restrict__ fp8_out,         // fp8, ROWS*HIDDEN
+    float*                __restrict__ inv_scale_out,
     __hip_bfloat16*       __restrict__ x_normed_out,    // bf16, ROWS*HIDDEN (saved for rmsnorm bwd)
     float*                __restrict__ rrms_out,        // fp32, ROWS (fp32 to match rmsnorm_bwd.cpp expectation)
     float*                __restrict__ amax_buf,        // fp32, NUM_WG per-WG partials
@@ -71,6 +73,8 @@ fused_rmsnorm_mul_quantize_fp8(
   const int tid = threadIdx.x;
   const int wg  = blockIdx.x;
 
+  const float inv_scale = (static_cast<float>(*amax_state) + 1e-8f) * (1.0f / FP8_MAX);
+  if (blockIdx.x == 0 && threadIdx.x == 0) *inv_scale_out = inv_scale;
   const float scale = FP8_MAX / (static_cast<float>(*amax_state) + 1e-8f);
   const float inv_hidden = 1.0f / static_cast<float>(HIDDEN);
   float local_max = 0.0f;

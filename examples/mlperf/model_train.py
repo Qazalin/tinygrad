@@ -1435,7 +1435,10 @@ def train_llama3():
 
   fp8_amax = [t for ts in model._fp8_amax.values() for t in ts]
   fp8_grad_amax = [t for ts in model._fp8_grad_amax.values() for t in ts] if hasattr(model, "_fp8_grad_amax") else []
-  fp8_inv_scales = list(model._fp8_inv_scale.values()) + list(model._fp8_next_inv_scale.values())
+  fp8_x_inv_scales = [t for ts in model._fp8_x_inv_scale.values() for t in ts] if hasattr(model, "_fp8_x_inv_scale") else []
+  fp8_w_inv_scales = [t for ts in model._fp8_w_inv_scale.values() for t in ts] if hasattr(model, "_fp8_w_inv_scale") else []
+  fp8_grad_inv_scales = [t for ts in model._fp8_grad_inv_scale.values() for t in ts] if hasattr(model, "_fp8_grad_inv_scale") else []
+  fp8_inv_scales = list(model._fp8_inv_scale.values()) + list(model._fp8_next_inv_scale.values()) + fp8_x_inv_scales + fp8_w_inv_scales + fp8_grad_inv_scales
 
   from tinygrad.nn.state import get_state_dict
   model_state = get_state_dict(model)
