@@ -29,6 +29,7 @@ static_assert(HIDDEN % VEC == 0, "HIDDEN must be divisible by VEC");
 extern "C" __global__ __launch_bounds__(THREADS_PER_WG) void
 fused_silu_mul_bwd_w13(
     __hip_fp8_storage_t*  __restrict__ grad_xw13_fp8_out,    // fp8,  2*N_ELEMS
+    float*                __restrict__ inv_scale_out,         // fp32 scalar, delayed grad dequant scale
     float*                __restrict__ grad_amax_buf,        // fp32, NUM_WG per-WG partials
     const __hip_bfloat16* __restrict__ xw13,                 // bf16, 2*N_ELEMS
     const __hip_bfloat16* __restrict__ grad_x2,              // bf16, N_ELEMS
@@ -43,7 +44,9 @@ fused_silu_mul_bwd_w13(
   const int stride_elems = NUM_WG * THREADS_PER_WG * VEC;
 
   const float scale = FP8_MAX / (static_cast<float>(*amax_state) + 1e-8f);
-  const float g_scale = FP8_MAX / (static_cast<float>(*grad_amax_state) + 1e-8f);
+  const float grad_amax = static_cast<float>(*grad_amax_state) + 1e-8f;
+  const float g_scale = FP8_MAX / grad_amax;
+  if (wg == 0 && tid == 0) *inv_scale_out = grad_amax / FP8_MAX;
   float local_max = 0.0f;
 
   for (int base = gid * VEC; base < N_ELEMS; base += stride_elems) {

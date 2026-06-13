@@ -24,9 +24,11 @@ static_assert(HIDDEN % VEC == 0, "HIDDEN must be divisible by VEC (so VEC loads 
 extern "C" __global__ __launch_bounds__(THREADS_PER_WG) void
 fused_silu_mul_cast_amax_w13(
     __hip_fp8_storage_t*  __restrict__ fp8_out,         // fp8, N_ELEMS
+    float*                __restrict__ inv_scale_out,   // fp32 scalar, delayed dequant scale
     float*                __restrict__ amax_buf,        // fp32, NUM_WG (per-WG amaxes)
     const __hip_bfloat16* __restrict__ xw13,            // bf16, 2*N_ELEMS
-    const float*          __restrict__ amax_state)      // fp32 scalar
+    const float*          __restrict__ amax_state,      // fp32 scalar
+    const float*          __restrict__ grad_inv_scale_state) // fp32 scalar, unused fwd, saved for bwd
 {
   __shared__ float sdata[THREADS_PER_WG];
 
@@ -35,7 +37,9 @@ fused_silu_mul_cast_amax_w13(
   const int gid = wg * THREADS_PER_WG + tid;
   const int stride_elems = NUM_WG * THREADS_PER_WG * VEC;
 
-  const float scale = FP8_MAX / (static_cast<float>(*amax_state) + 1e-8f);
+  const float amax = static_cast<float>(*amax_state) + 1e-8f;
+  const float scale = FP8_MAX / amax;
+  if (wg == 0 && tid == 0) *inv_scale_out = amax / FP8_MAX;
   float local_max = 0.0f;
 
   // grid-stride over 8-element groups
