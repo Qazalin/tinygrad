@@ -102,6 +102,10 @@ using G = kittens::group<NUM_WARPS>;
 #define X_SCALE_IS_AMAX 0
 #endif
 
+#ifndef W_SCALE_OFFSET
+#define W_SCALE_OFFSET 0
+#endif
+
 __global__ __launch_bounds__(512, 2) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_ptr, fp8e4m3 *B_ptr
 #if SCALE_MODE & 1
     , float *x_scale_ptr
@@ -364,7 +368,7 @@ __global__ __launch_bounds__(512, 2) void hk_fp8_gemm(bf16 *C_ptr, fp8e4m3 *A_pt
     scale *= x_scale;
 #endif
 #if SCALE_MODE & 2
-    scale *= *w_scale_ptr;
+    scale *= w_scale_ptr[W_SCALE_OFFSET];
 #endif
 #if SCALE_MODE & 4
     scale *= *extra_scale_ptr;
