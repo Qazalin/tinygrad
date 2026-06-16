@@ -102,12 +102,17 @@ def _precompiled_output_redirect(s:UOp, t:UOp) -> UOp|None:
   # how output s lands in the caller's buffer t, or None if it must be copied into t
   # materialize straight into t
   if s.op is Ops.CONTIGUOUS: return t.after(t.store(s.src[0]))
+  # a MULTI over an invalid-init AFTER is still an anonymous write-only output
+  if s.op is Ops.MULTI and _is_invalid_init_after(s.src[0]): return t
   # rebind output storage to t
   if s.op in {Ops.BUFFER, Ops.MULTI} and s.has_buffer_identity(): return t
   return None
 
 def _is_invalid_init_store(base:UOp, dep:UOp) -> bool:
   return dep.op is Ops.STORE and dep.src[0].buf_uop is base.buf_uop and dep.src[1].base.arg is Invalid
+
+def _is_invalid_init_after(x:UOp) -> bool:
+  return x.op is Ops.AFTER and all(_is_invalid_init_store(x.src[0], dep) for dep in x.src[1:])
 
 def transform_precompiled_call(c:UOp) -> UOp|None:
   if not c.arg.precompile: return None
@@ -126,7 +131,7 @@ def transform_precompiled_call(c:UOp) -> UOp|None:
     after_deps:list[UOp] = []
     init_afters:list[UOp] = []
     while s.op is Ops.AFTER:
-      if all(_is_invalid_init_store(s.src[0], x) for x in s.src[1:]): init_afters.append(s)
+      if _is_invalid_init_after(s): init_afters.append(s)
       else: after_deps.extend(s.src[1:])
       s = s.src[0]
     if (placed := _precompiled_output_redirect(s, t)) is not None and s not in subs:
