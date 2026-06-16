@@ -11,6 +11,7 @@ from tinygrad.codegen.opt import Opt
 from tinygrad.schedule.indexing import run_rangeify, BufferizeOpts, IndexingContext, apply_movement_op
 from tinygrad.schedule.multi import multi_pm
 from tinygrad.schedule.allreduce import create_allreduce_function
+from tinygrad.callify import _is_invalid_init_store
 
 # creation can recurse a lot
 import sys
@@ -171,6 +172,10 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 
   # SINK only ever references the base
   (UPat(Ops.SINK, name="x"), lambda x: x.replace(src=tuple(y.base for y in x.src))),
+
+  # don't copy from invalid-init buffers
+  (UPat(Ops.CONTIGUOUS, src=(UPat(Ops.AFTER, name="a"),)),
+   lambda a: a if len(a.src) > 1 and all(_is_invalid_init_store(a.src[0], x) for x in a.src[1:]) else None),
 
   # ** copy rules **
 
