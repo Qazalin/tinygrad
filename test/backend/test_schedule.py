@@ -426,6 +426,30 @@ class TestCopyFolding(unittest.TestCase):
     self.assertEqual(b.uop.numel(), 2)
     self.assertListEqual(b.tolist(), [0, 1])
 
+  def test_shrink_cross_device_copy(self):
+    x = Tensor([1, 2, 3], device="CPU:1").realize()
+    y = x[1:].to("CPU:2")
+    linear, var_vals = check_schedule(y, 1, filter_sink=False)
+    self.assertEqual(linear.src[0].src[2].op, Ops.SLICE)
+    run_linear(linear, var_vals)
+    self.assertListEqual(y.tolist(), [2, 3])
+
+  def test_strided_cross_device_copy_stages(self):
+    x = Tensor([1, 2, 3, 4], device="CPU:1").realize()
+    y = x[::2].to("CPU:2")
+    linear, var_vals = check_schedule(y, 2, filter_sink=False)
+    self.assertEqual([call.src[0].op for call in linear.src], [Ops.SINK, Ops.COPY])
+    run_linear(linear, var_vals)
+    self.assertListEqual(y.tolist(), [1, 3])
+
+  def test_permute_shrink_permute_back_cross_device_copy(self):
+    x = Tensor(np.arange(12).reshape(3, 4), device="CPU:1").realize()
+    y = x.permute(1, 0)[:, 1:3].permute(1, 0).to("CPU:2")
+    linear, var_vals = check_schedule(y, 1, filter_sink=False)
+    self.assertEqual(linear.src[0].src[2].op, Ops.SLICE)
+    run_linear(linear, var_vals)
+    self.assertListEqual(y.tolist(), [[4, 5, 6, 7], [8, 9, 10, 11]])
+
   def test_expanded_copy(self):
     a = Tensor.arange(2)
     view = a.reshape(2, 1).expand(2, 2)

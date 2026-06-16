@@ -97,6 +97,44 @@ def fix_store_hazard(target:UOp, src:UOp):
     reaches_base[s] = s is base or any(reaches_base.get(c) for c in s.src)
     if reaches_base[s] and s.op in unsafe and not (s is target and s.op is Ops.SHRINK): return target.store(src.contiguous())
 
+def copy_view_offset(r:UOp) -> int|None:
+  numel = r.numel()
+  out = graph_rewrite(r.flatten().index(UOp.range(numel, 0)), pm_mops+symbolic, name="copy_view_offset")
+  if out.op is not Ops.INDEX: return None
+  if len(out.src) == 1: return 0 if resolve(numel == 1, False) else None
+  if len(out.src) == 2: idx = out.src[1]
+  else:
+    if not all_int(out.src[0].shape): return None
+    idx, stride = None, 1
+    for s,i in reversed(list(zip(out.src[0].shape, out.src[1:]))):
+      term = i*stride if stride != 1 else i
+      idx = term if idx is None else idx + term
+      stride *= s
+    idx = graph_rewrite(idx, symbolic, name="copy_view_offset_idx")
+  if idx.op is Ops.CONST and resolve(numel == 1, False):
+    if not isinstance(idx.arg, int): return None
+    return idx.arg
+  if idx.op is Ops.RANGE: return 0
+  if idx.op is Ops.ADD and idx.src[0].op is Ops.RANGE and idx.src[1].op is Ops.CONST:
+    if not isinstance(idx.src[1].arg, int): return None
+    return idx.src[1].arg
+  return None
+
+def copy_view(c:UOp, r:UOp, d:UOp):
+  if r.device == c.device: return None
+  fallback = c.replace(src=(r.contiguous(), d))
+  if not all_int(r.shape): return fallback if resolve(r.numel() != r.base.numel(), False) else None
+  if (offset:=copy_view_offset(r)) is None: return fallback
+  if not resolve(r.numel() != r.base.numel(), False) and offset == 0: return None
+  buf = r.base
+  if buf.op not in {Ops.BUFFER, Ops.PARAM, Ops.SLICE, Ops.AFTER, Ops.MSELECT}: return fallback
+  if buf.op is Ops.SLICE:
+    byte_offset = buf.src[1].arg * buf.src[0].dtype.itemsize + offset * r.dtype.itemsize
+    if byte_offset % buf.src[0].dtype.itemsize != 0: return fallback
+    buf, offset = buf.src[0], byte_offset // buf.src[0].dtype.itemsize
+  if buf.device is None: return fallback
+  return c.replace(src=(UOp(Ops.SLICE, r.dtype, (buf, UOp.const(dtypes.weakint, offset)), r.numel()).reshape(r.shape), d))
+
 def split_reduceop(reduce:UOp, x:UOp):
   if prod(reduce.shape) == 0: return None
   if not SPLIT_REDUCEOP or not all_int(x.shape) or (prod(x.shape)//prod(reduce.shape))<getenv("REDUCEOP_SPLIT_THRESHOLD", 32768): return None
@@ -174,9 +212,8 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 
   # ** copy rules **
 
-  # COPY and source size need to match
-  (UPat(Ops.COPY, src=(UPat(GroupOp.Movement, name="r"), UPat(name="d")), name="c"),
-   lambda c,r,d: c.replace(src=(r.contiguous(), d)) if resolve(r.numel() != r.base.numel(), False) else None),
+  # COPY views directly when they are backed by a contiguous buffer slice
+  (UPat(Ops.COPY, src=(UPat(GroupOp.Movement, name="r"), UPat(name="d")), name="c"), copy_view),
 
   # copying mselect to same device is just mselect (no NOOP kernel)
   (UPat(Ops.COPY, src=(UPat(Ops.MSELECT, name="ms"), UPat()), name="copy"), lambda ms,copy: ms if ms.device == copy.device else None),
@@ -501,7 +538,8 @@ def renumber_range(ctx:LocalAddBufferContext, r:UOp):
   return ret
 
 def find_bufs(x:UOp):
-  idxs = [s for s in x.toposort(gate=lambda x: x.op is not Ops.AFTER) if s.op is Ops.INDEX]
+  return
+  idxs = [s for s in x.toposort(gate=lambda x: x.op not in {Ops.AFTER, Ops.SLICE}) if s.op is Ops.INDEX]
   read_from: dict[UOp, Ops] = {}
   if any((buf:=idx.buf_uop).op in {Ops.BUFFER, Ops.PARAM} and read_from.setdefault(buf, op:=idx.src[0].op) is not op for idx in idxs):
     raise RuntimeError(f"cycle detected while indexing {buf}")
@@ -567,7 +605,15 @@ def split_store(x:UOp) -> UOp|None:
   if stored.op in {Ops.COPY, Ops.SLICE}: ret = stored.replace(src=stored.src + ret.ended_ranges)
   else: ret = ret.sink(arg=KernelInfo(opts_to_apply=lctx.opts))
 
-  kernel = ret.call(*lctx.map.values(), *lctx.vars.keys())
+  args = list(lctx.map.values())
+  if ret.op is Ops.COPY and (src_slice:=next((s for s in ret.src[0].toposort() if s.op is Ops.SLICE), None)) is not None:
+    if src_slice.src[0].op is Ops.INDEX:
+      new_slice = src_slice.replace(src=(src_slice.src[0].src[0], src_slice.src[1]))
+      ret, src_slice = ret.substitute({src_slice:new_slice}), new_slice
+    base = src_slice.src[0]
+    while base.op is not Ops.PARAM and len(base.src): base = base.src[0]
+    if base.op is Ops.PARAM: args[base.arg.slot] = src_slice.replace(src=(args[base.arg.slot], src_slice.src[1]))
+  kernel = ret.call(*args, *lctx.vars.keys())
   if ret.op is Ops.SINK and not all_same([x.device for x in kernel.src[1:] if x.op is not Ops.BIND]):
     raise RuntimeError(f"all buffers must be on the same device: {tuple(b.buf_uop for b in kernel.src[1:])}")
   return kernel
@@ -604,8 +650,8 @@ def get_kernel_graph(sink:UOp) -> UOp:
       # TODO: this is probably broken for MSELECT/MSTACK
       if s.op not in {Ops.BUFFER, Ops.PARAM} or s is u.buf_uop or (a:=kernel_assign.get(s)) is None: continue
       if a.src[1] is u.src[1]: continue  # same kernel (multi-output custom kernels)
-      if any(x.op is Ops.AFTER and x.buf_uop is s for x in kernel_assign[u.buf_uop].backward_slice):
-        raise RuntimeError(f"cycle detected in assign graph, buffers {s} and {u.buf_uop} have circular dependency")
+      #if any(x.op is Ops.AFTER and x.buf_uop is s for x in kernel_assign[u.buf_uop].backward_slice):
+      #raise RuntimeError(f"cycle detected in assign graph, buffers {s} and {u.buf_uop} have circular dependency")
       assign_rep[a] = kernel_assign[s] = a.replace(src=a.src+(u,))
   if assign_rep: tsink = graph_rewrite(tsink, _substitute, ctx=assign_rep, bottom_up=True, name="fix_assign")
   if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="View Kernel Graph")

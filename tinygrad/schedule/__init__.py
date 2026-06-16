@@ -8,7 +8,7 @@ from tinygrad.helpers import DEBUG, cpu_profile, TracingKey, SPEC, pluralize, SC
 
 # unwrap VIEW/CAST/etc to find the actual data source (kernel output, buffer, or multi-device op)
 def _unwrap_src(s: UOp) -> UOp:
-  while len(s.src) and s.op not in {Ops.AFTER, Ops.BUFFER, Ops.PARAM, Ops.MSELECT, Ops.MSTACK, Ops.BIND}: s = s.src[0]
+  while len(s.src) and s.op not in {Ops.AFTER, Ops.BUFFER, Ops.PARAM, Ops.MSELECT, Ops.MSTACK, Ops.SLICE, Ops.BIND}: s = s.src[0]
   return s
 
 def _split_after(after: UOp) -> tuple[tuple[UOp, ...], tuple[UOp, ...]]:
@@ -31,7 +31,9 @@ def create_schedule(sched_sink:UOp) -> UOp:
         if k.op is Ops.END: assert k.src[0].op is Ops.CALL, f"END src[0] should be KERNEL, not {k.src[0].op}"
         kernel_deps = k.src[0].src[1:] if k.op is Ops.END else k.src[1:]
         for s in kernel_deps + after_deps:
-          match (s := _unwrap_src(s)).op:
+          s = _unwrap_src(s)
+          if s.op is Ops.SLICE: s = _unwrap_src(s.src[0])
+          match s.op:
             case Ops.AFTER:
               for t in _split_after(s)[0]:
                 children.setdefault(t, []).append(k)
@@ -40,6 +42,7 @@ def create_schedule(sched_sink:UOp) -> UOp:
               for ss in s.src:
                 if ss.op is Ops.MSELECT: ss = ss.src[0]
                 ss = _unwrap_src(ss)
+                if ss.op is Ops.SLICE: ss = _unwrap_src(ss.src[0])
                 if ss.op not in {Ops.BUFFER, Ops.PARAM}:
                   assert ss.op is Ops.AFTER, f"ss.op is not AFTER, it's {ss.op}"
                   for t in _split_after(ss)[0]:
@@ -60,7 +63,8 @@ def create_schedule(sched_sink:UOp) -> UOp:
       else:
         k = rk.src[0] if rk.op is Ops.END else rk
         assert k.op is Ops.CALL, f"unexpected op in queue: {k.op}"
-        buf_uops = tuple(_unwrap_src(s).buf_uop for s in k.src[1:] if s.op is not Ops.BIND)
+        unwrapped = tuple(_unwrap_src(s) for s in k.src[1:] if s.op is not Ops.BIND)
+        buf_uops = tuple(s if k.src[0].op in {Ops.COPY, Ops.SLICE} and s.op is Ops.SLICE else s.buf_uop for s in unwrapped)
         linearized.append(k.src[0].call(*buf_uops, metadata=k.arg.metadata))
       for x in children.get(rk, []):
         in_degree[x] -= 1
