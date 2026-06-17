@@ -352,23 +352,46 @@ pm_remove_bufferize = PatternMatcher([
   (UPat(Ops.END, src=(UPat(Ops.NOOP, name="x"),), allow_any_len=True), lambda x: x),
 ])
 
+def _range_size(r:UOp) -> int|None:
+  return r.src[0].arg if r.op is Ops.RANGE and r.src[0].op is Ops.CONST and isinstance(r.src[0].arg, int) else None
+
+def _index_view_offset(idx:UOp, size:int) -> int|None:
+  if idx.op is not Ops.INDEX: return None
+  if len(idx.src) == 1: return 0 if size == 1 else None
+  if not all_int(idx.src[0].shape): return None
+  lin, stride = None, 1
+  for s,i in reversed(list(zip(idx.src[0].shape, idx.src[1:]))):
+    term = i*stride if stride != 1 else i
+    lin = term if lin is None else lin + term
+    stride *= s
+  lin = graph_rewrite(lin, symbolic, name="late_buffer_view_index")
+  if lin.op is Ops.CONST and size == 1:
+    return lin.arg if isinstance(lin.arg, int) else None
+  if lin.op is Ops.RANGE and _range_size(lin) == size: return 0
+  if lin.op is Ops.ADD and lin.src[0].op is Ops.RANGE and _range_size(lin.src[0]) == size and lin.src[1].op is Ops.CONST:
+    return lin.src[1].arg if isinstance(lin.src[1].arg, int) else None
+  return None
+
 def late_buffer_view(t:UOp, b:UOp):
-  if not (isinstance(b.device, str) and b.device.startswith(("DISK", "TINYFS"))): return b
   shape = b.shape
   size = prod(shape)
 
   # walk up for the INDEX
   x = t
   while not any(u.op is Ops.INDEX for u in x.src):
-    assert x.op not in GroupOp.Elementwise, "can't buffer view elementwise"
+    if x.op in GroupOp.Elementwise or len(x.src) == 0: return b
     x = x.src[0]
   x = next(u for u in x.src if u.op is Ops.INDEX)
   assert x.op is Ops.INDEX, "must be INDEX"
 
-  if len(shape) == 0: offset = x.src[1].arg
-  else: offset = max(sum(idx.vmin for idx in x.src[1:]), 0)
-
-  return b.replace(src=(UOp(Ops.SLICE, t.dtype, (x.src[0], UOp.const(dtypes.weakint, offset)), size),))
+  if (offset:=_index_view_offset(x, size)) is None: return b
+  base = x.src[0].base
+  if base.op is Ops.SLICE:
+    byte_offset = base.src[1].arg * base.src[0].dtype.itemsize + offset * x.dtype.itemsize
+    if byte_offset % base.src[0].dtype.itemsize != 0: return b
+    base, offset = base.src[0], byte_offset // base.src[0].dtype.itemsize
+  if base.op not in {Ops.BUFFER, Ops.PARAM, Ops.STAGE, Ops.AFTER, Ops.MSELECT, Ops.MSTACK}: return b
+  return b.replace(src=(UOp(Ops.SLICE, t.dtype, (base, UOp.const(dtypes.weakint, offset)), size),))
 
 to_bufferview = PatternMatcher([
   (UPat(Ops.STAGE, src=(UPat((Ops.BITCAST, Ops.CONTIGUOUS), name="t"), UPat()), name="b"), late_buffer_view),

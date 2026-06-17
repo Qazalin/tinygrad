@@ -154,9 +154,17 @@ def unwrap_multi(call:UOp, resolved:list[UOp]) -> Iterator[tuple[list[Buffer], d
 
 def exec_view(ctx:ExecContext, call:UOp, ast:UOp) -> float|None:
   resolved = resolve_params(call, ctx.input_uops)
-  bufs = [cast(Buffer, b.buffer) for b in resolved]
-  bv = bufs[1].view(resolved[0].arg, ast.dtype, ast.src[1].arg*bufs[1].dtype.itemsize)
-  with track_stats(ctx, call, bv.device, [bv, bufs[1]], ctx.var_vals): buffers[resolved[0]] = bv
+  src = resolved[1].buffer
+  offset = ast.src[1].arg * ast.src[0].dtype.itemsize
+  if isinstance(src, MultiBuffer):
+    bv = MultiBuffer.__new__(MultiBuffer)
+    bv.bufs = [b.view(resolved[0].arg, ast.dtype, offset) for b in src.bufs]
+    for b,s in zip(bv.bufs, src.bufs):
+      with track_stats(ctx, call, b.device, [b, s], ctx.var_vals): pass
+  else:
+    bv = src.view(resolved[0].arg, ast.dtype, offset)
+    with track_stats(ctx, call, bv.device, [bv, src], ctx.var_vals): pass
+  buffers[resolved[0]] = bv
   return None
 
 def exec_copy(ctx:ExecContext, call:UOp, ast:UOp) -> float|None:
