@@ -99,6 +99,16 @@ def fix_store_hazard(target:UOp, src:UOp):
     reaches_base[s] = s is base or any(reaches_base.get(c) for c in s.src)
     if reaches_base[s] and s.op in unsafe and not (s is target and s.op is Ops.SHRINK): return target.store(src.contiguous())
 
+def view_to_slice(r:UOp) -> UOp|None:
+  if r.op is not Ops.SHRINK or r.src[0].op is not Ops.RESHAPE or len(r.marg) != 1: return None
+  src, (offset, size) = r.src[0].src[0], r.marg[0]
+  if src.op is not Ops.MSELECT or not isinstance(offset, int) or not isinstance(size, int): return None
+  if prod(r.src[0].shape) != prod(src.shape) or size != r.numel(): return None
+  return UOp(Ops.SLICE, r.dtype, (src, UOp.const(dtypes.weakint, offset)), size)
+
+def copy_view_or_contiguous(r:UOp) -> UOp:
+  return s if (s:=view_to_slice(r)) is not None else r.contiguous()
+
 def split_reduceop(reduce:UOp, x:UOp):
   if prod(reduce.shape) == 0: return None
   if not SPLIT_REDUCEOP or not all_int(x.shape) or (prod(x.shape)//prod(reduce.shape))<getenv("REDUCEOP_SPLIT_THRESHOLD", 32768): return None
@@ -178,7 +188,7 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 
   # COPY and source size need to match
   (UPat(Ops.COPY, src=(UPat(GroupOp.Movement, name="r"), UPat(name="d")), name="c"),
-   lambda c,r,d: c.replace(src=(r.contiguous(), d)) if resolve(r.numel() != r.base.numel(), False) else None),
+   lambda c,r,d: c.replace(src=(copy_view_or_contiguous(r), d)) if r.device != c.device and resolve(r.numel() != r.base.numel(), False) else None),
 
   # copying mselect to same device is just mselect (no NOOP kernel)
   (UPat(Ops.COPY, src=(UPat(Ops.MSELECT, name="ms"), UPat()), name="copy"), lambda ms,copy: ms if ms.device == copy.device else None),
@@ -571,6 +581,23 @@ pm_add_range_tags = PatternMatcher([
   (UPat(Ops.RANGE, name="x"), lambda x: x.rtag(())),
 ])
 
+def _copy_slice_src(x:UOp) -> UOp|None:
+  if x.op is Ops.INDEX and x.src[0].op is Ops.SLICE: x = x.src[0]
+  if x.op is not Ops.SLICE or x.src[1].op is not Ops.CONST: return None
+  src = x.src[0].src[0] if x.src[0].op is Ops.INDEX else x.src[0]
+  return x if src is x.src[0] else UOp(Ops.SLICE, x.dtype, (src, x.src[1]), x.arg)
+
+def split_copy_slice(x:UOp) -> UOp|None:
+  if x.ranges: return None
+  store = x.src[0] if x.op is Ops.END else x
+  if store.op is not Ops.STORE or store.src[1].op is not Ops.COPY or (src:=_copy_slice_src(store.src[1].src[0])) is None: return None
+  copy = store.src[1]
+  rngs = sorted(x.ended_ranges if x.op is Ops.END else (), key=lambda r: r.arg)
+  psrc = UOp(Ops.PARAM, src.dtype.ptr(prod(src.max_shape), src.addrspace), arg=ParamArg(1, addrspace=src.addrspace)).reshape(src.max_shape)
+  if src.max_shape != src.shape: psrc = psrc.shrink(tuple((0, s) for s in src.shape))
+  target = store.src[0].src[0] if store.src[0].op is Ops.INDEX else store.src[0]
+  return copy.replace(src=(psrc.index(*rngs), copy.src[1], *rngs)).call(target, src)
+
 def split_store(x:UOp) -> UOp|None:
   # if we have any open ranges here, we don't split
   if x.ranges: return None
@@ -592,6 +619,7 @@ def split_store(x:UOp) -> UOp|None:
   return kernel
 
 split_kernels = PatternMatcher([
+  (UPat((Ops.STORE, Ops.END), name="x"), split_copy_slice),
   (UPat((Ops.STORE, Ops.END), name="x"), split_store),
 ])
 

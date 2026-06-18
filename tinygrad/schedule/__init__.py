@@ -8,7 +8,7 @@ from tinygrad.helpers import DEBUG, cpu_profile, TracingKey, SPEC, pluralize, SC
 
 # unwrap VIEW/CAST/etc to find the actual data source (kernel output, buffer, or multi-device op)
 def _unwrap_src(s: UOp) -> UOp:
-  while len(s.src) and s.op not in {Ops.AFTER, Ops.BUFFER, Ops.PARAM, Ops.MSELECT, Ops.MSTACK, Ops.BIND}: s = s.src[0]
+  while len(s.src) and (s.op not in {Ops.AFTER, Ops.BUFFER, Ops.PARAM, Ops.MSELECT, Ops.MSTACK, Ops.SLICE, Ops.BIND} or (s.op is Ops.SLICE and s.src[0].op is Ops.INDEX)): s = s.src[0]
   return s
 
 def _split_after(after: UOp) -> tuple[tuple[UOp, ...], tuple[UOp, ...]]:
@@ -45,10 +45,10 @@ def create_schedule(sched_sink:UOp) -> UOp:
                   for t in _split_after(ss)[0]:
                     children.setdefault(t, []).append(k)
                     in_degree[k] += 1
-            case Ops.BUFFER | Ops.PARAM | Ops.BIND:
+            case Ops.BUFFER | Ops.PARAM | Ops.SLICE | Ops.BIND:
               pass  # BUFFER/PARAM is already realized, BIND is a bound variable (not a buffer dependency)
             case _:
-              raise RuntimeError(f"input to kernel must be AFTER, BUFFER, PARAM, MSELECT, MSTACK, or BIND, not {s.op}")
+              raise RuntimeError(f"input to kernel must be AFTER, BUFFER, PARAM, MSELECT, MSTACK, SLICE, or BIND, not {s.op}")
 
   with cpu_profile(TracingKey("linearize schedule")):
     queue: deque[UOp] = deque(k for k,v in in_degree.items() if v == 0)
