@@ -469,6 +469,33 @@ class TestCopyFolding(unittest.TestCase):
     b.realize()
     self.assertListEqual(b.tolist(), [[0, 2], [1, 3]])
 
+class TestCPUCrossDeviceCopyFolding(unittest.TestCase):
+  def test_copy_shrink_cross_device_uses_slice(self):
+    x = Tensor([1, 2, 3], device="CPU:1").realize()
+    y = x[1:].to("CPU:2")
+    linear, var_vals = check_schedule(y, 1, filter_sink=False)
+    self.assertEqual([call.src[0].op for call in linear.src], [Ops.COPY])
+    self.assertIs(linear.src[0].src[2].op, Ops.SLICE)
+    run_linear(linear, var_vals)
+    self.assertListEqual(y.tolist(), [2, 3])
+
+  def test_copy_shrink_2d_cross_device_uses_slice(self):
+    x = Tensor(list(range(20)), device="CPU:1").reshape(4, 5).realize()
+    y = x[1:3, :].to("CPU:2")
+    linear, var_vals = check_schedule(y, 1, filter_sink=False)
+    self.assertEqual([call.src[0].op for call in linear.src], [Ops.COPY])
+    self.assertIs(linear.src[0].src[2].op, Ops.SLICE)
+    run_linear(linear, var_vals)
+    self.assertListEqual(y.tolist(), [[5, 6, 7, 8, 9], [10, 11, 12, 13, 14]])
+
+  def test_copy_strided_cross_device_stages(self):
+    x = Tensor([1, 2, 3, 4], device="CPU:1").realize()
+    y = x[::2].to("CPU:2")
+    linear, var_vals = check_schedule(y, 2, filter_sink=False)
+    self.assertEqual([call.src[0].op for call in linear.src], [Ops.SINK, Ops.COPY])
+    run_linear(linear, var_vals)
+    self.assertListEqual(y.tolist(), [1, 3])
+
 class TestUOpBecome(unittest.TestCase):
   def test_setitem_offset(self):
     a = Tensor.full((16,), 0.).contiguous().realize()

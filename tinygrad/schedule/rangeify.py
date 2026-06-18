@@ -99,6 +99,22 @@ def fix_store_hazard(target:UOp, src:UOp):
     reaches_base[s] = s is base or any(reaches_base.get(c) for c in s.src)
     if reaches_base[s] and s.op in unsafe and not (s is target and s.op is Ops.SHRINK): return target.store(src.contiguous())
 
+def copy_view(c:UOp, r:UOp, d:UOp):
+  if not resolve(r.numel() != r.base.numel(), False): return None
+  if not all_int(r.shape) or (offset:=r.contiguous_view_offset()) is None: return c.replace(src=(r.contiguous(), d))
+  buf = r.base
+  if buf.op not in {Ops.BUFFER, Ops.PARAM, Ops.SLICE, Ops.AFTER}: return c.replace(src=(r.contiguous(), d))
+  if buf.op is Ops.SLICE:
+    byte_offset = buf.src[1].arg * buf.src[0].dtype.itemsize + offset * r.dtype.itemsize
+    if byte_offset % buf.src[0].dtype.itemsize != 0: return c.replace(src=(r.contiguous(), d))
+    buf, offset = buf.src[0], byte_offset // buf.src[0].dtype.itemsize
+  if buf.device is None: return c.replace(src=(r.contiguous(), d))
+  from tinygrad.device import Device
+  if isinstance(buf.device, str):
+    if not hasattr(Device[buf.device].allocator, "_offset"): return c.replace(src=(r.contiguous(), d))
+  elif not all(hasattr(Device[dev].allocator, "_offset") for dev in buf.device): return c.replace(src=(r.contiguous(), d))
+  return c.replace(src=(UOp(Ops.SLICE, r.dtype, (buf, UOp.const(dtypes.weakint, offset)), r.numel()).reshape(r.shape), d))
+
 def split_reduceop(reduce:UOp, x:UOp):
   if prod(reduce.shape) == 0: return None
   if not SPLIT_REDUCEOP or not all_int(x.shape) or (prod(x.shape)//prod(reduce.shape))<getenv("REDUCEOP_SPLIT_THRESHOLD", 32768): return None
@@ -176,9 +192,8 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 
   # ** copy rules **
 
-  # COPY and source size need to match
-  (UPat(Ops.COPY, src=(UPat(GroupOp.Movement, name="r"), UPat(name="d")), name="c"),
-   lambda c,r,d: c.replace(src=(r.contiguous(), d)) if resolve(r.numel() != r.base.numel(), False) else None),
+  # COPY views directly when they are backed by a contiguous buffer slice
+  (UPat(Ops.COPY, src=(UPat(GroupOp.Movement, name="r"), UPat(name="d")), name="c"), copy_view),
 
   # copying mselect to same device is just mselect (no NOOP kernel)
   (UPat(Ops.COPY, src=(UPat(Ops.MSELECT, name="ms"), UPat()), name="copy"), lambda ms,copy: ms if ms.device == copy.device else None),
@@ -520,6 +535,7 @@ def renumber_range(ctx:LocalAddBufferContext, r:UOp):
   return ret
 
 def find_bufs(x:UOp):
+  if x.src[1].op in {Ops.COPY, Ops.SLICE}: return None
   idxs = [s for s in x.toposort(gate=lambda x: x.op is not Ops.AFTER) if s.op is Ops.INDEX]
   read_from: dict[UOp, Ops] = {}
   if any((buf:=idx.buf_uop).op in {Ops.BUFFER, Ops.PARAM} and read_from.setdefault(buf, op:=idx.src[0].op) is not op for idx in idxs):
@@ -586,6 +602,11 @@ def split_store(x:UOp) -> UOp|None:
   if stored.op in {Ops.COPY, Ops.SLICE}: ret = stored.replace(src=stored.src + ret.ended_ranges)
   else: ret = ret.sink(arg=KernelInfo(opts_to_apply=lctx.opts))
 
+  if ret.op is Ops.COPY and (src_slice:=next((s for s in ret.src[0].toposort() if s.op is Ops.SLICE), None)) is not None:
+    base = src_slice.src[0].src[0] if src_slice.src[0].op is Ops.INDEX else src_slice.src[0]
+    if base.op is Ops.PARAM:
+      key = list(lctx.map.keys())[base.arg.slot]
+      lctx.map[key] = src_slice.replace(src=(lctx.map[key], src_slice.src[1]))
   kernel = ret.call(*lctx.map.values(), *lctx.vars.keys())
   if ret.op is Ops.SINK and not all_same([x.device for x in kernel.src[1:] if x.op is not Ops.BIND]):
     raise RuntimeError(f"all buffers must be on the same device: {tuple(b.buf_uop for b in kernel.src[1:])}")
