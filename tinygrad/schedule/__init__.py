@@ -18,6 +18,23 @@ def _split_after(after: UOp) -> tuple[tuple[UOp, ...], tuple[UOp, ...]]:
     raise AssertionError(f"AFTER source should be CALL, END, STORE, or AFTER, not {invalid[0].op}")
   return tuple(kernels), tuple(deps)
 
+def _add_kernel_dep(children: dict[UOp, list[UOp]], in_degree: dict[UOp, int], k: UOp, s: UOp):
+  match (s := _unwrap_src(s)).op:
+    case Ops.AFTER:
+      for t in _split_after(s)[0]:
+        children.setdefault(t, []).append(k)
+        in_degree[k] += 1
+    case Ops.MSELECT | Ops.MSTACK:
+      for ss in s.src:
+        if ss.op is Ops.MSELECT: ss = ss.src[0]
+        _add_kernel_dep(children, in_degree, k, ss)
+    case Ops.SLICE:
+      _add_kernel_dep(children, in_degree, k, s.src[0])
+    case Ops.BUFFER | Ops.PARAM | Ops.BIND:
+      pass  # BUFFER/PARAM is already realized, BIND is a bound variable (not a buffer dependency)
+    case _:
+      raise RuntimeError(f"input to kernel must be AFTER, BUFFER, PARAM, MSELECT, MSTACK, SLICE, or BIND, not {s.op}")
+
 def create_schedule(sched_sink:UOp) -> UOp:
   with cpu_profile(TracingKey("toposort sched_sink")):
     # build kernel dependency graph: edges from producer kernel to consumer kernels
@@ -30,25 +47,7 @@ def create_schedule(sched_sink:UOp) -> UOp:
         in_degree.setdefault(k, 0)
         if k.op is Ops.END: assert k.src[0].op is Ops.CALL, f"END src[0] should be KERNEL, not {k.src[0].op}"
         kernel_deps = k.src[0].src[1:] if k.op is Ops.END else k.src[1:]
-        for s in kernel_deps + after_deps:
-          match (s := _unwrap_src(s)).op:
-            case Ops.AFTER:
-              for t in _split_after(s)[0]:
-                children.setdefault(t, []).append(k)
-                in_degree[k] += 1
-            case Ops.MSELECT | Ops.MSTACK:
-              for ss in s.src:
-                if ss.op is Ops.MSELECT: ss = ss.src[0]
-                ss = _unwrap_src(ss)
-                if ss.op not in {Ops.BUFFER, Ops.PARAM}:
-                  assert ss.op is Ops.AFTER, f"ss.op is not AFTER, it's {ss.op}"
-                  for t in _split_after(ss)[0]:
-                    children.setdefault(t, []).append(k)
-                    in_degree[k] += 1
-            case Ops.BUFFER | Ops.PARAM | Ops.SLICE | Ops.BIND:
-              pass  # BUFFER/PARAM is already realized, BIND is a bound variable (not a buffer dependency)
-            case _:
-              raise RuntimeError(f"input to kernel must be AFTER, BUFFER, PARAM, MSELECT, MSTACK, SLICE, or BIND, not {s.op}")
+        for s in kernel_deps + after_deps: _add_kernel_dep(children, in_degree, k, s)
 
   with cpu_profile(TracingKey("linearize schedule")):
     queue: deque[UOp] = deque(k for k,v in in_degree.items() if v == 0)
