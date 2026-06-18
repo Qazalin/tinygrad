@@ -142,6 +142,15 @@ class TestMultiTensor(unittest.TestCase):
       a,b = _test_allreduce(Tensor.rand(256, 256))
       np.testing.assert_almost_equal(a.numpy(), b.numpy(), decimal=5)
 
+  def test_allreduce_all2all_correctness(self):
+    x_np = np.arange(256*256, dtype=np.float32).reshape(256, 256) / 1024
+    expected = sum(x_np[i*64:(i+1)*64] for i in range(4))
+    expected = np.tile(expected, (4, 1))
+    with Context(ALL2ALL=2, RING=0):
+      ts = Tensor(x_np).realize().shard(devices_4, 0).realize()
+      out = Tensor(UOp.allreduce(ts.uop, Ops.ADD, ts.device)).realize()
+      np.testing.assert_allclose(out.numpy(), expected, rtol=1e-6, atol=1e-6)
+
   def test_copy_jit(self):
     @TinyJit
     def copy_tensor(x:Tensor): return (x.to(f"{x.device.split(':')[0]}:1") + 1)
