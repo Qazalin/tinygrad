@@ -137,7 +137,7 @@ mop_cleanup = PatternMatcher([
   (UPat(Ops.RESHAPE, src=(UPat(Ops.RESHAPE, name="x2"), UPat()), name="x"), lambda x,x2: x.replace(src=(x2.src[0], x.src[1]))),
 ])
 
-pm_gather_params = PatternMatcher([ (UPat(Ops.PARAM, name="p"), lambda ctx, p: ctx.append(p)), ])
+pm_gather_params = PatternMatcher([ (UPat(Ops.PARAM, name="p"), lambda ctx, p: ctx.append(p) if p.arg.slot >= 0 else None), ])
 def resolve_function(c:UOp, allow_param_mismatch=True) -> UOp|None:
   if c.arg.precompile: return None
   params: list[UOp] = []
@@ -393,7 +393,7 @@ def limit_bufs(ctx:IndexingContext, root:UOp):
   bufs: set[UOp] = set()
   def gate_input(u:UOp):
     # TODO: add cache to fix n^2
-    if is_load:=(u.op in {Ops.STAGE, Ops.AFTER, Ops.PARAM, Ops.MSELECT, Ops.MSTACK, Ops.DEFINE_VAR}): bufs.add(u)
+    if is_load:=(u.op in {Ops.STAGE, Ops.AFTER, Ops.PARAM, Ops.MSELECT, Ops.MSTACK}): bufs.add(u)
     return not is_load
   root.toposort(gate=gate_input)
 
@@ -543,7 +543,9 @@ to_define_global = PatternMatcher([
    if v.arg.name is not None and v.arg.vmin_vmax is not None else None),
   (UPat(Ops.PARAM, name="buf"), lambda ctx, buf:
    None if isinstance(buf.dtype, PtrDType) or buf.arg.name is not None or buf._shape is None else debuf(ctx, buf)),
-  (UPat(Ops.INDEX, src=(UPat(Ops.DEFINE_VAR, name="v"),)), lambda v: v),
+
+  # ALU params are scalar symbolic values, not buffers.
+  (UPat(Ops.INDEX, src=(UPat(Ops.PARAM, name="v"),)), lambda v: v if v.addrspace == AddrSpace.ALU else None),
 
   (UPat(Ops.BIND, name="b"), unbind_kernel),
   (UPat(Ops.AFTER, name="after"), handle_after),

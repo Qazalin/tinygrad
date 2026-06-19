@@ -24,7 +24,8 @@ def validate_index(uidx:UOp, gate:UOp|None=None):
   # TODO: validate these
   # WEBGPU has a BITCAST in the index, PTX casts pointer to long
   # VECTORIZE/GEP can't be properly modeled in z3 since it doesn't support vectors
-  for x in idx.toposort() | gate.toposort():
+  # don't descend into PARAM shape metadata; only the PARAM value participates in index arithmetic
+  for x in idx.toposort(gate=lambda x: x.op is not Ops.PARAM) | gate.toposort(gate=lambda x: x.op is not Ops.PARAM):
     if x.op in {Ops.BITCAST, Ops.STACK, Ops.GEP} or (x.op is Ops.CAST and isinstance(x.src[0].dtype, PtrDType)): return True
 
   # if all is good and CHECK_OOB=1, validate with z3
@@ -51,9 +52,8 @@ spec_shared = PatternMatcher([
   # NOOP. TODO: remove this
   (UPat(Ops.NOOP), lambda: True),
 
-  # CONST/DEFINE_VAR are everywhere
+  # CONST is everywhere
   (UPat(Ops.CONST, src=(), name="x"), lambda x: type(x.arg) is type(x.dtype.const(x.arg))),
-  (UPat(Ops.DEFINE_VAR, name="x"), lambda x: len(x.arg) == 3 and isinstance(x.arg[0], str)),
 
   # STACK is everywhere too
   (UPat(Ops.STACK, dtype=dtypes.void, src=()), lambda: True),
@@ -79,6 +79,8 @@ spec_shared = PatternMatcher([
 
   # PARAM
   (UPat(Ops.PARAM, name="x"), lambda x: isinstance(x.arg, ParamArg)),
+  (UPat(Ops.BUFFER, src=(UPat(),), name="x"), lambda x:
+   isinstance(x.arg, ParamArg) and x.addrspace in (AddrSpace.REG, AddrSpace.LOCAL)),
 
   # GROUP of stores (or groups, or NOOPs)
   # TODO: remove UNROLL here, it's for SPEC=2
@@ -136,7 +138,7 @@ spec_tensor = PatternMatcher([
    lambda buf: isinstance(buf.arg, int) and isinstance(buf.dtype, DType)),
 
   # Tensor variable bindings
-  (UPat(Ops.BIND, (dtypes.int, dtypes.weakint,), (UPat(Ops.DEFINE_VAR), UPat.cvar(dtype=(dtypes.int,dtypes.weakint,))), arg=None), lambda: True),
+  (UPat(Ops.BIND, (dtypes.int, dtypes.weakint,), (UPat(Ops.PARAM), UPat.cvar(dtype=(dtypes.int,dtypes.weakint,))), arg=None), lambda: True),
 
   # custom function
   (UPat(Ops.CUSTOM_FUNCTION, name="x"), lambda x: isinstance(x.arg, str)),
@@ -196,7 +198,7 @@ spec_tensor = PatternMatcher([
 # these ops can exist in programs but not the tensor spec. example: LOAD
 spec_program = PatternMatcher([
   # no more of these in programs
-  (UPat((Ops.DEFINE_LOCAL, Ops.DEFINE_REG, Ops.DEFINE_VAR, Ops.GEP)), lambda: False),
+  (UPat((Ops.DEFINE_LOCAL, Ops.DEFINE_REG, Ops.GEP)), lambda: False),
 
   # weakint is not allowed in programs
   (UPat(GroupOp.All, dtypes.weakint), lambda: False),

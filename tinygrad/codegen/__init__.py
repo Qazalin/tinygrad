@@ -4,12 +4,11 @@ import itertools
 from tinygrad.helpers import DISABLE_FAST_IDIV, TRANSCENDENTAL, SPEC, DEBUG, VIZ, IMAGE, NOOPT, EMULATED_DTYPES, NOLOCALS, USE_TC
 from tinygrad.helpers import ALLOW_TF32, TracingKey, Context, panic
 from tinygrad.uop.ops import PatternMatcher, graph_rewrite, UOp, pm_lower_index_dtype, Ops, UPat, track_rewrites, KernelInfo, ProgramInfo, GroupOp
-from tinygrad.uop.ops import ParamArg
 from tinygrad.uop.render import pyrender
 from tinygrad.uop.spec import type_verify, spec_tensor, spec_program
 from tinygrad.renderer import Renderer, Estimates
 from tinygrad.renderer.isa import ISARenderer, IselContext, PreRegAllocContext
-from tinygrad.dtype import dtypes, PtrDType, ImageDType, AddrSpace
+from tinygrad.dtype import dtypes, PtrDType, ImageDType
 
 # import all pattern matchers here
 from tinygrad.codegen.gpudims import pm_add_gpudims
@@ -42,12 +41,6 @@ pm_remove_vec_dtypes = PatternMatcher([
   # remove all vec dtypes
   (UPat(GroupOp.All-{Ops.PARAM, Ops.BUFFER, Ops.DEFINE_LOCAL, Ops.DEFINE_REG}, name="x"),
    lambda x: x.replace(dtype=x.dtype.base.scalar().base)),
-  # replace DEFINE_LOCAL/DEFINE_REG with BUFFER
-  (UPat((Ops.DEFINE_LOCAL, Ops.DEFINE_REG), name="x"), lambda x:
-   x.replace(op=Ops.BUFFER, arg=ParamArg(x.arg, addrspace=AddrSpace.LOCAL if x.op == Ops.DEFINE_LOCAL else AddrSpace.REG))),
-  # replace DEFINE_VAR with PARAM
-  (UPat(Ops.DEFINE_VAR, name="x"), lambda x:
-   x.replace(op=Ops.PARAM, src=(UOp(Ops.STACK),), arg=ParamArg(slot=-1, name=x.arg[0], vmin_vmax=x.arg[1:], addrspace=AddrSpace.ALU))),
 ])+pm_clean_up_group_sink
 
 def do_number_param(ctx:list[int], x:UOp):
@@ -146,7 +139,7 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
   # this was the linearizer
   sink = graph_rewrite(sink, pm_add_control_flow, ctx=CFGContext(sink), name="add control flow", bottom_up=True)
 
-  # put unnumbered DEFINE_VAR in slots
+  # put unnumbered variable PARAMs in slots
   num_params = len([x for x in sink.toposort() if x.op is Ops.PARAM and x.arg.slot != -1])
   sink = graph_rewrite(sink, pm_number_params, ctx=[num_params], name="number params with -1", walk=True)
 
