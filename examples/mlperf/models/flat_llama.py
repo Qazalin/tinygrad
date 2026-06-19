@@ -154,8 +154,11 @@ class FlatTransformer:
     self._fp8_grad_amax = {name: [_amax() for _ in range(n_layers)] for name in grad_names}
     w_scales = [("wqkv", s_qkv), ("wo", s_o), ("w2", s_2)]
     w_scales += [("w1", s_1), ("w3", s_3)] if SPLIT_W13 else [("w13", s_13)]
-    self._fp8_inv_scale = {name: (s if MXFP8 else s.float()).contiguous().is_param_(False) for name, s in w_scales}
-    self._fp8_next_inv_scale = {name: (s if MXFP8 else s.float()).contiguous().is_param_(False) for name, s in w_scales}
+    def _inv_scale(s):
+      if MXFP8 or COLUMNWISE_WEIGHT_SCALE: return (s if MXFP8 else s.float()).contiguous().is_param_(False)
+      return [s[i].float().contiguous().is_param_(False) for i in range(n_layers)]
+    self._fp8_inv_scale = {name: _inv_scale(s) for name, s in w_scales}
+    self._fp8_next_inv_scale = {name: _inv_scale(s) for name, s in w_scales}
 
   def lin_per_layer(self, in_features:int, out_features:int, std:float=0.02, w:Tensor|None=None):
     if w is None:
@@ -250,9 +253,15 @@ class FlatTransformer:
       def _shard_fp8(name:str, axis:int):
         getattr(self, name).shard_(device, axis=axis)
         scale_axis = axis if MXFP8 else (1 if axis == 1 else None) if COLUMNWISE_WEIGHT_SCALE else None
-        self._fp8_inv_scale[name] = self._fp8_inv_scale[name].shard(device, axis=scale_axis).contiguous().is_param_(False)
-        self._fp8_next_inv_scale[name] = self._fp8_next_inv_scale[name].shard(device, axis=scale_axis).contiguous().is_param_(False)
-        Tensor.realize(getattr(self, name), self._fp8_inv_scale[name], self._fp8_next_inv_scale[name])
+        if MXFP8 or COLUMNWISE_WEIGHT_SCALE:
+          self._fp8_inv_scale[name] = self._fp8_inv_scale[name].shard(device, axis=scale_axis).contiguous().is_param_(False)
+          self._fp8_next_inv_scale[name] = self._fp8_next_inv_scale[name].shard(device, axis=scale_axis).contiguous().is_param_(False)
+          Tensor.realize(getattr(self, name), self._fp8_inv_scale[name], self._fp8_next_inv_scale[name])
+        else:
+          for i in range(self.n_layers):
+            self._fp8_inv_scale[name][i] = self._fp8_inv_scale[name][i].to(device).contiguous().is_param_(False)
+            self._fp8_next_inv_scale[name][i] = self._fp8_next_inv_scale[name][i].to(device).contiguous().is_param_(False)
+          Tensor.realize(getattr(self, name), *self._fp8_inv_scale[name], *self._fp8_next_inv_scale[name])
       _shard_fp8("wqkv", 1)          # (n_layers, out, dim) shard out
       _shard_fp8("wo", 2)            # (n_layers, dim, in) shard in
       if SPLIT_W13:
