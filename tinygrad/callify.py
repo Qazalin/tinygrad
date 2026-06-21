@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from tinygrad.dtype import dtypes, AddrSpace, PtrDType, ImageDType
+from tinygrad.dtype import dtypes, AddrSpace, PtrDType, ImageDType, Invalid
 from tinygrad.uop.ops import UOp, UPat, PatternMatcher, Ops, GroupOp, graph_rewrite, track_rewrites
 from tinygrad.helpers import VIZ, pluralize, all_int
 
@@ -98,8 +98,19 @@ def contiguous_mops_to_view(c:UOp, src:UOp):
 
   return None
 
-def _precompiled_output_redirect(s:UOp, t:UOp) -> UOp|None:
+def _is_fresh_invalid_output(u:UOp) -> bool:
+  if u.op is Ops.MULTI: u = u.src[0]
+  if u.op is not Ops.AFTER: return False
+  dst = u.src[0]
+  if not dst.has_buffer_identity() or dst.base.op is not Ops.BUFFER or dst.base.is_realized: return False
+  return len(u.src) > 1 and all(d.op is Ops.STORE and d.src[0].base is dst.base and d.src[1].base.op is Ops.CONST and
+                                 d.src[1].base.arg is Invalid for d in u.src[1:])
+
+def _precompiled_output_redirect(s:UOp, t:UOp, after_deps:list[UOp]) -> UOp|None:
   # how output s lands in the caller's buffer t, or None if it must be copied into t
+  # custom kernels often return CONTIGUOUS(fresh invalid output). If the dependency CALL also uses that CONTIGUOUS as an output,
+  # substitute the CALL output directly with t instead of copying the scratch output into t after the CALL.
+  if s.op is Ops.CONTIGUOUS and _is_fresh_invalid_output(s.src[0]) and any(s in d.toposort() for d in after_deps): return t
   # materialize straight into t
   if s.op is Ops.CONTIGUOUS: return t.after(t.store(s.src[0]))
   # rebind output storage to t
@@ -124,7 +135,7 @@ def transform_precompiled_call(c:UOp) -> UOp|None:
     while s.op is Ops.AFTER:
       after_deps.extend(s.src[1:])
       s = s.src[0]
-    if (placed := _precompiled_output_redirect(s, t)) is not None and s not in subs:
+    if (placed := _precompiled_output_redirect(s, t, after_deps)) is not None and s not in subs:
       subs[s] = placed
       items.append(s.after(*after_deps) if after_deps else s)
     else:

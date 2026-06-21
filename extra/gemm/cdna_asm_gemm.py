@@ -2701,18 +2701,24 @@ def _asm_gemm_report():
     for msg, cnt in Counter(counters["todos"]).most_common(): print(f'  {cnt:3d}x {msg}')
 atexit.register(_asm_gemm_report)
 
-def can_use_asm_gemm(a:Tensor, b:Tensor) -> bool:
+def can_use_asm_gemm(a:Tensor, b:Tensor, b_is_transposed:bool=False) -> bool:
   if a.dtype != b.dtype: return todo(f"dtypes must match {a.dtype} != {b.dtype}")
   if a.dtype not in {dtypes.bfloat16, dtypes.float16, FP8_DTYPE}: return todo(f"only bfloat16/float16/fp8, got {a.dtype}")
   batch, M, K = (1, *a.shape) if a.ndim == 2 else a.shape
-  N = b.shape[1]
+  if b_is_transposed:
+    N, K2 = b.shape[(1 if b.ndim == 3 else 0):]
+    if K != K2: return todo(f"GEMM shape mismatch {a.shape} @ {b.shape}.T")
+    b_k_axis, b_n_axis = 1, 0
+  else:
+    N = b.shape[1]
+    b_k_axis, b_n_axis = 0, 1
   if isinstance(a.device, tuple):
     if a.ndim == 2 and a.uop.axis == 0 and b.uop.axis is None: M //= len(a.device)
-    elif a.ndim == 2 and a.uop.axis == 1 and b.uop.axis == 0: K //= len(a.device)
-    elif a.ndim == 2 and a.uop.axis is None and b.uop.axis == 1: N //= len(a.device)
+    elif a.ndim == 2 and a.uop.axis == 1 and b.uop.axis == b_k_axis: K //= len(a.device)
+    elif a.ndim == 2 and a.uop.axis is None and b.uop.axis == b_n_axis: N //= len(a.device)
     elif a.ndim == 3 and a.uop.axis == 0 and b.uop.axis is None: batch //= len(a.device)
-    elif a.ndim == 3 and a.uop.axis is None and b.uop.axis == 1: N //= len(a.device)
-    elif a.ndim == 3 and a.uop.axis == 2 and b.uop.axis == 0: K //= len(a.device)
+    elif a.ndim == 3 and a.uop.axis is None and b.uop.axis == b_n_axis: N //= len(a.device)
+    elif a.ndim == 3 and a.uop.axis == 2 and b.uop.axis == b_k_axis: K //= len(a.device)
     else: return todo(f"sharding mismatch a.ndim={a.ndim} a.uop.axis={a.uop.axis} b.uop.axis={b.uop.axis}")
     dname = a.device[0]
   else: dname = a.device
@@ -2914,11 +2920,12 @@ def custom_mx_gemm_bw(gradient:UOp, kernel:UOp, has_w_post:bool, w_stored:bool=F
 # ** main gemm function
 
 def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=None, grad_amax_state:Tensor|None=None,
-             next_grad_amax_state:Tensor|None=None,
-             w_post_scale:Tensor|None=None, mx:bool=False, mx_scales:tuple|None=None, mx_w_stored:bool=False, g_amax:Tensor|None=None) -> Tensor:
-  assert can_use_asm_gemm(a, b), f"{counters['todos'][-1]}"
+              next_grad_amax_state:Tensor|None=None,
+              w_post_scale:Tensor|None=None, mx:bool=False, mx_scales:tuple|None=None, mx_w_stored:bool=False, g_amax:Tensor|None=None,
+              b_is_transposed:bool=False) -> Tensor:
+  assert can_use_asm_gemm(a, b, b_is_transposed=b_is_transposed), f"{counters['todos'][-1]}"
   counters["used"] += 1
-  unfold_batch = a.ndim == 3 and isinstance(a.device, tuple) and a.uop.axis == 2 and b.uop.axis == 0
+  unfold_batch = a.ndim == 3 and isinstance(a.device, tuple) and a.uop.axis == 2 and b.uop.axis == (1 if b_is_transposed else 0)
   if unfold_batch:
     orig_batch = a.shape[0]
     a = a.reshape(a.shape[0]*a.shape[1], a.shape[2])
@@ -2927,11 +2934,11 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
   out_dtype = dtypes.bfloat16 if a.dtype == FP8_DTYPE else a.dtype
 
   batch, M, K = a.shape
-  N = b.shape[1]
+  N = b.shape[(1 if b_is_transposed and b.ndim == 3 else 0)] if b_is_transposed else b.shape[1]
   is_multi = isinstance(a.device, tuple)
   if (k_sharded:=is_multi and a.uop.axis == 2): K //= len(a.device)
   if (m_sharded:=is_multi and a.uop.axis == 1): M //= len(a.device)
-  n_sharded = is_multi and b.uop.axis == 1
+  n_sharded = is_multi and b.uop.axis == (0 if b_is_transposed else 1)
 
   if is_multi:
     if n_sharded:
@@ -2968,7 +2975,7 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
       extra = ([grad_amax_state, next_grad_amax_state] if grad_amax_state is not None else []) + ([w_post_scale] if w_post_scale is not None else [])
       fxn = functools.partial(custom_hk_fp8_gemm, dname=dname, scale_mode=scale_mode)
       bw = functools.partial(custom_gemm_bw, n_scales=len(scales), has_grad_amax=grad_amax_state is not None, has_w_post=w_post_scale is not None)
-      out = Tensor.custom_kernel(out, a, b.T, *scales, *extra, fxn=fxn, grad_fxn=bw)[0]
+      out = Tensor.custom_kernel(out, a, b if b_is_transposed else b.T, *scales, *extra, fxn=fxn, grad_fxn=bw)[0]
     elif a.dtype == dtypes.bfloat16 and getenv("USE_HK_BF16_GEMM"):
       out = Tensor.custom_kernel(out, a, b.T, b, fxn=functools.partial(custom_hk_bf16_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
     else:
