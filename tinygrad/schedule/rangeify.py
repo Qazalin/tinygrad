@@ -182,7 +182,7 @@ def resolve_function(c:UOp, allow_param_mismatch=True) -> UOp|None:
 earliest_rewrites = mop_cleanup+PatternMatcher([
   # remove no-op PARAM movement before CALL
   # TODO: this is the E before hk_fp8_gemm_16384_6144_4096. this should be fixed in the custom_kernel by removing contiguous from custom_kernel
-  #(UPat(Ops.CALL, name="c"), remove_noop_param_contiguous),
+  (UPat(Ops.CALL, name="c"), remove_noop_param_contiguous),
 
   # resolve FUNCTION calls (inline the body)
   (UPat(Ops.FUNCTION, name="c"), resolve_function),
