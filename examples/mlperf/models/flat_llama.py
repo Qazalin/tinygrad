@@ -13,7 +13,7 @@ if __name__ == "__main__":
       os.environ["ASM_GEMM"] = "1"
 from tinygrad import Tensor, nn, function, getenv, dtypes, TinyJit
 from tinygrad.helpers import Timing, colored, GlobalCounters, profile_marker, round_up
-from tinygrad.uop.ops import Ops, UOp
+from tinygrad.uop.ops import Ops, UOp, KernelInfo
 from extra.models.llama import apply_rotary_emb, precompute_freqs_cis
 from extra.llama_kernels.rmsnorm import rmsnorm
 from extra.llama_kernels import FP8_MAX, local_abs_max
@@ -28,6 +28,15 @@ MXFP8 = getenv("MXFP8", 0)
 
 FP8_DTYPE = dtypes.fp8e4m3
 FP8_GRAD_DTYPE = dtypes.fp8e5m2
+
+
+def _store_fp8_amax_kernel(*args:UOp):
+  n = len(args)//2
+  return UOp.group(*[args[i].store(args[n+i]) for i in range(n)]).sink(arg=KernelInfo(f"store_fp8_amax{n}"))
+
+def store_fp8_amax(amaxs:list[Tensor], new_vals:list[Tensor]):
+  ret = Tensor.custom_kernel(*amaxs, *new_vals, fxn=_store_fp8_amax_kernel)
+  for a,out in zip(amaxs, ret[:len(amaxs)]): a.uop = out.uop
 
 def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
   new_amax = (local_abs_max(x) if isinstance(x.device, tuple) else x.abs().max()).detach().cast(dtypes.float32)
@@ -330,8 +339,7 @@ class FlatTransformer:
                           next_grad_amax_xw13=nga["xw13"][i])
       h, *ret = self.run_layer(h, freqs_cis, attn_kwargs, ffn_kwargs, save=save)
       amax_names = ["xqkv", "xo"] + (["x1", "x3"] if SPLIT_W13 else ["x13"]) + ["x2"]
-      for name, new_val in zip(amax_names, ret[:len(amax_names)]):
-        a[name][i].assign(new_val)
+      store_fp8_amax([a[name][i] for name in amax_names], ret[:len(amax_names)])
 
     logits = matmul(self.norm(h), self.output[0], fp8=False)[0]
     return logits
