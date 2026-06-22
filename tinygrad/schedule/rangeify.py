@@ -670,7 +670,7 @@ def get_kernel_graph(sink:UOp) -> UOp:
   # WAR deps: if kernel U reads buffer S, and S is also written by another kernel, S's write must wait for U to finish
   afters = [u for u in tsink.toposort() if u.op is Ops.AFTER]
   kernel_assign: dict[UOp, UOp] = {u.buf_uop:u for u in afters}
-  assign_deps: dict[UOp, list[UOp]] = {}
+  assign_rep: dict[UOp, UOp] = {}
   for u in afters:
     for s in u.src[1].src:
       # TODO: this is probably broken for MSELECT/MSTACK
@@ -678,8 +678,7 @@ def get_kernel_graph(sink:UOp) -> UOp:
       if a.src[1] is u.src[1]: continue  # same kernel (multi-output custom kernels)
       #if any(x.op is Ops.AFTER and x.buf_uop is s for x in kernel_assign[u.buf_uop].backward_slice):
       #  raise RuntimeError(f"cycle detected in assign graph, buffers {s} and {u.buf_uop} have circular dependency")
-      assign_deps.setdefault(a, []).append(u)
-  assign_rep = {a:a.replace(src=a.src+tuple(dedup(deps))) for a,deps in assign_deps.items()}
-  if assign_rep: tsink = graph_rewrite(tsink, _substitute, ctx=assign_rep, bottom_up=True, walk=True, name="fix_assign")
+      assign_rep[a] = kernel_assign[s] = a.replace(src=a.src+(u,))
+  if assign_rep: tsink = graph_rewrite(tsink, _substitute, ctx=assign_rep, bottom_up=True, name="fix_assign")
   if VIZ: graph_rewrite(tsink, PatternMatcher([]), name="View Kernel Graph")
   return tsink
