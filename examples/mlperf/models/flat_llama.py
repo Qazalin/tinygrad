@@ -36,15 +36,6 @@ def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
   x_clamped = x_scaled + (x_scaled.detach().clamp(-FP8_MAX, FP8_MAX) - x_scaled.detach())  # STE
   return x_clamped.cast(FP8_DTYPE), scale.float().reciprocal(), new_amax
 
-def split_layer_weight_state(model, state_dict:dict[str, Tensor]) -> dict[str, Tensor]:
-  ret = dict(state_dict)
-  for name in ("wqkv", "wo", "w1", "w2", "w3", "w13"):
-    weights = getattr(model, name, None)
-    if isinstance(weights, list) and name in ret:
-      stacked = ret.pop(name)
-      for i in range(len(weights)): ret[f"{name}.{i}"] = stacked[i]
-  return ret
-
 def matmul(x:Tensor, w:Tensor, fp8:bool=True, amax_x:Tensor|None=None, w_inv_scale:Tensor|None=None,
            x_fp8:Tensor|None=None, x_new_amax:Tensor|None=None,
            grad_amax_state:Tensor|None=None, next_grad_amax_state:Tensor|None=None) -> tuple[Tensor,...]:
@@ -72,14 +63,12 @@ def matmul(x:Tensor, w:Tensor, fp8:bool=True, amax_x:Tensor|None=None, w_inv_sca
       x_fp8, _, x_new_amax = quantize_fp8(x, amax_state=amax_x)
   if ASM_GEMM:
     from extra.gemm.cdna_asm_gemm import can_use_asm_gemm, asm_gemm
-    if can_use_asm_gemm(x_fp8, w, b_is_transposed=True):
+    if can_use_asm_gemm(x_fp8, w.T):
       assert amax_x is not None
       if COLUMNWISE_WEIGHT_SCALE:
-        out = asm_gemm(x_fp8, w, x_scale=amax_x, grad_amax_state=grad_amax_state, next_grad_amax_state=next_grad_amax_state,
-                       w_post_scale=w_inv_scale, b_is_transposed=True)
+        out = asm_gemm(x_fp8, w.T, x_scale=amax_x, grad_amax_state=grad_amax_state, next_grad_amax_state=next_grad_amax_state, w_post_scale=w_inv_scale)
       else:
-        out = asm_gemm(x_fp8, w, x_scale=amax_x, w_scale=w_inv_scale, grad_amax_state=grad_amax_state,
-                       next_grad_amax_state=next_grad_amax_state, b_is_transposed=True)
+        out = asm_gemm(x_fp8, w.T, x_scale=amax_x, w_scale=w_inv_scale, grad_amax_state=grad_amax_state, next_grad_amax_state=next_grad_amax_state)
       return out, x_new_amax, x_fp8
   return (x_fp8.dot(w.T, dtype=dtypes.float) * ((amax_x.float() + 1e-8) / FP8_MAX) * w_inv_scale).cast(dtypes.bfloat16), x_new_amax, x_fp8
 
@@ -176,7 +165,6 @@ class FlatTransformer:
     w_scales = [("wqkv", s_qkv), ("wo", s_o), ("w2", s_2)]
     w_scales += [("w1", s_1), ("w3", s_3)] if SPLIT_W13 else [("w13", s_13)]
     def _inv_scale(s):
-      if isinstance(s, list): return [x.float().contiguous().is_param_(False) for x in s]
       if MXFP8 or COLUMNWISE_WEIGHT_SCALE: return (s if MXFP8 else s.float()).contiguous().is_param_(False)
       return [s[i].float().contiguous().is_param_(False) for i in range(n_layers)]
     self._fp8_inv_scale = {name: _inv_scale(s) for name, s in w_scales}
@@ -194,8 +182,7 @@ class FlatTransformer:
     scale = FP8_MAX / (amax + 1e-8)
     inv_scale = (amax + 1e-8) / FP8_MAX
     scale_b = scale.reshape(self.n_layers, out_features, 1) if COLUMNWISE_WEIGHT_SCALE else scale.reshape(-1, 1, 1)
-    w_q = (w * scale_b).clamp(-FP8_MAX, FP8_MAX).cast(FP8_DTYPE)
-    return [w_q[i].contiguous() for i in range(self.n_layers)], [inv_scale[i].contiguous() for i in range(self.n_layers)]
+    return (w * scale_b).clamp(-FP8_MAX, FP8_MAX).cast(FP8_DTYPE), inv_scale
 
   def attention(self, x:Tensor, freqs_cis:Tensor, *, attention_norm:Tensor, wqkv:Tensor, wo:Tensor,
                 amax_xqkv:Tensor, amax_xo:Tensor, s_qkv:Tensor, s_o:Tensor,
@@ -282,27 +269,17 @@ class FlatTransformer:
     else:
       # flat per-layer weights: axis 0 is n_layers, so shard axes are +1 vs per-layer Transformer
       def _shard_fp8(name:str, axis:int):
-        weights = getattr(self, name)
-        if isinstance(weights, list):
-          weight_axis = axis - 1
-          scale_axis = (0 if axis == 1 else None) if COLUMNWISE_WEIGHT_SCALE else None
-          for i in range(len(weights)):
-            weights[i].shard_(device, axis=weight_axis)
-            self._fp8_inv_scale[name][i] = self._fp8_inv_scale[name][i].shard(device, axis=scale_axis).contiguous().is_param_(False)
-            self._fp8_next_inv_scale[name][i] = self._fp8_next_inv_scale[name][i].shard(device, axis=scale_axis).contiguous().is_param_(False)
-          Tensor.realize(*weights, *self._fp8_inv_scale[name], *self._fp8_next_inv_scale[name])
-          return
-        weights.shard_(device, axis=axis)
+        getattr(self, name).shard_(device, axis=axis)
         scale_axis = axis if MXFP8 else (1 if axis == 1 else None) if COLUMNWISE_WEIGHT_SCALE else None
         if MXFP8 or COLUMNWISE_WEIGHT_SCALE:
           self._fp8_inv_scale[name] = self._fp8_inv_scale[name].shard(device, axis=scale_axis).contiguous().is_param_(False)
           self._fp8_next_inv_scale[name] = self._fp8_next_inv_scale[name].shard(device, axis=scale_axis).contiguous().is_param_(False)
-          Tensor.realize(weights, self._fp8_inv_scale[name], self._fp8_next_inv_scale[name])
+          Tensor.realize(getattr(self, name), self._fp8_inv_scale[name], self._fp8_next_inv_scale[name])
         else:
           for i in range(self.n_layers):
             self._fp8_inv_scale[name][i] = self._fp8_inv_scale[name][i].to(device).contiguous().is_param_(False)
             self._fp8_next_inv_scale[name][i] = self._fp8_next_inv_scale[name][i].to(device).contiguous().is_param_(False)
-          Tensor.realize(weights, *self._fp8_inv_scale[name], *self._fp8_next_inv_scale[name])
+          Tensor.realize(getattr(self, name), *self._fp8_inv_scale[name], *self._fp8_next_inv_scale[name])
       _shard_fp8("wqkv", 1)          # (n_layers, out, dim) shard out
       _shard_fp8("wo", 2)            # (n_layers, dim, in) shard in
       if SPLIT_W13:

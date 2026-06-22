@@ -1282,7 +1282,7 @@ def train_bert():
         previous_step = i
 
 def train_llama3():
-  from examples.mlperf.models.flat_llama import FlatTransformer, apply_grad, FP8_DTYPE, MXFP8, split_layer_weight_state
+  from examples.mlperf.models.flat_llama import FlatTransformer, apply_grad, FP8_DTYPE, MXFP8
   from examples.llama3 import MODEL_PARAMS
   from examples.mlperf.lr_schedulers import CosineAnnealingLRWithWarmup
   from examples.mlperf.optim import GradAccClipAdamW
@@ -1427,7 +1427,7 @@ def train_llama3():
   if resume_ckpt := getenv("RESUME_CKPT"):
     fn = f"./ckpts/llama3_{resume_ckpt}.safe"
     print(f"loading initial checkpoint from {fn}")
-    load_state_dict(model, split_layer_weight_state(model, safe_load(fn)), realize=False)
+    load_state_dict(model, safe_load(fn), realize=False)
 
     fn = f"./ckpts/llama3_{resume_ckpt}_optim.safe"
     print(f"loading optim checkpoint from {fn}")
@@ -1441,23 +1441,20 @@ def train_llama3():
   from tinygrad.nn.state import get_state_dict
   model_state = get_state_dict(model)
   for wname in model._fp8_inv_scale:
-    weights = getattr(model, wname)
-    if not isinstance(weights, list): weights = [model_state[wname]]
-    inv_scales = model._fp8_inv_scale[wname] if isinstance(model._fp8_inv_scale[wname], list) else [model._fp8_inv_scale[wname]]
-    next_inv_scales = model._fp8_next_inv_scale[wname] if isinstance(model._fp8_next_inv_scale[wname], list) else [model._fp8_next_inv_scale[wname]]
-    for w, inv_scale, next_inv_scale in zip(weights, inv_scales, next_inv_scales):
-      w._inv_scale = inv_scale
-      w._next_inv_scale = next_inv_scale
-      if optim.master_params:
-        idx = next(j for j, p in enumerate(optim.params) if p is w)
-        master = optim.master_params[idx]
-        inv = inv_scale if inv_scale.device == master.device else inv_scale.to(master.device)
-        if MXFP8:
-          from extra.gemm.cdna_asm_gemm import _mx_block_scale
-          bs = _mx_block_scale(inv.reshape(-1, inv.shape[-1])).reshape(w.shape)
-          master.assign((master * bs).contiguous())
-        else:
-          master.assign((master * inv.reshape(*inv.shape, *([1]*(w.ndim-inv.ndim)))).contiguous())
+    w = model_state[wname]
+    w._inv_scale = model._fp8_inv_scale[wname]
+    w._next_inv_scale = model._fp8_next_inv_scale[wname]
+    if optim.master_params:
+      idx = next(j for j, p in enumerate(optim.params) if p is w)
+      master = optim.master_params[idx]
+      inv = Tensor.stack(*w._inv_scale) if isinstance(w._inv_scale, list) else w._inv_scale
+      inv = inv if inv.device == master.device else inv.to(master.device)
+      if MXFP8:
+        from extra.gemm.cdna_asm_gemm import _mx_block_scale
+        bs = _mx_block_scale(inv.reshape(-1, inv.shape[-1])).reshape(w.shape)
+        master.assign((master * bs).contiguous())
+      else:
+        master.assign((master * inv.reshape(*inv.shape, *([1]*(w.ndim-inv.ndim)))).contiguous())
 
   # realize everything here
   if optim.master_params: Tensor.realize(*optim.master_params)
