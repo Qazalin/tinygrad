@@ -1,14 +1,13 @@
 # inspired by https://github.com/karpathy/micrograd/blob/master/micrograd/engine.py
 from __future__ import annotations
 import time, math, itertools, functools, sys, inspect, pathlib, hashlib, weakref
-from contextlib import ContextDecorator
-from typing import Any, Callable, ClassVar, Sequence, cast, get_args, ParamSpec, TypeVar, Generic, TYPE_CHECKING
+from typing import Any, Callable, Sequence, cast, get_args, ParamSpec, TypeVar, Generic, TYPE_CHECKING
 if TYPE_CHECKING: import numpy
-from tinygrad.dtype import DType, DTypeLike, dtypes, ConstType, least_upper_dtype, to_dtype
+from tinygrad.dtype import DType, DTypeLike, dtypes, ConstType, to_dtype
 from tinygrad.dtype import _from_np_dtype, _to_np_dtype, PyConst, Invalid
 from tinygrad.helpers import argfix, flatten, prod, all_int, round_up, getenv, fully_flatten, ceildiv, fetch, flat_to_grouped
 from tinygrad.helpers import resolve_pool_pads, IMAGE, FLOAT16, WINO, Metadata, TRACEMETA, is_numpy_ndarray, TracingKey, cpu_profile
-from tinygrad.helpers import suppress_finalizing, disable_gc
+from tinygrad.helpers import suppress_finalizing, disable_gc, TRAINING
 from tinygrad.uop.ops import UOp, Ops, sint, all_metadata, _index_to_concrete_int, Variable, _broadcast_shape
 from tinygrad.mixin.rand import RandMixin
 from tinygrad.schedule import create_linear_with_vars
@@ -59,19 +58,25 @@ def _apply_winograd_matrix(mat, t:Tensor, dims:int) -> Tensor:
   assert isinstance(ret, Tensor), "sum didn't return a Tensor"
   return ret
 
-class Tensor(RandMixin):
+# TODO: deprecate this, always use TRAINING
+class TensorMeta(type):
+  @property
+  def training(cls) -> bool: return bool(TRAINING.value)
+  @training.setter
+  def training(cls, mode:bool): TRAINING.value = int(mode)
+
+class Tensor(RandMixin, metaclass=TensorMeta):
   """
   A `Tensor` is a multi-dimensional matrix containing elements of a single data type.
 
   ```python exec="true" session="tensor"
-  from tinygrad import Tensor, dtypes, nn
+  from tinygrad import Tensor, dtypes, nn, Context
   import numpy as np
   import math
   np.set_printoptions(precision=4)
   ```
   """
   __slots__ = "uop", "is_param", "grad"
-  training: ClassVar[bool] = False
 
   def __init__(self, data:ConstType|bytes|list|tuple|UOp|'numpy.ndarray'|pathlib.Path|None,
                device:str|tuple|list|None=None, dtype:DTypeLike|None=None):
@@ -147,11 +152,6 @@ class Tensor(RandMixin):
   def is_param_(self, is_param:bool=True) -> Tensor:
     self.is_param = is_param
     return self
-
-  class train(ContextDecorator):
-    def __init__(self, mode:bool = True): self.mode = mode
-    def __enter__(self): self.prev, Tensor.training = Tensor.training, self.mode
-    def __exit__(self, exc_type, exc_value, traceback): Tensor.training = self.prev
 
   def __repr__(self):
     ld = self.uop
@@ -503,25 +503,6 @@ class Tensor(RandMixin):
     high = counter[1:2] - (num >> 32) - (counter[0] < (num & 0xffffffff))
     return Tensor._device_seeds[device], low.cat(high)
 
-  # ***** creation helper functions *****
-
-  def full_like(self, fill_value:ConstType, dtype=None, device=None) -> Tensor:
-    """
-    Creates a tensor with the same shape as `self`, filled with the given value.
-    If `dtype` is not specified, the dtype of `self` is used.
-
-    You can pass in the `device` keyword argument to control device of the tensor.
-
-    ```python exec="true" source="above" session="tensor" result="python"
-    t = Tensor.ones(2, 3)
-    print(Tensor.full_like(t, 42).numpy())
-    ```
-    """
-    if isinstance(self.device, tuple):
-      if device is not None: raise RuntimeError("cannot specify `device` on `*_like` of a multi device tensor")
-      return self._multi_like(lambda shape, dev: Tensor.full(shape, fill_value, dtype=dtype or self.dtype, device=dev))
-    return Tensor.full(self.shape, fill_value, dtype=dtype or self.dtype, device=self.device if device is None else device)
-
   # ***** toposort and backward pass *****
 
   def backward(self, gradient:Tensor|None=None) -> Tensor:
@@ -803,59 +784,6 @@ class Tensor(RandMixin):
     srcs = (out:=Tensor.empty(*shape, device=self.device, dtype=self.dtype), self.contiguous(), state.contiguous(), *ref_frames)
     fn = UOp(Ops.CUSTOM_FUNCTION, dtypes.void, src=(frame_pos.src[0], *[UOp.const(dtypes.int, s) for s in shape]), arg="encdec")
     return Tensor(out.uop.after(fn.call(*[s.uop for s in srcs], frame_pos)))
-
-  # ***** functional nn ops *****
-
-  def dropout(self, p=0.5) -> Tensor:
-    """
-    Applies dropout to `self`.
-
-    NOTE: dropout is only applied when `Tensor.training` is `True`.
-
-    - Paper: https://jmlr.org/papers/v15/srivastava14a.html
-
-    ```python exec="true" source="above" session="tensor" result="python"
-    Tensor.manual_seed(42)
-    t = Tensor.randn(2, 2)
-    with Tensor.train():
-      print(t.dropout().numpy())
-    ```
-    """
-    if not 0 <= p <= 1: raise ValueError(f"{p=} is out of range [0, 1]")
-    if not Tensor.training or p == 0: return self
-    if p == 1: return self.const_like(0)
-    return (Tensor.rand_like(self, dtype=dtypes.default_float, contiguous=False) >= p).contiguous().where(self, 0) / (1.0 - p)
-
-  def scaled_dot_product_attention(self, key:Tensor, value:Tensor, attn_mask:Tensor|None=None, dropout_p:float=0.0,
-                                   is_causal:bool=False, enable_gqa:bool=False) -> Tensor:
-    """
-    Computes scaled dot-product attention.
-    `self` is the query tensor, `key` is the key tensor, and `value` is the value tensor.
-
-    - Paper: https://arxiv.org/abs/1706.03762v7
-
-    ```python exec="true" source="above" session="tensor" result="python"
-    q = Tensor.randn(2, 4, 8)
-    k = Tensor.randn(2, 4, 8)
-    v = Tensor.randn(2, 4, 8)
-    print(q.scaled_dot_product_attention(k, v).numpy())
-    ```
-    """
-    # GQA: https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
-    if enable_gqa:
-      key = key.repeat_interleave(int(self.shape[-3] // key.shape[-3]), dim=-3)
-      value = value.repeat_interleave(int(self.shape[-3] // value.shape[-3]), dim=-3)
-
-    q = self
-    qk = q.matmul(key.transpose(-2,-1), dtype=least_upper_dtype(q.dtype, key.dtype, dtypes.float32)) / math.sqrt(q.shape[-1])
-    # handle attention mask
-    if is_causal:
-      if attn_mask is not None: raise RuntimeError("cannot set attn_mask when is_causal=True")
-      attn_mask = qk.const_like(1).cast(dtypes.bool).tril()
-    if attn_mask is not None:
-      if attn_mask.dtype == dtypes.bool: attn_mask = attn_mask.where(0, -float("inf"))
-      qk = qk + attn_mask
-    return qk.cast(self.dtype).softmax(-1).dropout(dropout_p) @ value
 
   # ***** cast ops *****
 
