@@ -136,6 +136,8 @@ class FlatTransformer:
     self.head_dim = dim // n_heads
     self.n_rep = self.n_heads // self.n_kv_heads
     self.hidden_dim = hidden_dim
+    self.rope_theta = rope_theta
+    self.max_context = max_context
 
     scaled_std = 0.02 / math.sqrt(2 * n_layers)
 
@@ -205,18 +207,18 @@ class FlatTransformer:
                                                                   next_grad_amax_state=next_grad_amax_xqkv)
     amaxs.append(new_amax)
     saves.extend([x_normed, rrms, *s, xqkv])
-    xqkv = xqkv.reshape(bsz, seqlen, self.n_kv_heads, self.n_rep + 2, self.head_dim)
-    xq = xqkv[:, :, :, :self.n_rep].reshape(bsz, seqlen, self.n_heads, self.head_dim)
-    xk = xqkv[:, :, :, self.n_rep].reshape(bsz, seqlen, self.n_kv_heads, self.head_dim)
-    xv = xqkv[:, :, :, self.n_rep+1].reshape(bsz, seqlen, self.n_kv_heads, self.head_dim)
-
-    xq, xk = apply_rotary_emb(xq, xk, freqs_cis)
-    xq, xk, xv = xq.cast(dtypes.bfloat16), xk.cast(dtypes.bfloat16), xv.cast(dtypes.bfloat16)
     if getenv("HK_FLASH_ATTENTION"):
-      from extra.thunder.amd.fa import flash_attention
+      from extra.thunder.amd.fa import flash_attention, fused_qkv_rope
+      xq, xk, xv = fused_qkv_rope(xqkv, freqs_cis, self.n_heads, self.n_kv_heads, self.head_dim)
       attn, *save = flash_attention(xq, xk, xv, is_causal=True, write_flat=True)
       saves.extend(save)
     else:
+      xqkv = xqkv.reshape(bsz, seqlen, self.n_kv_heads, self.n_rep + 2, self.head_dim)
+      xq = xqkv[:, :, :, :self.n_rep].reshape(bsz, seqlen, self.n_heads, self.head_dim)
+      xk = xqkv[:, :, :, self.n_rep].reshape(bsz, seqlen, self.n_kv_heads, self.head_dim)
+      xv = xqkv[:, :, :, self.n_rep+1].reshape(bsz, seqlen, self.n_kv_heads, self.head_dim)
+      xq, xk = apply_rotary_emb(xq, xk, freqs_cis)
+      xq, xk, xv = xq.cast(dtypes.bfloat16), xk.cast(dtypes.bfloat16), xv.cast(dtypes.bfloat16)
       xq, xk, xv = xq.transpose(1, 2), xk.transpose(1, 2), xv.transpose(1, 2)
       attn = xq.scaled_dot_product_attention(xk, xv, is_causal=True, enable_gqa=True).transpose(1, 2)
     attn = attn.reshape(bsz, seqlen, -1)
@@ -276,6 +278,11 @@ class FlatTransformer:
     from tinygrad.nn.state import get_parameters
     if not mp:
       for v in get_parameters(self): v.shard_(device, axis=None)
+      import numpy as np
+      freqs = 1.0 / (self.rope_theta ** (np.arange(0, self.head_dim, 2, dtype=np.float32) / self.head_dim))
+      idx = np.arange(self.max_context * 2, dtype=np.float32)[:, None] * freqs[None, :]
+      freqs_cis = np.stack((np.cos(idx), np.sin(idx)), axis=-1).reshape(1, self.max_context * 2, 1, self.head_dim // 2, 2).astype(np.float32)
+      self.freqs_cis = Tensor(freqs_cis, device=device[0]).shard(device, axis=None).contiguous().is_param_(False).realize()
     else:
       # flat per-layer weights: axis 0 is n_layers, so shard axes are +1 vs per-layer Transformer
       def _shard_fp8(name:str, axis:int):
@@ -303,7 +310,11 @@ class FlatTransformer:
       self.norm.weight.shard_(device, axis=None).realize()
       self.tok_embeddings.weight.shard_(device, axis=0).realize()
       self.output.shard_(device, axis=1).realize()
-      self.freqs_cis.shard_(device, axis=None).realize()
+      import numpy as np
+      freqs = 1.0 / (self.rope_theta ** (np.arange(0, self.head_dim, 2, dtype=np.float32) / self.head_dim))
+      idx = np.arange(self.max_context * 2, dtype=np.float32)[:, None] * freqs[None, :]
+      freqs_cis = np.stack((np.cos(idx), np.sin(idx)), axis=-1).reshape(1, self.max_context * 2, 1, self.head_dim // 2, 2).astype(np.float32)
+      self.freqs_cis = Tensor(freqs_cis, device=device[0]).shard(device, axis=None).contiguous().is_param_(False).realize()
       for amax_dict in (self._fp8_amax, self._fp8_grad_amax, self._fp8_next_grad_amax):
         for name in amax_dict:
           for i in range(len(amax_dict[name])):
@@ -311,7 +322,7 @@ class FlatTransformer:
 
   def __call__(self, tokens:Tensor, save:bool=True):
     h = self.tok_embeddings(tokens)
-    freqs_cis = self.freqs_cis.cast(h.dtype)[:, :tokens.shape[1], :, :, :]
+    freqs_cis = self.freqs_cis if getenv("HK_FLASH_ATTENTION") else self.freqs_cis.cast(h.dtype)[:, :tokens.shape[1], :, :, :]
     a, ga, nga, s = self._fp8_amax, self._fp8_grad_amax, self._fp8_next_grad_amax, self._fp8_inv_scale
     for i in range(self.n_layers):
       attn_kwargs = dict(attention_norm=self.attention_norm[i], wqkv=self.wqkv[i], wo=self.wo[i],
