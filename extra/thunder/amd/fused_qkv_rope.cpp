@@ -21,8 +21,7 @@
 #endif
 
 constexpr int GROUP_SIZE = ATTN_H / ATTN_H_KV;
-constexpr int Q_ELEMS = ATTN_B * ATTN_N * ATTN_H * ATTN_D;
-constexpr int KV_ELEMS = ATTN_B * ATTN_N * ATTN_H_KV * ATTN_D;
+constexpr int HALF_D = ATTN_D / 2;
 constexpr int PACKED_D = (GROUP_SIZE + 2) * ATTN_D;
 
 extern "C" __global__ __launch_bounds__(THREADS_PER_BLOCK) void
@@ -32,39 +31,39 @@ fused_qkv_rope_forward(
     __hip_bfloat16*       __restrict__ v,
     const __hip_bfloat16* __restrict__ xqkv,
     const float*          __restrict__ freqs_cis) {
-  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  const int stride = blockDim.x * gridDim.x;
+  const int b = blockIdx.x;
+  const int n = blockIdx.y;
+  const int bn = b * ATTN_N + n;
+  const int packed_bn = bn * ATTN_H_KV * PACKED_D;
+  const int q_bn = bn * ATTN_H * ATTN_D;
+  const int kv_bn = bn * ATTN_H_KV * ATTN_D;
 
-  for (int idx = tid; idx < Q_ELEMS; idx += stride) {
-    const int d = idx % ATTN_D;
-    const int h = (idx / ATTN_D) % ATTN_H;
-    const int n = (idx / (ATTN_D * ATTN_H)) % ATTN_N;
-    const int b = idx / (ATTN_D * ATTN_H * ATTN_N);
-    const int kvh = h / GROUP_SIZE;
-    const int rep = h - kvh * GROUP_SIZE;
-    const int pair = d >> 1;
+  if (threadIdx.x < HALF_D) {
+    const int pair = threadIdx.x;
     const int even = pair << 1;
-    const int base = (((b * ATTN_N + n) * ATTN_H_KV + kvh) * PACKED_D) + rep * ATTN_D;
-    const float c = freqs_cis[((n * (ATTN_D / 2) + pair) * 2) + 0];
-    const float s = freqs_cis[((n * (ATTN_D / 2) + pair) * 2) + 1];
-    const float a = static_cast<float>(xqkv[base + even]);
-    const float bb = static_cast<float>(xqkv[base + even + 1]);
-    q[idx] = static_cast<__hip_bfloat16>((d & 1) ? (a * s + bb * c) : (a * c - bb * s));
-  }
+    const float c = freqs_cis[((n * HALF_D + pair) * 2) + 0];
+    const float s = freqs_cis[((n * HALF_D + pair) * 2) + 1];
 
-  for (int idx = tid; idx < KV_ELEMS; idx += stride) {
-    const int d = idx % ATTN_D;
-    const int kvh = (idx / ATTN_D) % ATTN_H_KV;
-    const int n = (idx / (ATTN_D * ATTN_H_KV)) % ATTN_N;
-    const int b = idx / (ATTN_D * ATTN_H_KV * ATTN_N);
-    const int pair = d >> 1;
-    const int even = pair << 1;
-    const int base = ((b * ATTN_N + n) * ATTN_H_KV + kvh) * PACKED_D;
-    const float c = freqs_cis[((n * (ATTN_D / 2) + pair) * 2) + 0];
-    const float s = freqs_cis[((n * (ATTN_D / 2) + pair) * 2) + 1];
-    const float a = static_cast<float>(xqkv[base + GROUP_SIZE * ATTN_D + even]);
-    const float bb = static_cast<float>(xqkv[base + GROUP_SIZE * ATTN_D + even + 1]);
-    k[idx] = static_cast<__hip_bfloat16>((d & 1) ? (a * s + bb * c) : (a * c - bb * s));
-    v[idx] = xqkv[base + (GROUP_SIZE + 1) * ATTN_D + d];
+    for (int kvh = 0; kvh < ATTN_H_KV; kvh++) {
+      const int base = packed_bn + kvh * PACKED_D;
+
+      for (int rep = 0; rep < GROUP_SIZE; rep++) {
+        const int qbase = base + rep * ATTN_D;
+        const int h = kvh * GROUP_SIZE + rep;
+        const float a = static_cast<float>(xqkv[qbase + even]);
+        const float bb = static_cast<float>(xqkv[qbase + even + 1]);
+        const int out = q_bn + h * ATTN_D + even;
+        q[out] = static_cast<__hip_bfloat16>(a * c - bb * s);
+        q[out + 1] = static_cast<__hip_bfloat16>(a * s + bb * c);
+      }
+
+      const float a = static_cast<float>(xqkv[base + GROUP_SIZE * ATTN_D + even]);
+      const float bb = static_cast<float>(xqkv[base + GROUP_SIZE * ATTN_D + even + 1]);
+      const int out = kv_bn + kvh * ATTN_D + even;
+      k[out] = static_cast<__hip_bfloat16>(a * c - bb * s);
+      k[out + 1] = static_cast<__hip_bfloat16>(a * s + bb * c);
+      v[out] = xqkv[base + (GROUP_SIZE + 1) * ATTN_D + even];
+      v[out + 1] = xqkv[base + (GROUP_SIZE + 1) * ATTN_D + even + 1];
+    }
   }
 }
