@@ -166,8 +166,8 @@ class FlatTransformer:
     w_scales += [("w1", s_1), ("w3", s_3)] if SPLIT_W13 else [("w13", s_13)]
     self._fp8_inv_scale = {name: (s if MXFP8 else s.float()).contiguous().is_param_(False) for name, s in w_scales}
     self._fp8_next_inv_scale = {name: (s if MXFP8 else s.float()).contiguous().is_param_(False) for name, s in w_scales}
-    for name, s in w_scales:
-      if s.ndim == 1:
+    if not MXFP8 and not COLUMNWISE_WEIGHT_SCALE:
+      for name, s in w_scales:
         self._fp8_inv_scale[name] = [s[i].float().contiguous().is_param_(False) for i in range(n_layers)]
         self._fp8_next_inv_scale[name] = [s[i].float().contiguous().is_param_(False) for i in range(n_layers)]
 
