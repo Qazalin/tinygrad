@@ -1435,7 +1435,8 @@ def train_llama3():
 
   fp8_amax = [t for ts in model._fp8_amax.values() for t in ts]
   fp8_grad_amax = [t for ts in model._fp8_grad_amax.values() for t in ts] if hasattr(model, "_fp8_grad_amax") else []
-  fp8_inv_scales = list(model._fp8_inv_scale.values()) + list(model._fp8_next_inv_scale.values())
+  fp8_next_grad_amax = [t for ts in model._fp8_next_grad_amax.values() for t in ts] if hasattr(model, "_fp8_next_grad_amax") else []
+  fp8_inv_scales = [x for v in list(model._fp8_inv_scale.values()) + list(model._fp8_next_inv_scale.values()) for x in (v if isinstance(v, list) else [v])]
 
   from tinygrad.nn.state import get_state_dict
   model_state = get_state_dict(model)
@@ -1446,7 +1447,8 @@ def train_llama3():
     if optim.master_params:
       idx = next(j for j, p in enumerate(optim.params) if p is w)
       master = optim.master_params[idx]
-      inv = w._inv_scale if w._inv_scale.device == master.device else w._inv_scale.to(master.device)
+      inv = Tensor.stack(*w._inv_scale) if isinstance(w._inv_scale, list) else w._inv_scale
+      inv = inv if inv.device == master.device else inv.to(master.device)
       if MXFP8:
         from extra.gemm.cdna_asm_gemm import _mx_block_scale
         bs = _mx_block_scale(inv.reshape(-1, inv.shape[-1])).reshape(w.shape)
@@ -1456,7 +1458,7 @@ def train_llama3():
 
   # realize everything here
   if optim.master_params: Tensor.realize(*optim.master_params)
-  Tensor.realize(*optim.params, *fp8_inv_scales, *fp8_amax, *fp8_grad_amax)
+  Tensor.realize(*optim.params, *fp8_inv_scales, *fp8_amax, *fp8_grad_amax, *fp8_next_grad_amax)
 
   @TinyJit
   def minibatch(tokens:Tensor):
@@ -1474,7 +1476,7 @@ def train_llama3():
       apply_grad(g, new_g.uop)
 
     loss_cpu = loss.flatten().float().to("CPU")
-    return loss_cpu.realize(*grads, *fp8_amax, *fp8_grad_amax)
+    return loss_cpu.realize(*grads, *fp8_amax, *fp8_grad_amax, *fp8_next_grad_amax)
 
   @TinyJit
   def optim_step():
@@ -1482,10 +1484,11 @@ def train_llama3():
     scheduler.step()
 
     for g in grads: g.assign(0)
+    for cur, nxt in zip(fp8_grad_amax, fp8_next_grad_amax): cur.assign(nxt)
 
     lr_cpu = optim.lr.float().to("CPU")
     grad_norm_cpu = grad_norm.float().to("CPU")
-    Tensor.realize(lr_cpu, grad_norm_cpu, *grads, *fp8_inv_scales)
+    Tensor.realize(lr_cpu, grad_norm_cpu, *grads, *fp8_inv_scales, *fp8_grad_amax)
 
     return lr_cpu, grad_norm_cpu
 
