@@ -44,7 +44,7 @@ def _fused_quantize_bwd_w13(gradient:UOp, kernel:UOp):
   grad_xw13_fp8 = alloc_like(xw13.shape, dtypes.fp8e4m3,  device, axis)
   grad_amax_buf = alloc_local((NUM_WG,), dtypes.float32,  device, axis)
   grad_amax_state_t = Tensor(grad_amax_state, device=device)
-  grad_amax = grad_amax_state_t.empty_like()
+  grad_amax = alloc_like(grad_amax_state.shape, grad_amax_state.dtype, device, grad_amax_state.axis)
   fxn = functools.partial(_custom_fused_bwd_w13, dname=dname_of(device))
   grad_xw13_fp8, grad_amax_buf, grad_amax, *_ = Tensor.custom_kernel(
     grad_xw13_fp8, grad_amax_buf, grad_amax,
