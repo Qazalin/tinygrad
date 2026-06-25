@@ -357,6 +357,14 @@ def after_all_invalid(after:UOp):
     and all(r in st.src[0].ranges for r in s.ended_ranges)
     and resolve(cast(UOp, prod(r.src[0] for r in s.ended_ranges)).eq(buf.numel()), False) for s in after.src[1:])
 
+def remove_noop_mselect_bufferize(m:UOp):
+  if len(m.src) != 1 or (b:=m.src[0]).op is not Ops.STAGE or len(b.src) < 2: return None
+  if (c:=b.src[0]).op is not Ops.CONTIGUOUS or len(c.src) != 1 or (idx:=c.src[0]).op is not Ops.INDEX: return None
+  if idx.src[0].op is not Ops.AFTER: return None
+  if idx.src[1:] != b.src[1:]: return None
+  if idx.dtype != b.dtype: return None
+  return m.replace(src=(idx.src[0],))
+
 pm_const_buffer_folding = pm_mops+PatternMatcher([
   (UPat(Ops.STAGE, name="b"), cleanup_dead_axes),
   # remove noop buffers. if we look at the next index we can remove even more of these
@@ -372,6 +380,7 @@ pm_const_buffer_folding = pm_mops+PatternMatcher([
    lambda idx,after: idx.const_like(Invalid) if after_all_invalid(after) else None),
   # copy on CONST is CONST
   (UPat(Ops.COPY, src=(UPat.cvar("x"), UPat()), name="copy"), lambda copy,x: copy.const_like(x.arg)),
+  (UPat(Ops.MSELECT, name="m"), remove_noop_mselect_bufferize),
   # hack if a noop turned to a const
   (UPat(Ops.NOOP, src=(UPat.cvar("c"),)), lambda c: c),
   # mstack on CONST is CONST
