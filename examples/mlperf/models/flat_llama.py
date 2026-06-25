@@ -68,7 +68,8 @@ def matmul(x:Tensor, w:Tensor, fp8:bool=True, amax_x:Tensor|None=None, w_inv_sca
     if can_use_asm_gemm(x_fp8, w.T):
       assert amax_x is not None
       if COLUMNWISE_WEIGHT_SCALE:
-        out = asm_gemm(x_fp8, w.T, x_scale=amax_x, grad_amax_state=grad_amax_state, next_grad_amax_state=next_grad_amax_state, w_post_scale=w_inv_scale)
+        out = asm_gemm(x_fp8, w.T, x_scale=amax_x, grad_amax_state=grad_amax_state, next_grad_amax_state=next_grad_amax_state,
+                       w_post_scale=w_inv_scale)
       else:
         out = asm_gemm(x_fp8, w.T, x_scale=amax_x, w_scale=w_inv_scale, grad_amax_state=grad_amax_state, next_grad_amax_state=next_grad_amax_state)
       return out, x_new_amax, x_fp8
@@ -79,8 +80,8 @@ def norm_quantize_matmul(x:Tensor, norm:Tensor, w:Tensor, w_inv_scale:Tensor, ep
   if FUSED_ADD_NORM_MUL_QUANTIZE:
     from extra.llama_kernels.fused_rmsnorm_mul_quantize_fp8 import fused_rmsnorm_mul_quantize_fp8
     x_fp8, new_amax, x_normed, rrms = fused_rmsnorm_mul_quantize_fp8(x, norm, amax_x, eps, FP8_DTYPE)
-    out, *ret = matmul(None, w, w_inv_scale=w_inv_scale, x_fp8=x_fp8, amax_x=amax_x, x_new_amax=new_amax,
-                       grad_amax_state=grad_amax_state, next_grad_amax_state=next_grad_amax_state)
+    out, *ret = matmul(None, w, w_inv_scale=w_inv_scale, x_fp8=x_fp8, amax_x=amax_x, x_new_amax=new_amax, grad_amax_state=grad_amax_state,
+                       next_grad_amax_state=next_grad_amax_state)
     return out, x_normed, rrms, ret
   x_normed, rrms = rmsnorm(x, eps)
   out, *ret = matmul(x_normed * norm, w, amax_x=amax_x, w_inv_scale=w_inv_scale, grad_amax_state=grad_amax_state,
@@ -102,20 +103,17 @@ def add_norm_quantize_matmul(x:Tensor, residual:Tensor, norm:Tensor, w:Tensor, w
   return out, h, x_normed, rrms, ret
 
 def silu_w13_quantize_matmul(x_w13:Tensor, w2:Tensor, s_2:Tensor,
-                             amax_x2:Tensor,
-                             grad_amax_xw13:Tensor, next_grad_amax_xw13:Tensor,
-                             grad_amax_xout:Tensor, next_grad_amax_xout:Tensor):
+                             amax_x2:Tensor, grad_amax_xw13:Tensor, next_grad_amax_xw13:Tensor, grad_amax_xout:Tensor, next_grad_amax_xout:Tensor):
   if FUSED_SILU_W13:
     from extra.llama_kernels.cast_amax import fused_quantize_fp8_w13
-    x2_fp8, new_amax_x2 = fused_quantize_fp8_w13(x_w13, amax_x2, FP8_DTYPE,
-                                                 grad_amax_state=grad_amax_xw13, next_grad_amax_state=next_grad_amax_xw13)
-    out, *ret = matmul(None, w2, w_inv_scale=s_2, x_fp8=x2_fp8, amax_x=amax_x2, x_new_amax=new_amax_x2,
-                       grad_amax_state=grad_amax_xout, next_grad_amax_state=next_grad_amax_xout)
+    x2_fp8, new_amax_x2 = fused_quantize_fp8_w13(x_w13, amax_x2, FP8_DTYPE, grad_amax_state=grad_amax_xw13, next_grad_amax_state=next_grad_amax_xw13)
+    out, *ret = matmul(None, w2, w_inv_scale=s_2, x_fp8=x2_fp8, amax_x=amax_x2, x_new_amax=new_amax_x2, grad_amax_state=grad_amax_xout,
+                       next_grad_amax_state=next_grad_amax_xout)
     return out, ret
   hidden = x_w13.shape[-1] // 2
   x_w1, x_w3 = x_w13[..., :hidden], x_w13[..., hidden:]
-  out, *ret = matmul(x_w1.silu() * x_w3, w2, amax_x=amax_x2, w_inv_scale=s_2,
-                     grad_amax_state=grad_amax_xout, next_grad_amax_state=next_grad_amax_xout)
+  out, *ret = matmul(x_w1.silu() * x_w3, w2, amax_x=amax_x2, w_inv_scale=s_2, grad_amax_state=grad_amax_xout,
+                     next_grad_amax_state=next_grad_amax_xout)
   return out, ret
 
 class FlatTransformer:
@@ -212,8 +210,7 @@ class FlatTransformer:
       attn = xq.scaled_dot_product_attention(xk, xv, is_causal=True, enable_gqa=True).transpose(1, 2)
     attn = attn.reshape(bsz, seqlen, -1)
 
-    out, new_amax, *s = matmul(attn, wo, amax_x=amax_xo, w_inv_scale=s_o, grad_amax_state=grad_amax_xo,
-                               next_grad_amax_state=next_grad_amax_xo)
+    out, new_amax, *s = matmul(attn, wo, amax_x=amax_xo, w_inv_scale=s_o, grad_amax_state=grad_amax_xo, next_grad_amax_state=next_grad_amax_xo)
     amaxs.append(new_amax)
     saves.extend([*s, out])
     return out, amaxs, saves
@@ -226,12 +223,12 @@ class FlatTransformer:
       x_normed, rrms = rmsnorm(h, self.norm_eps)
       saves.extend([x_normed, rrms])
       inp = x_normed * kwargs["ffn_norm"]
-      x_w1, new_amax, *s = matmul(inp, kwargs["w1"], amax_x=kwargs["amax_x1"], w_inv_scale=kwargs["s_1"],
-                                  grad_amax_state=kwargs["grad_amax_xw1"], next_grad_amax_state=kwargs["next_grad_amax_xw1"])
+      x_w1, new_amax, *s = matmul(inp, kwargs["w1"], amax_x=kwargs["amax_x1"], w_inv_scale=kwargs["s_1"], grad_amax_state=kwargs["grad_amax_xw1"],
+                                  next_grad_amax_state=kwargs["next_grad_amax_xw1"])
       amaxs.append(new_amax)
       saves.extend([*s, x_w1])
-      x_w3, new_amax, *s = matmul(inp, kwargs["w3"], amax_x=kwargs["amax_x3"], w_inv_scale=kwargs["s_3"],
-                                  grad_amax_state=kwargs["grad_amax_xw3"], next_grad_amax_state=kwargs["next_grad_amax_xw3"])
+      x_w3, new_amax, *s = matmul(inp, kwargs["w3"], amax_x=kwargs["amax_x3"], w_inv_scale=kwargs["s_3"], grad_amax_state=kwargs["grad_amax_xw3"],
+                                  next_grad_amax_state=kwargs["next_grad_amax_xw3"])
       amaxs.append(new_amax)
       saves.extend([*s, x_w3])
       if FUSED_SILU_W13 and MXFP8:
@@ -242,8 +239,7 @@ class FlatTransformer:
         out = out.reshape(*x_w1.shape[:-1], kwargs["w2"].shape[0])
       else:
         out, new_amax, *s = matmul(x_w1.silu() * x_w3, kwargs["w2"], amax_x=kwargs["amax_x2"], w_inv_scale=kwargs["s_2"],
-                                   grad_amax_state=kwargs["grad_amax_xout"],
-                                   next_grad_amax_state=kwargs["next_grad_amax_xout"])
+                                   grad_amax_state=kwargs["grad_amax_xout"], next_grad_amax_state=kwargs["next_grad_amax_xout"])
       amaxs.append(new_amax)
       saves.extend([*s, out])
     else:
