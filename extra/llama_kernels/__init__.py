@@ -2,7 +2,7 @@ from __future__ import annotations
 import functools, pathlib
 from dataclasses import replace
 from tinygrad import Tensor, dtypes
-from tinygrad.uop.ops import shape_to_shape_arg
+from tinygrad.uop.ops import shape_to_shape_arg, UOp, KernelInfo
 from tinygrad.runtime.support.compiler_amd import HIPCCCompiler
 
 FP8_MAX = 448.0
@@ -24,6 +24,13 @@ def scalar_amax(amax_buf:Tensor) -> Tensor:
   if isinstance(amax_buf.device, tuple):
     return local_abs_max(amax_buf).detach()
   return amax_buf.max().detach()
+
+def zero_scalar(device, axis=None) -> Tensor:
+  out = alloc_local((), dtypes.float32, device, axis)
+  def _zero_kernel(out:UOp) -> UOp:
+    i = UOp.range(out.numel(), 0)
+    return out.flatten()[i].store(0.0).end(i).sink(arg=KernelInfo(name="zero"))
+  return Tensor.custom_kernel(out, fxn=_zero_kernel)[0]
 
 def shard_shape(shape:tuple, axis:int, ndev:int) -> list:
   s = list(shape)

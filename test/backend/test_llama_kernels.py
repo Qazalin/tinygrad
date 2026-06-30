@@ -5,6 +5,7 @@ from examples.mlperf.models.flat_llama import FP8_DTYPE, quantize_fp8
 from extra.llama_kernels.fused_ce import fused_ce_loss
 from extra.llama_kernels import local_abs_max
 from extra.llama_kernels.quantize_fp8_delayed import quantize_fp8_delayed, quantize_fp8_scalar
+from extra.llama_kernels.cast_amax import fused_quantize_fp8_w13
 from test.helpers import needs_second_gpu
 
 def run_fused_ce(bs:int, seqlen:int, vocab:int, label_smoothing:float=0.0) -> None:
@@ -82,6 +83,29 @@ class TestQuantizeFP8(unittest.TestCase):
     Tensor.realize(fp8, new_amax)
     assert fp8.uop.shape == x.uop.shape
     assert new_amax.shape == ()
+
+class TestCastAmax(unittest.TestCase):
+  def setUp(self):
+    if Device.DEFAULT.split(":")[0] not in ("AMD", "HIP"): self.skipTest("needs AMD/HIP")
+    try: ren = Device[Device.DEFAULT].renderer
+    except RuntimeError as e: self.skipTest(str(e))
+    if dtypes.bfloat16 not in ren.supported_dtypes() or dtypes.fp8e4m3 not in ren.supported_dtypes(): self.skipTest("need bf16/fp8")
+
+  def test_w13_amax(self):
+    Tensor.manual_seed(0)
+    xw13 = Tensor.randn(1, 16, 512, dtype=dtypes.float32).cast(dtypes.bfloat16).contiguous()
+    amax_state = Tensor.full((), 2.0, dtype=dtypes.float32).contiguous()
+    grad_amax_state = Tensor.full((), 2.0, dtype=dtypes.float32).contiguous()
+    next_grad_amax_state = Tensor.full((), 2.0, dtype=dtypes.float32).contiguous()
+    Tensor.realize(xw13, amax_state, grad_amax_state, next_grad_amax_state)
+
+    fp8, amax = fused_quantize_fp8_w13(xw13, amax_state, FP8_DTYPE, grad_amax_state, next_grad_amax_state)
+    hidden = xw13.shape[-1] // 2
+    ref_amax = (xw13[..., :hidden].silu() * xw13[..., hidden:]).abs().max().detach().cast(dtypes.float32)
+    Tensor.realize(fp8, amax, ref_amax)
+
+    with Context(DEBUG=0):
+      assert amax.allclose(ref_amax, atol=2e-2, rtol=2e-2).item(), f"amax mismatch: got={amax.item()} ref={ref_amax.item()}"
 
 class TestLocalAmax(unittest.TestCase):
   def test_multi_tensor_local_shard_amax(self):
