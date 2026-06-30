@@ -11,13 +11,13 @@ from extra.llama_kernels import NUM_WG, THREADS_PER_WG, compile_cpp, alloc_like,
 _grad_fp8_mailbox:dict[UOp, tuple[UOp, UOp]] = {}
 
 @functools.cache
-def _custom_fused_bwd_w13(grad_xw13_fp8:UOp, grad_amax_next:UOp, grad_amax:UOp,
+def _custom_fused_bwd_w13(grad_xw13_fp8:UOp, grad_amax_next:UOp,
                           xw13:UOp, grad_x2:UOp, amax_state:UOp, grad_amax_state:UOp, dname:str) -> UOp:
   hidden = xw13.shape[2] // 2
   n_elems = xw13.shape[0] * xw13.shape[1] * hidden
   threads, workgroups = UOp.special(THREADS_PER_WG, "lidx0"), UOp.special(NUM_WG, "gidx0")
-  mem = n_elems * 2 * 3 + n_elems * 2 + 4 + 4
-  sink = UOp.sink(grad_xw13_fp8.base, grad_amax_next, grad_amax.base,
+  mem = n_elems * 2 * 3 + n_elems * 2 + 4
+  sink = UOp.sink(grad_xw13_fp8.base, grad_amax_next,
                   xw13.base, grad_x2.base, amax_state.base, grad_amax_state.base, threads, workgroups,
                   arg=KernelInfo(f"fused_silu_mul_bwd_w13_{n_elems}", estimates=Estimates(ops=10*n_elems, mem=mem)))
   src, lib = compile_cpp(pathlib.Path(__file__).parent, "cast_amax_bwd_w13.cpp", n_elems, hidden)
@@ -44,10 +44,9 @@ def _fused_quantize_bwd_w13(gradient:UOp, kernel:UOp):
   grad_xw13_fp8 = alloc_like(xw13.shape, dtypes.fp8e4m3,  device, axis)
   grad_amax_next = zero_scalar(device)
   grad_amax_state_t = Tensor(grad_amax_state, device=device)
-  grad_amax = grad_amax_state_t.empty_like()
   fxn = functools.partial(_custom_fused_bwd_w13, dname=dname_of(device))
-  grad_xw13_fp8, grad_amax_next, grad_amax, *_ = Tensor.custom_kernel(
-    grad_xw13_fp8, grad_amax_next, grad_amax,
+  grad_xw13_fp8, grad_amax_next, *_ = Tensor.custom_kernel(
+    grad_xw13_fp8, grad_amax_next,
     Tensor(xw13, device=device), Tensor(gradient, device=device).cast(dtypes.bfloat16),
     Tensor(amax_state, device=device), grad_amax_state_t, fxn=fxn)
   grad_xw13_uop = grad_xw13_fp8.uop.cast(dtypes.bfloat16)
