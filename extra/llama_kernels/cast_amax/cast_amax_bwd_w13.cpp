@@ -25,15 +25,17 @@ __forceinline__ __device__ float atomicMaxOfNonNegative(float* addr, float value
   return __int_as_float(atomicMax(reinterpret_cast<int32_t*>(addr), __float_as_int(value)));
 }
 
-// fused silu*mul backward, two outputs in a single HBM pass:
+// fused silu*mul backward, three outputs in a single HBM pass:
 //   1) fp8  grad_xw13_fp8  — delayed-scale quantize using grad_amax_state (mailbox to matmul bwd)
-//   2) fp32 grad_amax_next — scalar |grad_xw13| via global atomic max
+//   2) fp32 grad_amax_out  — scalar |grad_xw13| via global atomic max
+//   3) fp32 grad_amax_out  — delayed grad amax used for quantize/GEMM epilogue scale
 // grad_amax_state is read for the fp8 scale. The store of new_grad_amax into grad_amax_state's
 // buffer is built in Python as a separate effect and threaded into grad_a via .after(store).
 extern "C" __global__ __launch_bounds__(THREADS_PER_WG) void
 fused_silu_mul_bwd_w13(
     __hip_fp8_storage_t*  __restrict__ grad_xw13_fp8_out,    // fp8,  2*N_ELEMS
     float*                __restrict__ grad_amax_next,       // fp32 scalar, initialized to 0 before launch
+    float*                __restrict__ grad_amax_out,        // fp32 scalar delayed grad amax
     const __hip_bfloat16* __restrict__ xw13,                 // bf16, 2*N_ELEMS
     const __hip_bfloat16* __restrict__ grad_x2,              // bf16, N_ELEMS
     const float*          __restrict__ amax_state,           // fp32 scalar (fwd x2 amax)
@@ -50,6 +52,8 @@ fused_silu_mul_bwd_w13(
   const float grad_amax = static_cast<float>(*grad_amax_state);
   const float g_scale = FP8_MAX / (grad_amax + 1e-8f);
   float local_max = 0.0f;
+
+  if (wg == 0 && tid == 0) *grad_amax_out = grad_amax;
 
   for (int base = gid * VEC; base < N_ELEMS; base += stride_elems) {
     const int outer = base / HIDDEN;
