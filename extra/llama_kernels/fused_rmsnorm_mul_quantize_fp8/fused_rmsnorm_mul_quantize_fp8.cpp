@@ -155,5 +155,5 @@ fused_rmsnorm_mul_quantize_fp8(
     if (tid < s) sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
     __syncthreads();
   }
-  if (tid == 0) atomicMaxOfNonNegative(amax_out, sdata[0]);
+  if (tid == 0 && sdata[0] > *amax_out) atomicMaxOfNonNegative(amax_out, sdata[0]);
 }

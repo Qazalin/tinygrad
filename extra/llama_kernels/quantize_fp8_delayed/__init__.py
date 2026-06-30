@@ -47,12 +47,15 @@ def _custom_quantize_fp8_with_amax(fp8_out:UOp, amax_out:UOp, x:UOp, amax_state:
 
   device = device[0].split(":")[0] if isinstance(device, tuple) else device.split(":")[0]
   if device in ("AMD", "HIP"):
-    atomic_arg = "__hip_atomic_fetch_max((int*){0}, {1}, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);"
+    # Avoid sending every workgroup to the same hot atomic. The scalar only increases, so if a non-atomic read already
+    # observes a value >= this WG's max, skipping the atomic is safe. Stale reads only cause extra atomics, not misses.
+    atomic_arg = "if ({2} > {3}) __hip_atomic_fetch_max((int*){0}, {1}, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);"
   elif device in ("CPU", "NULL"):
-    atomic_arg = "__atomic_fetch_max((int*){0}, {1}, __ATOMIC_RELAXED);"
+    atomic_arg = "if ({2} > {3}) __atomic_fetch_max((int*){0}, {1}, __ATOMIC_RELAXED);"
   else:
     raise NotImplementedError(f"no atomic max for device {device}")
-  atomic = UOp(Ops.CUSTOM, dtypes.void, (amax_out.reshape((1,)).index(UOp.const(dtypes.weakint, 0), ptr=True), lds[0].bitcast(dtypes.int32)), arg=atomic_arg)
+  atomic = UOp(Ops.CUSTOM, dtypes.void, (amax_out.reshape((1,)).index(UOp.const(dtypes.weakint, 0), ptr=True),
+                                         lds[0].bitcast(dtypes.int32), lds[0], amax_out.reshape((1,))[0]), arg=atomic_arg)
   return atomic.end(tid, wg).sink(arg=KernelInfo(f"quantize_fp8_with_amax_{n_elems}", opts_to_apply=()))
 
 @functools.cache

@@ -92,5 +92,5 @@ fused_silu_mul_bwd_w13(
     if (tid < s) sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
     __syncthreads();
   }
-  if (tid == 0) atomicMaxOfNonNegative(grad_amax_next, sdata[0]);
+  if (tid == 0 && sdata[0] > *grad_amax_next) atomicMaxOfNonNegative(grad_amax_next, sdata[0]);
 }

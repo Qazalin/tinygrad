@@ -79,5 +79,5 @@ fused_silu_mul_cast_amax_w13(
     __syncthreads();
   }
 
-  if (tid == 0) atomicMaxOfNonNegative(amax_out, sdata[0]);
+  if (tid == 0 && sdata[0] > *amax_out) atomicMaxOfNonNegative(amax_out, sdata[0]);
 }

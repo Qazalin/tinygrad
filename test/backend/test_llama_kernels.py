@@ -73,6 +73,22 @@ class TestQuantizeFP8(unittest.TestCase):
   def test_scalar(self): run_quantize_fp8((getenv("N", 1024), 32), delayed=False)
   def test_delayed(self): run_quantize_fp8((getenv("N", 2048), 1024))
 
+  def test_delayed_spike_amax(self):
+    Tensor.manual_seed(0)
+    shape = (2048, 1024)
+    x = Tensor.randn(*shape).cast(dtypes.bfloat16).contiguous()
+    spike = (Tensor.arange(x.numel()).reshape(shape) == (x.numel() - 1)).where(32.0, x).cast(dtypes.bfloat16).contiguous()
+    amax_state = Tensor.full((), 2.0, dtype=dtypes.float32).contiguous()
+    Tensor.realize(spike, amax_state)
+    fp8, inv_scale, new_amax, _ = quantize_fp8_delayed(spike, amax_state, FP8_DTYPE)
+    ref_fp8, ref_inv_scale, ref_new_amax = quantize_fp8(spike, amax_state=amax_state)
+    Tensor.realize(fp8, inv_scale, new_amax, ref_fp8, ref_inv_scale, ref_new_amax)
+    with Context(DEBUG=0):
+      assert fp8.cast(dtypes.float).allclose(ref_fp8.cast(dtypes.float), atol=0, rtol=0).item(), "fp8 mismatch"
+      assert inv_scale.allclose(ref_inv_scale, atol=0, rtol=0).item(), "inv_scale mismatch"
+      assert new_amax.allclose(ref_new_amax, atol=0, rtol=0).item(), \
+        f"amax mismatch: got={new_amax.item()} ref={ref_new_amax.item()}"
+
   @needs_second_gpu
   def test_multi(self):
     devs = tuple(f"{Device.DEFAULT}:{i}" for i in range(8))
