@@ -1,9 +1,9 @@
 import functools, itertools
 from tinygrad.helpers import all_int, prod, DEBUG, RING, ALL2ALL, getenv
-from tinygrad.uop.ops import UOp, Invalid
+from tinygrad.uop.ops import Ops, UOp, Invalid
 
 # *** allreduce implementation ***
-def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
+def handle_allreduce(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
   if not isinstance(buf.device, tuple): return None
   assert all_int(buf.shape), f"does not support symbolic shape {buf.shape}"
   ndev, shape, numel = len(buf.device), buf.shape, prod(buf.shape)
@@ -52,6 +52,9 @@ def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
       copied_chunks.append(UOp.mstack(*(chain[(j-i+1)%ndev] for j in range(ndev))))
 
   # reassemble
+  if output is not None and use_all2all:
+    flat_out = output.reshape((numel,))
+    return output.after(*[flat_out.shrink(((s,e),)).store(c) for (s,e),c in zip(chunks, copied_chunks)])
   return UOp.usum(*[c.pad(((s,numel-e),)) for (s,e),c in zip(chunks, copied_chunks)]).reshape(shape)
 
 def create_allreduce_function(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
@@ -59,4 +62,6 @@ def create_allreduce_function(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|Non
   to = red.param_like(0)
   src = buf.param_like(1)
   red = src.allreduce(red.arg, red.src[1])
-  return output.after(to.after(to.store(handle_allreduce(src, red))).sink().call(output, buf.contiguous(), name="allreduce", precompile=True))
+  ret = handle_allreduce(src, red, to)
+  body = ret if ret.op is Ops.AFTER and ret.src[0] is to else to.after(to.store(ret))
+  return output.after(body.sink().call(output, buf.contiguous(), name="allreduce", precompile=True))
