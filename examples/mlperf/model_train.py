@@ -1441,7 +1441,7 @@ def train_llama3():
 
   from tinygrad.nn.state import get_state_dict
   model_state = get_state_dict(model)
-  deferred_wgrad_params = {model_state[name] for name in ("wqkv", "wo", "w13", "w1", "w3", "w2") if name in model_state}
+  deferred_wgrad_params = {model_state[name] for name in ("wqkv", "wo", "w13", "w1", "w3", "w2", "attention_norm", "ffn_norm") if name in model_state}
   deferred_wgrad_grads = [grads[i] for i,p in enumerate(optim.params) if p in deferred_wgrad_params]
   for wname in model._fp8_inv_scale:
     w = model_state[wname]

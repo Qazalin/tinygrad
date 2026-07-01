@@ -76,7 +76,18 @@ def _bwd_common(fp8_grad_u, h_grad_u, x_u, x_normed_u, rrms_u, weight_u, amax_st
       Tensor(weight_u, device=device),
       Tensor(amax_state_u, device=device), fxn=fxn)
     grad_h_from_fp8 = grad_x_t
-    grad_weight_uop = grad_weight_partial_t.sum(axis=0).cast(dtypes.bfloat16).uop
+    if isinstance(device, tuple):
+      def strip_multi_axis0(u:UOp) -> UOp:
+        if u.op is Ops.MULTI:
+          assert u.axis == 0, f"expected local norm grad MULTI on axis 0, got {u.axis}"
+          return u.src[0]
+        if u.op is Ops.AFTER: return strip_multi_axis0(u.src[0]).after(*u.src[1:])
+        if u.op is Ops.CONTIGUOUS: return strip_multi_axis0(u.src[0]).contiguous()
+        raise AssertionError(f"expected local norm grad MULTI on axis 0, got {u.op} {u.axis}")
+      local_sum = strip_multi_axis0(grad_weight_partial_t.uop)._rop(Ops.ADD, (0,)).reshape((HIDDEN,))
+      grad_weight_uop = local_sum.cast(dtypes.bfloat16)
+    else:
+      grad_weight_uop = grad_weight_partial_t.sum(axis=0).cast(dtypes.bfloat16).uop
   if h_grad_u is not None:
     h_grad_t = Tensor(h_grad_u, device=device).cast(dtypes.bfloat16)
     grad_total = (grad_h_from_fp8 + h_grad_t) if grad_h_from_fp8 is not None else h_grad_t
