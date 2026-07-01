@@ -2861,7 +2861,7 @@ def custom_gemm_bw(gradient:UOp, kernel:UOp, n_scales:int=2, has_grad_amax:bool=
       g_fp8_T = fast_fp8_transpose(g_fp8_2d)
     else:
       g_fp8_T = g_fp8.permute(2, 0, 1).reshape(g_t.shape[-1], -1)
-    grad_b = asm_gemm(g_fp8_T, a_t.reshape(-1, a_t.shape[-1]), x_scale=s_x_t, g_amax=g_amax)
+    grad_b = asm_gemm(g_fp8_T, a_t.reshape(-1, a_t.shape[-1]), x_scale=s_x_t, g_amax=g_amax, defer_k_allreduce=True)
     # wgrad: rescale if not scalar
     if w_post_t is not None:
       grad_b = grad_b / w_post_t.reshape(*w_post_t.shape, *([1]*(grad_b.ndim - w_post_t.ndim)))
@@ -2918,7 +2918,7 @@ def _custom_gemm_bw_fxn(n_scales:int, has_grad_amax:bool, has_w_post:bool):
   return functools.partial(custom_gemm_bw, n_scales=n_scales, has_grad_amax=has_grad_amax, has_w_post=has_w_post)
 
 def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=None, grad_amax_state:Tensor|None=None,
-             next_grad_amax_state:Tensor|None=None,
+             next_grad_amax_state:Tensor|None=None, defer_k_allreduce:bool=False,
              w_post_scale:Tensor|None=None, mx:bool=False, mx_scales:tuple|None=None, mx_w_stored:bool=False, g_amax:Tensor|None=None) -> Tensor:
   assert can_use_asm_gemm(a, b), f"{counters['todos'][-1]}"
   counters["used"] += 1
@@ -2979,7 +2979,18 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
       out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_asm_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
   else:
     out = Tensor.custom_kernel(out, a, b, fxn=custom_uop_gemm, grad_fxn=custom_gemm_bw)[0]
-  if k_sharded: out = out.sum(0)
+  if k_sharded:
+    if defer_k_allreduce:
+      def strip_multi_axis0(u:UOp) -> UOp:
+        if u.op is Ops.MULTI:
+          assert u.axis == 0, f"expected k-sharded output MULTI on axis 0, got {u.axis}"
+          return u.src[0]
+        if u.op is Ops.AFTER: return strip_multi_axis0(u.src[0]).after(*u.src[1:])
+        if u.op is Ops.CONTIGUOUS: return strip_multi_axis0(u.src[0]).contiguous()
+        raise AssertionError(f"expected k-sharded output MULTI on axis 0, got {u.op} {u.axis}")
+      out = Tensor(strip_multi_axis0(out.uop), device=a.device)
+    else:
+      out = out.sum(0)
   out = out.squeeze(0) if squeeze else out
   if unfold_batch: out = out.reshape(orig_batch, -1, out.shape[-1])
   if w_post_scale is not None: out = (out * w_post_scale.reshape(*([1]*(out.ndim-1)), -1)).cast(out.dtype)

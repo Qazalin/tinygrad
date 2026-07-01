@@ -6,6 +6,7 @@ from tinygrad import Device, GlobalCounters, Tensor, TinyJit, dtypes, Context
 from tinygrad.helpers import getenv, BEAM, WINO, round_up, diskcache_clear, Profiling, profile_marker, DEBUG
 from tinygrad.nn.state import get_parameters, get_state_dict, load_state_dict, safe_load, safe_save
 from tinygrad.nn.optim import LAMB, LARS, SGD, OptimizerGroup, Adam, AdamW
+from tinygrad.uop.ops import Ops
 
 from extra.lr_scheduler import LRSchedulerGroup
 from examples.mlperf.helpers import get_training_state, load_training_state
@@ -1440,6 +1441,8 @@ def train_llama3():
 
   from tinygrad.nn.state import get_state_dict
   model_state = get_state_dict(model)
+  deferred_wgrad_params = {model_state[name] for name in ("wqkv", "wo", "w13", "w1", "w3", "w2") if name in model_state}
+  deferred_wgrad_grads = [grads[i] for i,p in enumerate(optim.params) if p in deferred_wgrad_params]
   for wname in model._fp8_inv_scale:
     w = model_state[wname]
     w._inv_scale = model._fp8_inv_scale[wname]
@@ -1480,6 +1483,8 @@ def train_llama3():
 
   @TinyJit
   def optim_step():
+    for g in deferred_wgrad_grads:
+      g.assign(Tensor(g.uop.buf_uop.reshape(g.shape).allreduce(Ops.ADD, g.device)))
     grad_norm = optim.fstep(grads)
     scheduler.step()
 
