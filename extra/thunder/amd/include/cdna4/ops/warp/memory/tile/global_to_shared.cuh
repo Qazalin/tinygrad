@@ -265,7 +265,7 @@ __device__ __forceinline__ void load(ST& dst, const GL& src, const COORD& idx,
     using T = typename ST::dtype;
     static_assert(sizeof(T) == 2 || sizeof(T) == 1, "only supporting 16 and 8-bit dtypes");
 
-    constexpr int bytes_per_thread = 16;
+    constexpr int bytes_per_thread = ST::underlying_subtile_bytes_per_thread;
     constexpr int bytes_per_memcpy = bytes_per_thread * N_THREADS;
     constexpr int memcpy_per_tile  = (ST::rows * ST::cols * sizeof(T)) / bytes_per_memcpy;
     static_assert(bytes_per_memcpy % 16 == 0, "LDS bump must be 16-aligned");
@@ -300,8 +300,8 @@ __device__ __forceinline__ void load(ST& dst, const GL& src, const COORD& idx,
         asm volatile("s_mov_b32 m0, %0" :: "s"(lds_byte));
         llvm_amdgcn_raw_buffer_load_lds(
             SRD, 
-            (as3_uint32_ptr)0, 
-            16, 
+            (as3_uint32_ptr)0,
+            bytes_per_thread,
             swizzled_offsets[i], 
             SOFF, 
             0,

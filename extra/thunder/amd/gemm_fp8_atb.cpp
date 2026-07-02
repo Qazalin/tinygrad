@@ -148,17 +148,43 @@ __global__ __launch_bounds__(512, 2) void hk_fp8_atb_gemm(bf16 *C_ptr, fp8e4m3 *
     RT_C cC;
     RT_C cD;
 
-    // Calculate which block this threadblock should work on
-    int global_block_id = blockIdx.x;
+    int wgid = blockIdx.x;
+    const int WGM = 8;
+    wgid = chiplet_transform_chunked(wgid, total_blocks_needed, NUM_XCDS, 64);
 
-    // Convert linear block ID to 2D coordinates
-    int block_row = global_block_id / blocks_per_col;
-    int block_col = global_block_id % blocks_per_col;
+    const int num_wgid_in_group = WGM * blocks_per_col;
+    int group_id = wgid / num_wgid_in_group;
+    int first_block_row = group_id * WGM;
+    int group_size_m = min(blocks_per_row - first_block_row, WGM);
+    int block_row = first_block_row + ((wgid % num_wgid_in_group) % group_size_m);
+    int block_col = (wgid % num_wgid_in_group) / group_size_m;
     int block_m = block_row * BLOCK_SIZE_ROW;
     int block_n = block_col * BLOCK_SIZE_COL;
 
     int warp_m = (warpid() / WARPS_COL); // warp row: 0 to 3
     int warp_n = (warpid() % WARPS_COL); // warp col: 0 to 1
+
+    const fp8e4m3 *a_base = (fp8e4m3*)&A[{0, 0, 0, 0}];
+    const fp8e4m3 *b_base = (fp8e4m3*)&B[{0, 0, 0, 0}];
+    const int a_row_stride = A.template stride<2>() * sizeof(fp8e4m3);
+    const int b_row_stride = B.template stride<2>() * sizeof(fp8e4m3);
+    i32x4 a_srsrc_base = make_srsrc(a_base, K * a_row_stride, a_row_stride);
+    i32x4 b_srsrc_base = make_srsrc(b_base, K * b_row_stride, b_row_stride);
+
+    const int wid = warpid() % NUM_WARPS;
+    constexpr int elem_per_warp = (ST_A::underlying_subtile_bytes_per_thread / sizeof(fp8e4m3)) * kittens::WARP_THREADS;
+    uint32_t a_lds[2][2] = {
+        {to_sgpr_u32(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&As[0][0].data[0]) + wid * elem_per_warp * sizeof(fp8e4m3))),
+         to_sgpr_u32(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&As[0][1].data[0]) + wid * elem_per_warp * sizeof(fp8e4m3)))},
+        {to_sgpr_u32(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&As[1][0].data[0]) + wid * elem_per_warp * sizeof(fp8e4m3))),
+         to_sgpr_u32(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&As[1][1].data[0]) + wid * elem_per_warp * sizeof(fp8e4m3)))}
+    };
+    uint32_t b_lds[2][2] = {
+        {to_sgpr_u32(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&Bs[0][0].data[0]) + wid * elem_per_warp * sizeof(fp8e4m3))),
+         to_sgpr_u32(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&Bs[0][1].data[0]) + wid * elem_per_warp * sizeof(fp8e4m3)))},
+        {to_sgpr_u32(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&Bs[1][0].data[0]) + wid * elem_per_warp * sizeof(fp8e4m3))),
+         to_sgpr_u32(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&Bs[1][1].data[0]) + wid * elem_per_warp * sizeof(fp8e4m3)))}
+    };
 
     int tic = 0, toc = 1;
 
@@ -181,10 +207,10 @@ __global__ __launch_bounds__(512, 2) void hk_fp8_atb_gemm(bf16 *C_ptr, fp8e4m3 *
     zero(cC);
     zero(cD);
 
-    G::load(Bs[tic][0], B, {0, 0, 0, block_col * 2}, swizzled_offsets_B);
-    G::load(As[tic][0], A, {0, 0, 0, block_row * 2}, swizzled_offsets_A);
-    G::load(Bs[tic][1], B, {0, 0, 0, block_col * 2 + 1}, swizzled_offsets_B);
-    G::load(As[tic][1], A, {0, 0, 0, block_row * 2 + 1}, swizzled_offsets_A);
+    G::load(Bs[tic][0], B, {0, 0, 0, block_col * 2}, swizzled_offsets_B, b_srsrc_base, b_base, b_lds[tic][0]);
+    G::load(As[tic][0], A, {0, 0, 0, block_row * 2}, swizzled_offsets_A, a_srsrc_base, a_base, a_lds[tic][0]);
+    G::load(Bs[tic][1], B, {0, 0, 0, block_col * 2 + 1}, swizzled_offsets_B, b_srsrc_base, b_base, b_lds[tic][1]);
+    G::load(As[tic][1], A, {0, 0, 0, block_row * 2 + 1}, swizzled_offsets_A, a_srsrc_base, a_base, a_lds[tic][1]);
 
     if (warp_m == 1) {
         __builtin_amdgcn_s_barrier();
@@ -193,9 +219,9 @@ __global__ __launch_bounds__(512, 2) void hk_fp8_atb_gemm(bf16 *C_ptr, fp8e4m3 *
     asm volatile("s_waitcnt vmcnt(4)");
     __builtin_amdgcn_s_barrier();
 
-    G::load(Bs[toc][0], B, {0, 0, 1, block_col * 2}, swizzled_offsets_B);
-    G::load(As[toc][0], A, {0, 0, 1, block_row * 2}, swizzled_offsets_A);
-    G::load(Bs[toc][1], B, {0, 0, 1, block_col * 2 + 1}, swizzled_offsets_B);
+    G::load(Bs[toc][0], B, {0, 0, 1, block_col * 2}, swizzled_offsets_B, b_srsrc_base, b_base, b_lds[toc][0]);
+    G::load(As[toc][0], A, {0, 0, 1, block_row * 2}, swizzled_offsets_A, a_srsrc_base, a_base, a_lds[toc][0]);
+    G::load(Bs[toc][1], B, {0, 0, 1, block_col * 2 + 1}, swizzled_offsets_B, b_srsrc_base, b_base, b_lds[toc][1]);
 
     asm volatile("s_waitcnt vmcnt(6)");
     __builtin_amdgcn_s_barrier();
@@ -206,7 +232,7 @@ __global__ __launch_bounds__(512, 2) void hk_fp8_atb_gemm(bf16 *C_ptr, fp8e4m3 *
         
         load(b0, Bs[tic][0], warp_n * REG_BLOCK_N);
         load(a, As[tic][0], warp_m * REG_BLOCK_M);
-        G::load(As[toc][1], A, {0, 0, k + 1, block_row * 2 + 1}, swizzled_offsets_A);
+        G::load(As[toc][1], A, {0, 0, k + 1, block_row * 2 + 1}, swizzled_offsets_A, a_srsrc_base, a_base, a_lds[toc][1]);
         asm volatile("s_waitcnt lgkmcnt(8)");
         __builtin_amdgcn_s_barrier();
 
@@ -218,7 +244,7 @@ __global__ __launch_bounds__(512, 2) void hk_fp8_atb_gemm(bf16 *C_ptr, fp8e4m3 *
         __builtin_amdgcn_sched_barrier(0);
 
         load(b1, Bs[tic][1], warp_n * REG_BLOCK_N);
-        G::load(Bs[tic][0], B, {0, 0, k + 2, block_col * 2}, swizzled_offsets_B);
+        G::load(Bs[tic][0], B, {0, 0, k + 2, block_col * 2}, swizzled_offsets_B, b_srsrc_base, b_base, b_lds[tic][0]);
         __builtin_amdgcn_s_barrier();
 
         asm volatile("s_waitcnt lgkmcnt(0)");
@@ -228,7 +254,7 @@ __global__ __launch_bounds__(512, 2) void hk_fp8_atb_gemm(bf16 *C_ptr, fp8e4m3 *
         __builtin_amdgcn_s_barrier();
 
         load(a, As[tic][1], warp_m * REG_BLOCK_M);
-        G::load(As[tic][0], A, {0, 0, k + 2, block_row * 2}, swizzled_offsets_A);
+        G::load(As[tic][0], A, {0, 0, k + 2, block_row * 2}, swizzled_offsets_A, a_srsrc_base, a_base, a_lds[tic][0]);
         __builtin_amdgcn_s_barrier();
 
         asm volatile("s_waitcnt lgkmcnt(0)");
@@ -238,7 +264,7 @@ __global__ __launch_bounds__(512, 2) void hk_fp8_atb_gemm(bf16 *C_ptr, fp8e4m3 *
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
-        G::load(Bs[tic][1], B, {0, 0, k + 2, block_col * 2 + 1}, swizzled_offsets_B);
+        G::load(Bs[tic][1], B, {0, 0, k + 2, block_col * 2 + 1}, swizzled_offsets_B, b_srsrc_base, b_base, b_lds[tic][1]);
         asm volatile("s_waitcnt vmcnt(6)");
         __builtin_amdgcn_s_barrier();
 
@@ -253,7 +279,7 @@ __global__ __launch_bounds__(512, 2) void hk_fp8_atb_gemm(bf16 *C_ptr, fp8e4m3 *
 
         load(b0, Bs[tic][0], warp_n * REG_BLOCK_N);
         load(a, As[tic][0], warp_m * REG_BLOCK_M);
-        G::load(As[toc][1], A, {0, 0, k + 1, block_row * 2 + 1}, swizzled_offsets_A);
+        G::load(As[toc][1], A, {0, 0, k + 1, block_row * 2 + 1}, swizzled_offsets_A, a_srsrc_base, a_base, a_lds[toc][1]);
         __builtin_amdgcn_s_barrier();
 
         asm volatile("s_waitcnt lgkmcnt(0)");
