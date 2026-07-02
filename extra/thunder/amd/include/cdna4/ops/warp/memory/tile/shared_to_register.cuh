@@ -720,8 +720,8 @@ __device__ inline static void load(RT &dst, const ST &src, int col_offset) {
             asm volatile(
                 "ds_read_b64_tr_b8 %0, %2 offset:0\n"
                 "ds_read_b64_tr_b8 %1, %2 offset:%3\n"
-                : "=&v"(*reinterpret_cast<float2*>(&dst.tiles[i][0].data[0])),
-                  "=&v"(*reinterpret_cast<float2*>(&dst.tiles[i][0].data[4]))
+                : "=v"(*reinterpret_cast<float2*>(&dst.tiles[i][0].data[0])),
+                  "=v"(*reinterpret_cast<float2*>(&dst.tiles[i][0].data[4]))
                 : "v"(addr), "i"(4 * subtile_bytes)
                 : "memory"
             );
@@ -731,8 +731,8 @@ __device__ inline static void load(RT &dst, const ST &src, int col_offset) {
             asm volatile(
                 "ds_read_b64_tr_b8 %0, %2 offset:0\n"
                 "ds_read_b64_tr_b8 %1, %2 offset:%3\n"
-                : "=&v"(*reinterpret_cast<float2*>(&dst.tiles[i][0].data[2])),
-                  "=&v"(*reinterpret_cast<float2*>(&dst.tiles[i][0].data[6]))
+                : "=v"(*reinterpret_cast<float2*>(&dst.tiles[i][0].data[2])),
+                  "=v"(*reinterpret_cast<float2*>(&dst.tiles[i][0].data[6]))
                 : "v"(addr), "i"(4 * subtile_bytes)
                 : "memory"
             );
