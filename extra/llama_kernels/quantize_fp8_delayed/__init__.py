@@ -78,7 +78,7 @@ def _quantize_fp8_delayed_bwd(gradient:UOp, kernel:UOp):
   grad_x = (Tensor(gradient, device=device).float() * scale).cast(dtypes.bfloat16)
   return (None, None, grad_x.uop, None)
 
-def quantize_fp8_delayed(x:Tensor, amax_state:Tensor, fp8_dtype=dtypes.fp8e4m3) -> tuple[Tensor, Tensor, Tensor, UOp]:
+def quantize_fp8_delayed(x:Tensor, amax_state:Tensor, fp8_dtype=dtypes.fp8e4m3, amax_out:Tensor|None=None) -> tuple[Tensor, Tensor, Tensor, UOp|None]:
   # NOTE: one-pass bf16 -> fp8 quantize with delayed scaling. Returns (fp8, inv_scale, new_amax, store_effect).
   # Fused kernel reads x once and writes fp8 + scalar amax via global atomic max.
   # store_effect writes new_amax into amax_state's buffer — the caller must thread it into a realized
@@ -89,13 +89,14 @@ def quantize_fp8_delayed(x:Tensor, amax_state:Tensor, fp8_dtype=dtypes.fp8e4m3) 
   fp8_out      = alloc_like(x.shape,  fp8_dtype,      x.device, axis)
   n_elems = prod(x.uop.shard_shape)
   assert n_elems % NUM_WG == 0, f"{n_elems=} must divide over {NUM_WG=}"
-  amax_out = zero_scalar(x.device)
+  owned_amax_out = amax_out is None
+  amax_out = zero_scalar(x.device) if owned_amax_out else amax_out
   fxn = functools.partial(_custom_quantize_fp8_with_amax, device=x.device)
   fp8_out, amax_out, *_ = Tensor.custom_kernel(fp8_out, amax_out, x, amax_state,
                                                     fxn=fxn, grad_fxn=_quantize_fp8_delayed_bwd)
   new_amax = amax_out
   inv_scale = (amax_state.float() + 1e-8) / FP8_MAX
-  store_effect = amax_state.uop.store(new_amax.uop)
+  store_effect = amax_state.uop.store(new_amax.uop) if owned_amax_out else None
   return fp8_out, inv_scale, new_amax, store_effect
 
 def quantize_fp8_scalar(x:Tensor, amax_state:Tensor, fp8_dtype=dtypes.fp8e4m3) -> Tensor:
