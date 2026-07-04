@@ -427,7 +427,7 @@ if __name__ == "__main__":
   @TinyJit
   def fwd_bwd(tokens:Tensor):
     with Timing("python forward: "):
-      for nxt in fp8_next_amax: nxt.assign(Tensor.zeros((), device=nxt.device, dtype=nxt.dtype))
+      for nxt in fp8_next_amax: nxt.assign(nxt.zeros_like())
       logits = model(tokens[:, :-1], save=llama_size=="8B")
       loss = vocab_mask.where(-1e9, logits).sparse_categorical_crossentropy(tokens[:, 1:])
     with Timing("python backward: "):
