@@ -87,7 +87,7 @@ atexit.register(_asm_gemm_report)
 
 def can_use_asm_gemm(a:Tensor, b:Tensor) -> bool:
   if a.dtype != b.dtype: return todo(f"dtypes must match {a.dtype} != {b.dtype}")
-  if a.dtype not in {dtypes.bfloat16, dtypes.float16, FP8_DTYPE}: return todo(f"only bfloat16/float16/fp8, got {a.dtype}")
+  if a.dtype not in {dtypes.bfloat16, FP8_DTYPE}: return todo(f"only bfloat16/fp8, got {a.dtype}")
   batch, M, K = (1, *a.shape) if a.ndim == 2 else a.shape
   N = b.shape[1]
   if isinstance(a.device, tuple):
@@ -95,6 +95,7 @@ def can_use_asm_gemm(a:Tensor, b:Tensor) -> bool:
     elif a.ndim == 2 and a.uop.axis == 1 and b.uop.axis == 0: K //= len(a.device)
     elif a.ndim == 2 and a.uop.axis is None and b.uop.axis == 1: N //= len(a.device)
     elif a.ndim == 3 and a.uop.axis == 0 and b.uop.axis is None: batch //= len(a.device)
+    elif a.ndim == 3 and a.uop.axis == 1 and b.uop.axis is None: M //= len(a.device)
     elif a.ndim == 3 and a.uop.axis is None and b.uop.axis == 1: N //= len(a.device)
     elif a.ndim == 3 and a.uop.axis == 2 and b.uop.axis == 0: K //= len(a.device)
     else: return todo(f"sharding mismatch a.ndim={a.ndim} a.uop.axis={a.uop.axis} b.uop.axis={b.uop.axis}")

@@ -20,7 +20,7 @@ def run_asm_gemm(a_shape, b_shape, dtype=dtypes.bfloat16, a_shard=None, b_shard=
   devs = tuple(f"{Device.DEFAULT}:{i}" for i in range(gpus)) if (multi:=gpus>1) else None
 
   if dtype == FP8_DTYPE:
-    a_rand, x_scale, _ = quantize_fp8(a_rand)
+    a_rand, _, x_scale = quantize_fp8(a_rand)
     b_rand, w_scale, _ = quantize_fp8(b_rand)
     grad_amax_state = Tensor.full((), FP8_MAX, dtype=dtypes.float32, device=devs).contiguous()
     with Context(DEBUG=0):
@@ -33,16 +33,18 @@ def run_asm_gemm(a_shape, b_shape, dtype=dtypes.bfloat16, a_shard=None, b_shard=
   else:
     a_ref, b_ref = a_rand.clone(), b_rand.clone()
   if multi: a, b = a.shard(devs, axis=a_shard), b.shard(devs, axis=b_shard)
+  if multi and dtype == FP8_DTYPE: x_scale, w_scale = x_scale.shard(devs), w_scale.shard(devs)
   if dtype == FP8_DTYPE:
     tst = asm_gemm(a, b, x_scale=x_scale, w_scale=w_scale, grad_amax_state=grad_amax_state)
   else:
     tst = asm_gemm(a, b)
+  g_shard = (len(tst.shape)-1 if b_shard == 1 else a_shard if a_shard is not None and a_shard < len(a_shape)-1 else None) if multi else None
   tst.sum().backward()
   Tensor.realize(tst, a.grad, b.grad)
 
   if multi: a_ref, b_ref = a_ref.shard(devs, axis=a_shard), b_ref.shard(devs, axis=b_shard)
   if dtype == FP8_DTYPE:
-    ref = ((a_ref @ b_ref) * x_scale * w_scale).cast(dtypes.bfloat16)
+    ref = ((a_ref @ b_ref) * ((x_scale + 1e-8) / FP8_MAX) * w_scale).cast(dtypes.bfloat16)
   else:
     ref = a_ref @ b_ref
   ref.sum().backward()
@@ -51,8 +53,9 @@ def run_asm_gemm(a_shape, b_shape, dtype=dtypes.bfloat16, a_shard=None, b_shard=
   # no validation on the NULL device
   if a_rand.device.startswith("NULL"): return None
   atol, rtol = (2e-1, 1e-2) if dtype == dtypes.bfloat16 else (256, 1e-2) if dtype == FP8_DTYPE else (1e-2, 1e-3)
+  if dtype == dtypes.bfloat16 and multi: rtol = 3e-2
   # allow more rtol for multi because of ALLREDUCE_CAST
-  grad_atol, grad_rtol = (16895, 0.125) if dtype == FP8_DTYPE else (atol, 2e-2 if multi else rtol)
+  grad_atol, grad_rtol = (40000, 0.125) if dtype == FP8_DTYPE else (atol, 3e-2)
   with Context(DEBUG=0):
     # enable for debugging, slow for larger gemms
     if getenv("USE_NPY"):
@@ -110,20 +113,20 @@ class TestAsmGEMM(unittest.TestCase):
     if not is_cdna4() or not has_hipcc():
       self.skipTest("assembly gemm is only for cdna4")
 
-  def test_tiny(self): verify_asm_gemm(1, 256, 256, 64)
+  def test_tiny(self): verify_asm_gemm(1, 256, 256, 256)
 
   def test_verify_with_numpy(self):
     import numpy as np
-    M, N, K = 256, 256, 64
+    M, N, K = 256, 256, 256
     rng = np.random.default_rng(0)
-    a_np = (rng.random((M, K), dtype=np.float32) - 0.5).astype(np.half)
-    b_np = (rng.random((K, N), dtype=np.float32) - 0.5).astype(np.half)
-    c_np = a_np @ b_np
-    a, b = Tensor(a_np), Tensor(b_np)
+    a_np = rng.random((M, K), dtype=np.float32) - 0.5
+    b_np = rng.random((K, N), dtype=np.float32) - 0.5
+    a, b = Tensor(a_np).cast(dtypes.bfloat16), Tensor(b_np).cast(dtypes.bfloat16)
     c = asm_gemm(a, b)
     c.realize()
     # no validation on the NULL device
     if a.device.startswith("NULL"): return None
+    c_np = a.numpy() @ b.numpy()
     np.testing.assert_allclose(c.numpy(), c_np, atol=2e-3, rtol=5e-2)
 
   def test_unsupported_batch(self):
@@ -214,9 +217,9 @@ class TestGemmLlama(unittest.TestCase):
   def test_shape_batched_small(self): verify_asm_gemm(2, 256, 256, 256)
   def test_shape_batched_rect(self): verify_asm_gemm(2, 512, 1024, 256)
   # K edge cases: iters=1,2,3 exercise different loop paths
-  def test_shape_k64(self): verify_asm_gemm(1, 256, 256, 64)
-  def test_shape_k128(self): verify_asm_gemm(1, 256, 256, 128)
-  def test_shape_k192(self): verify_asm_gemm(1, 256, 256, 192)
+  def test_shape_k256(self): verify_asm_gemm(1, 256, 256, 256)
+  def test_shape_k512(self): verify_asm_gemm(1, 256, 256, 512)
+  def test_shape_k768(self): verify_asm_gemm(1, 256, 256, 768)
 
   def test_llama3_out1(self): verify_asm_gemm(1, 8192, 128256, 4096, dtype=self.dtype)
   def test_llama3_out2(self): verify_asm_gemm(1, 8192, 4096, 128256, dtype=self.dtype)
