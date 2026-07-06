@@ -164,6 +164,9 @@ def custom_hk_bf16_atb_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
 
 def hk_bf16_atb_gemm(a:Tensor, b:Tensor) -> Tensor:
   assert a.dtype == b.dtype == dtypes.bfloat16, f"expected bf16, got {a.dtype} {b.dtype}"
+  if isinstance(a.device, tuple):
+    if a.uop.axis in (0, 1) and b.uop.axis is None: b = Tensor(b.uop._shard(a.uop.axis, len(a.device)).multi(a.uop.axis), device=a.device)
+    elif b.uop.axis in (0, 1) and a.uop.axis is None: a = Tensor(a.uop._shard(b.uop.axis, len(a.device)).multi(b.uop.axis), device=a.device)
   assert a.ndim == b.ndim == 3 and a.shape[:2] == b.shape[:2], f"{a.shape} {b.shape}"
   batch, rows, M = a.shape
   N = b.shape[2]
@@ -206,6 +209,9 @@ def custom_gemm_bw(gradient:UOp, kernel:UOp, n_scales:int=2, has_grad_amax:bool=
     s_w_t = Tensor(s_w, device=a.device) if has_w else None
     s_g_t = Tensor(s_g, device=a.device) if s_g is not None else None
     w_post_t = Tensor(w_post, device=a.device) if has_w_post else None
+    k_sharded = isinstance(a.device, tuple) and a.axis == len(a.shape)-1 and b.axis == len(b.shape)-1
+    if isinstance(a.device, tuple) and g_t.uop.axis is None and out.axis is not None and not k_sharded:
+      g_t = Tensor(g_t.uop._shard(out.axis, len(a.device)).multi(out.axis), device=a.device)
     g_t = g_t[:a.shape[0]]
     from extra.llama_kernels.cast_amax import _grad_fp8_mailbox
     from extra.llama_kernels.quantize_fp8_delayed import quantize_fp8_delayed
@@ -250,6 +256,9 @@ def custom_gemm_bw(gradient:UOp, kernel:UOp, n_scales:int=2, has_grad_amax:bool=
       out, a, b = inputs
       assert all_same([gradient.device, a.device, b.device, out.device])
     a_t, b_t, g_t = Tensor(a, device=a.device), Tensor(b, device=a.device), Tensor(gradient, device=a.device)
+    k_sharded = hk_bf16 and isinstance(a.device, tuple) and a.axis == len(a.shape)-1 and b.axis == 0
+    if hk_bf16 and isinstance(a.device, tuple) and g_t.uop.axis is None and out.axis is not None and not k_sharded:
+      g_t = Tensor(g_t.uop._shard(out.axis, len(a.device)).multi(out.axis), device=a.device)
     g_t = g_t[:a.shape[0]]
     if hk_bf16 and g_t.dtype != b_t.dtype: g_t = g_t.cast(b_t.dtype)
     if can_use_asm_gemm(g_t, b_t.T): grad_a = asm_gemm(g_t, b_t.T).uop
