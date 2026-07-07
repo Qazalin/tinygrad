@@ -47,7 +47,11 @@ def type_verify(ast:UOp|list[UOp], check_spec:PatternMatcher):
 
 # these ops can be used in the tensor graph and programs
 spec_shared = PatternMatcher([
-  (UPat(Ops.SINK, dtypes.void), lambda: True), # NOTE: for testing, we let sinks be anything
+  # no vec dtypes allowed
+  (UPat(GroupOp.All, name="x"), lambda x: False if x.dtype.vcount > 1 else None),
+
+  # NOTE: for testing, we let sinks be anything
+  (UPat(Ops.SINK, dtypes.void), lambda: True),
 
   # NOOP. TODO: remove this
   (UPat(Ops.NOOP), lambda: True),
@@ -83,10 +87,11 @@ spec_shared = PatternMatcher([
    isinstance(x.arg, ParamArg) and x.addrspace in (AddrSpace.REG, AddrSpace.LOCAL)),
 
   # GROUP of stores (or groups, or NOOPs)
-  (UPat(Ops.GROUP, dtypes.void, src=UPat((Ops.GROUP, Ops.STORE, Ops.NOOP, Ops.INS))), lambda: True),
+  (UPat(Ops.GROUP, dtypes.void, src=UPat((Ops.GROUP, Ops.STORE, Ops.NOOP, Ops.INS, Ops.END))), lambda: True),
 
   # AFTER on Movement Op, PARAM, BUFFER, CONTIGUOUS, or another AFTER
-  (UPat(Ops.AFTER, src=(UPat(GroupOp.Movement.union({Ops.PARAM, Ops.BUFFER, Ops.CONTIGUOUS, Ops.AFTER, Ops.MULTI, Ops.BITCAST, Ops.INS})),),
+  (UPat(Ops.AFTER, src=(UPat(GroupOp.Movement.union({Ops.PARAM, Ops.BUFFER, Ops.CONTIGUOUS, Ops.INDEX,
+                                                     Ops.AFTER, Ops.MULTI, Ops.BITCAST, Ops.INS})),),
         allow_any_len=True), lambda: True),
 
   # CUSTOM (inline and non inline)
@@ -150,10 +155,10 @@ spec_tensor = PatternMatcher([
   (UPat((Ops.PAD, Ops.SHRINK), src=(UPat(), UPat(), UPat()), name="x"), lambda x: x.src[1].shape == x.src[2].shape),
   (UPat((Ops.PERMUTE, Ops.FLIP), name="mv", src=(UPat(),)), lambda mv: isinstance(mv.arg, tuple)),
 
-  # REDUCE has arg=(op, axis_tuple), src[1:] are ranges after lowering
+  # REDUCE has arg=(op, num_axes), src[1:] are ranges after lowering
   (UPat(Ops.REDUCE, src=(UPat(),), allow_any_len=True, name="x"),
    lambda x: isinstance(x.arg, tuple) and len(x.arg) == 2 and x.arg[0] in GroupOp.Reduce
-   and isinstance(x.arg[1], tuple) and all(y.dtype in (dtypes.weakint, dtypes.int) for y in x.src[1:])),
+   and isinstance(x.arg[1], int) and all(y.dtype in (dtypes.weakint, dtypes.int) for y in x.src[1:])),
 
   # COPY. TODO: this should not have allow_any_len, but something is adding ranges
   (UPat(Ops.COPY, name="copy", src=(UPat.var("x"),), allow_any_len=True), lambda copy,x: copy.dtype == x.dtype and is_device(copy.arg)),

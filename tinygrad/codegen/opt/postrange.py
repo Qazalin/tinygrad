@@ -303,11 +303,11 @@ class Scheduler:
             # they need to be moved into the WMMA srcs
             wmma_arg = (str(tc), tc.dims, tc.dtype_in, tc.dtype_out, self.ren.target.device, tc.threads, tc_upcast_axes, ()) #, tc_reduce_axes)
             tc_uop = UOp(Ops.WMMA, dtype=tc.dtype_out, src=(
-              srcs[0], srcs[1], UOp.const(tc.dtype_out.vec(tc.elements_per_thread[2]), 0.0)), arg=wmma_arg, tag=1)
+              srcs[0], srcs[1], UOp.const(tc.dtype_out, (0.0,)*tc.elements_per_thread[2])), arg=wmma_arg, tag=1)
 
             # preserve extra reduces
             reduce_ranges = [x for x in UOp.sink(*reduceop.src[1:]).toposort() if x.op is Ops.RANGE and x.arg[0] not in tc_reduce_axes]
-            if len(reduce_ranges): tc_uop = UOp(Ops.REDUCE, tc_uop.dtype, (tc_uop,)+tuple(reduce_ranges), (Ops.ADD, ()))
+            if len(reduce_ranges): tc_uop = UOp(Ops.REDUCE, tc_uop.dtype, (tc_uop,)+tuple(reduce_ranges), (Ops.ADD, 0))
             self.ast = self.ast.substitute({reduceop: tc_uop})
           self.tensor_core = tc
           return axes

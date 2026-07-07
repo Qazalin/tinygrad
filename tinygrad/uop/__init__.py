@@ -57,7 +57,7 @@ class Ops(FastEnum):
   # ** 4 -- math **
 
   # tensor core math op, not elementwise
-  WMMA = auto(); SHAPED_WMMA = auto()
+  WMMA = auto()
 
   # UnaryOps
   CAST = auto(); BITCAST = auto(); EXP2 = auto(); LOG2 = auto(); SIN = auto()
@@ -108,7 +108,7 @@ class GroupOp:
             Ops.XOR, Ops.SHL, Ops.SHR, Ops.OR, Ops.AND, Ops.THREEFRY, Ops.SUB, Ops.FDIV, Ops.POW, Ops.FLOORDIV, Ops.FLOORMOD}
   Ternary = {Ops.WHERE, Ops.MULACC}
   ALU = set.union(Unary, Binary, Ternary)
-  Broadcastable = set.union(Binary, Ternary, {Ops.GROUP})
+  Broadcastable = set.union(Binary, Ternary)
 
   # TODO: is BITCAST always Elementwise if it's shape changing?
   Elementwise = set.union(ALU, {Ops.CAST, Ops.BITCAST})
