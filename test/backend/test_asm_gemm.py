@@ -141,8 +141,9 @@ class TestAsmGEMM(unittest.TestCase):
       verify_asm_gemm(1, 256, 1000, 256)
 
 # test the Asm GEMM with Llama shapes, only run on the real machine for speed
+@unittest.skipUnless(has_hipcc(), "FP8 gemm requires hipcc to compile")
 class TestGemmLlama(unittest.TestCase):
-  dtype = dtypes.bfloat16
+  dtype = FP8_DTYPE
 
   def setUp(self):
     if not is_cdna4() or DEV.interface.startswith("MOCK") or not has_hipcc():
@@ -226,9 +227,6 @@ def has_hipcc():
   try: system("hipcc --version")
   except Exception: return False
   return True
-
-@unittest.skipUnless(has_hipcc(), "FP8 gemm requires hipcc to compile")
-class TestGemmLlamaFP8(TestGemmLlama): dtype = FP8_DTYPE
 
 # mxfp8: 1x32 block scaling along K, e8m0 scales packed iteration-major (K/128, dim) uint32
 def quantize_mxfp8(x:Tensor) -> tuple[Tensor, Tensor, Tensor]:
