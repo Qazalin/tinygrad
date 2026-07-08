@@ -20,7 +20,7 @@ def run_asm_gemm(a_shape, b_shape, dtype=dtypes.bfloat16, a_shard=None, b_shard=
   devs = tuple(f"{Device.DEFAULT}:{i}" for i in range(gpus)) if (multi:=gpus>1) else None
 
   if dtype == FP8_DTYPE:
-    a_rand, x_scale, _ = quantize_fp8(a_rand)
+    a_rand, _, x_scale = quantize_fp8(a_rand)
     b_rand, w_scale, _ = quantize_fp8(b_rand)
     grad_amax_state = Tensor.full((), FP8_MAX, dtype=dtypes.float32, device=devs).contiguous()
     with Context(DEBUG=0):
@@ -33,6 +33,7 @@ def run_asm_gemm(a_shape, b_shape, dtype=dtypes.bfloat16, a_shard=None, b_shard=
   else:
     a_ref, b_ref = a_rand.clone(), b_rand.clone()
   if multi: a, b = a.shard(devs, axis=a_shard), b.shard(devs, axis=b_shard)
+  if multi and dtype == FP8_DTYPE: x_scale, w_scale = x_scale.shard(devs), w_scale.shard(devs)
   if dtype == FP8_DTYPE:
     tst = asm_gemm(a, b, x_scale=x_scale, w_scale=w_scale, grad_amax_state=grad_amax_state)
   else:
@@ -42,7 +43,7 @@ def run_asm_gemm(a_shape, b_shape, dtype=dtypes.bfloat16, a_shard=None, b_shard=
 
   if multi: a_ref, b_ref = a_ref.shard(devs, axis=a_shard), b_ref.shard(devs, axis=b_shard)
   if dtype == FP8_DTYPE:
-    ref = ((a_ref @ b_ref) * x_scale * w_scale).cast(dtypes.bfloat16)
+    ref = ((a_ref @ b_ref) * ((x_scale + 1e-8) / FP8_MAX) * w_scale).cast(dtypes.bfloat16)
   else:
     ref = a_ref @ b_ref
   ref.sum().backward()
