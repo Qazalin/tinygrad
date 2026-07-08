@@ -136,6 +136,18 @@ class TestCustomKernel(unittest.TestCase):
     c = Tensor.custom_kernel(c, a, fxn=custom_add_one_kernel)[0]
     assert (c == 2).all().item()
 
+  def test_sharded_backward_custom_kernel(self):
+    devs = ("CPU:0", "CPU:1")
+    def backward_add_one(gradient:UOp, kernel:UOp):
+      _, a = kernel.src[1:]
+      return None, Tensor.empty_like(Tensor(a)).custom_kernel(Tensor(gradient), fxn=custom_add_one_kernel)[0].uop
+
+    a = Tensor.ones(4, 4).contiguous().shard(devs, axis=0)
+    c = Tensor(Tensor.empty(2, 4, device=devs).uop.multi(0), device=devs)
+    c = Tensor.custom_kernel(c, a, fxn=custom_add_one_kernel, grad_fxn=backward_add_one)[0]
+    c.sum().backward()
+    assert (a.grad == 2).all().item()
+
   def test_multioutput(self):
     a = Tensor.full((16, 16), 3.).contiguous()
     b = Tensor.full((16, 16), 3.).contiguous()
