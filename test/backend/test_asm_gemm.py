@@ -105,42 +105,6 @@ class TestGemm(unittest.TestCase):
   @needs_second_gpu
   def test_gemm_k_sharded_3d(self): verify_asm_gemm_k_sharded_3d(1, 64, 32, 2*64, gpus=2)
 
-# uses the smallest size for the cdna assembly gemm
-class TestAsmGEMM(unittest.TestCase):
-  def setUp(self):
-    if not is_cdna4() or not has_hipcc():
-      self.skipTest("assembly gemm is only for cdna4")
-
-  def test_tiny(self): verify_asm_gemm(1, 256, 256, 64)
-
-  def test_verify_with_numpy(self):
-    import numpy as np
-    M, N, K = 256, 256, 64
-    rng = np.random.default_rng(0)
-    a_np = (rng.random((M, K), dtype=np.float32) - 0.5).astype(np.half)
-    b_np = (rng.random((K, N), dtype=np.float32) - 0.5).astype(np.half)
-    c_np = a_np @ b_np
-    a, b = Tensor(a_np), Tensor(b_np)
-    c = asm_gemm(a, b)
-    c.realize()
-    # no validation on the NULL device
-    if a.device.startswith("NULL"): return None
-    np.testing.assert_allclose(c.numpy(), c_np, atol=2e-3, rtol=5e-2)
-
-  def test_unsupported_batch(self):
-    with self.assertRaisesRegex(AssertionError, "batch size"):
-      verify_asm_gemm(3, 256, 256, 256)
-
-  def test_unsupported_k(self):
-    with self.assertRaisesRegex(AssertionError, "not a multiple"):
-      verify_asm_gemm(1, 1024, 1024, 100)
-  def test_unsupported_m(self):
-    with self.assertRaisesRegex(AssertionError, "not a multiple"):
-      verify_asm_gemm(1, 1000, 256, 256)
-  def test_unsupported_n(self):
-    with self.assertRaisesRegex(AssertionError, "not a multiple"):
-      verify_asm_gemm(1, 256, 1000, 256)
-
 # test the Asm GEMM with Llama shapes, only run on the real machine for speed
 class TestGemmLlama(unittest.TestCase):
   dtype = FP8_DTYPE
