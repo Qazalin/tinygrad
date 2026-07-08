@@ -146,7 +146,7 @@ class TestGemmLlama(unittest.TestCase):
   def test_gemm8(self): verify_asm_gemm(1, 4096, 14336, 8192, dtype=self.dtype)
   def test_gemm9(self): verify_asm_gemm(8, 4096, 14336, 8192, dtype=self.dtype, gpus=8)
   def test_gemm10(self): verify_asm_gemm(1, 4096, 8192, 4096, dtype=self.dtype)
-  def test_gemm11(self): verify_asm_gemm(8, 1024, 1024, 4096, gpus=8)
+  def test_gemm11(self): verify_asm_gemm(8, 1024, 1024, 4096, gpus=8, dtype=self.dtype)
   def test_k_sharded_1(self): verify_asm_gemm_k_sharded(14336, 4096, 8*8192, dtype=self.dtype, gpus=8)
   def test_k_sharded_2(self): verify_asm_gemm_k_sharded(4096, 14336, 8*8192, dtype=self.dtype, gpus=8)
   def test_k_sharded_3(self): verify_asm_gemm_k_sharded(4096, 4096, 8*8192, dtype=self.dtype, gpus=8)
