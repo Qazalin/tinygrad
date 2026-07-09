@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 
 import time, mmap, sys, shutil, os, glob, subprocess, argparse, collections
-from tinygrad.helpers import DEBUG, colored, ansilen
+from tinygrad.helpers import DEBUG, colored, ansilen, NO_COLOR
 from tinygrad.runtime.autogen import libc
 from tinygrad.runtime.autogen.am import am
 from tinygrad.runtime.support.hcq import MMIOInterface
 from tinygrad.runtime.support.am.amdev import AMDev, AMMemoryManager, AMPageTableEntry
 from tinygrad.runtime.support.am.ip import AM_SOC, AM_GMC, AM_IH, AM_PSP, AM_SMU, AM_GFX, AM_SDMA
 
-def bold(s): return f"\033[1m{s}\033[0m"
+def bold(s): return s if NO_COLOR else f"\033[1m{s}\033[0m"
 
 def trim(s:str, length:int) -> str:
   if len(s) > length: return s[:length-3] + "..."
@@ -142,12 +142,12 @@ class SMICtx:
       if d.read_pci_state() != d.pci_state:
         d.pci_state = d.read_pci_state()
         if d.pci_state == "D0": d._init_from_d0()
-        os.system('clear')
+        if sys.stdout.isatty(): os.system('clear')
 
       if d.pci_state == "D0" and d.reg("regSCRATCH_REG7").read() != AMDev.Version:
         self.devs.remove(d)
         self.opened_pcidevs.remove(d.pcibus)
-        os.system('clear')
+        if sys.stdout.isatty(): os.system('clear')
         if DEBUG >= 2: print(f"Removed AM device {d.pcibus}")
 
   def collect(self):
@@ -404,13 +404,16 @@ if __name__ == "__main__":
         print(f"{dev[8:-5]}: no process found")
     sys.exit(0)
 
+  interactive = sys.stdout.isatty()
+  refresh = interactive and not args.list
+
   try:
-    if not args.list: os.system('clear')
+    if refresh: os.system('clear')
     smi_ctx = SMICtx()
     while True:
       smi_ctx.rescan_devs()
       smi_ctx.draw(args.list)
-      if args.list: break
+      if not refresh: break
       time.sleep(1)
   except KeyboardInterrupt:
     print("Exiting...")
