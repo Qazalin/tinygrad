@@ -276,7 +276,7 @@ class SMICtx:
     return usage
 
   def draw(self, once):
-    terminal_width, terminal_height = shutil.get_terminal_size()
+    terminal_width, terminal_height = shutil.get_terminal_size(fallback=(231, 24))
     if not once and (self.prev_terminal_width != terminal_width or self.prev_terminal_height != terminal_height):
       os.system('clear')
     self.prev_terminal_width, self.prev_terminal_height = terminal_width, terminal_height
