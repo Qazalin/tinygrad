@@ -1434,10 +1434,11 @@ def train_llama3():
     print(f"loading optim checkpoint from {fn}")
     load_state_dict(scheduler, safe_load(fn), realize=False)
 
-  fp8_amax = [t for ts in model._fp8_amax.values() for t in ts]
-  fp8_grad_amax = [t for ts in model._fp8_grad_amax.values() for t in ts] if hasattr(model, "_fp8_grad_amax") else []
-  fp8_next_grad_amax = [t for ts in model._fp8_next_grad_amax.values() for t in ts] if hasattr(model, "_fp8_next_grad_amax") else []
-  fp8_inv_scales = [x for v in list(model._fp8_inv_scale.values()) + list(model._fp8_next_inv_scale.values()) for x in (v if isinstance(v, list) else [v])]
+  fp8_amax = list(model._fp8_amax.values())
+  fp8_grad_amax = list(model._fp8_grad_amax.values()) if hasattr(model, "_fp8_grad_amax") else []
+  fp8_next_grad_amax = list(model._fp8_next_grad_amax.values()) if hasattr(model, "_fp8_next_grad_amax") else []
+  fp8_inv_scales = list(model._fp8_inv_scale.values()) + list(model._fp8_next_inv_scale.values())
+  layer_nums = getattr(model, "_layer_num", [])
 
   from tinygrad.nn.state import get_state_dict
   model_state = get_state_dict(model)
@@ -1450,8 +1451,7 @@ def train_llama3():
     if optim.master_params:
       idx = next(j for j, p in enumerate(optim.params) if p is w)
       master = optim.master_params[idx]
-      inv = Tensor.stack(*w._inv_scale) if isinstance(w._inv_scale, list) else w._inv_scale
-      inv = inv if inv.device == master.device else inv.to(master.device)
+      inv = w._inv_scale if w._inv_scale.device == master.device else w._inv_scale.to(master.device)
       if MXFP8:
         from extra.gemm.cdna_asm_gemm import _mx_block_scale
         bs = _mx_block_scale(inv.reshape(-1, inv.shape[-1])).reshape(w.shape)
@@ -1461,10 +1461,11 @@ def train_llama3():
 
   # realize everything here
   if optim.master_params: Tensor.realize(*optim.master_params)
-  Tensor.realize(*optim.params, *fp8_inv_scales, *fp8_amax, *fp8_grad_amax, *fp8_next_grad_amax)
+  Tensor.realize(*optim.params, *fp8_inv_scales, *fp8_amax, *fp8_grad_amax, *fp8_next_grad_amax, *layer_nums)
 
   @TinyJit
   def minibatch(tokens:Tensor):
+    for nxt in fp8_next_grad_amax: nxt.assign(nxt.zeros_like())
     if is_dp: tokens = tokens.to(None).shard(device, 0)
     if is_mp: tokens = tokens.shard(device)
     if not is_sharding: tokens = tokens.to(None)

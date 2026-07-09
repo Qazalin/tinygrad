@@ -14,6 +14,9 @@
 #ifndef THREADS_PER_WG
 #define THREADS_PER_WG 256
 #endif
+#ifndef LAYER_SCALE
+#define LAYER_SCALE 0
+#endif
 
 constexpr int VEC = 8;
 constexpr float FP8_MAX = 448.0f;
@@ -37,7 +40,11 @@ fused_silu_mul_bwd_w13(
     const __hip_bfloat16* __restrict__ xw13,                 // bf16, 2*N_ELEMS
     const __hip_bfloat16* __restrict__ grad_x2,              // bf16, N_ELEMS
     const float*          __restrict__ amax_state,           // fp32 scalar (fwd x2 amax)
-    const float*          __restrict__ grad_amax_state)      // fp32 scalar (delayed grad amax)
+    const float*          __restrict__ grad_amax_state       // fp32 scalar or n_layers (delayed grad amax)
+#if LAYER_SCALE
+    , const int*        __restrict__ layer_num
+#endif
+)
 {
   __shared__ float sdata[THREADS_PER_WG];
 
@@ -46,8 +53,14 @@ fused_silu_mul_bwd_w13(
   const int gid = wg * THREADS_PER_WG + tid;
   const int stride_elems = NUM_WG * THREADS_PER_WG * VEC;
 
-  const float scale = FP8_MAX / (static_cast<float>(*amax_state) + 1e-8f);
-  const float grad_amax = static_cast<float>(*grad_amax_state);
+#if LAYER_SCALE
+  const int layer = layer_num[0];
+#else
+  const int layer = 0;
+#endif
+  float* grad_amax_next_layer = grad_amax_next + layer;
+  const float scale = FP8_MAX / (static_cast<float>(amax_state[layer]) + 1e-8f);
+  const float grad_amax = static_cast<float>(grad_amax_state[layer]);
   const float g_scale = FP8_MAX / (grad_amax + 1e-8f);
   float local_max = 0.0f;
 
@@ -92,5 +105,5 @@ fused_silu_mul_bwd_w13(
     if (tid < s) sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
     __syncthreads();
   }
-  if (tid == 0 && sdata[0] > *grad_amax_next) atomicMaxOfNonNegative(grad_amax_next, sdata[0]);
+  if (tid == 0 && sdata[0] > *grad_amax_next_layer) atomicMaxOfNonNegative(grad_amax_next_layer, sdata[0]);
 }

@@ -6,7 +6,7 @@ from tinygrad.uop.ops import UOp, Ops, KernelInfo, AxisType
 from extra.llama_kernels import FP8_MAX, NUM_WG, THREADS_PER_WG, alloc_like, zero_scalar
 
 @functools.cache
-def _custom_quantize_fp8_with_amax(fp8_out:UOp, amax_out:UOp, x:UOp, amax_state:UOp, device) -> UOp:
+def _custom_quantize_fp8_with_amax(fp8_out:UOp, amax_out:UOp, x:UOp, amax_state:UOp, layer_num:UOp|None=None, device=None) -> UOp:
   VEC = 8
   n_elems = prod(x.shape)
   assert n_elems % (NUM_WG * THREADS_PER_WG * VEC) == 0
@@ -21,7 +21,8 @@ def _custom_quantize_fp8_with_amax(fp8_out:UOp, amax_out:UOp, x:UOp, amax_state:
 
   idx = (((it * NUM_WG + wg) * THREADS_PER_WG + tid) * VEC) + lane
 
-  scale = FP8_MAX / (amax_state[0].cast(dtypes.float) + 1e-8)
+  layer = UOp.const(dtypes.weakint, 0) if layer_num is None else layer_num[0]
+  scale = FP8_MAX / (amax_state[layer].cast(dtypes.float) + 1e-8)
   x_f = x[idx].cast(dtypes.float)
   abs_x = (x_f < 0.0).where(-x_f, x_f)
   scaled = (x_f * scale).maximum(-FP8_MAX).minimum(FP8_MAX)
@@ -54,17 +55,18 @@ def _custom_quantize_fp8_with_amax(fp8_out:UOp, amax_out:UOp, x:UOp, amax_state:
     atomic_arg = "if ({2} > {3}) __atomic_fetch_max((int*){0}, {1}, __ATOMIC_RELAXED);"
   else:
     raise NotImplementedError(f"no atomic max for device {device}")
-  atomic = UOp(Ops.CUSTOM, dtypes.void, (amax_out.reshape((1,)).index(UOp.const(dtypes.weakint, 0), ptr=True),
-                                         lds[0].bitcast(dtypes.int32), lds[0], amax_out.reshape((1,))[0]), arg=atomic_arg)
+  atomic = UOp(Ops.CUSTOM, dtypes.void, (amax_out.index(layer, ptr=True),
+                                         lds[0].bitcast(dtypes.int32), lds[0], amax_out[layer]), arg=atomic_arg)
   return atomic.end(tid, wg).sink(arg=KernelInfo(f"quantize_fp8_with_amax_{n_elems}", opts_to_apply=()))
 
 @functools.cache
-def _custom_quantize_fp8_scalar(fp8_out:UOp, x:UOp, amax_state:UOp) -> UOp:
+def _custom_quantize_fp8_scalar(fp8_out:UOp, x:UOp, amax_state:UOp, layer_num:UOp|None=None) -> UOp:
   n_elems = prod(x.shape)
   i = UOp.range(n_elems, 0)
 
   x_f = x.reshape(n_elems)[i].cast(dtypes.float)
-  scale = FP8_MAX / (amax_state[0].cast(dtypes.float) + 1e-8)
+  layer = UOp.const(dtypes.weakint, 0) if layer_num is None else layer_num[0]
+  scale = FP8_MAX / (amax_state[layer].cast(dtypes.float) + 1e-8)
   store = fp8_out.reshape(n_elems)[i].store((x_f * scale).cast(fp8_out.dtype.base))
 
   return store.end(i).sink(arg=KernelInfo(f"quantize_fp8_scalar_{n_elems}"))
@@ -72,13 +74,17 @@ def _custom_quantize_fp8_scalar(fp8_out:UOp, x:UOp, amax_state:UOp) -> UOp:
 def _quantize_fp8_delayed_bwd(gradient:UOp, kernel:UOp):
   # NOTE: STE-equivalent backward — grad_x = grad_fp8 * scale, scale = FP8_MAX / amax_state.
   # `gradient` is bf16 grad w.r.t. fp8 output (asm_gemm bwd already applied x_scale).
-  _, _, x, amax_state = kernel.src[1:]
+  src = kernel.src[1:]
+  _, _, x, amax_state = src[:4]
+  layer_num = src[4] if len(src) > 4 else None
   device = x.device
-  scale = FP8_MAX / (Tensor(amax_state, device=device).float() + 1e-8)
+  amax_state_t = Tensor(amax_state, device=device)
+  if layer_num is not None: amax_state_t = amax_state_t[Tensor(layer_num, device=device)[0]]
+  scale = FP8_MAX / (amax_state_t.float() + 1e-8)
   grad_x = (Tensor(gradient, device=device).float() * scale).cast(dtypes.bfloat16)
-  return (None, None, grad_x.uop, None)
+  return (None, None, grad_x.uop, None) + ((None,) if layer_num is not None else ())
 
-def quantize_fp8_delayed(x:Tensor, amax_state:Tensor, fp8_dtype=dtypes.fp8e4m3, amax_out:Tensor|None=None) -> tuple[Tensor, Tensor, Tensor, UOp|None]:
+def quantize_fp8_delayed(x:Tensor, amax_state:Tensor, fp8_dtype=dtypes.fp8e4m3, amax_out:Tensor|None=None, layer_num:Tensor|None=None) -> tuple[Tensor, Tensor, Tensor, UOp|None]:
   # NOTE: one-pass bf16 -> fp8 quantize with delayed scaling. Returns (fp8, inv_scale, new_amax, store_effect).
   # Fused kernel reads x once and writes fp8 + scalar amax via global atomic max.
   # store_effect writes new_amax into amax_state's buffer — the caller must thread it into a realized
@@ -90,19 +96,21 @@ def quantize_fp8_delayed(x:Tensor, amax_state:Tensor, fp8_dtype=dtypes.fp8e4m3, 
   n_elems = prod(x.uop.shard_shape)
   assert n_elems % NUM_WG == 0, f"{n_elems=} must divide over {NUM_WG=}"
   owned_amax_out = amax_out is None
+  assert layer_num is None or amax_out is not None, "layer-index quantize must write the packed amax buffer, not a scalar temp"
   amax_out = zero_scalar(x.device) if owned_amax_out else amax_out
   fxn = functools.partial(_custom_quantize_fp8_with_amax, device=x.device)
-  fp8_out, amax_out, *_ = Tensor.custom_kernel(fp8_out, amax_out, x, amax_state,
-                                                    fxn=fxn, grad_fxn=_quantize_fp8_delayed_bwd)
+  args = (fp8_out, amax_out, x, amax_state) if layer_num is None else (fp8_out, amax_out, x, amax_state, layer_num)
+  fp8_out, amax_out, *_ = Tensor.custom_kernel(*args, fxn=fxn, grad_fxn=_quantize_fp8_delayed_bwd)
   new_amax = amax_out
-  inv_scale = (amax_state.float() + 1e-8) / FP8_MAX
-  store_effect = amax_state.uop.store(new_amax.uop) if owned_amax_out else None
+  cur_amax = amax_state if layer_num is None else amax_state[layer_num[0]]
+  inv_scale = (cur_amax.float() + 1e-8) / FP8_MAX
+  store_effect = cur_amax.uop.store(new_amax.uop) if owned_amax_out else None
   return fp8_out, inv_scale, new_amax, store_effect
 
-def quantize_fp8_scalar(x:Tensor, amax_state:Tensor, fp8_dtype=dtypes.fp8e4m3) -> Tensor:
+def quantize_fp8_scalar(x:Tensor, amax_state:Tensor, fp8_dtype=dtypes.fp8e4m3, layer_num:Tensor|None=None) -> Tensor:
   # NOTE: pure one-pass bf16 -> fp8 quantize with delayed scalar scale. No amax computation.
   axis = x.uop.axis if isinstance(x.device, tuple) else None
   fp8_out = alloc_like(x.shape, fp8_dtype, x.device, axis)
   fxn = _custom_quantize_fp8_scalar
-  fp8_out, *_ = Tensor.custom_kernel(fp8_out, x, amax_state, fxn=fxn)
+  fp8_out, *_ = Tensor.custom_kernel(fp8_out, x, amax_state, *((layer_num,) if layer_num is not None else ()), fxn=fxn)
   return fp8_out

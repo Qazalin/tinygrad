@@ -54,6 +54,6 @@ def alloc_local(shape, dtype, device, axis=None) -> Tensor:
 def compile_hip(src:str, defines:list[str]):
   return HIPCCCompiler("gfx950", ["-std=c++20", "-ffast-math", *defines]).compile_cached(src)
 
-def compile_cpp(cpp_dir:pathlib.Path, cpp_name:str, n_elems:int, hidden:int):
+def compile_cpp(cpp_dir:pathlib.Path, cpp_name:str, n_elems:int, hidden:int, extra_defines:list[str]|None=None):
   src = (cpp_dir/cpp_name).read_text()
-  return src, compile_hip(src, [f"-DN_ELEMS={n_elems}", f"-DHIDDEN={hidden}", f"-DNUM_WG={NUM_WG}", f"-DTHREADS_PER_WG={THREADS_PER_WG}"])
+  return src, compile_hip(src, [f"-DN_ELEMS={n_elems}", f"-DHIDDEN={hidden}", f"-DNUM_WG={NUM_WG}", f"-DTHREADS_PER_WG={THREADS_PER_WG}", *(extra_defines or [])])
