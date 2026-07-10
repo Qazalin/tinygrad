@@ -153,12 +153,12 @@ class LLVMRenderer(Renderer):
         r[u] = f"%{'local' if u.addrspace == AddrSpace.LOCAL else 'reg'}_{str(u.arg.slot)}"
         size = u.max_numel()
         if u.addrspace == AddrSpace.REG:
-          kernel.append(f"  {r[u]} = alloca [{size} x {ldt(u.dtype.base)}]")
+          kernel.append(f"  {r[u]} = alloca [{size} x {ldt(u.dtype)}]")
         elif self.has_local:
           local_args.append(f"@{r[u][1:]} = internal unnamed_addr addrspace(3) global [{size} x {ldt(u.dtype)}] undef, align 16")
           kernel.append(f"  {r[u]} = addrspacecast [{size} x {ldt(u.dtype)}] addrspace(3)* @{r[u][1:]} to [{size} x {ldt(u.dtype)}]*")
         else:
-          kernel.append(f"  {r[u]} = alloca [{size} x {ldt(u.dtype.base)}], align 16")
+          kernel.append(f"  {r[u]} = alloca [{size} x {ldt(u.dtype)}], align 16")
       elif u.op is Ops.CONST: r[u] = lconst(u.arg, u.dtype)
       elif u.op is Ops.CAST and ldt(u.dtype) == ldt(u.src[0].dtype):
         r[u] = r[u.src[0]] # cast from signed to unsigned of the same size is a noop, or pointer cast
@@ -256,27 +256,27 @@ exit: %packed = phi i32 [%packed_bf8, %do_bf8], [%packed_fp8, %do_fp8]\n  %trunc
     if self.is_cdna:
       self.extra_matcher += PatternMatcher([
         (UPat(Ops.WMMA, name="x", dtype=dtypes.float.vec(4)),
-          lambda x: UOp(Ops.WMMA, dtypes.float.vec(4), (x.src[0].bitcast(dtypes.uint16.vec(4)), x.src[1].bitcast(dtypes.uint16.vec(4)),
-            x.src[2]), (*x.arg,)) if x.src[0].dtype == dtypes.bfloat16.vec(4) else None),
+          lambda x: UOp(Ops.WMMA, src=(x.src[0].bitcast(dtypes.uint16.vec(4)), x.src[1].bitcast(dtypes.uint16.vec(4)),
+            x.src[2]), arg=(*x.arg,)) if x.src[0].dtype == dtypes.bfloat16.vec(4) else None),
         (UPat(Ops.WMMA, name="x", dtype=dtypes.float.vec(4)),
-          lambda x: UOp(Ops.WMMA, dtypes.float.vec(4), (x.src[0].bitcast(dtypes.uint64), x.src[1].bitcast(dtypes.uint64),
-            x.src[2]), (*x.arg,)) if x.src[0].dtype in (dtypes.fp8e4m3.vec(8), dtypes.fp8e5m2.vec(8)) else None),
+          lambda x: UOp(Ops.WMMA, src=(x.src[0].bitcast(dtypes.uint64), x.src[1].bitcast(dtypes.uint64),
+            x.src[2]), arg=(*x.arg,)) if x.src[0].dtype in (dtypes.fp8e4m3.vec(8), dtypes.fp8e5m2.vec(8)) else None),
       ])
     if target.arch in {"gfx1100", "gfx1151"}:
       self.extra_matcher += PatternMatcher([
         (UPat(Ops.WMMA, name="x", dtype=dtypes.half.vec(8)),
-          lambda x: UOp(Ops.WMMA, dtypes.half.vec(16), (x.src[0], x.src[1], x.src[2].cast(dtypes.half.vec(16))), (*x.arg,)).cast(dtypes.half.vec(8))),
-        (UPat(Ops.WMMA, name="x"), lambda x: UOp(Ops.WMMA, x.dtype, (x.src[0].bitcast(dtypes.uint16.vec(16)), x.src[1].bitcast(dtypes.uint16.vec(16)),
-          x.src[2]), x.arg) if x.src[0].dtype == dtypes.bfloat16.vec(16) else None),
+          lambda x: UOp(Ops.WMMA, src=(x.src[0], x.src[1], x.src[2].cast(dtypes.half.vec(16))), arg=(*x.arg,)).cast(dtypes.half.vec(8))),
+        (UPat(Ops.WMMA, name="x"), lambda x: UOp(Ops.WMMA, src=(x.src[0].bitcast(dtypes.uint16.vec(16)), x.src[1].bitcast(dtypes.uint16.vec(16)),
+          x.src[2]), arg=x.arg) if x.src[0].dtype == dtypes.bfloat16.vec(16) else None),
       ])
     if target.arch in {"gfx1200", "gfx1201"}:
       self.extra_matcher += PatternMatcher([
-        (UPat(Ops.WMMA, name="x", dtype=dtypes.bfloat16.vec(8)), lambda x: UOp(Ops.WMMA, dtypes.uint16.vec(8),
-          (x.src[0].bitcast(dtypes.uint16.vec(8)), x.src[1].bitcast(dtypes.uint16.vec(8)), x.src[2].bitcast(dtypes.uint16.vec(8))), (*x.arg,))
+        (UPat(Ops.WMMA, name="x", dtype=dtypes.bfloat16.vec(8)), lambda x: UOp(Ops.WMMA,
+          src=(x.src[0].bitcast(dtypes.uint16.vec(8)), x.src[1].bitcast(dtypes.uint16.vec(8)), x.src[2].bitcast(dtypes.uint16.vec(8))), arg=(*x.arg,))
             .bitcast(dtypes.bfloat16.vec(8)) if x.src[0].dtype == dtypes.bfloat16.vec(8) else None),
         (UPat(Ops.WMMA, name="x", dtype=dtypes.float.vec(8)),
-          lambda x: UOp(Ops.WMMA, dtypes.float.vec(8), (x.src[0].bitcast(dtypes.uint16.vec(8)), x.src[1].bitcast(dtypes.uint16.vec(8)),
-            x.src[2]), (*x.arg,)) if x.src[0].dtype == dtypes.bfloat16.vec(8) else None)
+          lambda x: UOp(Ops.WMMA, src=(x.src[0].bitcast(dtypes.uint16.vec(8)), x.src[1].bitcast(dtypes.uint16.vec(8)),
+            x.src[2]), arg=(*x.arg,)) if x.src[0].dtype == dtypes.bfloat16.vec(8) else None)
       ])
 
   def supported_dtypes(self): return {d for d in super().supported_dtypes()

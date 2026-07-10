@@ -69,9 +69,9 @@ class Tensor(RandMixin):
 
     # create a UOp from the different types of inputs
     if isinstance(data, UOp):
-      assert _dtype is None or _dtype==data.dtype or data.dtype==dtypes.weakint, f"dtype mismatch: {_dtype} vs {data.dtype}"
-      # if data is dtype.weakint that means that this is a symbolic int and we need to lower it to something we can make a Tensor out of
-      if data.dtype == dtypes.weakint: data = _index_to_concrete_int(data)
+      assert _dtype is None or _dtype==data.dtype or data.dtype==dtypes.index, f"dtype mismatch: {_dtype} vs {data.dtype}"
+      # if data is dtype.index that means that this is a symbolic int and we need to lower it to something we can make a Tensor out of
+      if data.dtype == dtypes.index: data = _index_to_concrete_int(data)
     elif data is None:
       data = UOp.const(_dtype or dtypes.default_float, 0)
     elif isinstance(data, get_args(ConstType)):
@@ -204,7 +204,7 @@ class Tensor(RandMixin):
     return self
 
   def assign(self, x:Tensor|PyConst|list|tuple) -> Tensor:
-    is_disk = isinstance(self.device, str) and self.device.startswith("DISK")
+    is_disk = isinstance(self.device, str) and self.device.startswith(("DISK", "TINYFS"))
     if not isinstance(x, Tensor): x = Tensor(x, device="CPU" if is_disk else self.device, dtype=self.dtype)
     if self.uop is x.uop: return self  # a self assign is a NOOP
     # broadcast x (shape only, dtype must match)
@@ -237,7 +237,7 @@ class Tensor(RandMixin):
     if capturing and not getenv("UNSAFE_ALLOW_JIT_BUFFER"):
       from tinygrad.engine.jit import JitError
       raise JitError("cannot access tensor data during JIT capture, the value will be baked in")
-    x = self.cast(self.dtype.base).contiguous()
+    x = self.cast(self.dtype).contiguous()
     if self.uop.device is None or isinstance(self.device, tuple): x = x.clone("CPU")
     return cast(Buffer, x.realize().uop.buffer).ensure_allocated()
 
@@ -252,11 +252,12 @@ class Tensor(RandMixin):
     print(np.frombuffer(t.data(), dtype=np.int32))
     ```
     """
-    if 0 in self.shape: return memoryview(bytearray(0)).cast(self.dtype.base.fmt)
+    if 0 in self.shape: return memoryview(bytearray(0)).cast(self.dtype.fmt)  # type: ignore[arg-type,return-value]
     assert all_int(self.shape), f"no data if shape is symbolic, {self.shape=}"
-    assert self.dtype.base.fmt is not None, f"no fmt dtype for {self.dtype.base}"
-    assert self.dtype.base.fmt != "e" or sys.version_info >= (3, 12)
-    return self._data().cast(self.dtype.base.fmt, self.shape)
+    fmt = self.dtype.fmt
+    assert fmt is not None, f"no fmt dtype for {self.dtype}"
+    assert fmt != "e" or sys.version_info >= (3, 12)
+    return self._data().cast(fmt, self.shape)  # type: ignore[arg-type,return-value]
 
   # NOTE: list[Any] because return type is recursive (list[list[...]] for higher dimensions)
   def tolist(self) -> PyConst|list[Any]:
@@ -288,8 +289,8 @@ class Tensor(RandMixin):
     """
     assert all_int(self.shape), f"no data if shape is symbolic, {self.shape=}"
     import numpy as np
-    if self.dtype.base in { dtypes.bfloat16, *dtypes.fp8s }: return self.float().numpy()
-    if 0 in self.shape: return np.empty(self.shape, dtype=_to_np_dtype(self.dtype.base))
+    if self.dtype in { dtypes.bfloat16, *dtypes.fp8s }: return self.float().numpy()
+    if 0 in self.shape: return np.empty(self.shape, dtype=_to_np_dtype(self.dtype))
     return self._buffer().numpy().reshape(self.shape)
 
   def clone(self, device:str|tuple[str, ...]|None=None) -> Tensor:
@@ -528,7 +529,7 @@ class Tensor(RandMixin):
     ref_frames = [x.contiguous() for x in ref_frames or []]
     assert frame_pos.op is Ops.BIND, "frame_pos must be a bound Variable"
     srcs = (out:=Tensor.empty(*shape, device=self.device, dtype=self.dtype), self.contiguous(), state.contiguous(), *ref_frames)
-    fn = UOp(Ops.CUSTOM_FUNCTION, dtypes.void, src=(frame_pos.src[0], *[UOp.const(dtypes.int, s) for s in shape]), arg="encdec")
+    fn = UOp(Ops.CUSTOM_FUNCTION, src=(frame_pos.src[0], *[UOp.const(dtypes.int, s) for s in shape]), arg="encdec")
     return Tensor(out.uop.after(fn.call(*[s.uop for s in srcs], frame_pos)))
 
 P = ParamSpec("P")
