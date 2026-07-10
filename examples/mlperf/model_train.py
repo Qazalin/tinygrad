@@ -1444,6 +1444,7 @@ def train_llama3():
   model_state = get_state_dict(model)
   deferred_wgrad_params = {model_state[name] for name in ("wqkv", "wo", "w13", "w1", "w3", "w2", "attention_norm", "ffn_norm") if name in model_state}
   deferred_wgrad_grads = [grads[i] for i,p in enumerate(optim.params) if p in deferred_wgrad_params]
+  overlap_sdma = is_dp and getenv("OVERLAP_SDMA", 0)
   for wname in model._fp8_inv_scale:
     w = model_state[wname]
     w._inv_scale = model._fp8_inv_scale[wname]
@@ -1476,16 +1477,17 @@ def train_llama3():
     else:
       loss = vocab_mask.where(-1e9, logits).sparse_categorical_crossentropy(tokens[:, 1:])
 
-    for g, new_g in zip(grads, loss.gradient(*optim.params)):
-      apply_grad(g, new_g.uop)
+    for g, p, new_g in zip(grads, optim.params, loss.gradient(*optim.params)):
+      apply_grad(g, new_g.uop, allreduce=overlap_sdma and p in deferred_wgrad_params)
 
     loss_cpu = loss.flatten().float().to("CPU")
     return loss_cpu.realize(*grads, *fp8_amax, *fp8_grad_amax, *fp8_next_grad_amax)
 
   @TinyJit
   def optim_step():
-    for g in deferred_wgrad_grads:
-      g.assign(Tensor(g.uop.buf_uop.reshape(g.shape).allreduce(Ops.ADD, g.device)))
+    if not overlap_sdma:
+      for g in deferred_wgrad_grads:
+        g.assign(Tensor(g.uop.buf_uop.reshape(g.shape).allreduce(Ops.ADD, g.device)))
     grad_norm = optim.fstep(grads)
     scheduler.step()
 

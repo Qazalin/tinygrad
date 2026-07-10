@@ -357,9 +357,10 @@ def _get_pads(uop:UOp) -> list[UOp]:
   if uop.op == Ops.ADD: return _get_pads(uop.src[0]) + _get_pads(uop.src[1])
   return [uop]
 
-def apply_grad(grad_buf:Tensor, new_grad:UOp):
+def apply_grad(grad_buf:Tensor, new_grad:UOp, allreduce:bool=False):
   pads = _get_pads(new_grad)
   if len(pads) <= 1:
+    if allreduce: new_grad = new_grad.allreduce(Ops.ADD, grad_buf.device)
     new_grad = new_grad.cast(grad_buf.dtype)
     grad_buf.uop = grad_buf.uop.after(grad_buf.uop.store(grad_buf.uop + new_grad))
     return
@@ -368,9 +369,11 @@ def apply_grad(grad_buf:Tensor, new_grad:UOp):
     if pad.op == Ops.PAD:
       grad_shrink = tuple([(p[0], s+p[0]) for s,p in zip(pad.src[0].shape, pad.marg)])
       buf_slice = cur.shrink(grad_shrink)
-      cur = cur.after(buf_slice.store(buf_slice + pad.src[0].cast(cur.dtype)))
+      add = pad.src[0].allreduce(Ops.ADD, grad_buf.device) if allreduce else pad.src[0]
+      cur = cur.after(buf_slice.store(buf_slice + add.cast(cur.dtype)))
     else:
-      cur = cur.after(cur.store(cur + pad.cast(cur.dtype)))
+      add = pad.allreduce(Ops.ADD, grad_buf.device) if allreduce else pad
+      cur = cur.after(cur.store(cur + add.cast(cur.dtype)))
   grad_buf.uop = cur
 
 if __name__ == "__main__":
