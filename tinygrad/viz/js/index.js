@@ -25,6 +25,13 @@ const colored = n => d3.create("span").call(s => s.selectAll("span").data(typeof
 const rect = (s) => (typeof s === "string" ? document.querySelector(s) : s).getBoundingClientRect();
 const viewBounds = () => [rect(".ctx-list-parent").right, rect(".metadata-parent").left];
 
+const graphViewRect = () => {
+  const mainRect = rect(".main-container");
+  const [x0, x1] = viewBounds();
+  const pad = 16;
+  return { x:x0+pad, y:mainRect.top+pad, width:(x1>0 ? x1-x0 : mainRect.width)-2*pad, height:mainRect.height-2*pad };
+};
+
 // dims of shapes on the canvas aren't tracked by the browser, we compute it
 const canvasRect = (s, pixelScale) => {
   const { e } = selectShape(s), t = data.tracks.get(s.split("-")[0]);
@@ -89,6 +96,13 @@ const drawGraph = (data) => {
   const STROKE_WIDTH = 1.4, textSpace = g.graph().textSpace;
   const labels = nodes.selectAll("g.label").data(d => [d]).join("g").attr("class", "label");
   labels.attr("transform", d => `translate(${d.labelX-d.labelWidth/2}, -${d.labelHeight/2+STROKE_WIDTH*2})`);
+  const nodeText = ({ label }) => Array.isArray(label) ? label.map(graphLabelText).join("") : parseColors(label ?? "").map(x => x.st).join("");
+  d3.select("#graph-find-index").selectAll("div").data(g.nodes().map(id => g.node(id)), d => d.id).join("div").attr("hidden", "until-found").text(nodeText).on("beforematch", ({ target }, d) => {
+    const R = graphViewRect(); const scale = Math.min(R.width/(d.width+32), R.height/(d.height+32), 2);
+    d3.select("#graph-svg").call(svgZoom.transform, d3.zoomIdentity.translate(R.x+R.width/2-d.x*scale, R.y+R.height/2-d.y*scale).scale(scale));
+    // reset this attribute for the next find
+    setTimeout(() => target.setAttribute("hidden", "until-found"));
+  });
   const rectGroup = labels.selectAll("g.rect-group").data(d => [d]).join("g").attr("class", "rect-group");
   const tokens = labels.selectAll("g.text-group").data(d => [d]).join("g").attr("class", "text-group").selectAll("text").data(d => {
     if (Array.isArray(d.label)) return [d.label];
@@ -806,10 +820,7 @@ document.getElementById("zoom-to-fit-btn").addEventListener("click", () => {
   }
   const svg = d3.select("#graph-svg");
   svg.call(svgZoom.transform, d3.zoomIdentity);
-  const mainRect = rect(".main-container");
-  const [x0, x1] = viewBounds();
-  const pad = 16;
-  const R = { x: x0+pad, y: mainRect.top+pad, width: (x1>0 ? x1-x0 : mainRect.width)-2*pad, height: mainRect.height-2*pad };
+  const R = graphViewRect();
   const r = rect("#render");
   if (r.width === 0) return;
   const scale = Math.min(R.width/r.width, R.height/r.height);
