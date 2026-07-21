@@ -173,6 +173,32 @@ class TestSchedule(unittest.TestCase):
     run_linear(*check_schedule(out, 5))
     np.testing.assert_equal(out.numpy(), [4.])
 
+  def test_allreduce_all2all_uses_slice(self):
+    # view_to_slice converts shrink(reshape(mselect)) copies into hardware SLICE ops
+    with Context(ALL2ALL=2):
+      devs = ("CPU:0", "CPU:1")
+      x = Tensor.ones(2, 96, device="CPU").shard(devs, axis=0).realize()
+      linear, _ = x.sum(0).linear_with_vars()
+      slices = [u for u in linear.toposort() if u.op is Ops.SLICE]
+      contigs = [u for u in linear.toposort() if u.op is Ops.CONTIGUOUS]
+      self.assertGreater(len(slices), 0, "expected SLICE ops from view_to_slice")
+      self.assertEqual(len(contigs), 0, "expected no CONTIGUOUS ops")
+
+  def test_allreduce_all2all_correctness(self):
+    with Context(ALL2ALL=2):
+      devs = ("CPU:0", "CPU:1")
+      x = Tensor.arange(2*96).to("CPU").reshape(2, 96).contiguous().shard(devs, axis=0).realize()
+      out = x.sum(0).realize()
+      np.testing.assert_allclose(out.numpy(), x.numpy().sum(0))
+
+  def test_allreduce_ring_uses_slice(self):
+    with Context(RING=2):
+      devs = ("CPU:0", "CPU:1")
+      x = Tensor.ones(2, 96, device="CPU").shard(devs, axis=0).realize()
+      linear, _ = x.sum(0).linear_with_vars()
+      slices = [u for u in linear.toposort() if u.op is Ops.SLICE]
+      self.assertGreater(len(slices), 0, "expected SLICE ops from view_to_slice")
+
 class TestLimitBufs(unittest.TestCase):
   @unittest.skipIf(DEV.interface.startswith("MOCK") and Device.DEFAULT == "NV", "crashes in ocelot")
   def test_limit_bufs_with_var(self):

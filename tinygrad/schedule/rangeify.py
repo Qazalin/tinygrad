@@ -68,6 +68,12 @@ def fix_store_hazard(target:UOp, src:UOp):
     reaches_base[s] = s is base or any(reaches_base.get(c) for c in s.src)
     if reaches_base[s] and s.op in unsafe and not (s is target and s.op is Ops.SHRINK): return target.store(src.contiguous())
 
+def copy_view_or_contiguous(r:UOp) -> UOp:
+  from tinygrad.callify import _make_buffer_view
+  if r.base.op in {Ops.BUFFER, Ops.SLICE, Ops.MULTI, Ops.MSELECT} and (s:=_make_buffer_view(r)) is not None:
+    return s.reshape(r.shape)
+  return r.contiguous()
+
 def split_reduceop(reduce:UOp, x:UOp):
   if prod(reduce.shape) == 0: return None
   if not SPLIT_REDUCEOP or not all_int(x.shape) or (prod(x.shape)//prod(reduce.shape))<getenv("REDUCEOP_SPLIT_THRESHOLD", 32768): return None
@@ -93,6 +99,7 @@ def split_reduceop(reduce:UOp, x:UOp):
   return splitted._rop(reduce.arg[0], tuple(range(reduce.arg[1]))).contiguous()._rop(reduce.arg[0], (len(reduce.shape),)).reshape(reduce.shape)
 
 pm_gather_params = PatternMatcher([ (UPat(Ops.PARAM, name="p"), lambda ctx, p: ctx.append(p) if p.arg.slot >= 0 else None), ])
+
 def resolve_function(c:UOp, allow_param_mismatch=True) -> UOp|None:
   if c.arg.precompile: return None
   params: list[UOp] = []
@@ -147,7 +154,8 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 
   # COPY transfers a contiguous range, so materialize a source that's resized (shrink/pad/expand) or reordered (permute/flip)
   (UPat(Ops.COPY, src=(UPat(GroupOp.Movement, name="r"),), name="c"),
-   lambda c,r: c.replace(src=(r.contiguous(),)) if resolve(r.numel() != r.base.numel(), False) or r.contiguous_view_offset() is None else None),
+   lambda c,r: c.replace(src=(copy_view_or_contiguous(r),)) if resolve(r.numel() != r.base.numel(), False) else
+               c.replace(src=(r.contiguous(),)) if r.contiguous_view_offset() is None else None),
 
   # copying mselect to same device is just mselect (no NOOP kernel)
   (UPat(Ops.COPY, src=(UPat(Ops.MSELECT, name="ms"),), name="copy"), lambda ms,copy: ms if ms.device == copy.device else None),
@@ -285,6 +293,10 @@ def remove_noop_bufferize(idx,b2):
   if idx.src[1:] != b2.src[1:]: return None
   return idx.src[0].shrink(tuple((0, s) for s in b2.shape)) if b2.shape else idx.src[0]
 
+def normalize_slice_source(x:UOp) -> UOp|None:
+  if x.src[0].op is not Ops.INDEX or x.src[1].op is not Ops.CONST: return None
+  return UOp(Ops.SLICE, x.dtype, (x.src[0].src[0], x.src[1]), x.arg)
+
 def after_all_invalid(after:UOp):
   buf = after.src[0].buf_uop
   # check all ranges are used (no expand), and same size (no pad and shrink)
@@ -293,6 +305,7 @@ def after_all_invalid(after:UOp):
     and resolve(cast(UOp, prod(r.src[0] for r in s.ended_ranges)).eq(buf.numel()), False) for s in after.src[1:])
 
 pm_const_buffer_folding = pm_mops+PatternMatcher([
+  (UPat(Ops.SLICE, name="x"), normalize_slice_source),
   (UPat(Ops.STAGE, name="b"), cleanup_dead_axes),
   # remove noop buffers. if we look at the next index we can remove even more of these
   (UPat(Ops.INDEX, name="idx").f(Ops.STAGE, allow_any_len=True, name="b2"), remove_noop_bufferize),
@@ -468,7 +481,7 @@ def find_bufs(x:UOp):
 
 to_define_global = PatternMatcher([
   (UPat(Ops.STORE, name="x"), find_bufs),
-  (UPat((Ops.BUFFER, Ops.MSTACK, Ops.MSELECT), name="buf"), debuf),
+  (UPat((Ops.BUFFER, Ops.MSTACK, Ops.MSELECT, Ops.SLICE), name="buf"), debuf),
   (UPat(Ops.PARAM, name="v"), lambda v:
    UOp.variable(v.arg.name, v.arg.vmin_vmax[0], v.arg.vmin_vmax[1], v.dtype, multiple_of=v.arg.multiple_of)
    if v.arg.name is not None and v.arg.vmin_vmax is not None else None),
@@ -514,7 +527,7 @@ def split_store(x:UOp) -> UOp|None:
   lctx = LocalAddBufferContext()
   ret = graph_rewrite(x, to_define_global+pm_flatten_range+rangeify_codegen, ctx=lctx, name="kernel split", bottom_up=True)
 
-  # SINK requires all buffers on the same device, but COPY is cross-device
+  # SINK requires all buffers on the same device, but COPY/SLICE are cross-device or special hardware ops
   if ret.op is Ops.STORE: stored = ret.src[1]
   elif ret.op is Ops.END and ret.src[0].op is Ops.STORE: stored = ret.src[0].src[1]
   else: raise RuntimeError(f"unknown kernel type {ret.op}")
