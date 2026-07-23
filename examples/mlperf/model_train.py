@@ -1443,6 +1443,8 @@ def train_llama3():
 
   from tinygrad.nn.state import get_state_dict
   model_state = get_state_dict(model)
+  param_names = {id(v):k for k,v in model_state.items()}
+  grad_names = [param_names.get(id(p), f"param[{i}]") for i,p in enumerate(optim.params)]
   if not MXFP4:
     for wname in model._fp8_inv_scale:
       w = model_state[wname]
@@ -1566,6 +1568,14 @@ def train_llama3():
         loss_count += 1
         dev_time += time.perf_counter() - mst
       if stopped: break
+
+      if getenv("MXFP4_DIAG"):
+        grad_sq = Tensor.stack(*[g.float().square().sum() for g in grads]).to("CPU").realize().tolist()
+        grad_max = Tensor.stack(*[g.float().abs().max() for g in grads]).to("CPU").realize().tolist()
+        bad = [name for name,g in zip(grad_names, grads) if not g.isfinite().all().item()]
+        top = sorted(zip(grad_max, grad_names), reverse=True)[:5]
+        tqdm.write(f"MXFP4_DIAG pre_optim_norm={math.sqrt(sum(grad_sq))/grad_acc:.6g} nonfinite={bad} "
+                   f"top_abs={[(name, f'{value:.6g}') for value,name in top]}")
 
       gt = time.perf_counter()
       ret = optim_step()

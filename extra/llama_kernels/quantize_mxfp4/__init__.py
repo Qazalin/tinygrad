@@ -1,11 +1,17 @@
 from __future__ import annotations
 import functools, pathlib
+from dataclasses import replace
 from tinygrad import Tensor, dtypes
 from tinygrad.renderer import Estimates
-from tinygrad.uop.ops import UOp, Ops, KernelInfo
+from tinygrad.uop.ops import UOp, Ops, KernelInfo, ProgramInfo
 from extra.llama_kernels import THREADS_PER_WG, alloc_like, compile_hip, dname_of
 
 BLK = 32
+
+
+def quantize_mxfp4_program_info(sink:UOp) -> ProgramInfo:
+  info = ProgramInfo.from_sink(sink)
+  return replace(info, outs=info.globals[:2], ins=info.globals[2:])
 
 
 @functools.cache
@@ -21,7 +27,8 @@ def _custom_quantize_mxfp4(q:UOp, e8:UOp, x:UOp, use_hadamard:bool, dname:str) -
   src = (pathlib.Path(__file__).parent/"quantize_mxfp4.cpp").read_text()
   defines = [f"-DROWS={rows}", f"-DK_DIM={K}", f"-DTHREADS_PER_WG={THREADS_PER_WG}", f"-DUSE_HADAMARD={int(use_hadamard)}"]
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)),
-                               UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=compile_hip(src, defines))))
+                               UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=compile_hip(src, defines))),
+             arg=quantize_mxfp4_program_info(sink))
 
 
 def quantize_mxfp4(x:Tensor, use_hadamard:bool=False) -> tuple[Tensor, Tensor]:

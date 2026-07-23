@@ -1,12 +1,18 @@
 import functools, pathlib
+from dataclasses import replace
 from tinygrad import Tensor, dtypes
 from tinygrad.renderer import Estimates
 from tinygrad.runtime.support.compiler_amd import HIPCCCompiler
-from tinygrad.uop.ops import UOp, Ops, KernelInfo
+from tinygrad.uop.ops import UOp, Ops, KernelInfo, ProgramInfo
 
 MX_BLOCK_SIZE = 32
 MXFP4_VALUES = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
                 -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0)
+
+
+def mxfp4_gemm_program_info(sink:UOp) -> ProgramInfo:
+  info = ProgramInfo.from_sink(sink)
+  return replace(info, outs=(info.globals[0],), ins=info.globals[1:])
 
 
 def _hadamard(size:int) -> list[list[float]]:
@@ -87,7 +93,7 @@ def _custom_mxfp4_gemm(C:UOp, A:UOp, B:UOp, scale_a:UOp, scale_b:UOp, orig_a:UOp
   opts = ["-std=c++20", "-ffast-math", f"-DGEMM_M={M}", f"-DGEMM_N={N}", f"-DGEMM_K={K}"]
   lib = HIPCCCompiler("gfx950", opts).compile_cached(src)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)),
-                               UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
+                               UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)), arg=mxfp4_gemm_program_info(sink))
 
 
 def _mxfp4_gemm_launch(a:Tensor, b:Tensor, scale_a:Tensor, scale_b:Tensor, orig_a:Tensor, orig_b:Tensor, grad_fxn=None) -> Tensor:

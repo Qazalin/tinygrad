@@ -4,8 +4,10 @@ import numpy as np
 
 from tinygrad import Tensor, dtypes
 from tinygrad.device import Device
-from extra.gemm.mxfp4 import MXFP4_VALUES, dequantize_mxfp4, hadamard16, mxfp4_gemm, mxfp4_linear, quantize_mxfp4_ref
-from extra.llama_kernels.quantize_mxfp4 import quantize_mxfp4
+from tinygrad.uop.ops import UOp, KernelInfo
+from extra.gemm.mxfp4 import (MXFP4_VALUES, dequantize_mxfp4, hadamard16, mxfp4_gemm, mxfp4_gemm_program_info, mxfp4_linear,
+                              quantize_mxfp4_ref)
+from extra.llama_kernels.quantize_mxfp4 import quantize_mxfp4, quantize_mxfp4_program_info
 
 
 def numpy_quantize_mxfp4(x:np.ndarray, use_hadamard:bool=False) -> tuple[np.ndarray, np.ndarray]:
@@ -29,6 +31,15 @@ def numpy_quantize_mxfp4(x:np.ndarray, use_hadamard:bool=False) -> tuple[np.ndar
 
 
 class TestMXFP4Reference(unittest.TestCase):
+  def test_opaque_program_buffer_bindings(self):
+    q, e8, x = (UOp.param(i, dtypes.uint8, (16,), "NULL") for i in range(3))
+    qinfo = quantize_mxfp4_program_info(UOp.sink(q, e8, x, arg=KernelInfo("quantize_mxfp4")))
+    self.assertEqual((qinfo.globals, qinfo.outs, qinfo.ins), ((0, 1, 2), (0, 1), (2,)))
+
+    c, a, b, sa, sb, orig_a, orig_b = (UOp.param(i, dtypes.uint8, (16,), "NULL") for i in range(7))
+    ginfo = mxfp4_gemm_program_info(UOp.sink(c, a, b, sa, sb, orig_a, orig_b, arg=KernelInfo("mxfp4_gemm")))
+    self.assertEqual((ginfo.globals, ginfo.outs, ginfo.ins), ((0, 1, 2, 3, 4, 5, 6), (0,), (1, 2, 3, 4, 5, 6)))
+
   def test_hadamard_is_normalized_and_self_inverse(self):
     Tensor.manual_seed(0)
     x = Tensor.randn(3, 64)
