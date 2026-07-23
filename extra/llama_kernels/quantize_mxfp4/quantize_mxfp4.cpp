@@ -13,6 +13,12 @@
 #ifndef USE_HADAMARD
 #define USE_HADAMARD 0
 #endif
+#ifndef SHUFFLE_DATA
+#define SHUFFLE_DATA 0
+#endif
+#ifndef SHUFFLE_SCALES
+#define SHUFFLE_SCALES 0
+#endif
 
 constexpr int BLK = 32;
 constexpr int N_BLOCKS = ROWS * K_DIM / BLK;
@@ -68,9 +74,19 @@ quantize_mxfp4(uint8_t *__restrict__ q, uint8_t *__restrict__ e8_out,
   const uint8_t e8 = amax == 0.0f ? 127 : uint8_t(unbiased + 127);
   const float qscale = ldexpf(1.0f, 127 - int(e8));
 
-  const long long output = (long long)block * (BLK / 2);
+  const int row = block / (K_DIM / BLK);
+  const int kblock = block % (K_DIM / BLK);
+  const long long output = SHUFFLE_DATA ?
+      ((((long long)(row / 16) * (K_DIM / 64) + kblock / 2) * 2 + kblock % 2) * 16 + row % 16) * 16 :
+      (long long)block * (BLK / 2);
   #pragma unroll
   for (int i = 0; i < BLK / 2; i++)
     q[output + i] = encode_e2m1(vals[2*i] * qscale) | (encode_e2m1(vals[2*i+1] * qscale) << 4);
-  e8_out[block] = e8;
+  if constexpr (SHUFFLE_SCALES) {
+    const int bs0 = row / 32, bs1 = (row % 32) / 16, bs2 = row % 16;
+    const int bs3 = kblock / 8, bs4 = (kblock % 8) / 4, bs5 = kblock % 4;
+    e8_out[(long long)bs0 * 32 * (K_DIM / 32) + bs3 * 256 + bs5 * 64 + bs2 * 4 + bs4 * 2 + bs1] = e8;
+  } else {
+    e8_out[block] = e8;
+  }
 }

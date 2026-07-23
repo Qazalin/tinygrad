@@ -212,6 +212,7 @@ class PM4Executor(AMDQueue):
     scratch_size = wavesize * (16 if self.gpu.arch == "cdna" else 4)  # per-thread scratch size in bytes
 
     assert prg_sz > 0, "Invalid prg ptr (not found in mapped ranges)"
+    if getenv("MOCKGPU_SKIP_KERNEL_EXEC", 0): return
     # Pass valid memory ranges, rsrc2, scratch_size, arch, and user data registers to the emulator
     remu.valid_mem_ranges = self.gpu.mapped_ranges
     remu.rsrc2 = rsrc2

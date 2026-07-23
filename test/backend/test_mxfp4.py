@@ -1,12 +1,14 @@
-import unittest
+import struct, unittest
 
 import numpy as np
 
 from tinygrad import Tensor, dtypes
 from tinygrad.device import Device
 from tinygrad.uop.ops import UOp, KernelInfo
-from extra.gemm.mxfp4 import (MXFP4_VALUES, dequantize_mxfp4, hadamard16, mxfp4_gemm, mxfp4_gemm_program_info, mxfp4_linear,
-                              quantize_mxfp4_ref)
+from extra.gemm.mxfp4 import (MXFP4_VALUES, dequantize_mxfp4, hadamard16, mxfp4_gemm, mxfp4_gemm_preshuffled,
+                              mxfp4_gemm_program_info, mxfp4_linear, quantize_mxfp4_ref, shuffle_mxfp4_scales,
+                              shuffle_mxfp4_weight, unshuffle_mxfp4_scales, unshuffle_mxfp4_weight,
+                              _aiter_f4_kernargs, _aiter_f4_program_info, _custom_mxfp4_dispatch)
 from extra.llama_kernels.quantize_mxfp4 import quantize_mxfp4, quantize_mxfp4_program_info
 
 
@@ -39,6 +41,32 @@ class TestMXFP4Reference(unittest.TestCase):
     c, a, b, sa, sb, orig_a, orig_b = (UOp.param(i, dtypes.uint8, (16,), "NULL") for i in range(7))
     ginfo = mxfp4_gemm_program_info(UOp.sink(c, a, b, sa, sb, orig_a, orig_b, arg=KernelInfo("mxfp4_gemm")))
     self.assertEqual((ginfo.globals, ginfo.outs, ginfo.ins), ((0, 1, 2, 3, 4, 5, 6), (0,), (1, 2, 3, 4, 5, 6)))
+
+  def test_aiter_f4_packed_abi(self):
+    M, N, K = 16384, 4096, 14336
+    args = _aiter_f4_kernargs(M, N, K)
+    self.assertEqual(len(args), 384)
+    self.assertEqual(struct.unpack_from("<f", args, 64)[0], 1.0)
+    self.assertEqual(struct.unpack_from("<f", args, 80)[0], 0.0)
+    self.assertEqual(tuple(struct.unpack_from("<I", args, off)[0] for off in (224, 240, 256)), (M, N, K))
+    self.assertEqual(tuple(struct.unpack_from("<I", args, off)[0] for off in (304, 336)), (K // 32, K // 32))
+    self.assertEqual(struct.unpack_from("<I", args, 368)[0], 0)
+
+    bufs = [UOp.param(i, dtypes.uint8, (16,), "NULL") for i in range(7)]
+    info = _aiter_f4_program_info(UOp.sink(*bufs, arg=KernelInfo("aiter_f4")), M, N, K, 256, 256)
+    self.assertEqual(info.global_size, (16, 64, 1))
+    self.assertEqual(info.local_size, (256, 1, 1))
+    self.assertEqual(info.aux[0], "packed")
+    self.assertEqual(info.aux[2], (0, 32, 48, 272, 288, None, None))
+
+  def test_aiter_selection_uses_local_shard_shape(self):
+    M, N, K = 16384, 4096, 4096
+    c = UOp.param(0, dtypes.bfloat16, (M, N), "AMD")
+    a, b = UOp.param(1, dtypes.uint8, (M, K // 2), "AMD"), UOp.param(2, dtypes.uint8, (N, K // 2), "AMD")
+    sa, sb = UOp.param(3, dtypes.uint8, (M, K // 32), "AMD"), UOp.param(4, dtypes.uint8, (N, K // 32), "AMD")
+    orig_a, orig_b = UOp.param(5, dtypes.bfloat16, (M, K), "AMD"), UOp.param(6, dtypes.bfloat16, (N, K), "AMD")
+    prg = _custom_mxfp4_dispatch(c, a, b, sa, sb, orig_a, orig_b, "AMD", b_preshuffled=True, use_aiter=True)
+    self.assertEqual(prg.arg.name, "aiter_f4gemm_16384_4096_4096")
 
   def test_hadamard_is_normalized_and_self_inverse(self):
     Tensor.manual_seed(0)
@@ -89,6 +117,20 @@ class TestMXFP4Reference(unittest.TestCase):
     self.assertEqual(q.tolist(), [[0] * 32, [0] * 32])
     self.assertEqual(s.tolist(), [[127, 127], [127, 127]])
 
+  def test_amd_weight_shuffle_layout_and_inverse(self):
+    x = Tensor(np.arange(16 * 32, dtype=np.uint16).astype(np.uint8).reshape(16, 32))
+    shuffled = shuffle_mxfp4_weight(x)
+    expected = x.numpy().reshape(1, 16, 1, 2, 16).transpose(0, 2, 3, 1, 4).reshape(16, 32)
+    np.testing.assert_array_equal(shuffled.numpy(), expected)
+    np.testing.assert_array_equal(unshuffle_mxfp4_weight(shuffled).numpy(), x.numpy())
+
+  def test_amd_scale_shuffle_layout_and_inverse(self):
+    x = Tensor(np.arange(32 * 16, dtype=np.uint16).astype(np.uint8).reshape(32, 16))
+    shuffled = shuffle_mxfp4_scales(x)
+    expected = x.numpy().reshape(1, 2, 16, 2, 2, 4).transpose(0, 3, 5, 2, 4, 1).reshape(32, 16)
+    np.testing.assert_array_equal(shuffled.numpy(), expected)
+    np.testing.assert_array_equal(unshuffle_mxfp4_scales(shuffled).numpy(), x.numpy())
+
 
 class TestMXFP4HIP(unittest.TestCase):
   def test_native_matches_reference(self):
@@ -106,7 +148,7 @@ class TestMXFP4HIP(unittest.TestCase):
   def test_native_gemm_matches_dequantized_reference(self):
     if Device.DEFAULT.split(":")[0] != "AMD": self.skipTest("native MXFP4 GEMM requires AMD")
     Tensor.manual_seed(7)
-    for M, N, K, use_hadamard in ((16, 16, 128, False), (32, 48, 256, False), (16, 32, 128, True)):
+    for M, N, K, use_hadamard in ((16, 16, 128, False), (32, 48, 256, False), (16, 32, 128, True), (256, 256, 256, False)):
       with self.subTest(shape=(M, N, K), use_hadamard=use_hadamard):
         a = (Tensor.randn(M, K) * 0.5).cast(dtypes.bfloat16).realize()
         b = (Tensor.randn(N, K) * 0.5).cast(dtypes.bfloat16).realize()
@@ -125,13 +167,26 @@ class TestMXFP4HIP(unittest.TestCase):
     out = mxfp4_gemm(q, q, sa, sb).realize().float().numpy()
     np.testing.assert_array_equal(out, np.full((16, 16), 1024.0, dtype=np.float32))
 
+  def test_preshuffled_weight_gemm_matches_plain_layout(self):
+    if Device.DEFAULT.split(":")[0] != "AMD": self.skipTest("native MXFP4 GEMM requires AMD")
+    Tensor.manual_seed(17)
+    M = N = K = 256
+    a = (Tensor.randn(M, K) * 0.5).cast(dtypes.bfloat16).realize()
+    b = (Tensor.randn(N, K) * 0.5).cast(dtypes.bfloat16).realize()
+    aq, ae = quantize_mxfp4(a)
+    bq, be = quantize_mxfp4(b)
+    plain = mxfp4_gemm(aq, bq, ae, be)
+    shuffled = mxfp4_gemm_preshuffled(aq, shuffle_mxfp4_weight(bq), shuffle_mxfp4_scales(ae), shuffle_mxfp4_scales(be))
+    Tensor.realize(plain, shuffled)
+    np.testing.assert_array_equal(shuffled.numpy(), plain.numpy())
+
   def test_a4w4_backward_matches_dequantized_reference(self):
     if Device.DEFAULT.split(":")[0] != "AMD": self.skipTest("native MXFP4 GEMM requires AMD")
     Tensor.manual_seed(11)
-    a = (Tensor.randn(128, 128) * 0.25).cast(dtypes.bfloat16).realize()
-    b = (Tensor.randn(128, 128) * 0.25).cast(dtypes.bfloat16).realize()
+    a = (Tensor.randn(256, 256) * 0.25).cast(dtypes.bfloat16).realize()
+    b = (Tensor.randn(256, 256) * 0.25).cast(dtypes.bfloat16).realize()
     a.requires_grad = b.requires_grad = True
-    gradient = (Tensor.randn(128, 128) * 0.25).cast(dtypes.bfloat16).realize()
+    gradient = (Tensor.randn(256, 256) * 0.25).cast(dtypes.bfloat16).realize()
     mxfp4_linear(a, b, use_hadamard=True).backward(gradient)
     assert a.grad is not None and b.grad is not None
 
