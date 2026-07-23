@@ -25,6 +25,11 @@ FUSED_SILU_W13 = getenv("FUSED_SILU_W13", 0)
 SPLIT_W13 = getenv("SPLIT_W13", 0)
 COLUMNWISE_WEIGHT_SCALE = getenv("COLUMNWISE_WEIGHT_SCALE", 0)
 MXFP8 = getenv("MXFP8", 0)
+MXFP4 = getenv("MXFP4", 0)
+MXFP4_FPROP = getenv("MXFP4_FPROP", MXFP4)
+MXFP4_DGRAD = getenv("MXFP4_DGRAD", MXFP4)
+MXFP4_WGRAD = getenv("MXFP4_WGRAD", MXFP4)
+MXFP4_HADAMARD = getenv("MXFP4_HADAMARD", MXFP4)
 
 FP8_DTYPE = dtypes.fp8e4m3
 FP8_GRAD_DTYPE = dtypes.fp8e5m2
@@ -45,6 +50,17 @@ def matmul(x:Tensor, w:Tensor, fp8:bool=True, amax_x:Tensor|None=None, w_inv_sca
       from extra.gemm.cdna_asm_gemm import can_use_asm_gemm, asm_gemm
       if can_use_asm_gemm(x, w.T): return (asm_gemm(x, w.T),)
     return (x @ w.T,)
+  if MXFP4:
+    assert x is not None and x_fp8 is None and x_prequant_mx is None
+    x_shape = x.shape
+    x_2d = x.reshape(-1, x.shape[-1])
+    if MXFP4_FPROP:
+      from extra.gemm.mxfp4 import mxfp4_linear
+      out = mxfp4_linear(x_2d, w, use_hadamard=bool(MXFP4_HADAMARD),
+                         dgrad=bool(MXFP4_DGRAD), wgrad=bool(MXFP4_WGRAD))
+    else:
+      out = x_2d @ w.T
+    return out.reshape(*x_shape[:-1], w.shape[0]), x_2d
   assert w_inv_scale is not None, "fp8 matmul requires w_inv_scale (weights must be stored in fp8 with per-tensor scale)"
   if MXFP8:
     from extra.gemm.cdna_asm_gemm import asm_gemm, quantize_mxfp8, mx_pack, can_use_asm_gemm, _mx_block_scale
@@ -80,7 +96,7 @@ def matmul(x:Tensor, w:Tensor, fp8:bool=True, amax_x:Tensor|None=None, w_inv_sca
 
 def norm_quantize_matmul(x:Tensor, norm:Tensor, w:Tensor, w_inv_scale:Tensor, eps:float, amax_x:Tensor, next_amax_x:Tensor,
                          grad_amax_state:Tensor, next_grad_amax_state:Tensor, layer_num:Tensor):
-  if FUSED_ADD_NORM_MUL_QUANTIZE:
+  if FUSED_ADD_NORM_MUL_QUANTIZE and not MXFP4:
     from extra.llama_kernels.fused_rmsnorm_mul_quantize_fp8 import fused_rmsnorm_mul_quantize_fp8
     x_fp8, x_normed, rrms = fused_rmsnorm_mul_quantize_fp8(x, norm, amax_x, eps, FP8_DTYPE, next_amax_x, layer_num=layer_num)
     out, *ret = matmul(None, w, w_inv_scale=w_inv_scale, x_fp8=x_fp8, amax_x=amax_x,
@@ -93,7 +109,7 @@ def norm_quantize_matmul(x:Tensor, norm:Tensor, w:Tensor, w_inv_scale:Tensor, ep
 
 def add_norm_quantize_matmul(x:Tensor, residual:Tensor, norm:Tensor, w:Tensor, w_inv_scale:Tensor, eps:float, amax_x:Tensor,
                              next_amax_x:Tensor, grad_amax_state:Tensor|None=None, next_grad_amax_state:Tensor|None=None, layer_num:Tensor|None=None):
-  if FUSED_ADD_NORM_MUL_QUANTIZE:
+  if FUSED_ADD_NORM_MUL_QUANTIZE and not MXFP4:
     from extra.llama_kernels.fused_rmsnorm_mul_quantize_fp8 import fused_add_rmsnorm_mul_quantize_fp8
     x_fp8, h, x_normed, rrms = fused_add_rmsnorm_mul_quantize_fp8(x, residual, norm, amax_x, eps, FP8_DTYPE, next_amax_x, layer_num=layer_num)
     out, *ret = matmul(None, w, w_inv_scale=w_inv_scale, x_fp8=x_fp8, amax_x=amax_x,
@@ -109,7 +125,7 @@ def silu_w13_quantize_matmul(x_w13:Tensor, w2:Tensor, s_2:Tensor,
                              amax_x2:Tensor, next_amax_x2:Tensor,
                              grad_amax_xw13:Tensor, next_grad_amax_xw13:Tensor,
                              grad_amax_xout:Tensor, next_grad_amax_xout:Tensor, layer_num:Tensor):
-  if FUSED_SILU_W13:
+  if FUSED_SILU_W13 and not MXFP4:
     from extra.llama_kernels.cast_amax import fused_quantize_fp8_w13
     x2_fp8 = fused_quantize_fp8_w13(x_w13, amax_x2, FP8_DTYPE, grad_amax_state=grad_amax_xw13,
                                     next_grad_amax_state=next_grad_amax_xw13, amax_out=next_amax_x2, layer_num=layer_num)
@@ -177,6 +193,8 @@ class FlatTransformer:
     if w is None:
       if getenv("ZEROS"): w = Tensor.zeros(self.n_layers, out_features, in_features)
       else: w = Tensor.normal(self.n_layers, out_features, in_features, mean=0.0, std=std)
+    if MXFP4:
+      return w.cast(dtypes.bfloat16), Tensor.ones(self.n_layers, dtype=dtypes.float32)
     if MXFP8:
       from extra.gemm.cdna_asm_gemm import quantize_mxfp8
       w_q, w_e8, _ = quantize_mxfp8(w.reshape(self.n_layers * out_features, in_features))
@@ -289,7 +307,11 @@ class FlatTransformer:
       # flat per-layer weights: axis 0 is n_layers, so shard axes are +1 vs per-layer Transformer
       def _shard_fp8(name:str, axis:int, std:float=0.02):
         w = getattr(self, name)
-        if MXFP8:
+        if MXFP4:
+          w.shard_(device, axis=axis)
+          self._fp8_inv_scale[name] = self._fp8_inv_scale[name].to(device).contiguous().is_param_(False)
+          self._fp8_next_inv_scale[name] = self._fp8_next_inv_scale[name].to(device).contiguous().is_param_(False)
+        elif MXFP8:
           from extra.gemm.cdna_asm_gemm import quantize_mxfp8
           w_bf16 = Tensor.empty(self.n_layers, w.shape[1], w.shape[2], dtype=dtypes.bfloat16).shard(device, axis=axis).randn_like() * std
           w_q, w_e8, _ = quantize_mxfp8(w_bf16)
