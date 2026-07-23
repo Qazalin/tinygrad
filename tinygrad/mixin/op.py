@@ -11,7 +11,7 @@ from tinygrad.helpers import all_int, argfix, argsort, ceildiv, flatten, flat_to
 from tinygrad.helpers import resolve_pool_pads, round_up, IMAGE, FLOAT16, WINO
 
 if TYPE_CHECKING:
-  from tinygrad.uop.ops import sint, UOp
+  from tinygrad.uop.ops import sint
 
 ReductionStr = Literal["mean", "sum", "none"]
 
@@ -110,8 +110,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       consecutive = dims == list(range(dims[0], dims[0] + len(dims)))
       if v is None and len(dims) > 1 and consecutive and all_int(ishp := tuple(x.shape[d] for d in dims)):
         strides = tuple(prod(ishp[i+1:]) for i in range(len(dims)))
-        try: linear_idx = type(self).usum(*[t._broadcast_to(big_shape) * s for t, s in zip(tensors, strides)])
-        except ValueError as err: raise IndexError(f"cannot broadcast indices: {err}") from err
+        linear_idx = type(self).usum(*[t * s for t, s in zip(tensors, strides)])
         valid = type(self).uprod(*[(t >= 0) & (t < s) for t, s in zip(tensors, ishp)])
         pre, post = x.shape[:dims[0]], x.shape[dims[-1]+1:]
         x = x.reshape(pre + (prod(ishp),) + post)[tuple([slice(None)] * len(pre)) + (valid.where(linear_idx, 0),)]
@@ -285,8 +284,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     pads = tuple((smax(pB,0), smax(pA,0)) for pB,pA in pX) if has_neg else pX
     base = MovementMixin.pad(X, pads)
     if value == 0: return base
-    if value is not Invalid: base = base.cast(least_upper_dtype(base.dtype, dtypes.from_py(value)))
-    return MovementMixin.pad(X.const_like(1).cast(dtypes.bool), pads).where(base, base.const_like(value))
+    return MovementMixin.pad(X.const_like(1).cast(dtypes.bool), pads).where(base, value)
 
   def _pad_circular(self, pX:tuple[tuple[sint, sint], ...]) -> Self:
     # shrink first for negative pads, then wrap the non-negative remainder
@@ -356,17 +354,6 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     if mode == "circular": return self._pad_circular(pX)
     if mode in {"reflect", "replicate"}: return self._pad_reflect_replicate(pX, mode)
     raise NotImplementedError(f"{mode=} is not supported")
-
-  def _broadcasted(self, y:Self|ConstType|UOp, reverse:bool=False) -> tuple[Self, Self]:
-    if not isinstance(y, type(self)): y = self.ufix(y)
-    x, y = (self, y) if not reverse else (y, self)
-    # ValueError: unsized ptr has shape (-1,) which can't broadcast; RuntimeError: shape mismatch
-    try:
-      out_shape = _broadcast_shape(x.shape, y.shape)
-      x, y = x._broadcast_to(out_shape), y._broadcast_to(out_shape)
-    except (RuntimeError, ValueError): pass
-    if x.dtype == y.dtype: return x, y
-    return x.cast(out_dtype := least_upper_dtype(x.dtype, y.dtype)), y.cast(out_dtype)
 
   def dot(self, w:Self, dtype:DTypeLike|None=None) -> Self:
     """
@@ -658,7 +645,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     print(t.logsumexp(axis=1).numpy())
     ```
     """
-    m = self.max(axis=axis, keepdim=True)
+    m = self.max(axis=axis, keepdim=True).detach()
     return (self - m).exp().sum(axis=axis, keepdim=keepdim).log() + (m if keepdim else m.squeeze(axis))
 
   def _softmax(self, axis, dtype:DTypeLike|None=None) -> tuple[Self, Self, Self]:
@@ -841,8 +828,8 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     x = self.transpose(axis, -1)
     last_dim_size = x.shape[-1]
     x_unsqueezed = x.unsqueeze(-2).expand((None,)*(self.ndim-1)+(last_dim_size, None))
-    x_cummax, _ = x.cummax(-1)
-    mask = type(self).ones(last_dim_size, last_dim_size, buffer=False).tril()
+    x_cummax = x.cummax(-1)[0].detach()
+    mask = type(self).ones(last_dim_size, last_dim_size, buffer=False, dtype=dtypes.bool).tril()
     ret = mask.where(x_unsqueezed - x_cummax.unsqueeze(-1), self.dtype.min).exp().sum(-1).log() + x_cummax
     return ret.transpose(-1, axis)
 
