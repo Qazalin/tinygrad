@@ -191,9 +191,9 @@ class TestMXFP4HIP(unittest.TestCase):
     assert a.grad is not None and b.grad is not None
 
     gq, ge = quantize_mxfp4(gradient, True)
-    btq, bte = quantize_mxfp4(b.detach().T.contiguous(), True)
-    gtq, gte = quantize_mxfp4(gradient.T.contiguous(), True)
-    atq, ate = quantize_mxfp4(a.detach().T.contiguous(), True)
+    btq, bte = quantize_mxfp4(b.detach(), True, transpose=True)
+    gtq, gte = quantize_mxfp4(gradient, True, transpose=True)
+    atq, ate = quantize_mxfp4(a.detach(), True, transpose=True)
     ref_a = dequantize_mxfp4(gq, ge) @ dequantize_mxfp4(btq, bte).T
     ref_b = dequantize_mxfp4(gtq, gte) @ dequantize_mxfp4(atq, ate).T
     Tensor.realize(a.grad, b.grad, ref_a, ref_b)

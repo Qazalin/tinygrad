@@ -276,11 +276,13 @@ def aiter_mxfp4_gemm_preshuffled(a:Tensor, b:Tensor, scale_a:Tensor, scale_b:Ten
   return Tensor.custom_kernel(out, a, b, scale_a, scale_b, a, b, fxn=fxn)[0]
 
 
-def _mxfp4_linear_nograd(a:Tensor, b:Tensor, use_hadamard:bool) -> Tensor:
+def _mxfp4_linear_nograd(a:Tensor, b:Tensor, use_hadamard:bool, a_transpose:bool=False, b_transpose:bool=False) -> Tensor:
   from extra.llama_kernels.quantize_mxfp4 import quantize_mxfp4
-  use_fast = a.shape[0] % 256 == b.shape[0] % 256 == 0 and (a.shape[1] // 32) % 8 == 0
-  aq, ae = quantize_mxfp4(a, use_hadamard, shuffle_scales=use_fast)
-  bq, be = quantize_mxfp4(b, use_hadamard, shuffle_data=use_fast, shuffle_scales=use_fast)
+  ashape = (a.shape[1], a.shape[0]) if a_transpose else a.shape
+  bshape = (b.shape[1], b.shape[0]) if b_transpose else b.shape
+  use_fast = ashape[0] % 256 == bshape[0] % 256 == 0 and (ashape[1] // 32) % 8 == 0
+  aq, ae = quantize_mxfp4(a, use_hadamard, shuffle_scales=use_fast, transpose=a_transpose)
+  bq, be = quantize_mxfp4(b, use_hadamard, shuffle_data=use_fast, shuffle_scales=use_fast, transpose=b_transpose)
   if use_fast: return _mxfp4_gemm_launch(aq, bq, ae, be, a, b, b_preshuffled=True)
   return _mxfp4_gemm_launch(aq, bq, ae, be, a, b)
 
@@ -292,8 +294,8 @@ def _mxfp4_gemm_bw(gradient:UOp, kernel:UOp, use_hadamard:bool, dgrad:bool, wgra
   g = Tensor(gradient, device=gradient.device).cast(dtypes.bfloat16)
   # ABt only: dA = G @ B, dB = G.T @ A. Transposes are quantized directly
   # from the canonical BF16 tensors rather than transposing packed FP4.
-  grad_a = _mxfp4_linear_nograd(g, b.T.contiguous(), use_hadamard) if dgrad else (g @ b).cast(dtypes.bfloat16)
-  grad_b = _mxfp4_linear_nograd(g.T.contiguous(), a.T.contiguous(), use_hadamard) if wgrad else (g.T @ a).cast(dtypes.bfloat16)
+  grad_a = _mxfp4_linear_nograd(g, b, use_hadamard, b_transpose=True) if dgrad else (g @ b).cast(dtypes.bfloat16)
+  grad_b = _mxfp4_linear_nograd(g, a, use_hadamard, a_transpose=True, b_transpose=True) if wgrad else (g.T @ a).cast(dtypes.bfloat16)
   return None, None, None, None, None, grad_a.uop, grad_b.uop
 
 
