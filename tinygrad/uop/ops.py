@@ -695,9 +695,9 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
       return src_axis - self.arg[1]
     if self.op is Ops.RESHAPE:
       if src_axis is None: return None
-      arg_acc:list[sint] = list(itertools.accumulate(self.marg, operator.mul, initial=1))
+      arg_acc:list[sint] = [ssimplify(x) for x in itertools.accumulate(self.marg, operator.mul, initial=1)]
       # new_axis is the last one that preserves prod(prior to new_axis) and must not move items between shards
-      target = prod(self.src[0].shape[:src_axis])
+      target = ssimplify(prod(self.src[0].shape[:src_axis]))
       if target not in arg_acc: raise RuntimeError(f"reshape {self.src[0].shape} -> {self.shape} moved items between shards")
       new_axis = len(arg_acc) - arg_acc[::-1].index(target) - 1
       if self.shape[new_axis] % len(self.device) != 0: raise RuntimeError(f"reshape {self.src[0].shape} -> {self.shape} moved items between shards")
@@ -1729,6 +1729,10 @@ def lower_weak_node(u:UOp) -> UOp|None:
   return u.replace(dtype=None, src=src[:start]+tuple(s.cast(dt) for s in src[start:])).cast(u.dtype)
 pm_lower_weak = PatternMatcher([
   (UPat(Ops.CONST, dtype=dtypes.weaks, name="u"), lambda u: u.replace(dtype=select_dtype(u)).cast(u.dtype)),
+  # two stacked weak casts are a weakint value used as weakfloat (or vice versa): resolve the inner one at the outer kind's default.
+  # a SINGLE weak cast is never rewritten here, each consumer absorbs it on its own edge (see lower_weak_srcs)
+  (UPat(Ops.CAST, dtype=dtypes.weaks, src=(UPat(Ops.CAST, dtype=dtypes.weaks, src=(UPat.var("x"),)),), name="u"),
+   lambda u,x: x.cast(select_dtype(u)).cast(u.dtype) if x.dtype not in dtypes.weaks else None),
   # Binary can widen from the bounds, all other nodes derive from the lowered sources.
   # a weakfloat Unary (sin/exp2/...) must resolve here, before the transcendental decomposition
   (UPat(GroupOp.Binary|GroupOp.Unary|{Ops.WHERE, Ops.RANGE, Ops.STACK}, name="u"), lower_weak_node),
