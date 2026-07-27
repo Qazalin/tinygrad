@@ -3,7 +3,7 @@ import functools, itertools
 from dataclasses import dataclass, field, replace
 from tinygrad.dtype import dtypes, AddrSpace
 from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, resolve, GroupOp, graph_rewrite, sint, AxisType, profile_matches, broadcast_axes
-from tinygrad.uop.ops import gate_kernel_sink, CallInfo
+from tinygrad.uop.ops import gate_kernel_sink
 from tinygrad.uop.symbolic import symbolic, pm_simplify_valid, pm_drop_and_clauses
 from tinygrad.helpers import argsort, all_same, cpu_profile, PCONTIG, colored, Context, SPEC
 
@@ -18,7 +18,7 @@ def realize_srcs(ctx:dict[UOp, None], rb:UOp) -> None:
     if s.base.op not in ALWAYS_CONTIGUOUS: ctx[s] = None
 
 def realize_call_srcs(ctx:dict[UOp, None], cl:UOp) -> None:
-  if isinstance(cl.arg, CallInfo) and cl.arg.precompile: return None
+  if cl.src[0].op is not Ops.SINK: return None
   for s in cl.src[1:]:
     if s.base.op not in ALWAYS_CONTIGUOUS or s.get_offset() != 0: ctx[s] = None
 
