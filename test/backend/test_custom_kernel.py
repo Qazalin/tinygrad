@@ -414,7 +414,7 @@ class TestCustomKernel(unittest.TestCase):
     GlobalCounters.reset()
     y = run(x[0]).realize()
     # CL/WEBGPU are copying the input and the output because of lack of SLICE in callify
-    self.assertEqual(GlobalCounters.kernel_count, 3 if x.device.startswith(("WEBGPU", "CL")) else 1)
+    self.assertEqual(GlobalCounters.kernel_count, 2 if x.device.startswith(("WEBGPU", "CL")) else 1)
     self.assertEqual(y.tolist(), [1, 2, 3, 4])
 
   def test_custom_kernel_copy(self):
