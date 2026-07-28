@@ -1,6 +1,7 @@
 import unittest
 from tinygrad import Tensor, UOp, GlobalCounters, Context, Device
 from tinygrad.dtype import AddrSpace, dtypes, Invalid
+from tinygrad.engine.realize import run_linear
 from tinygrad.uop.ops import KernelInfo, AxisType, Ops
 
 # **** kernels ****
@@ -403,6 +404,87 @@ class TestCustomKernel(unittest.TestCase):
     self.assertEqual(z.tolist(), x.add(2).tolist())
 
   def test_custom_kernel_sched_copy(self): self.test_custom_kernel_sched(use_custom=True)
+
+  def _custom_program_input(self, movement):
+    a = Tensor([0., 1., 2., 3.], device="CPU").realize()
+    src = movement(a)
+    def precompiled_add_one(b, a):
+      name = f"precompiled_add_one_{b.numel()}"
+      source = f"void {name}(float* restrict b, float* restrict a) {{ for (int i=0;i<{b.numel()};i++) b[i]=a[i]+1.0f; }}"
+      binary = Device["CPU"].renderer.compiler.compile(source)
+      sink = UOp.sink(b.base, a.base, arg=KernelInfo(name=name))
+      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(sink.toposort())),
+                                   UOp(Ops.SOURCE, arg=source), UOp(Ops.BINARY, arg=binary)))
+    out = Tensor.custom_kernel(Tensor.empty_like(src), src, fxn=precompiled_add_one)[0]
+    linear = out.schedule_linear()
+    program_call = next(x for x in linear.src if x.src[0].op is Ops.PROGRAM)
+    return a.uop.buf_uop, program_call.src[2], out, linear
+
+  def _assert_custom_program_result(self, out, linear, shape, expected, kernel_count):
+    self.assertEqual(out.shape, shape)
+    self.assertEqual(len(linear.src), kernel_count)
+    GlobalCounters.reset()
+    run_linear(linear)
+    self.assertEqual(GlobalCounters.kernel_count, kernel_count)
+    self.assertEqual(out.tolist(), expected)
+
+  def test_custom_program_reshape_input_is_view(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x.reshape(2, 2))
+    self.assertIs(arg, original)
+    self._assert_custom_program_result(out, linear, (2, 2), [[1, 2], [3, 4]], 1)
+
+  def test_custom_program_expand_input_realizes(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x.reshape(1, 4).expand(2, 4))
+    self.assertIsNot(arg, original)
+    self.assertEqual(arg.shape, (8,))
+    self._assert_custom_program_result(out, linear, (2, 4), [[1, 2, 3, 4], [1, 2, 3, 4]], 2)
+
+  def test_custom_program_permute_input_realizes(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x.reshape(2, 2).permute(1, 0))
+    self.assertIsNot(arg, original)
+    self.assertEqual(arg.shape, (4,))
+    self._assert_custom_program_result(out, linear, (2, 2), [[1, 3], [2, 4]], 2)
+
+  def test_custom_program_singleton_permute_input_is_view(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x.reshape(1, 4).permute(1, 0))
+    self.assertIs(arg, original)
+    self._assert_custom_program_result(out, linear, (4, 1), [[1], [2], [3], [4]], 1)
+
+  def test_custom_program_permuted_reshape_input_realizes(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x.reshape(2, 2).permute(1, 0).reshape(4))
+    self.assertIsNot(arg, original)
+    self.assertEqual(arg.shape, (4,))
+    self._assert_custom_program_result(out, linear, (4,), [1, 3, 2, 4], 2)
+
+  def test_custom_program_prefix_shrink_input_is_view(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x[:2])
+    self.assertIs(arg, original)
+    self._assert_custom_program_result(out, linear, (2,), [1, 2], 1)
+
+  def test_custom_program_contiguous_shrink_input_is_slice(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x[1:3])
+    self.assertEqual(arg.op, Ops.SLICE)
+    self.assertIs(arg.src[0], original)
+    self.assertEqual((arg.shape, arg.src[1].arg), ((2,), 1))
+    self._assert_custom_program_result(out, linear, (2,), [2, 3], 1)
+
+  def test_custom_program_noncontiguous_shrink_input_realizes(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x.reshape(2, 2)[:, 1:])
+    self.assertIsNot(arg, original)
+    self.assertEqual(arg.shape, (2,))
+    self._assert_custom_program_result(out, linear, (2, 1), [[2], [4]], 2)
+
+  def test_custom_program_pad_input_realizes(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x.pad(((1, 1),)))
+    self.assertIsNot(arg, original)
+    self.assertEqual(arg.shape, (6,))
+    self._assert_custom_program_result(out, linear, (6,), [1, 1, 2, 3, 4, 1], 2)
+
+  def test_custom_program_flip_input_realizes(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x.flip(0))
+    self.assertIsNot(arg, original)
+    self.assertEqual(arg.shape, (4,))
+    self._assert_custom_program_result(out, linear, (4,), [4, 3, 2, 1], 2)
 
   def test_sliced_buffer_function(self):
     x = Tensor.arange(32).reshape(8, 4).clone().realize()
