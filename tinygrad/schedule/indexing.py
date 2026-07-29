@@ -18,7 +18,7 @@ def realize_srcs(ctx:dict[UOp, None], rb:UOp) -> None:
     if s.base.op not in ALWAYS_CONTIGUOUS: ctx[s] = None
 
 def realize_call_srcs(ctx:dict[UOp, None], cl:UOp) -> None:
-  if cl.src[0].op is not Ops.SINK: return None
+  if cl.src[0].op not in {Ops.SINK, Ops.PROGRAM}: return None
   for s in cl.src[1:]:
     if s.base.op not in ALWAYS_CONTIGUOUS or s.get_offset() != 0: ctx[s] = None
 
