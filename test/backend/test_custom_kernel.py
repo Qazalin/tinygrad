@@ -423,8 +423,6 @@ class TestCustomKernel(unittest.TestCase):
     c = b.T.to_("CPU:2").realize()
     self.assertEqual(c.tolist(), [[1, 3], [2, 4]])
 
-  # spec for movement op inputs to custom_kernel: the input is aliased in place (no extra kernel) if the view collapses
-  # to an offset-0 contiguous range of the buffer, otherwise it is materialized before the call (one extra kernel)
   def test_mop_input(self, mop_fxn=lambda x: x.reshape(16, 2), kcount:int=0):
     x = mop_fxn(Tensor.arange(32).clone("CPU").realize())
     y = Tensor.custom_kernel(Tensor.empty_like(x), x, fxn=custom_add_one_kernel)[0]
@@ -434,16 +432,16 @@ class TestCustomKernel(unittest.TestCase):
     self.assertEqual(y.tolist(), x.add(1).tolist())
     self.assertEqual(kernel_count, 1+kcount)
 
-  # aliased in place (the view is an offset-0 contiguous range, or a nop)
-  def test_shrink_input(self): self.test_mop_input(lambda x: x[:4], kcount=0)  # becomes a SLICE when the device supports it
+  # becomes a SLICE when the device supports it (TODO: maybe removal of slice fixes backend specific behavior)
+  def test_shrink_input(self): self.test_mop_input(lambda x: x[:4], kcount=0)
   def test_double_permute_input(self): self.test_mop_input(lambda x: x.reshape(4, 8).T.T, kcount=0)
-  # materialized before the call
+  # must materialize the movement op before CALL
   def test_permute_input(self): self.test_mop_input(lambda x: x.reshape(4, 8).T, kcount=1)
   def test_offset_shrink_input(self): self.test_mop_input(lambda x: x[4:8], kcount=1)
   def test_2d_shrink_input(self): self.test_mop_input(lambda x: x.reshape(4, 8)[:, 2:6], kcount=1)
   def test_pad_input(self): self.test_mop_input(lambda x: x[:4].pad(((0, 4),)), kcount=1)
   def test_flip_input(self): self.test_mop_input(lambda x: x.flip(0), kcount=1)
-  # TODO: the materialization realizes the 16-elem shrink instead of the 32-elem expand, remove expectedFailure when fixed
+  # TODO: fix correctness issue
   @unittest.expectedFailure
   def test_expand_input(self): self.test_mop_input(lambda x: x.reshape(16, 2)[:, :1].expand(16, 2), kcount=1)
 
