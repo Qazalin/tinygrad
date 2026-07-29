@@ -450,11 +450,26 @@ class TestCustomKernel(unittest.TestCase):
     self.assertIs(arg, original)
     self._assert_custom_program_result(out, linear, (4, 1), [[1], [2], [3], [4]], 1)
 
+  def test_custom_program_inverse_permutes_input_is_view(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x.reshape(2, 2).permute(1, 0).permute(1, 0))
+    self.assertIs(arg, original)
+    self._assert_custom_program_result(out, linear, (2, 2), [[1, 2], [3, 4]], 1)
+
   def test_custom_program_permuted_reshape_input_realizes(self):
     original, arg, out, linear = self._custom_program_input(lambda x: x.reshape(2, 2).permute(1, 0).reshape(4))
     self.assertIsNot(arg, original)
     self.assertEqual(arg.shape, (4,))
     self._assert_custom_program_result(out, linear, (4,), [1, 3, 2, 4], 2)
+
+  def test_custom_program_expand_shrink_input_is_view(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x.reshape(1, 4).expand(3, 4)[:1])
+    self.assertIs(arg, original)
+    self._assert_custom_program_result(out, linear, (1, 4), [[1, 2, 3, 4]], 1)
+
+  def test_custom_program_pad_shrink_input_is_view(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x.pad(((1, 1),))[1:5])
+    self.assertIs(arg, original)
+    self._assert_custom_program_result(out, linear, (4,), [1, 2, 3, 4], 1)
 
   def test_custom_program_prefix_shrink_input_is_view(self):
     original, arg, out, linear = self._custom_program_input(lambda x: x[:2])
@@ -485,6 +500,18 @@ class TestCustomKernel(unittest.TestCase):
     self.assertIsNot(arg, original)
     self.assertEqual(arg.shape, (4,))
     self._assert_custom_program_result(out, linear, (4,), [4, 3, 2, 1], 2)
+
+  def test_custom_program_double_flip_input_is_view(self):
+    original, arg, out, linear = self._custom_program_input(lambda x: x.flip(0).flip(0))
+    self.assertIs(arg, original)
+    self._assert_custom_program_result(out, linear, (4,), [1, 2, 3, 4], 1)
+
+  def test_custom_program_canceling_movement_chain_input_is_view(self):
+    def movement(x):
+      return x.reshape(1, 2, 2).expand(3, 2, 2).permute(0, 2, 1).permute(0, 2, 1)[:1].reshape(4)
+    original, arg, out, linear = self._custom_program_input(movement)
+    self.assertIs(arg, original)
+    self._assert_custom_program_result(out, linear, (4,), [1, 2, 3, 4], 1)
 
   def test_sliced_buffer_function(self):
     x = Tensor.arange(32).reshape(8, 4).clone().realize()
