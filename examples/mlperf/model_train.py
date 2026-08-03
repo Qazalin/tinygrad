@@ -1466,6 +1466,7 @@ def train_llama3():
 
   # realize everything here
   if optim.master_params: Tensor.realize(*optim.master_params)
+  Tensor.realize(*[x for o in optim.optimizers for x in o.m + o.v + o.param_shards])
   mxfp4_weights = model.mxfp4_weights() if MXFP4 else None
   if mxfp4_weights is not None: Tensor.realize(*[x for layers in mxfp4_weights.values() for outputs in layers for x in outputs])
   Tensor.realize(*optim.params, *fp8_inv_scales, *fp8_amax_state, *fp8_next_amax_state, *fp8_grad_amax_state, *fp8_next_grad_amax_state)

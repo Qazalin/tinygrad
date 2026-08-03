@@ -17,6 +17,7 @@ export USE_ATOMICS=1
 export ASM_GEMM=1
 export WQKV=1
 export MASTER_WEIGHTS=1
+export ZERO_OPTIM=1
 export FP8=1
 export ALLREDUCE_CAST=1
 export FAST_CE=1
