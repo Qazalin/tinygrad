@@ -1439,10 +1439,10 @@ def train_llama3():
     print(f"loading optim checkpoint from {fn}")
     load_state_dict(scheduler, safe_load(fn), realize=False)
 
-  fp8_amax = [t for ts in model._fp8_amax.values() for t in ts]
-  fp8_next_amax = [t for ts in model._fp8_next_amax.values() for t in ts] if hasattr(model, "_fp8_next_amax") else []
-  fp8_grad_amax = [t for ts in model._fp8_grad_amax.values() for t in ts] if hasattr(model, "_fp8_grad_amax") else []
-  fp8_next_grad_amax = [t for ts in model._fp8_next_grad_amax.values() for t in ts] if hasattr(model, "_fp8_next_grad_amax") else []
+  fp8_amax = [] if MXFP4 else [t for ts in model._fp8_amax.values() for t in ts]
+  fp8_next_amax = [] if MXFP4 else [t for ts in model._fp8_next_amax.values() for t in ts] if hasattr(model, "_fp8_next_amax") else []
+  fp8_grad_amax = [] if MXFP4 else [t for ts in model._fp8_grad_amax.values() for t in ts] if hasattr(model, "_fp8_grad_amax") else []
+  fp8_next_grad_amax = [] if MXFP4 else [t for ts in model._fp8_next_grad_amax.values() for t in ts] if hasattr(model, "_fp8_next_grad_amax") else []
   fp8_inv_scales = list(model._fp8_inv_scale.values()) + list(model._fp8_next_inv_scale.values())
 
   from tinygrad.nn.state import get_state_dict
