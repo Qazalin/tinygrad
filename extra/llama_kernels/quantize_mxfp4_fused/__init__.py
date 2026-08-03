@@ -7,28 +7,12 @@ from extra.llama_kernels import alloc_like, compile_hip
 
 BLK = 32
 
-def _amd_cast_transpose_src(fused_swiglu:bool=False) -> str:
+def _amd_cast_transpose_src() -> str:
   # Keep AMD's submitted kernel body verbatim, replacing only its templated launch signature with tinygrad's fixed entry point.
   src = (pathlib.Path(__file__).parent/"cast_transpose_mxfp4_shuffled.hip").read_text()
   start = src.index("template<")
   body = src.index(") {", start) + 3
   end = src.index("\n}\n\n}  // namespace te_mxfp4", body)
-  swiglu = '''
-__device__ __forceinline__ uint16_t swiglu_load1(const uint16_t* input, int row, int col, int hidden) {
-    const float x = uint_as_float((uint32_t)input[row * 2 * hidden + col] << 16);
-    const float gate = uint_as_float((uint32_t)input[row * 2 * hidden + hidden + col] << 16);
-    const float y = (x * __frcp_rn(1.0f + __expf(-x))) * gate;
-    __hip_bfloat16 out = static_cast<__hip_bfloat16>(y);
-    return *reinterpret_cast<uint16_t*>(&out);
-}
-
-__device__ __forceinline__ uint64_t swiglu_load4(const uint16_t* input, int row, int col, int hidden) {
-    return (uint64_t)swiglu_load1(input, row, col, hidden) |
-           ((uint64_t)swiglu_load1(input, row, col + 1, hidden) << 16) |
-           ((uint64_t)swiglu_load1(input, row, col + 2, hidden) << 32) |
-           ((uint64_t)swiglu_load1(input, row, col + 3, hidden) << 48);
-}
-''' if fused_swiglu else ""
   entry = '''extern "C" __global__ __launch_bounds__(256, 8)
 void quantize_mxfp4_dual(uint8_t* __restrict__ rowwise_fp4, uint8_t* __restrict__ rowwise_scale,
                          uint8_t* __restrict__ colwise_fp4, uint8_t* __restrict__ colwise_scale,
@@ -50,27 +34,19 @@ void quantize_mxfp4_dual(uint8_t* __restrict__ rowwise_fp4, uint8_t* __restrict_
     constexpr int colwise_scale_M_pad = N_DIM;
     constexpr int colwise_scale_N_pad = M_DIM / 32;
 '''
-  kernel_body = src[body:end]
-  if fused_swiglu:
-    kernel_body = kernel_body.replace('*reinterpret_cast<const uint64_t*>(&input[grow * N + gcol])',
-                                      'swiglu_load4(input, grow, gcol, N)')
-    for off in ("", " + 1", " + 2", " + 3"):
-      kernel_body = kernel_body.replace(f'input[grow * N + gcol{off}]', f'swiglu_load1(input, grow, gcol{off}, N)')
-  return src[:start] + swiglu + entry + kernel_body + "\n}\n\n}  // namespace te_mxfp4\n#endif\n"
+  return src[:start] + entry + src[body:end] + "\n}\n\n}  // namespace te_mxfp4\n#endif\n"
 
 @functools.cache
 def _custom_quantize_mxfp4_dual(row_q:UOp, row_s:UOp, col_q:UOp, col_s:UOp, x:UOp,
-                                use_hadamard:bool, shuffle_row:bool, shuffle_col:bool, shuffle_scales:bool,
-                                fused_swiglu:bool=False) -> UOp:
+                                use_hadamard:bool, shuffle_row:bool, shuffle_col:bool, shuffle_scales:bool) -> UOp:
   M, N = math.prod(x.shape[:-1]), x.shape[-1]
-  if fused_swiglu: N //= 2
   assert M % 256 == 0 and N % 256 == 0, f"AMD MXFP4 cast-transpose requires multiples of 256, got {x.shape}"
   threads = UOp.special(256, "lidx0")
   groups_m, groups_n = UOp.special(ceildiv(M, 128), "gidx0"), UOp.special(ceildiv(N, 64), "gidx1")
   mem = M*N*2 + M*N + M*N//16
   sink = UOp.sink(row_q.base, row_s.base, col_q.base, col_s.base, x.base, threads, groups_m, groups_n,
                   arg=KernelInfo(f"quantize_mxfp4_dual_{M}_{N}", estimates=Estimates(ops=M*N, mem=mem)))
-  src = _amd_cast_transpose_src(fused_swiglu)
+  src = _amd_cast_transpose_src()
   defines = [f"-DM_DIM={M}", f"-DN_DIM={N}", f"-DUSE_HADAMARD_VALUE={'true' if use_hadamard else 'false'}",
              f"-DSHUFFLE_ROWWISE_FP4_VALUE={'true' if shuffle_row else 'false'}",
              f"-DSHUFFLE_COLWISE_FP4_VALUE={'true' if shuffle_col else 'false'}",
@@ -100,20 +76,6 @@ def quantize_mxfp4_dual(x:Tensor, *, use_hadamard:bool=True, shuffle_row:bool=Fa
     for dst, src in zip(out, ret): dst.replace(src)
     return out
   row_q, row_s, col_q, col_s = ret
-  return row_q, row_s, col_q, col_s
-
-def quantize_mxfp4_swiglu_dual(x_w13:Tensor, *, shuffle_col:bool=True) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-  assert x_w13.dtype == dtypes.bfloat16 and x_w13.ndim >= 2 and x_w13.shape[-1] % 512 == 0
-  M, N = math.prod(x_w13.shape[:-1]), x_w13.shape[-1]//2
-  axis = x_w13.uop.axis if isinstance(x_w13.device, tuple) else None
-  col_axis = None if axis is None else (0 if axis == x_w13.ndim-1 else 1)
-  row_q = alloc_like((*x_w13.shape[:-1], N//2), dtypes.uint8, x_w13.device, axis)
-  row_s = alloc_like((*x_w13.shape[:-1], N//BLK), dtypes.uint8, x_w13.device, axis)
-  col_q = alloc_like((N, M//2), dtypes.uint8, x_w13.device, col_axis)
-  col_s = alloc_like((N, M//BLK), dtypes.uint8, x_w13.device, col_axis)
-  fxn = functools.partial(_custom_quantize_mxfp4_dual, use_hadamard=True, shuffle_row=False,
-                          shuffle_col=shuffle_col, shuffle_scales=True, fused_swiglu=True)
-  row_q, row_s, col_q, col_s, *_ = Tensor.custom_kernel(row_q, row_s, col_q, col_s, x_w13, fxn=fxn)
   return row_q, row_s, col_q, col_s
 
 def _e2m1_code(x:UOp) -> UOp:
@@ -183,11 +145,6 @@ def _swiglu_bwd(gradient:UOp, kernel:UOp):
   grad_out, *_ = Tensor.custom_kernel(grad_out, Tensor(x_w13, device=x_w13.device), Tensor(gradient, device=x_w13.device),
                                       fxn=_custom_swiglu_bwd)
   return (None, grad_out.uop)
-
-def swiglu_bwd(x_w13:Tensor, grad_act:Tensor) -> Tensor:
-  axis = x_w13.uop.axis if isinstance(x_w13.device, tuple) else None
-  grad_out = alloc_like(x_w13.shape, dtypes.bfloat16, x_w13.device, axis)
-  return Tensor.custom_kernel(grad_out, x_w13, grad_act, fxn=_custom_swiglu_bwd)[0]
 
 def swiglu(x_w13:Tensor) -> Tensor:
   assert x_w13.dtype == dtypes.bfloat16 and x_w13.ndim >= 2 and x_w13.shape[-1] % 32 == 0

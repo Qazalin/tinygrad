@@ -411,7 +411,7 @@ def custom_mx_gemm_bw(gradient:UOp, kernel:UOp, has_w_post:bool, w_stored:bool=F
 
 # ** mxfp4 gemm backward
 
-def custom_mxfp4_gemm_bw(gradient:UOp, kernel:UOp, swiglu:bool=False):
+def custom_mxfp4_gemm_bw(gradient:UOp, kernel:UOp):
   inputs = kernel.src[1:]  # out, row operands/scales, BF16 operands, then column operands/scales
   assert len(inputs) == 11
   a, w = Tensor(inputs[5], device=inputs[5].device), Tensor(inputs[6], device=inputs[6].device)
@@ -422,9 +422,6 @@ def custom_mxfp4_gemm_bw(gradient:UOp, kernel:UOp, swiglu:bool=False):
   g_row, scale_g_row, g_col, scale_g_col = quantize_mxfp4_dual(g, shuffle_scales=True, flatten_row=True)
   grad_a = _mxfp4_gemm_quantized(g_row.reshape(-1, g_row.shape[-1]), w_col, scale_g_row.reshape(-1, scale_g_row.shape[-1]),
                                  scale_w_col).reshape(*a.shape[:-1], w.shape[-1])
-  if swiglu:
-    from extra.llama_kernels.quantize_mxfp4_fused import swiglu_bwd
-    grad_a = swiglu_bwd(a, grad_a)
   grad_w = _mxfp4_gemm_quantized(g_col, a_col, scale_g_col, scale_a_col).reshape(w.shape)
   return (None, None, None, None, None, grad_a.uop, grad_w.uop, None, None, None, None)
 
@@ -433,13 +430,12 @@ def custom_mxfp4_gemm_bw(gradient:UOp, kernel:UOp, swiglu:bool=False):
 def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=None, grad_amax_state:Tensor|None=None,
              next_grad_amax_state:Tensor|None=None,
              w_post_scale:Tensor|None=None, mx:bool=False, mx_scales:tuple|None=None, mx_w_stored:bool=False, g_amax:Tensor|None=None,
-             a_pretranspose:Tensor|None=None, mxfp4:bool=False, mxfp4_swiglu:bool=False,
+             a_pretranspose:Tensor|None=None, mxfp4:bool=False,
              mxfp4_w:tuple[Tensor, Tensor, Tensor, Tensor]|None=None) -> Tensor:
-  assert mxfp4_swiglu or can_use_asm_gemm(a, b), f"{counters['todos'][-1]}"
+  assert can_use_asm_gemm(a, b), f"{counters['todos'][-1]}"
   if mxfp4:
     assert not mx and mx_scales is None, "mxfp4 owns quantization; mx/mx_scales are for mxfp8"
     assert a.dtype == dtypes.bfloat16, f"cannot quantize {a.dtype} to mxfp4"
-  assert not mxfp4_swiglu or mxfp4, "fused SwiGLU is an MXFP4 input producer"
   counters["used"] += 1
   unfold_batch = a.ndim == 3 and isinstance(a.device, tuple) and a.uop.axis == 2 and b.uop.axis == 0
   if unfold_batch:
@@ -450,9 +446,6 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
   out_dtype = dtypes.bfloat16 if a.dtype == FP8_DTYPE or mxfp4 else a.dtype
 
   batch, M, K = a.shape
-  if mxfp4_swiglu:
-    assert K % 2 == 0 and K//2 == b.shape[0]
-    K //= 2
   N = b.shape[1]
   is_multi = isinstance(a.device, tuple)
   if (k_sharded:=is_multi and a.uop.axis == 2): K //= len(a.device)
@@ -477,14 +470,12 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
       tile_m, tile_n = next((tm, tn) for tm, tn in ((256, 256), (192, 256), (128, 512)) if (batch*M) % tm == N % tn == 0)
       fxn = functools.partial(custom_mxfp4_gemm, tile_m=tile_m, tile_n=tile_n)
       w = b.T
-      from extra.llama_kernels.quantize_mxfp4_fused import quantize_mxfp4_dual, quantize_mxfp4_swiglu_dual
-      if mxfp4_swiglu: a_q, scale_a, a_col, scale_a_col = quantize_mxfp4_swiglu_dual(a)
-      else: a_q, scale_a, a_col, scale_a_col = quantize_mxfp4_dual(a, shuffle_col=True)
+      from extra.llama_kernels.quantize_mxfp4_fused import quantize_mxfp4_dual
+      a_q, scale_a, a_col, scale_a_col = quantize_mxfp4_dual(a, shuffle_col=True)
       if mxfp4_w is None: b_q, scale_b, b_col, scale_b_col = quantize_mxfp4_dual(w, shuffle_row=True, shuffle_col=True)
       else: b_q, scale_b, b_col, scale_b_col = mxfp4_w
       out = Tensor.custom_kernel(out, a_q.reshape(*a.shape[:-1], a_q.shape[-1]), b_q, scale_a, scale_b, a, w,
-                                 a_col, scale_a_col, b_col, scale_b_col, fxn=fxn,
-                                 grad_fxn=functools.partial(custom_mxfp4_gemm_bw, swiglu=mxfp4_swiglu))[0]
+                                 a_col, scale_a_col, b_col, scale_b_col, fxn=fxn, grad_fxn=custom_mxfp4_gemm_bw)[0]
     elif mx:
       # mxfp8 1x32 block scaling
       if mx_scales is not None:
