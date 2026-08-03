@@ -39,7 +39,7 @@ def quantize_fp8(x:Tensor, amax_state:Tensor|None=None):
 
 def matmul(x:Tensor, w:Tensor, fp8:bool=True, amax_x:Tensor|None=None, w_inv_scale:Tensor|None=None,
            x_fp8:Tensor|None=None, grad_amax_state:Tensor|None=None, next_grad_amax_state:Tensor|None=None, x_prequant_mx:tuple|None=None,
-           next_amax_x:Tensor|None=None) -> tuple[Tensor,...]:
+           next_amax_x:Tensor|None=None, mxfp4_w:tuple[Tensor, Tensor, Tensor, Tensor]|None=None) -> tuple[Tensor,...]:
   if not fp8:
     if ASM_GEMM:
       from extra.gemm.cdna_asm_gemm import can_use_asm_gemm, asm_gemm
@@ -48,7 +48,7 @@ def matmul(x:Tensor, w:Tensor, fp8:bool=True, amax_x:Tensor|None=None, w_inv_sca
   if MXFP4:
     assert x is not None, "MXFP4 matmul requires an unquantized input"
     from extra.gemm.cdna_asm_gemm import asm_gemm, can_use_asm_gemm
-    if can_use_asm_gemm(x, w.T): return (asm_gemm(x, w.T, mxfp4=True),)
+    if can_use_asm_gemm(x, w.T): return (asm_gemm(x, w.T, mxfp4=True, mxfp4_w=mxfp4_w),)
     return (x @ w.T,)
   assert w_inv_scale is not None, "fp8 matmul requires w_inv_scale (weights must be stored in fp8 with per-tensor scale)"
   if MXFP8:
@@ -84,7 +84,7 @@ def matmul(x:Tensor, w:Tensor, fp8:bool=True, amax_x:Tensor|None=None, w_inv_sca
   return (x_fp8.dot(w.T, dtype=dtypes.float) * ((amax_x.float() + 1e-8) / FP8_MAX) * w_inv_scale).cast(dtypes.bfloat16), x_fp8
 
 def norm_quantize_matmul(x:Tensor, norm:Tensor, w:Tensor, w_inv_scale:Tensor, eps:float, amax_x:Tensor,
-                         next_amax_x:Tensor, grad_amax_state:Tensor, next_grad_amax_state:Tensor):
+                         next_amax_x:Tensor, grad_amax_state:Tensor, next_grad_amax_state:Tensor, mxfp4_w=None):
   if FUSED_ADD_NORM_MUL_QUANTIZE and not MXFP4:
     from extra.llama_kernels.fused_rmsnorm_mul_quantize_fp8 import fused_rmsnorm_mul_quantize_fp8
     x_fp8, x_normed, rrms = fused_rmsnorm_mul_quantize_fp8(x, norm, amax_x, eps, FP8_DTYPE, next_amax_x)
@@ -93,11 +93,11 @@ def norm_quantize_matmul(x:Tensor, norm:Tensor, w:Tensor, w_inv_scale:Tensor, ep
     return out, x_normed, rrms, ret
   x_normed, rrms = rmsnorm(x, eps)
   out, *ret = matmul(x_normed * norm, w, amax_x=amax_x, w_inv_scale=w_inv_scale, grad_amax_state=grad_amax_state,
-                     next_grad_amax_state=next_grad_amax_state, next_amax_x=next_amax_x)
+                     next_grad_amax_state=next_grad_amax_state, next_amax_x=next_amax_x, mxfp4_w=mxfp4_w)
   return out, x_normed, rrms, ret
 
 def add_norm_quantize_matmul(x:Tensor, residual:Tensor, norm:Tensor, w:Tensor, w_inv_scale:Tensor, eps:float, amax_x:Tensor,
-                             next_amax_x:Tensor, grad_amax_state:Tensor|None=None, next_grad_amax_state:Tensor|None=None):
+                             next_amax_x:Tensor, grad_amax_state:Tensor|None=None, next_grad_amax_state:Tensor|None=None, mxfp4_w=None):
   if FUSED_ADD_NORM_MUL_QUANTIZE and not MXFP4:
     from extra.llama_kernels.fused_rmsnorm_mul_quantize_fp8 import fused_add_rmsnorm_mul_quantize_fp8
     x_fp8, h, x_normed, rrms = fused_add_rmsnorm_mul_quantize_fp8(x, residual, norm, amax_x, eps, FP8_DTYPE, next_amax_x)
@@ -107,18 +107,16 @@ def add_norm_quantize_matmul(x:Tensor, residual:Tensor, norm:Tensor, w:Tensor, w
   h = x + residual
   x_normed, rrms = rmsnorm(h, eps)
   out, *ret = matmul(x_normed * norm, w, amax_x=amax_x, w_inv_scale=w_inv_scale, grad_amax_state=grad_amax_state,
-                     next_grad_amax_state=next_grad_amax_state, next_amax_x=next_amax_x)
+                     next_grad_amax_state=next_grad_amax_state, next_amax_x=next_amax_x, mxfp4_w=mxfp4_w)
   return out, h, x_normed, rrms, ret
 
 def silu_w13_quantize_matmul(x_w13:Tensor, w2:Tensor, s_2:Tensor,
                              amax_x2:Tensor, next_amax_x2:Tensor,
                              grad_amax_xw13:Tensor, next_grad_amax_xw13:Tensor,
-                             grad_amax_xout:Tensor, next_grad_amax_xout:Tensor):
+                             grad_amax_xout:Tensor, next_grad_amax_xout:Tensor, mxfp4_w=None):
   if FUSED_SILU_W13 and MXFP4:
-    from extra.llama_kernels.quantize_mxfp4_fused import swiglu
-    out, *ret = matmul(swiglu(x_w13), w2, amax_x=amax_x2, w_inv_scale=s_2, grad_amax_state=grad_amax_xout,
-                       next_grad_amax_state=next_grad_amax_xout, next_amax_x=next_amax_x2)
-    return out, ret
+    from extra.gemm.cdna_asm_gemm import asm_gemm
+    return asm_gemm(x_w13, w2.T, mxfp4=True, mxfp4_swiglu=True, mxfp4_w=mxfp4_w), []
   if FUSED_SILU_W13:
     from extra.llama_kernels.cast_amax import fused_quantize_fp8_w13
     x2_fp8 = fused_quantize_fp8_w13(x_w13, amax_x2, FP8_DTYPE, grad_amax_state=grad_amax_xw13,
@@ -202,13 +200,15 @@ class FlatTransformer:
   def attention(self, x:Tensor, freqs_cis:Tensor, *, attention_norm:Tensor, wqkv:Tensor, wo:Tensor,
                 amax_xqkv:Tensor, amax_xo:Tensor, s_qkv:Tensor, s_o:Tensor,
                 next_amax_xqkv:Tensor, next_amax_xo:Tensor,
-                grad_amax_xqkv:Tensor, grad_amax_xo:Tensor, next_grad_amax_xqkv:Tensor, next_grad_amax_xo:Tensor):
+                grad_amax_xqkv:Tensor, grad_amax_xo:Tensor, next_grad_amax_xqkv:Tensor, next_grad_amax_xo:Tensor,
+                mxfp4_wqkv=None, mxfp4_wo=None):
     bsz, seqlen, _ = x.shape
     saves = []
 
     xqkv, x_normed, rrms, s = norm_quantize_matmul(x, attention_norm, wqkv, s_qkv, self.norm_eps,
                                                                   amax_x=amax_xqkv, grad_amax_state=grad_amax_xqkv,
-                                                                  next_grad_amax_state=next_grad_amax_xqkv, next_amax_x=next_amax_xqkv)
+                                                                  next_grad_amax_state=next_grad_amax_xqkv, next_amax_x=next_amax_xqkv,
+                                                                  mxfp4_w=mxfp4_wqkv)
     saves.extend([x_normed, rrms, *s, xqkv])
     if getenv("HK_FLASH_ATTENTION"):
       from extra.thunder.amd.fa import flash_attention, fused_qkv_rope
@@ -227,7 +227,7 @@ class FlatTransformer:
     attn = attn.reshape(bsz, seqlen, -1)
 
     out, *s = matmul(attn, wo, amax_x=amax_xo, w_inv_scale=s_o, grad_amax_state=grad_amax_xo,
-                               next_grad_amax_state=next_grad_amax_xo, next_amax_x=next_amax_xo)
+                               next_grad_amax_state=next_grad_amax_xo, next_amax_x=next_amax_xo, mxfp4_w=mxfp4_wo)
     saves.extend([*s, out])
     return out, saves
 
@@ -241,11 +241,11 @@ class FlatTransformer:
       inp = x_normed * kwargs["ffn_norm"]
       x_w1, *s = matmul(inp, kwargs["w1"], amax_x=kwargs["amax_x1"], w_inv_scale=kwargs["s_1"],
                                   grad_amax_state=kwargs["grad_amax_xw1"], next_grad_amax_state=kwargs["next_grad_amax_xw1"],
-                                  next_amax_x=kwargs["next_amax_x1"])
+                                  next_amax_x=kwargs["next_amax_x1"], mxfp4_w=kwargs.get("mxfp4_w1"))
       saves.extend([*s, x_w1])
       x_w3, *s = matmul(inp, kwargs["w3"], amax_x=kwargs["amax_x3"], w_inv_scale=kwargs["s_3"],
                                   grad_amax_state=kwargs["grad_amax_xw3"], next_grad_amax_state=kwargs["next_grad_amax_xw3"],
-                                  next_amax_x=kwargs["next_amax_x3"])
+                                  next_amax_x=kwargs["next_amax_x3"], mxfp4_w=kwargs.get("mxfp4_w3"))
       saves.extend([*s, x_w3])
       if FUSED_SILU_W13 and MXFP8:
         from extra.llama_kernels.fused_silu_mul_quantize_mxfp8 import fused_silu_mul_quantize_mxfp8
@@ -264,14 +264,16 @@ class FlatTransformer:
                                                                           self.norm_eps, amax_x=kwargs["amax_x13"],
                                                                           next_amax_x=kwargs["next_amax_x13"],
                                                                           grad_amax_state=kwargs["grad_amax_xw13"],
-                                                                          next_grad_amax_state=kwargs["next_grad_amax_xw13"])
+                                                                          next_grad_amax_state=kwargs["next_grad_amax_xw13"],
+                                                                          mxfp4_w=kwargs.get("mxfp4_w13"))
       saves.extend([x_normed, rrms, *s, x_w13])
       out, s = silu_w13_quantize_matmul(x_w13, kwargs["w2"], kwargs["s_2"], amax_x2=kwargs["amax_x2"],
                                                      next_amax_x2=kwargs["next_amax_x2"],
                                                      grad_amax_xw13=kwargs["grad_amax_xw13"],
                                                      next_grad_amax_xw13=kwargs["next_grad_amax_xw13"],
                                                      grad_amax_xout=kwargs["grad_amax_xout"],
-                                                     next_grad_amax_xout=kwargs["next_grad_amax_xout"])
+                                                     next_grad_amax_xout=kwargs["next_grad_amax_xout"],
+                                                     mxfp4_w=kwargs.get("mxfp4_w2"))
       saves.extend([*s, out])
     return out, h, saves
 
@@ -324,7 +326,20 @@ class FlatTransformer:
           for i in range(len(amax_dict[name])):
             amax_dict[name][i] = amax_dict[name][i].to(device).contiguous().is_param_(False)
 
-  def __call__(self, tokens:Tensor, save:bool=True):
+  def mxfp4_weights(self) -> dict[str, list[tuple[Tensor, Tensor, Tensor, Tensor]]]:
+    assert MXFP4
+    from extra.llama_kernels.quantize_mxfp4_fused import quantize_mxfp4_dual
+    names = ("wqkv", "wo", "w1", "w3", "w2") if SPLIT_W13 else ("wqkv", "wo", "w13", "w2")
+    return {name:[quantize_mxfp4_dual(w, shuffle_row=True, shuffle_col=True) for w in getattr(self, name)] for name in names}
+
+  def refresh_mxfp4_weights(self, cached:dict[str, list[tuple[Tensor, Tensor, Tensor, Tensor]]]) -> list[Tensor]:
+    from extra.llama_kernels.quantize_mxfp4_fused import quantize_mxfp4_dual
+    for name in cached:
+      for w, outputs in zip(getattr(self, name), cached[name]):
+        quantize_mxfp4_dual(w, shuffle_row=True, shuffle_col=True, out=outputs)
+    return [x for layers in cached.values() for outputs in layers for x in outputs]
+
+  def __call__(self, tokens:Tensor, save:bool=True, mxfp4_weights=None):
     h = self.tok_embeddings(tokens)
     freqs_cis = self.freqs_cis.cast(h.dtype)
     if not getenv("HK_FLASH_ATTENTION"): freqs_cis = freqs_cis[:, :tokens.shape[1], :, :, :]
@@ -338,14 +353,19 @@ class FlatTransformer:
       ffn_kwargs = dict(ffn_norm=self.ffn_norm[i], w2=self.w2[i],
                         amax_x2=a["x2"][i], s_2=s["w2"][i], grad_amax_xout=ga["xout"][i], next_grad_amax_xout=nga["xout"][i],
                         next_amax_x2=na["x2"][i])
+      if mxfp4_weights is not None:
+        attn_kwargs.update(mxfp4_wqkv=mxfp4_weights["wqkv"][i], mxfp4_wo=mxfp4_weights["wo"][i])
+        ffn_kwargs.update(mxfp4_w2=mxfp4_weights["w2"][i])
       if SPLIT_W13:
         ffn_kwargs.update(w1=self.w1[i], w3=self.w3[i], amax_x1=a["x1"][i], amax_x3=a["x3"][i],
                           next_amax_x1=na["x1"][i], next_amax_x3=na["x3"][i],
                           s_1=s["w1"][i], s_3=s["w3"][i], grad_amax_xw1=ga["xw1"][i], grad_amax_xw3=ga["xw3"][i],
                           next_grad_amax_xw1=nga["xw1"][i], next_grad_amax_xw3=nga["xw3"][i])
+        if mxfp4_weights is not None: ffn_kwargs.update(mxfp4_w1=mxfp4_weights["w1"][i], mxfp4_w3=mxfp4_weights["w3"][i])
       else:
         ffn_kwargs.update(w13=self.w13[i], amax_x13=a["x13"][i], s_13=s["w13"][i], grad_amax_xw13=ga["xw13"][i],
                           next_grad_amax_xw13=nga["xw13"][i], next_amax_x13=na["x13"][i])
+        if mxfp4_weights is not None: ffn_kwargs.update(mxfp4_w13=mxfp4_weights["w13"][i])
       h, *_ = self.run_layer(h, freqs_cis, attn_kwargs, ffn_kwargs, save=save)
 
     logits = matmul(self.norm(h), self.output[0], fp8=False)[0]

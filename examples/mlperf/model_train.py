@@ -1282,7 +1282,7 @@ def train_bert():
         previous_step = i
 
 def train_llama3():
-  from examples.mlperf.models.flat_llama import FlatTransformer, apply_grad, FP8_DTYPE, MXFP8
+  from examples.mlperf.models.flat_llama import FlatTransformer, apply_grad, FP8_DTYPE, MXFP8, MXFP4
   from examples.llama3 import MODEL_PARAMS
   from examples.mlperf.lr_schedulers import CosineAnnealingLRWithWarmup
   from examples.mlperf.optim import GradAccClipAdamW, GradAccClipAdamWGroup, clip_grads
@@ -1464,6 +1464,8 @@ def train_llama3():
 
   # realize everything here
   if optim.master_params: Tensor.realize(*optim.master_params)
+  mxfp4_weights = model.mxfp4_weights() if MXFP4 else None
+  if mxfp4_weights is not None: Tensor.realize(*[x for layers in mxfp4_weights.values() for outputs in layers for x in outputs])
   Tensor.realize(*optim.params, *fp8_inv_scales, *fp8_amax, *fp8_next_amax, *fp8_grad_amax, *fp8_next_grad_amax)
 
   @TinyJit
@@ -1473,7 +1475,7 @@ def train_llama3():
     if is_dp: tokens = tokens.to(None).shard(device, 0)
     if is_mp: tokens = tokens.shard(device)
     if not is_sharding: tokens = tokens.to(None)
-    logits:Tensor = model(tokens[:, :-1], save=bool(SMALL))
+    logits:Tensor = model(tokens[:, :-1], save=bool(SMALL), mxfp4_weights=mxfp4_weights)
     if getenv("FAST_CE", 0):
       from extra.llama_kernels.fused_ce import fused_ce_loss
       loss = fused_ce_loss(logits.cast(dtypes.bfloat16), tokens[:, 1:], label_smoothing=0.0)
@@ -1491,6 +1493,7 @@ def train_llama3():
     grad_norm = clip_grads(grads, grad_acc, 1.0)
     optim.fstep(grads, grad_norm)
     scheduler.step()
+    refreshed_mxfp4 = model.refresh_mxfp4_weights(mxfp4_weights) if mxfp4_weights is not None else []
 
     for g in grads: g.assign(0)
     for cur, nxt in zip(fp8_amax, fp8_next_amax): cur.assign(nxt)
@@ -1498,7 +1501,7 @@ def train_llama3():
 
     lr_cpu = optim.lr.float().to("CPU")
     grad_norm_cpu = grad_norm.float().to("CPU")
-    Tensor.realize(lr_cpu, grad_norm_cpu, *grads, *fp8_inv_scales, *fp8_amax, *fp8_grad_amax)
+    Tensor.realize(lr_cpu, grad_norm_cpu, *grads, *fp8_inv_scales, *fp8_amax, *fp8_grad_amax, *refreshed_mxfp4)
 
     return lr_cpu, grad_norm_cpu
 
@@ -1508,7 +1511,7 @@ def train_llama3():
     if is_dp: tokens = tokens.to(None).shard(device, 0)
     if is_mp: tokens = tokens.shard(device)
     if not is_sharding: tokens = tokens.to(None)
-    logits:Tensor = model(tokens[:, :-1])
+    logits:Tensor = model(tokens[:, :-1], mxfp4_weights=mxfp4_weights)
     loss = vocab_mask.where(-1e9, logits).sparse_categorical_crossentropy(tokens[:, 1:])
     return loss.flatten().float().to("CPU")
 

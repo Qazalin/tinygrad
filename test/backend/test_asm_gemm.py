@@ -174,10 +174,24 @@ class TestMXFP4(unittest.TestCase):
     ref_row_q, ref_row_s, _ = quantize_mxfp4(x.reshape(256, 256))
     ref_col_q, ref_col_s, _ = quantize_mxfp4(x.reshape(256, 256).T.contiguous())
     Tensor.realize(row_q, row_s, col_q, col_s, ref_row_q, ref_row_s, ref_col_q, ref_col_s)
-    np.testing.assert_array_equal(row_q.numpy(), ref_row_q.numpy())
-    np.testing.assert_array_equal(row_s.numpy(), ref_row_s.numpy())
+    np.testing.assert_array_equal(row_q.numpy().reshape(256, 128), ref_row_q.numpy())
+    np.testing.assert_array_equal(row_s.numpy().reshape(256, 8), ref_row_s.numpy())
     np.testing.assert_array_equal(col_q.numpy(), ref_col_q.numpy())
     np.testing.assert_array_equal(col_s.numpy(), ref_col_s.numpy())
+
+  def test_dual_quantize_multitensor_layout(self):
+    import numpy as np
+    from extra.llama_kernels.quantize_mxfp4_fused import quantize_mxfp4_dual
+    rng = np.random.default_rng(10)
+    xn = rng.standard_normal((4, 128, 256), dtype=np.float32)
+    x = Tensor(xn, dtype=dtypes.bfloat16).shard(("AMD", "AMD:1"), axis=0).contiguous()
+    row_q, row_s, _, _ = quantize_mxfp4_dual(x, use_hadamard=False, shuffle_scales=False)
+    ref_q, ref_s, _ = quantize_mxfp4(Tensor(xn, dtype=dtypes.bfloat16).reshape(512, 256))
+    Tensor.realize(row_q, row_s, ref_q, ref_s)
+    self.assertEqual(row_q.shape, (4, 128, 128))
+    self.assertEqual(row_s.shape, (4, 128, 8))
+    np.testing.assert_array_equal(row_q.to(None).numpy().reshape(512, 128), ref_q.numpy())
+    np.testing.assert_array_equal(row_s.to(None).numpy().reshape(512, 8), ref_s.numpy())
 
   def test_swiglu(self):
     import numpy as np
@@ -194,6 +208,56 @@ class TestMXFP4(unittest.TestCase):
     Tensor.realize(act, ref, x.grad, x_ref.grad)
     np.testing.assert_allclose(act.numpy(), ref.numpy(), rtol=2e-2, atol=2e-2)
     np.testing.assert_allclose(x.grad.numpy(), x_ref.grad.numpy(), rtol=0, atol=2e-2)
+
+  def test_swiglu_gemm(self):
+    import numpy as np
+    from extra.llama_kernels.quantize_mxfp4_fused import swiglu
+    rng = np.random.default_rng(6)
+    x = Tensor(rng.standard_normal((256, 512), dtype=np.float32), dtype=dtypes.bfloat16)
+    w = Tensor(rng.standard_normal((256, 256), dtype=np.float32), dtype=dtypes.bfloat16)
+    x_ref, w_ref = Tensor(x.numpy(), dtype=dtypes.bfloat16), Tensor(w.numpy(), dtype=dtypes.bfloat16)
+    Tensor.realize(x, w, x_ref, w_ref)
+    out = asm_gemm(x, w.T, mxfp4=True, mxfp4_swiglu=True)
+    ref = asm_gemm(swiglu(x_ref), w_ref.T, mxfp4=True)
+    out.sum().backward()
+    ref.sum().backward()
+    Tensor.realize(out, ref, x.grad, x_ref.grad, w.grad, w_ref.grad)
+    np.testing.assert_array_equal(out.numpy(), ref.numpy())
+    np.testing.assert_allclose(x.grad.numpy(), x_ref.grad.numpy(), rtol=0, atol=2e-2)
+    np.testing.assert_array_equal(w.grad.numpy(), w_ref.grad.numpy())
+
+  def test_prequant_weight(self):
+    import numpy as np
+    from extra.llama_kernels.quantize_mxfp4_fused import quantize_mxfp4_dual
+    rng = np.random.default_rng(8)
+    a = Tensor(rng.standard_normal((256, 256), dtype=np.float32), dtype=dtypes.bfloat16)
+    w = Tensor(rng.standard_normal((256, 256), dtype=np.float32), dtype=dtypes.bfloat16)
+    a_ref, w_ref = Tensor(a.numpy(), dtype=dtypes.bfloat16), Tensor(w.numpy(), dtype=dtypes.bfloat16)
+    Tensor.realize(a, w, a_ref, w_ref)
+    wq = quantize_mxfp4_dual(w, shuffle_row=True, shuffle_col=True)
+    out = asm_gemm(a, w.T, mxfp4=True, mxfp4_w=wq)
+    ref = asm_gemm(a_ref, w_ref.T, mxfp4=True)
+    out.sum().backward()
+    ref.sum().backward()
+    Tensor.realize(out, ref, a.grad, a_ref.grad, w.grad, w_ref.grad)
+    np.testing.assert_array_equal(out.numpy(), ref.numpy())
+    np.testing.assert_array_equal(a.grad.numpy(), a_ref.grad.numpy())
+    np.testing.assert_array_equal(w.grad.numpy(), w_ref.grad.numpy())
+
+  def test_prequant_weight_refresh(self):
+    import numpy as np
+    from extra.llama_kernels.quantize_mxfp4_fused import quantize_mxfp4_dual
+    rng = np.random.default_rng(9)
+    a = Tensor(rng.standard_normal((256, 256), dtype=np.float32), dtype=dtypes.bfloat16)
+    w = Tensor(rng.standard_normal((256, 256), dtype=np.float32), dtype=dtypes.bfloat16).contiguous().realize()
+    cached = quantize_mxfp4_dual(w, shuffle_row=True, shuffle_col=True)
+    Tensor.realize(*cached)
+    w.assign((w + 0.25).contiguous()).realize()
+    quantize_mxfp4_dual(w, shuffle_row=True, shuffle_col=True, out=cached)
+    out = asm_gemm(a, w.T, mxfp4=True, mxfp4_w=cached)
+    ref = asm_gemm(a, w.T, mxfp4=True)
+    Tensor.realize(out, ref)
+    np.testing.assert_array_equal(out.numpy(), ref.numpy())
 
   def test_correctness(self):
     import numpy as np
