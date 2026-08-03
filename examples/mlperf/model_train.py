@@ -1439,10 +1439,12 @@ def train_llama3():
     print(f"loading optim checkpoint from {fn}")
     load_state_dict(scheduler, safe_load(fn), realize=False)
 
-  fp8_amax = [] if MXFP4 else [t for ts in model._fp8_amax.values() for t in ts]
-  fp8_next_amax = [] if MXFP4 else [t for ts in model._fp8_next_amax.values() for t in ts] if hasattr(model, "_fp8_next_amax") else []
-  fp8_grad_amax = [] if MXFP4 else [t for ts in model._fp8_grad_amax.values() for t in ts] if hasattr(model, "_fp8_grad_amax") else []
-  fp8_next_grad_amax = [] if MXFP4 else [t for ts in model._fp8_next_grad_amax.values() for t in ts] if hasattr(model, "_fp8_next_grad_amax") else []
+  fp8_amax_state = [t for ts in model._fp8_amax.values() for t in ts]
+  fp8_next_amax_state = [t for ts in model._fp8_next_amax.values() for t in ts] if hasattr(model, "_fp8_next_amax") else []
+  fp8_grad_amax_state = [t for ts in model._fp8_grad_amax.values() for t in ts] if hasattr(model, "_fp8_grad_amax") else []
+  fp8_next_grad_amax_state = [t for ts in model._fp8_next_grad_amax.values() for t in ts] if hasattr(model, "_fp8_next_grad_amax") else []
+  fp8_amax, fp8_next_amax = ([], []) if MXFP4 else (fp8_amax_state, fp8_next_amax_state)
+  fp8_grad_amax, fp8_next_grad_amax = ([], []) if MXFP4 else (fp8_grad_amax_state, fp8_next_grad_amax_state)
   fp8_inv_scales = list(model._fp8_inv_scale.values()) + list(model._fp8_next_inv_scale.values())
 
   from tinygrad.nn.state import get_state_dict
@@ -1466,7 +1468,7 @@ def train_llama3():
   if optim.master_params: Tensor.realize(*optim.master_params)
   mxfp4_weights = model.mxfp4_weights() if MXFP4 else None
   if mxfp4_weights is not None: Tensor.realize(*[x for layers in mxfp4_weights.values() for outputs in layers for x in outputs])
-  Tensor.realize(*optim.params, *fp8_inv_scales, *fp8_amax, *fp8_next_amax, *fp8_grad_amax, *fp8_next_grad_amax)
+  Tensor.realize(*optim.params, *fp8_inv_scales, *fp8_amax_state, *fp8_next_amax_state, *fp8_grad_amax_state, *fp8_next_grad_amax_state)
 
   @TinyJit
   def minibatch(tokens:Tensor):
