@@ -3,7 +3,7 @@ from tinygrad import Tensor, dtypes
 from tinygrad.uop.ops import UOp, Ops, KernelInfo
 from tinygrad.renderer import Estimates
 from tinygrad.helpers import ceildiv
-from extra.llama_kernels import NUM_WG, alloc_like, compile_hip
+from extra.llama_kernels import alloc_like, compile_hip
 
 BLK = 32
 
@@ -157,21 +157,23 @@ def quantize_mxfp4_fused(x:Tensor, packed_shape:tuple[int, ...]|None=None, packe
 @functools.cache
 def _custom_swiglu(out:UOp, x_w13:UOp) -> UOp:
   hidden, n_elems = x_w13.shape[-1]//2, math.prod(x_w13.shape[:-1]) * x_w13.shape[-1]//2
-  threads, workgroups = UOp.special(512, "lidx0"), UOp.special(NUM_WG, "gidx0")
+  num_wg = min(ceildiv(ceildiv(n_elems, 16), 512), 65535)
+  threads, workgroups = UOp.special(512, "lidx0"), UOp.special(num_wg, "gidx0")
   sink = UOp.sink(out.base, x_w13.base, threads, workgroups,
                   arg=KernelInfo(f"swiglu_fwd_{n_elems}", estimates=Estimates(ops=5*n_elems, mem=6*n_elems)))
   src = (pathlib.Path(__file__).parent/"swiglu.hip").read_text()
-  lib = compile_hip(src, [f"-DN_ELEMS={n_elems}", f"-DHIDDEN={hidden}", f"-DNUM_WG={NUM_WG}", "-DTHREADS_PER_WG=512"])
+  lib = compile_hip(src, [f"-DN_ELEMS={n_elems}", f"-DHIDDEN={hidden}", f"-DNUM_WG={num_wg}", "-DTHREADS_PER_WG=512"])
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
 
 @functools.cache
 def _custom_swiglu_bwd(grad_out:UOp, x_w13:UOp, grad_act:UOp) -> UOp:
   hidden, n_elems = x_w13.shape[-1]//2, math.prod(x_w13.shape[:-1]) * x_w13.shape[-1]//2
-  threads, workgroups = UOp.special(512, "lidx0"), UOp.special(NUM_WG, "gidx0")
+  num_wg = min(ceildiv(ceildiv(n_elems, 16), 512), 65535)
+  threads, workgroups = UOp.special(512, "lidx0"), UOp.special(num_wg, "gidx0")
   sink = UOp.sink(grad_out.base, x_w13.base, grad_act.base, threads, workgroups,
                   arg=KernelInfo(f"swiglu_bwd_{n_elems}", estimates=Estimates(ops=10*n_elems, mem=10*n_elems)))
   src = (pathlib.Path(__file__).parent/"swiglu.hip").read_text()
-  lib = compile_hip(src, [f"-DN_ELEMS={n_elems}", f"-DHIDDEN={hidden}", f"-DNUM_WG={NUM_WG}", "-DTHREADS_PER_WG=512", "-DSWIGLU_BACKWARD"])
+  lib = compile_hip(src, [f"-DN_ELEMS={n_elems}", f"-DHIDDEN={hidden}", f"-DNUM_WG={num_wg}", "-DTHREADS_PER_WG=512", "-DSWIGLU_BACKWARD"])
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=lib)))
 
 def _swiglu_bwd(gradient:UOp, kernel:UOp):
