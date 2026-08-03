@@ -1,7 +1,7 @@
 import numpy as np
 import unittest
 from tinygrad.function import function
-from tinygrad import Tensor, GlobalCounters, Device
+from tinygrad import Tensor, GlobalCounters, Device, dtypes
 from tinygrad.dtype import Invalid
 from tinygrad.uop.ops import UOp, Ops, KernelInfo, ProgramInfo
 
@@ -407,6 +407,17 @@ class TestFunctionTuple(unittest.TestCase):
     (t1+t2).sum().backward()
     x.grad.realize(y.grad)
   def test_grad_tuple_precompile(self): self.test_grad_tuple(True)
+
+  def test_shared_input_gradient(self):
+    x, y = Tensor.arange(6, dtype=dtypes.float).clone().realize(), Tensor.arange(6, dtype=dtypes.float).clone().realize()
+    x.requires_grad = y.requires_grad = True
+    grad = Tensor.arange(6, dtype=dtypes.float).clone().realize()
+    @function(precompile=True, precompile_backward=True)
+    def f(a:Tensor, b:Tensor): return a + b
+    (f(x, y) * grad).sum().backward()
+    self.assertIs(x.grad.uop, y.grad.uop)
+    np.testing.assert_allclose(x.grad.numpy(), grad.numpy())
+    np.testing.assert_allclose(y.grad.numpy(), grad.numpy())
 
   def test_grad_fxn_tuple(self):
     # grad_fxn for tuple: receives one gradient per output as positional args

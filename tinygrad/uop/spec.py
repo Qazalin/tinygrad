@@ -141,6 +141,11 @@ spec_tensor = PatternMatcher([
    (isinstance(buf.dtype, DType) and matches_dtype(buf.src[0], dtypes.weakint) and is_device(buf.arg.device))
    if isinstance(buf.arg, ParamArg) and buf.addrspace is AddrSpace.GLOBAL else None),
 
+  # hardware slice of a buffer-backed tensor
+  (UPat(Ops.SLICE, src=(UPat(GroupOp.Movement.union({Ops.BUFFER, Ops.PARAM, Ops.STAGE, Ops.AFTER, Ops.MSELECT, Ops.MSTACK, Ops.INDEX})),
+                        UPat(Ops.CONST, dtype=dtypes.weakint)), allow_any_len=True, name="bv"),
+   lambda bv: isinstance(bv.arg, int)),
+
   # Tensor variable bindings
   (UPat(Ops.BIND, (dtypes.int, dtypes.long, dtypes.weakint,), (UPat(Ops.PARAM), UPat.cvar(dtype=(dtypes.int,dtypes.long,dtypes.weakint,))), arg=None),
    lambda: True),
@@ -232,11 +237,6 @@ spec_hcq = PatternMatcher([
 # these are intermediate ops. everything should be deleted from here
 spec_full = PatternMatcher([
   (UPat(Ops.REWRITE_ERROR, dtypes.void, name="x"), lambda x: isinstance(x.arg, str)),
-
-  # SLICE on BUFFER is allowed if BUFFER is
-  (UPat(Ops.SLICE, src=(UPat(GroupOp.Movement.union({Ops.BUFFER, Ops.PARAM, Ops.STAGE, Ops.AFTER})),
-                        UPat(Ops.CONST, dtype=dtypes.weakint)), allow_any_len=True, name="bv"),
-   lambda bv: isinstance(bv.arg, int)),
 
   (UPat(Ops.CALL, dtypes.void, src=(UPat((Ops.SLICE,)),), allow_any_len=True), lambda: True),
 
