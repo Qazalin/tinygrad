@@ -46,13 +46,18 @@ def create_schedule(sched_sink:UOp) -> UOp:
     children: dict[UOp, list[UOp]] = {}
     in_degree: dict[UOp, int] = {}
     writes: dict[UOp, list[tuple[UOp, UOp, tuple[UOp, ...]]]] = {}  # buffer -> (AFTER, prior state, new kernels)
+    program_outputs: dict[UOp, set[UOp]] = {}  # opaque PROGRAM -> buffers whose AFTER state keeps the write
     reads: list[tuple[UOp, UOp, UOp, UOp]] = []  # (reader AFTER, reader kernel, buffer state read, access)
     for u in sched_sink.toposort(gate_kernel_sink):
       if u.op is not Ops.AFTER: continue
       kernels, after_deps = _split_after(u)
       prev_state = _unwrap_src(u.src[0])
       prev_kernels = set(_split_after(prev_state)[0]) if prev_state.op is Ops.AFTER else set()
-      writes.setdefault(u.buf_uop, []).append((u, prev_state, tuple(k for k in kernels if k not in prev_kernels)))
+      new_kernels = tuple(k for k in kernels if k not in prev_kernels)
+      writes.setdefault(u.buf_uop, []).append((u, prev_state, new_kernels))
+      for k in new_kernels:
+        call = k.src[0] if k.op is Ops.END else k
+        if call.src[0].op is Ops.PROGRAM: program_outputs.setdefault(call, set()).add(u.buf_uop)
       for k in kernels:
         in_degree.setdefault(k, 0)
         if k.op is Ops.END: assert k.src[0].op is Ops.CALL, f"END src[0] should be KERNEL, not {k.src[0].op}"
@@ -150,8 +155,11 @@ def create_schedule(sched_sink:UOp) -> UOp:
       else:
         k = rk.src[0] if rk.op is Ops.END else rk
         assert k.op is Ops.CALL, f"unexpected op in queue: {k.op}"
-        buf_uops = tuple(_unwrap_src(s).buf_uop for s in k.src[1:] if s.op is not Ops.BIND)
-        linearized.append(k.src[0].call(*buf_uops))
+        args = tuple(s for s in k.src[1:] if s.op is not Ops.BIND)
+        buf_uops = tuple(_unwrap_src(s).buf_uop for s in args)
+        aux = ("program_outputs", tuple(i for i,s in enumerate(args) if _unwrap_src(s).buf_uop in program_outputs.get(k, set()))) \
+          if k.src[0].op is Ops.PROGRAM else None
+        linearized.append(k.src[0].call(*buf_uops, aux=aux))
       for x in children.get(rk, []):
         in_degree[x] -= 1
         if in_degree[x] == 0:

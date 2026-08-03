@@ -1,7 +1,7 @@
 import unittest, numpy as np
 from tinygrad import Tensor, Variable, Context, Device, TinyJit, GlobalCounters, dtypes, UOp, nn, getenv
 from tinygrad.nn.state import get_parameters, get_state_dict
-from tinygrad.uop.ops import Ops
+from tinygrad.uop.ops import Ops, KernelInfo
 from test.helpers import not_support_multi_device, needs_second_gpu, slow
 from hypothesis import given, strategies as strat, settings
 
@@ -305,6 +305,34 @@ class TestMultiTensor(unittest.TestCase):
     np.testing.assert_allclose(grad, grad_shard, atol=1e-6, rtol=1e-6)
 
   def test_embedding_backward_shard_weight(self): self.test_embedding_backward(shard_weight_axis=1)
+
+  @Context(USE_ATOMICS=1)
+  def test_embedding_backward_atomic_is_program_output(self):
+    from tinygrad.codegen import to_program
+    layer = nn.Embedding(32, 8)
+    layer.weight.shard_(devices_2, axis=None).realize()
+    x = Tensor([[1, 2], [3, 1]], device=devices_2).realize()
+    layer(x).sum().backward()
+    calls = list((layer.weight.grad + 1).schedule_linear().src)
+    self.assertTrue(all(c.src[0].op is Ops.SINK for c in calls))
+    programs = [to_program(c.src[0], Device[c.device[0]].renderer) for c in calls]
+    embedding_bwd = [p for p in programs if p.arg.name == "embedding_bwd"]
+    self.assertEqual(len(embedding_bwd), 1)
+    self.assertEqual(embedding_bwd[0].arg.outs, (0,))
+
+  def test_opaque_custom_kernel_is_program_output(self):
+    from tinygrad.engine.realize import compile_linear
+    def opaque_copy(out:UOp, x:UOp) -> UOp:
+      sink = UOp.sink(out.base, x.base, arg=KernelInfo("opaque_copy"))
+      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)),
+                                   UOp(Ops.SOURCE, arg=""), UOp(Ops.BINARY, arg=b"")))
+    x = Tensor.ones(4).contiguous().shard(devices_2, axis=None).realize()
+    out = Tensor.empty(4, device=devices_2)
+    out = Tensor.custom_kernel(out, x, fxn=opaque_copy)[0]
+    programs = [c.src[0] for c in compile_linear(out.schedule_linear()).src if c.src[0].op is Ops.PROGRAM]
+    opaque = [p for p in programs if p.arg.name == "opaque_copy"]
+    self.assertEqual(len(opaque), 1)
+    self.assertEqual(opaque[0].arg.outs, (0,))
 
   def test_rmsnorm(self):
     B, T, embed_size = 4, 10, 20
