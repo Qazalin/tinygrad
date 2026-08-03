@@ -4,6 +4,7 @@ from tinygrad.helpers import Context, dedup, getenv, DEBUG
 from tinygrad.uop.ops import UOp, Ops, graph_rewrite, PatternMatcher, UPat
 from tinygrad.tensor import Tensor
 from tinygrad.nn.state import get_state_dict
+from tinygrad.callify import pm_buffer_views
 
 def add_to_ctx(ctx, x:UOp):
   if x.buf_uop in ctx[1]: return None
@@ -61,6 +62,8 @@ class _function(Generic[ReturnType]):
     # replace the known inputs with params (using deduplicated slots)
     subs = {x:x.param_like(i) for i,x in enumerate(call_uops)}
     uret = uret.substitute(subs)
+    # function bodies are opaque to callify, so canonicalize storage-preserving views after BUFFERs become PARAMs
+    uret = graph_rewrite(uret, pm_buffer_views, name="function buffer views")
 
     # the BUFFERs that are left are the implicit inputs
     num_explicit = len(call_uops)

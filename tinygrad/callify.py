@@ -64,8 +64,13 @@ def _make_buffer_view(src:UOp) -> UOp|None:
   return UOp(Ops.SLICE, src.dtype, (buf, UOp.const(offset)), src.numel())
 
 def contiguous_mops_to_view(c:UOp, src:UOp):
-  """MOPS(BUFFER) → SLICE when movement ops collapse to a contiguous range."""
+  """MOPS(buffer identity) → SLICE when movement ops collapse to a contiguous range."""
   buf = src.base
+  # PARAM views cannot become SLICE in tensor IR. A full zero-offset view can still use the PARAM directly.
+  if buf.op is Ops.PARAM:
+    if c.op is Ops.BITCAST or src.numel() != buf.numel() or src.contiguous_view_offset() != 0: return None
+    param_view = buf.reshape(src.shape)
+    return c.replace(src=(param_view,)) if c.op is Ops.COPY else param_view
   if buf.op not in {Ops.BUFFER, Ops.SLICE, Ops.UNSHARD}: return None
   if src.op is Ops.RESHAPE and src.src[0].op in {Ops.BUFFER, Ops.SLICE} and c.op is not Ops.BITCAST: return None
   if c.op is not Ops.BITCAST and src.op is Ops.BUFFER: return None
@@ -91,8 +96,9 @@ def _precompiled_output_redirect(s:UOp, t:UOp) -> UOp|None:
   # how output s lands in the caller's buffer t, or None if it must be copied into t
   # materialize straight into t
   if s.op is Ops.CONTIGUOUS: return t.after(t.store(s.src[0]))
-  # rebind output storage to t
-  if s.op in {Ops.BUFFER, Ops.UNSHARD} and s.has_buffer_identity(): return t
+  # rebind internally-owned output storage to t, including through shape-only views.
+  # PARAM/SLICE-backed outputs alias external storage and must instead be copied into t.
+  if s.has_buffer_identity() and s.base.op in {Ops.BUFFER, Ops.UNSHARD}: return t
   return None
 
 def transform_precompiled_call(c:UOp) -> UOp|None:
@@ -130,16 +136,18 @@ def transform_precompiled_call(c:UOp) -> UOp|None:
 
   return UOp.maketuple(*rets)
 
+pm_buffer_views = PatternMatcher([
+  # fold MOPS+BITCAST over buffer-backed storage into SLICE when movement ops collapse to a contiguous range
+  (UPat((Ops.BITCAST, Ops.COPY, Ops.CONTIGUOUS), src=(UPat(GroupOp.Movement|{Ops.BUFFER}, name="src"),), name="c"), contiguous_mops_to_view),
+])
+
 # NOTE: adding rules to here is bad. these all need to run before the schedule cache
-pm_early_transform_tensor_graph = PatternMatcher([
+pm_early_transform_tensor_graph = pm_buffer_views+PatternMatcher([
   # transform precompiled FUNCTIONs into CALLs (body becomes SINK with stores)
   (UPat(Ops.FUNCTION, name="c"), transform_precompiled_call),
 
   # resolve TUPLE+GETTUPLE (for precompiled calls)
   (UPat(Ops.GETTUPLE, src=(UPat(Ops.TUPLE, name="t"),), name="g"), lambda g,t: t.src[g.arg]),
-
-  # fold MOPS+BITCAST over BUFFER/SLICE into SLICE when movement ops collapse to contiguous range
-  (UPat((Ops.BITCAST, Ops.COPY, Ops.CONTIGUOUS), src=(UPat(GroupOp.Movement|{Ops.BUFFER}, name="src"),), name="c"), contiguous_mops_to_view),
 
   # remove contiguous on movement ops before a copy on disk
   (UPat(GroupOp.Movement-{Ops.SHRINK, Ops.RESHAPE}, name="x").f(Ops.CONTIGUOUS).f(Ops.COPY, name="copy"), lambda x,copy:
