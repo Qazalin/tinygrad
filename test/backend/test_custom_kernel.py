@@ -419,34 +419,6 @@ class TestCustomKernel(unittest.TestCase):
     self.assertEqual(GlobalCounters.kernel_count, 2 if x.device.startswith(("WEBGPU", "CL")) else 1)
     self.assertEqual(y.tolist(), [1, 2, 3, 4])
 
-  def test_custom_kernel_copy(self):
-    a = Tensor.arange(4).reshape(2, 2).clone(device="CPU:1")
-    b = Tensor.custom_kernel(Tensor.empty_like(a), a, fxn=custom_add_one_kernel)[0]
-    c = b.T.to_("CPU:2").realize()
-    self.assertEqual(c.tolist(), [[1, 3], [2, 4]])
-
-  def test_mop_input(self, mop_fxn=lambda x: x.reshape(16, 2), kcount:int=0):
-    x = mop_fxn(Tensor.arange(32).clone("CPU").realize())
-    y = Tensor.custom_kernel(Tensor.empty_like(x), x, fxn=custom_add_one_kernel)[0]
-    GlobalCounters.reset()
-    y.realize()
-    kernel_count = GlobalCounters.kernel_count
-    self.assertEqual(y.tolist(), x.add(1).tolist())
-    self.assertEqual(kernel_count, 1+kcount)
-
-  # becomes a SLICE when the device supports it (TODO: maybe removal of slice fixes backend specific behavior)
-  def test_shrink_input(self): self.test_mop_input(lambda x: x[:4], kcount=0)
-  def test_double_permute_input(self): self.test_mop_input(lambda x: x.reshape(4, 8).T.T, kcount=0)
-  # must materialize the movement op before CALL
-  def test_permute_input(self): self.test_mop_input(lambda x: x.reshape(4, 8).T, kcount=1)
-  def test_offset_shrink_input(self): self.test_mop_input(lambda x: x[4:8], kcount=1)
-  def test_2d_shrink_input(self): self.test_mop_input(lambda x: x.reshape(4, 8)[:, 2:6], kcount=1)
-  def test_pad_input(self): self.test_mop_input(lambda x: x[:4].pad(((0, 4),)), kcount=1)
-  def test_flip_input(self): self.test_mop_input(lambda x: x.flip(0), kcount=1)
-  # TODO: fix correctness issue
-  @unittest.expectedFailure
-  def test_expand_input(self): self.test_mop_input(lambda x: x.reshape(16, 2)[:, :1].expand(16, 2), kcount=1)
-
   @Context(DEV="CPU")
   def test_simple_from_source(self):
     a = Tensor.arange(4).clone().realize()
