@@ -248,7 +248,7 @@ def compile_call(call:UOp, ast:UOp) -> UOp:
   prg = to_program(ast, Device[call.device if isinstance(call.device, str) else call.device[0]].renderer)
   is_program_outputs = isinstance(call.arg.aux, tuple) and call.arg.aux[:1] == ("program_outputs",)
   if is_program_outputs:
-    prg = prg.replace(arg=replace(prg.arg, outs=call.arg.aux[1]))
+    prg = prg.replace(arg=replace(prg.arg, outs=tuple(sorted(set(prg.arg.outs) | set(call.arg.aux[1])))))
   return call.replace(src=(prg, *call.src[1:]), arg=replace(call.arg, aux=None) if is_program_outputs else call.arg)
 
 pm_compile = PatternMatcher([

@@ -44,7 +44,8 @@ def _custom_quantize_mxfp4_dual(row_q:UOp, row_s:UOp, col_q:UOp, col_s:UOp, x:UO
   threads = UOp.special(256, "lidx0")
   groups_m, groups_n = UOp.special(ceildiv(M, 128), "gidx0"), UOp.special(ceildiv(N, 64), "gidx1")
   mem = M*N*2 + M*N + M*N//16
-  sink = UOp.sink(row_q.base, row_s.base, col_q.base, col_s.base, x.base, threads, groups_m, groups_n,
+  outputs = tuple(UOp(Ops.CUSTOM, dtypes.void, (o.base.index(0),), arg="") for o in (row_q, row_s, col_q, col_s))
+  sink = UOp.sink(row_q.base, row_s.base, col_q.base, col_s.base, x.base, *outputs, threads, groups_m, groups_n,
                   arg=KernelInfo(f"quantize_mxfp4_dual_{M}_{N}", estimates=Estimates(ops=M*N, mem=mem)))
   src = _amd_cast_transpose_src()
   defines = [f"-DM_DIM={M}", f"-DN_DIM={N}", f"-DUSE_HADAMARD_VALUE={'true' if use_hadamard else 'false'}",

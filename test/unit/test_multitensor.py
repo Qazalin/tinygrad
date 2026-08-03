@@ -322,17 +322,18 @@ class TestMultiTensor(unittest.TestCase):
 
   def test_opaque_custom_kernel_is_program_output(self):
     from tinygrad.engine.realize import compile_linear
-    def opaque_copy(out:UOp, x:UOp) -> UOp:
-      sink = UOp.sink(out.base, x.base, arg=KernelInfo("opaque_copy"))
+    def opaque_copy(out0:UOp, out1:UOp, x:UOp) -> UOp:
+      writes = tuple(UOp(Ops.CUSTOM, dtypes.void, (o.base.index(0),), arg="") for o in (out0, out1))
+      sink = UOp.sink(out0.base, out1.base, x.base, *writes, arg=KernelInfo("opaque_copy"))
       return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)),
                                    UOp(Ops.SOURCE, arg=""), UOp(Ops.BINARY, arg=b"")))
     x = Tensor.ones(4).contiguous().shard(devices_2, axis=None).realize()
-    out = Tensor.empty(4, device=devices_2)
-    out = Tensor.custom_kernel(out, x, fxn=opaque_copy)[0]
+    out0, out1 = Tensor.empty(4, device=devices_2), Tensor.empty(4, device=devices_2)
+    out = Tensor.custom_kernel(out0, out1, x, fxn=opaque_copy)[0]
     programs = [c.src[0] for c in compile_linear(out.schedule_linear()).src if c.src[0].op is Ops.PROGRAM]
     opaque = [p for p in programs if p.arg.name == "opaque_copy"]
     self.assertEqual(len(opaque), 1)
-    self.assertEqual(opaque[0].arg.outs, (0,))
+    self.assertEqual(opaque[0].arg.outs, (0, 1))
 
   def test_rmsnorm(self):
     B, T, embed_size = 4, 10, 20
