@@ -44,6 +44,30 @@ def step(tensor, optim, steps=1, teeny=False, **kwargs):
     optim.step()
   return net.x.detach().numpy(), net.W.detach().numpy()
 
+class TestMLPerfOptim(unittest.TestCase):
+  def test_fused_adamw(self):
+    from examples.mlperf.optim import _fused_adamw_step
+    rng = np.random.default_rng(4)
+    param = Tensor(rng.standard_normal(256, dtype=np.float32), dtype=dtypes.bfloat16).realize()
+    grad = Tensor(rng.standard_normal(256, dtype=np.float32), dtype=dtypes.bfloat16).realize()
+    m = Tensor.randn(256, dtype=dtypes.bfloat16).realize()
+    v = Tensor.rand(256, dtype=dtypes.bfloat16).realize()
+    master = param.float().contiguous().realize()
+    m_ref, v_ref, master_ref = m.clone().realize(), v.clone().realize(), master.clone().realize()
+    lr, b1_t, b2_t = Tensor([1e-3]).realize(), Tensor([0.9]).realize(), Tensor([0.95]).realize()
+    m_calc = 0.9 * m_ref.float() + 0.1 * grad.float()
+    v_calc = 0.95 * v_ref.float() + 0.05 * grad.float().square()
+    m_new, v_new = m_calc.cast(dtypes.bfloat16), v_calc.cast(dtypes.bfloat16)
+    master_new = master_ref - lr * ((m_calc / (1.0 - b1_t)) / ((v_calc / (1.0 - b2_t)).sqrt() + 1e-5) + 0.1 * master_ref)
+    param_ref = master_new.cast(dtypes.bfloat16)
+    Tensor.realize(m_new, v_new, master_new, param_ref)
+    _fused_adamw_step(param, grad, m, v, master, lr, b1_t, b2_t, 0.9, 0.95, 1e-5, 0.1)
+    Tensor.realize(param, m, v, master)
+    np.testing.assert_array_equal(param.numpy(), param_ref.numpy())
+    np.testing.assert_array_equal(m.numpy(), m_new.numpy())
+    np.testing.assert_array_equal(v.numpy(), v_new.numpy())
+    np.testing.assert_allclose(master.numpy(), master_new.numpy(), rtol=2e-7, atol=2e-7)
+
 @slow
 class TestOptim(unittest.TestCase):
   def setUp(self): self.enterContext(Context(TRAINING=1))

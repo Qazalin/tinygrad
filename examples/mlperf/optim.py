@@ -1,8 +1,9 @@
+import functools
 from tinygrad.tensor import Tensor
 from tinygrad.dtype import dtypes
 from tinygrad.nn.optim import Optimizer, OptimizerGroup
 from tinygrad.helpers import FUSE_OPTIM, getenv
-from tinygrad.uop.ops import UOp, Ops, AxisType
+from tinygrad.uop.ops import UOp, Ops, AxisType, KernelInfo
 
 STOCHASTIC_ROUND = getenv("STOCHASTIC_ROUND", 0)
 MASTER_WEIGHTS = getenv("MASTER_WEIGHTS", 0)
@@ -26,6 +27,27 @@ def clip_grads(grads:list[Tensor], grad_acc, clip_norm) -> Tensor:
   total_norm = Tensor.stack(*[g.float().square().sum() for g in grads]).sum().sqrt().contiguous()
   for g in grads: g.assign((g * (clip_norm / (total_norm + 1e-6)).clamp(max_=1.0)).cast(g.dtype))
   return total_norm
+
+@functools.cache
+def _fused_adamw_kernel(m_out:UOp, v_out:UOp, w_out:UOp, p_out:UOp, m:UOp, v:UOp, w:UOp, g:UOp,
+                        lr:UOp, b1_t:UOp, b2_t:UOp, *, b1:float, b2:float, eps:float, wd:float) -> UOp:
+  m_out, v_out, w_out, p_out, m, v, w, g = (x.flatten() for x in (m_out, v_out, w_out, p_out, m, v, w, g))
+  assert m_out.shape == v_out.shape == w_out.shape == p_out.shape == m.shape == v.shape == w.shape == g.shape
+  i = UOp.range(m.numel(), 0)
+  gf, mf, vf, wf = g[i].cast(dtypes.float32), m[i].cast(dtypes.float32), v[i].cast(dtypes.float32), w[i].cast(dtypes.float32)
+  m_new = b1 * mf + (1.0 - b1) * gf
+  v_new = b2 * vf + (1.0 - b2) * gf * gf
+  update = (m_new / (1.0 - b1_t.flatten()[0])) / ((v_new / (1.0 - b2_t.flatten()[0])).sqrt() + eps)
+  w_new = wf - lr.flatten()[0] * (update + wd * wf)
+  stores = (m_out[i].store(m_new.cast(m_out.dtype)), v_out[i].store(v_new.cast(v_out.dtype)),
+            w_out[i].store(w_new.cast(w_out.dtype)), p_out[i].store(w_new.cast(p_out.dtype)))
+  return UOp.group(*stores).end(i).sink(arg=KernelInfo(f"fused_adamw_{m.numel()}"))
+
+def _fused_adamw_step(param:Tensor, grad:Tensor, m:Tensor, v:Tensor, master:Tensor, lr:Tensor, b1_t:Tensor, b2_t:Tensor,
+                      b1:float, b2:float, eps:float, wd:float) -> None:
+  fxn = functools.partial(_fused_adamw_kernel, b1=b1, b2=b2, eps=eps, wd=wd)
+  ret = Tensor.custom_kernel(m, v, master, param, m, v, master, grad, lr, b1_t, b2_t, fxn=fxn)[:4]
+  for dst, src in zip((m, v, master, param), ret): dst.replace(src)
 
 class GradAccClipAdamW(Optimizer):
   def __init__(self, params:list[Tensor], lr=0.001, b1=0.9, b2=0.999, eps=1e-6, weight_decay=0.0, grad_acc=1, clip_norm=1.0, device=None, fused=FUSE_OPTIM):
@@ -51,6 +73,16 @@ class GradAccClipAdamW(Optimizer):
     return Tensor.cat(*[t[p*sz:(p+1)*sz] for p in range(n)], dim=0)
 
   def fschedule_step(self, grads:list[Tensor]) -> list[Tensor]:
+    if self.master_params is not None and not self.zero and not STOCHASTIC_ROUND and all(
+      p.dtype == g.dtype == dtypes.bfloat16 and m.dtype in (dtypes.bfloat16, dtypes.float32) and v.dtype == m.dtype and
+      master.dtype == dtypes.float32 and p.device == g.device == m.device == v.device == master.device
+      for p, g, m, v, master in zip(self.params, grads, self.m, self.v, self.master_params)
+    ):
+      self.b1_t *= self.b1
+      self.b2_t *= self.b2
+      for p, g, m, v, master in zip(self.params, grads, self.m, self.v, self.master_params):
+        _fused_adamw_step(p, g, m, v, master, self.lr, self.b1_t, self.b2_t, self.b1, self.b2, self.eps, self.wd)
+      return [self.b1_t, self.b2_t] + self.m + self.v + self.params + self.master_params
     updates, extra = self._step([], grads)
     for i, tt in enumerate(self.params): tt.assign(self._apply_update(tt, updates[i], self.master_params[i] if self.master_params else None))
     fp8_inv_scales = [tt._inv_scale for tt in self.params if hasattr(tt, '_inv_scale')]
