@@ -1,4 +1,5 @@
 import functools, math, pathlib
+from typing import Literal, overload
 from tinygrad import Tensor, dtypes
 from tinygrad.uop.ops import UOp, Ops, KernelInfo
 from tinygrad.renderer import Estimates
@@ -7,18 +8,22 @@ from extra.llama_kernels import alloc_like, compile_hip
 
 BLK = 32
 
-def _amd_cast_transpose_src() -> str:
+def _amd_cast_transpose_src(rowwise:bool=True, columnwise:bool=True) -> str:
   # Keep AMD's submitted kernel body verbatim, replacing only its templated launch signature with tinygrad's fixed entry point.
+  assert rowwise or columnwise
   src = (pathlib.Path(__file__).parent/"cast_transpose_mxfp4_shuffled.hip").read_text()
   start = src.index("template<")
   body = src.index(") {", start) + 3
   end = src.index("\n}\n\n}  // namespace te_mxfp4", body)
-  entry = '''extern "C" __global__ __launch_bounds__(256, 8)
-void quantize_mxfp4_dual(uint8_t* __restrict__ rowwise_fp4, uint8_t* __restrict__ rowwise_scale,
-                         uint8_t* __restrict__ colwise_fp4, uint8_t* __restrict__ colwise_scale,
-                         const uint16_t* __restrict__ input) {
-    constexpr bool USE_ROWWISE = true;
-    constexpr bool USE_COLWISE = true;
+  name = "dual" if rowwise and columnwise else "row" if rowwise else "col"
+  ptrs = (("uint8_t* __restrict__ rowwise_fp4, uint8_t* __restrict__ rowwise_scale,\n                         " if rowwise else "") +
+          ("uint8_t* __restrict__ colwise_fp4, uint8_t* __restrict__ colwise_scale,\n                         " if columnwise else ""))
+  missing = ("    uint8_t *colwise_fp4 = nullptr, *colwise_scale = nullptr;\n" if rowwise and not columnwise else
+             "    uint8_t *rowwise_fp4 = nullptr, *rowwise_scale = nullptr;\n" if columnwise and not rowwise else "")
+  entry = f'''extern "C" __global__ __launch_bounds__(256, 8)
+void quantize_mxfp4_{name}({ptrs}const uint16_t* __restrict__ input) {{
+{missing}    constexpr bool USE_ROWWISE = {'true' if rowwise else 'false'};
+    constexpr bool USE_COLWISE = {'true' if columnwise else 'false'};
     constexpr bool SHUFFLE_SCALES = SHUFFLE_SCALES_VALUE;
     constexpr bool USE_HADAMARD = USE_HADAMARD_VALUE;
     constexpr bool SHUFFLE_ROWWISE_FP4 = SHUFFLE_ROWWISE_FP4_VALUE;
@@ -37,17 +42,20 @@ void quantize_mxfp4_dual(uint8_t* __restrict__ rowwise_fp4, uint8_t* __restrict_
   return src[:start] + entry + src[body:end] + "\n}\n\n}  // namespace te_mxfp4\n#endif\n"
 
 @functools.cache
-def _custom_quantize_mxfp4_dual(row_q:UOp, row_s:UOp, col_q:UOp, col_s:UOp, x:UOp,
-                                use_hadamard:bool, shuffle_row:bool, shuffle_col:bool, shuffle_scales:bool) -> UOp:
+def _custom_quantize_mxfp4_directional(*args:UOp, use_hadamard:bool, shuffle_row:bool, shuffle_col:bool, shuffle_scales:bool,
+                                       rowwise:bool, columnwise:bool) -> UOp:
+  *outputs, x = args
   M, N = math.prod(x.shape[:-1]), x.shape[-1]
   assert M % 256 == 0 and N % 256 == 0, f"AMD MXFP4 cast-transpose requires multiples of 256, got {x.shape}"
+  assert len(outputs) == 2 * (rowwise + columnwise)
   threads = UOp.special(256, "lidx0")
   groups_m, groups_n = UOp.special(ceildiv(M, 128), "gidx0"), UOp.special(ceildiv(N, 64), "gidx1")
-  mem = M*N*2 + M*N + M*N//16
-  outputs = tuple(UOp(Ops.CUSTOM, dtypes.void, (o.base.index(0),), arg="") for o in (row_q, row_s, col_q, col_s))
-  sink = UOp.sink(row_q.base, row_s.base, col_q.base, col_s.base, x.base, *outputs, threads, groups_m, groups_n,
-                  arg=KernelInfo(f"quantize_mxfp4_dual_{M}_{N}", estimates=Estimates(ops=M*N, mem=mem)))
-  src = _amd_cast_transpose_src()
+  mem = M*N*2 + (M*N + M*N//16) * (rowwise + columnwise) // 2
+  markers = tuple(UOp(Ops.CUSTOM, dtypes.void, (o.base.index(0),), arg="") for o in outputs)
+  name = "dual" if rowwise and columnwise else "row" if rowwise else "col"
+  sink = UOp.sink(*(o.base for o in outputs), x.base, *markers, threads, groups_m, groups_n,
+                  arg=KernelInfo(f"quantize_mxfp4_{name}_{M}_{N}", estimates=Estimates(ops=M*N, mem=mem)))
+  src = _amd_cast_transpose_src(rowwise, columnwise)
   defines = [f"-DM_DIM={M}", f"-DN_DIM={N}", f"-DUSE_HADAMARD_VALUE={'true' if use_hadamard else 'false'}",
              f"-DSHUFFLE_ROWWISE_FP4_VALUE={'true' if shuffle_row else 'false'}",
              f"-DSHUFFLE_COLWISE_FP4_VALUE={'true' if shuffle_col else 'false'}",
@@ -55,29 +63,44 @@ def _custom_quantize_mxfp4_dual(row_q:UOp, row_s:UOp, col_q:UOp, col_s:UOp, x:UO
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
                                UOp(Ops.BINARY, arg=compile_hip(src, defines))))
 
+@overload
 def quantize_mxfp4_dual(x:Tensor, *, use_hadamard:bool=True, shuffle_row:bool=False, shuffle_col:bool=False,
-                        shuffle_scales:bool=True, flatten_row:bool=False,
-                        out:tuple[Tensor, Tensor, Tensor, Tensor]|None=None) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+                        shuffle_scales:bool=True, flatten_row:bool=False, out:tuple[Tensor, Tensor, Tensor, Tensor]|None=None,
+                        rowwise:Literal[True]=True, columnwise:Literal[True]=True) -> tuple[Tensor, Tensor, Tensor, Tensor]: ...
+@overload
+def quantize_mxfp4_dual(x:Tensor, *, use_hadamard:bool=True, shuffle_row:bool=False, shuffle_col:bool=False,
+                        shuffle_scales:bool=True, flatten_row:bool=False, out:None=None,
+                        rowwise:Literal[False], columnwise:Literal[True]=True) -> tuple[Tensor, Tensor]: ...
+@overload
+def quantize_mxfp4_dual(x:Tensor, *, use_hadamard:bool=True, shuffle_row:bool=False, shuffle_col:bool=False,
+                        shuffle_scales:bool=True, flatten_row:bool=False, out:None=None,
+                        rowwise:Literal[True]=True, columnwise:Literal[False]) -> tuple[Tensor, Tensor]: ...
+def quantize_mxfp4_dual(x:Tensor, *, use_hadamard:bool=True, shuffle_row:bool=False, shuffle_col:bool=False,
+                        shuffle_scales:bool=True, flatten_row:bool=False, out:tuple[Tensor, Tensor, Tensor, Tensor]|None=None,
+                        rowwise:bool=True, columnwise:bool=True) -> tuple[Tensor, ...]:
   assert x.dtype == dtypes.bfloat16 and x.ndim >= 2, f"expected BF16 matrix, got {x.dtype} {x.shape}"
+  assert rowwise or columnwise
+  assert out is None or (rowwise and columnwise)
   M, N = math.prod(x.shape[:-1]), x.shape[-1]
   assert M % 256 == 0 and N % 256 == 0, f"AMD MXFP4 cast-transpose requires multiples of 256, got {x.shape}"
   axis = x.uop.axis if isinstance(x.device, tuple) else None
   col_axis = None if axis is None else (0 if axis == x.ndim-1 else 1)
   if out is None:
     row_axis = 0 if flatten_row and axis is not None else axis
-    row_q = alloc_like((M, N//2) if flatten_row else (*x.shape[:-1], N//2), dtypes.uint8, x.device, row_axis)
-    row_s = alloc_like((M, N//BLK) if flatten_row else (*x.shape[:-1], N//BLK), dtypes.uint8, x.device, row_axis)
-    col_q = alloc_like((N, M//2), dtypes.uint8, x.device, col_axis)
-    col_s = alloc_like((N, M//BLK), dtypes.uint8, x.device, col_axis)
-  else: row_q, row_s, col_q, col_s = out
-  fxn = functools.partial(_custom_quantize_mxfp4_dual, use_hadamard=use_hadamard, shuffle_row=shuffle_row,
-                          shuffle_col=shuffle_col, shuffle_scales=shuffle_scales)
-  ret = Tensor.custom_kernel(row_q, row_s, col_q, col_s, x, fxn=fxn)[:4]
+    outputs = []
+    if rowwise:
+      outputs += [alloc_like((M, N//2) if flatten_row else (*x.shape[:-1], N//2), dtypes.uint8, x.device, row_axis),
+                  alloc_like((M, N//BLK) if flatten_row else (*x.shape[:-1], N//BLK), dtypes.uint8, x.device, row_axis)]
+    if columnwise:
+      outputs += [alloc_like((N, M//2), dtypes.uint8, x.device, col_axis), alloc_like((N, M//BLK), dtypes.uint8, x.device, col_axis)]
+  else: outputs = list(out)
+  fxn = functools.partial(_custom_quantize_mxfp4_directional, use_hadamard=use_hadamard, shuffle_row=shuffle_row,
+                          shuffle_col=shuffle_col, shuffle_scales=shuffle_scales, rowwise=rowwise, columnwise=columnwise)
+  ret = Tensor.custom_kernel(*outputs, x, fxn=fxn)[:len(outputs)]
   if out is not None:
     for dst, src in zip(out, ret): dst.replace(src)
     return out
-  row_q, row_s, col_q, col_s = ret
-  return row_q, row_s, col_q, col_s
+  return tuple(ret)
 
 def _e2m1_code(x:UOp) -> UOp:
   mag = x.abs()

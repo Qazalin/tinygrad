@@ -245,6 +245,22 @@ class TestMXFP4(unittest.TestCase):
     np.testing.assert_array_equal(a.grad.numpy(), a_ref.grad.numpy())
     np.testing.assert_array_equal(w.grad.numpy(), w_ref.grad.numpy())
 
+  def test_save_original_input(self):
+    import numpy as np
+    rng = np.random.default_rng(11)
+    a = Tensor(rng.standard_normal((256, 256), dtype=np.float32), dtype=dtypes.bfloat16)
+    w = Tensor(rng.standard_normal((256, 256), dtype=np.float32), dtype=dtypes.bfloat16)
+    a_ref, w_ref = Tensor(a.numpy(), dtype=dtypes.bfloat16), Tensor(w.numpy(), dtype=dtypes.bfloat16)
+    Tensor.realize(a, w, a_ref, w_ref)
+    out = asm_gemm(a, w.T, mxfp4=True, save_original_input=True)
+    ref = asm_gemm(a_ref, w_ref.T, mxfp4=True)
+    out.sum().backward()
+    ref.sum().backward()
+    Tensor.realize(out, ref, a.grad, a_ref.grad, w.grad, w_ref.grad)
+    np.testing.assert_array_equal(out.numpy(), ref.numpy())
+    np.testing.assert_array_equal(a.grad.numpy(), a_ref.grad.numpy())
+    np.testing.assert_array_equal(w.grad.numpy(), w_ref.grad.numpy())
+
   def test_prequant_weight_refresh(self):
     import numpy as np
     from extra.llama_kernels.quantize_mxfp4_fused import quantize_mxfp4_dual
