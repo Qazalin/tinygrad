@@ -57,11 +57,11 @@ def _make_buffer_view(src:UOp) -> UOp|None:
   if (offset := src.contiguous_view_offset()) is None: return None
   buf = src.base
   if buf.op is Ops.SLICE:
-    byte_offset = buf.src[1].arg * buf.src[0].dtype.itemsize + offset * src.dtype.itemsize
+    byte_offset = buf.src[1].val * buf.src[0].dtype.itemsize + offset * src.dtype.itemsize
     buf = buf.src[0]
     if byte_offset % buf.dtype.itemsize != 0: return None
     offset = byte_offset // buf.dtype.itemsize
-  return UOp(Ops.SLICE, src.dtype, (buf, UOp.const(None, offset)), src.numel())
+  return UOp(Ops.SLICE, src.dtype, (buf, UOp.const(offset)), src.numel())
 
 def contiguous_mops_to_view(c:UOp, src:UOp):
   """MOPS(BUFFER) → SLICE when movement ops collapse to a contiguous range."""
@@ -83,7 +83,7 @@ def contiguous_mops_to_view(c:UOp, src:UOp):
     resolved = graph_rewrite(src, multi_pm, name="multi_buffer_view")
     if resolved.op is not Ops.UNSHARD: return None
     if (view := _make_buffer_view(resolved.src[0])) is None: return None
-    return view.reshape(resolved.src[0].shape).unshard(resolved.arg, resolved.src[1]).contiguous(tag=c.tag)
+    return view.reshape(resolved.src[0].shape).unshard(resolved.arg, resolved.src[1:]).contiguous(tag=c.tag)
 
   return None
 

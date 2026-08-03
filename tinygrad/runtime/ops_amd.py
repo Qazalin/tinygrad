@@ -602,8 +602,7 @@ class AMDProgram(HCQProgram['AMDDevice']):
 
     if dev.sqtt_enabled: self.libhash: tuple[int, int] = struct.unpack('<Q', hashlib.md5(self.lib).digest()[:8])*2
 
-    super().__init__(CLikeArgsState, self.dev, self.name, kernargs_alloc_size=self.kernargs_segment_size+additional_alloc_sz, lib=self.lib,
-                     base=self.lib_gpu.va_addr)
+    super().__init__(CLikeArgsState, self.dev, obj, kernargs_alloc_size=self.kernargs_segment_size+additional_alloc_sz, base=self.lib_gpu.va_addr)
     weakref.finalize(self, self._fini, self.dev, self.lib_gpu, buf_spec)
 
   def __call__(self, *bufs, global_size:tuple[int,int,int]=(1,1,1), local_size:tuple[int,int,int]=(1,1,1), vals:tuple[int|None, ...]=(),
@@ -910,7 +909,7 @@ class PCIIface(PCIIfaceBase):
 
 class USBIface(PCIIface):
   def __init__(self, dev, dev_id): # pylint: disable=super-init-not-called
-    if dev_id >= len(visible:=hcq_filter_visible_devices(USB3.list_devices(0xADD1, 0x0001), "AMD")):
+    if dev_id >= len(visible:=hcq_filter_visible_devices(USB3.list_devices(0xADD1, 0x0001) + USB3.list_devices(0x3801, 0x0001), "AMD")):
       raise RuntimeError(f"AMD:{dev_id} does not exist ({pluralize('device', len(visible))} available)")
     self.dev, self.pci_dev, self.vram_bar, self.count = dev, USBPCIDevice("AM", *visible[dev_id]), 0, len(visible)
     self.dev_impl = AMDev(self.pci_dev)

@@ -60,8 +60,8 @@ class TestMultiTensor(unittest.TestCase):
   def test_shard_elementwise(self): self._test_shard_op(lambda t:(t+t).reshape(2, 2), [[2.,2.],[2.,2.]])
   def test_alu_deviceless_const(self):
     s = Tensor([1.0, 2, 3, 4]).shard((f"{Device.DEFAULT}:0", f"{Device.DEFAULT}:1"), axis=0)
-    np.testing.assert_equal((s + Tensor(UOp.const(dtypes.float, 1.0))).numpy(), [2, 3, 4, 5])
-    np.testing.assert_equal((s + Tensor(UOp.const(dtypes.float, 1.0)).reshape((1,)).expand((4,))).numpy(), [2, 3, 4, 5])
+    np.testing.assert_equal((s + Tensor(UOp.const(1.0).cast(dtypes.float))).numpy(), [2, 3, 4, 5])
+    np.testing.assert_equal((s + Tensor(UOp.const(1.0).cast(dtypes.float)).reshape((1,)).expand((4,))).numpy(), [2, 3, 4, 5])
 
   def test_add_rank_expand_shard(self):
     # a sharded src keeps its own rank under implicit broadcast, its shard axis right-aligns into the output
@@ -597,7 +597,7 @@ class TestShrinkMultiTensorShardedAxis(unittest.TestCase):
     t = Tensor.arange(64).reshape(8, 8).clone().realize()
     t.shard_([f"{Device.DEFAULT}:{i}" for i in range(4)], axis=0)
 
-    with self.assertRaises(AssertionError):
+    with self.assertRaises(RuntimeError):
       # sharded axis shrink on non-device boundry is not allowed
       a = t.shrink(((0, 3), (0, 8))).contiguous()
       a.schedule_linear()

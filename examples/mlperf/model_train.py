@@ -1434,9 +1434,9 @@ def train_llama3():
     load_state_dict(scheduler, safe_load(fn), realize=False)
 
   fp8_amax = [t for ts in model._fp8_amax.values() for t in ts]
-  fp8_next_amax = [t for ts in model._fp8_next_amax.values() for t in ts] if hasattr(model, "_fp8_next_amax") else []
-  fp8_grad_amax = [t for ts in model._fp8_grad_amax.values() for t in ts] if hasattr(model, "_fp8_grad_amax") else []
-  fp8_next_grad_amax = [t for ts in model._fp8_next_grad_amax.values() for t in ts] if hasattr(model, "_fp8_next_grad_amax") else []
+  fp8_next_amax = [t for ts in model._fp8_next_amax.values() for t in ts]
+  fp8_grad_amax = [t for ts in model._fp8_grad_amax.values() for t in ts]
+  fp8_next_grad_amax = [t for ts in model._fp8_next_grad_amax.values() for t in ts]
   fp8_inv_scales = list(model._fp8_inv_scale.values()) + list(model._fp8_next_inv_scale.values())
 
   from tinygrad.nn.state import get_state_dict
@@ -1462,8 +1462,7 @@ def train_llama3():
 
   @TinyJit
   def minibatch(tokens:Tensor):
-    for nxt in fp8_next_amax: nxt.assign(0)
-    for nxt in fp8_next_grad_amax: nxt.assign(0)
+    model.reset_amax()
     if is_dp: tokens = tokens.to(None).shard(device, 0)
     if is_mp: tokens = tokens.shard(device)
     if not is_sharding: tokens = tokens.to(None)
@@ -1487,8 +1486,7 @@ def train_llama3():
     scheduler.step()
 
     for g in grads: g.assign(0)
-    for cur, nxt in zip(fp8_amax, fp8_next_amax): cur.assign(nxt)
-    for cur, nxt in zip(fp8_grad_amax, fp8_next_grad_amax): cur.assign(nxt)
+    model.update_amax()
 
     lr_cpu = optim.lr.float().to("CPU")
     grad_norm_cpu = grad_norm.float().to("CPU")
@@ -1711,9 +1709,10 @@ def train_gptoss():
     wandb.init(config=config, **wandb_args, project="MLPerf-gpt-oss")
 
   model_params = GPT_OSS_20B
-  model_params['vocab_size'] = 128256
+  model_params['vocab_size'] = getenv("VOCAB_SIZE", 128256)
   real_vocab_size = model_params['vocab_size']
   if (layers:=getenv("LAYERS")) != 0: model_params['n_layers'] = layers
+  if (experts:=getenv("EXPERTS")) != 0: model_params['n_experts'] = experts
   print(f"model parameters: {model_params}")
 
   model = GPTOSS(**model_params, max_context=SEQLEN)
@@ -1748,7 +1747,10 @@ def train_gptoss():
 
   from extra.gemm.cdna_asm_gemm import _mx_block_scale
   model_state = get_state_dict(model)
-  fp8_scale_names = {n: f"{n}_scale" for n, t in model_state.items() if t.dtype == FP8_DTYPE}
+  def _scale_key(n):
+    if "." in n and (c:=f"{(b:=n.rsplit('.',1))[0]}_scale.{b[1]}") in model_state: return c
+    return f"{n}_scale"
+  fp8_scale_names = {n: _scale_key(n) for n, t in model_state.items() if t.dtype == FP8_DTYPE}
   fp8_inv_scales = [model_state[sname] for sname in fp8_scale_names.values()]
   for wname, sname in fp8_scale_names.items():
     w, scale = model_state[wname], model_state[sname]
