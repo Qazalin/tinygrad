@@ -1,7 +1,7 @@
 from typing import TypeVar, Generic, Callable, Any, overload
 import functools
 from tinygrad.tensor import Tensor, all_tensors
-from tinygrad.helpers import flatten, merge_dicts, DEBUG, Context, BEAM, getenv, JIT, JIT_BATCH_SIZE, dedup, pluralize, VIZ, disable_gc
+from tinygrad.helpers import flatten, merge_dicts, DEBUG, Context, BEAM, getenv, JIT, JIT_BATCH_SIZE, dedup, pluralize, VIZ, disable_gc, to_tuple
 from tinygrad.device import Buffer, Compiled, Device, MultiBuffer, DepsTracker
 from tinygrad.dtype import DType
 from tinygrad.uop.ops import UOp, PatternMatcher, Variable, sym_infer, Ops, buffers, track_rewrites, graph_rewrite
@@ -43,8 +43,13 @@ def graph_split_rewrite(linear:UOp, max_batch_size:int=0) -> UOp:
       if DEBUG >= 2: print(f"JIT GRAPHing batch with {len(current_batch)} kernels")
     current_batch, current_batch_devs = [], []
 
+  amd_allreduce_id = 0
   for si in linear.src:
     if si.src[0].op is Ops.SLICE: continue
+
+    if si.src[0].op is Ops.CUSTOM_FUNCTION and si.src[0].arg == "amd_allreduce" and to_tuple(si.src[1].device)[0].startswith("AMD"):
+      from tinygrad.runtime.support.am.allreduce import graph_amd_allreduce
+      si, amd_allreduce_id = graph_amd_allreduce(si, amd_allreduce_id), amd_allreduce_id + 1
 
     devs = dedup([Device[x] for b in si.src[1:] if b.op is not Ops.BIND for x in (b.device if isinstance(b.device, tuple) else (b.device,))])
     graph_t = graph_class(devs[0]) if devs[0].graph is not None else None

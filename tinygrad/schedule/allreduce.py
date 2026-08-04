@@ -10,6 +10,14 @@ def allreduce_modes(ndev:int, numel:int) -> tuple[bool, bool]:
   use_ring = not use_all2all and (RING >= 2 or (ndev > 2 and numel > getenv("RING_ALLREDUCE_THRESHOLD", 256_000) and RING >= 1))
   return use_all2all, use_ring
 
+def use_amd_allreduce(buf:UOp, red:UOp) -> bool:
+  return isinstance(buf.device, tuple) and len(buf.device) == 8 and red.arg[0] is Ops.ADD and buf.dtype is dtypes.bfloat16 and \
+         all(d.startswith("AMD") or d.startswith("NULL") for d in buf.device)
+
+def amd_allreduce(buf:UOp, output:UOp|None=None) -> UOp:
+  if output is None: output = UOp.invalids(buf.shape, dtype=buf.dtype, device=buf.device)
+  return output.after(UOp.custom_function("amd_allreduce").call(output, buf.contiguous(), name="amd_allreduce"))
+
 def handle_allreduce(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
   if not isinstance(buf.device, tuple): return None
   assert all_int(buf.shape), f"does not support symbolic shape {buf.shape}"
@@ -20,6 +28,8 @@ def handle_allreduce(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
   # fallback to naive allreduce to save on kernel dispatch, chunking and reassembling chunks.
   use_all2all, use_ring = allreduce_modes(ndev, numel)
   if DEBUG >= 2: print(f"{'ALL2ALL' if use_all2all else 'RING' if use_ring else 'NAIVE'} ALLREDUCE {ndev}x{numel} | {buf.dtype}")
+
+  if use_amd_allreduce(buf, red): return None
 
   # contiguous before we copy it
   buf = buf.contiguous()
@@ -99,6 +109,7 @@ def handle_allreduce(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
 
 def create_allreduce_function(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
   if output is None: output = UOp.invalids(red.shape, dtype=red.dtype, device=red.device)
+  if use_amd_allreduce(buf, red): return amd_allreduce(buf, output)
   if isinstance(buf.device, tuple) and allreduce_modes(len(buf.device), prod(cast(tuple[int, ...], buf.shape)))[0]:
     ret = handle_allreduce(buf, red, output)
     assert ret is not None

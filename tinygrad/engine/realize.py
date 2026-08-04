@@ -19,6 +19,7 @@ def get_call_outs_ins(call:UOp) -> tuple[tuple[int, ...], tuple[int, ...]]:
   if ast.op is Ops.PROGRAM: return tuple(ast.arg.outs), tuple(ast.arg.ins)
   if ast.op in (Ops.COPY, Ops.SLICE): return (0,), (1,)
   if ast.op is Ops.CUSTOM_FUNCTION and ast.arg == "encdec": return (0,), tuple(range(1, len(get_call_arg_uops(call))))
+  if ast.op is Ops.CUSTOM_FUNCTION and ast.arg == "amd_allreduce": return (0,), (1,)
   return (), ()
 
 def get_call_name(call:UOp, bufs:Sequence[Buffer|UOp], var_vals:dict[str, int]|None=None) -> str:
@@ -32,6 +33,7 @@ def get_call_name(call:UOp, bufs:Sequence[Buffer|UOp], var_vals:dict[str, int]|N
     return colored(f"view {_uop_sz_to_str(arg_uops[0]):>10} @ {offset:<10d}", "yellow")
   if ast.op is Ops.COPY: return colored(f"copy {_uop_sz_to_str(arg_uops[0]):>10}, {_dev_str(bufs[0]):>7s} <- {_dev_str(bufs[1]):7s}", "yellow")
   if ast.op is Ops.CUSTOM_FUNCTION and ast.arg == "encdec": return colored(f"enc/dec {_uop_sz_to_str(arg_uops[0])}", "yellow")
+  if ast.op is Ops.CUSTOM_FUNCTION and ast.arg == "amd_allreduce": return colored(f"AMD allreduce {_uop_sz_to_str(arg_uops[0])}", "magenta")
   if ast.op is Ops.CUSTOM_FUNCTION and ast.arg == "graph": return colored(f"batched {len(ast.src[0].src)}", "cyan")
   if ast.op is Ops.CUSTOM_FUNCTION and ast.arg == "hcq": return call.arg.aux.name
   raise NotImplementedError("get_call_name is not implemented")
@@ -150,7 +152,8 @@ def unwrap_multi(call:UOp, resolved:list[UOp]) -> Iterator[tuple[list[Buffer], d
   else:
     # the DEVICE axis is bound per device at launch: it's a RANGE in the AST and the _device_num variable after codegen
     has_dnum = any((x.op is Ops.RANGE and x.arg[-1] is AxisType.DEVICE) or (x.op is Ops.PARAM and x.arg.name == '_device_num')
-                   for x in call.src[0].toposort())
+                   for x in call.src[0].toposort()) or \
+      (call.src[0].op is Ops.PROGRAM and any(v.expr == "_device_num" for v in call.src[0].arg.vars))
     for j, per_dev in enumerate(zip(*[cast(MultiBuffer, b).bufs for b in bufs])): yield list(per_dev), {"_device_num": j} if has_dnum else {}
 
 def exec_view(ctx:ExecContext, call:UOp, ast:UOp) -> float|None:
@@ -201,6 +204,16 @@ def exec_encdec(ctx:ExecContext, call:UOp, ast:UOp) -> float|None:
   shape, pos_var = tuple(s.val for s in ast.src if s.op is Ops.CONST), ast.variables()[0].expr
   with track_stats(ctx, call, bufs[0].device, bufs, ctx.var_vals):
     bufs[0].allocator._encode_decode(bufs[0]._buf, bufs[1]._buf, bufs[2]._buf, [x._buf for x in bufs[3:]], shape, ctx.var_vals[pos_var])
+  return None
+
+def exec_amd_allreduce(ctx:ExecContext, call:UOp, ast:UOp) -> float|None:
+  out, inp = [b.buffer for b in resolve_params(call, ctx.input_uops)]
+  assert isinstance(out, MultiBuffer) and isinstance(inp, MultiBuffer)
+  all_bufs = [b.ensure_allocated() for mb in (out, inp) for b in mb.bufs]
+  with track_stats(ctx, call, out.bufs[0].device, all_bufs, ctx.var_vals):
+    if not out.bufs[0].device.startswith("NULL"):
+      from tinygrad.runtime.support.am.allreduce import run_amd_allreduce
+      run_amd_allreduce(out, inp, wait=ctx.wait, timeout=ctx.timeout)
   return None
 
 def exec_graph(ctx:ExecContext, call:UOp, ast:UOp) -> float|None:
@@ -264,6 +277,7 @@ pm_exec = PatternMatcher([
   (UPat(Ops.CALL, src=(UPat(Ops.COPY, name="ast"),), name="call", allow_any_len=True), exec_copy),
   (UPat(Ops.CALL, src=(UPat(Ops.PROGRAM, name="ast"),), name="call", allow_any_len=True), exec_kernel),
   (UPat(Ops.CALL, src=(UPat(Ops.CUSTOM_FUNCTION, arg="encdec", name="ast"),), name="call", allow_any_len=True), exec_encdec),
+  (UPat(Ops.CALL, src=(UPat(Ops.CUSTOM_FUNCTION, arg="amd_allreduce", name="ast"),), name="call", allow_any_len=True), exec_amd_allreduce),
   (UPat(Ops.CALL, src=(UPat(Ops.CUSTOM_FUNCTION, arg="graph", name="ast"),), name="call", allow_any_len=True), exec_graph),
   (UPat(Ops.CALL, src=(UPat(Ops.CUSTOM_FUNCTION, arg="hcq", src=(UPat(Ops.PROGRAM, name="ast"),)),), name="call", allow_any_len=True), exec_hcq),
   (UPat(Ops.CALL, src=(UPat(Ops.CUSTOM_FUNCTION, arg="validate", name="ast"),), name="call", allow_any_len=True), exec_validate),

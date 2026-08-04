@@ -272,7 +272,17 @@ class HCQGraph(MultiGraphRunner):
     for dev in self.devices: self.last_timeline[dev][0].wait(self.last_timeline[dev][1])
     if PROFILE and self.kickoff_value > 1: self.collect_timestamps()
 
-    hcq_var_vals = {self.kickoff_var.expr: self.kickoff_value, **var_vals,
+    ar_vars = {v for v in self.vars if v.startswith("_ar_")}
+    if ar_vars:
+      from tinygrad.runtime.support.am.allreduce import reserve_graph_epoch
+      ar_ids = [int(v.rsplit("_", 1)[1]) for v in ar_vars if v.startswith("_ar_epoch_")]
+      ar_epoch = reserve_graph_epoch(tuple(d.device for d in sorted(self.devices, key=lambda d: d.device_id)), max(ar_ids) + 1)
+    else: ar_epoch = 0
+    ar_var_vals = {}
+    for v in ar_vars:
+      key, value = v.rsplit("_", 1)
+      ar_var_vals[v] = ar_epoch + int(value) * 32 if key == "_ar_epoch" else int(value)
+    hcq_var_vals = {self.kickoff_var.expr: self.kickoff_value, **var_vals, **ar_var_vals,
                     **{var.expr: dev.timeline_value - 1 for dev, var in self.virt_timeline_vals.items()},
                     **{sig.base_buf.va_addr.expr: dev.timeline_signal.base_buf.va_addr for dev, sig in self.virt_timeline_signals.items()}}
 

@@ -80,6 +80,7 @@ class ProfileGraphEvent(ProfileEvent): ents:list[ProfileGraphEntry]; deps:list[l
 class BufferSpec:
   # TODO: move device, size, dtype here?
   uncached: bool = False
+  coherent: bool = False
   cpu_access: bool = False
   host: bool = False
   nolru: bool = False
