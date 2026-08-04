@@ -22,20 +22,29 @@ def stochastic_round_bf16(x:Tensor) -> Tensor:
   noise = (noise * 0xFFFF).cast(dtypes.uint32)
   return ((bits + noise) & 0xFFFF0000).bitcast(dtypes.float32).cast(dtypes.bfloat16)
 
-def clip_grads(grads:list[Tensor], grad_acc, clip_norm) -> Tensor:
-  for g in grads: g.assign(g / grad_acc)
-  total_norm = Tensor.stack(*[g.float().square().sum() for g in grads]).sum().sqrt().contiguous()
-  for g in grads: g.assign((g * (clip_norm / (total_norm + 1e-6)).clamp(max_=1.0)).cast(g.dtype))
-  return total_norm
+def clip_grads(grads:list[Tensor], grad_acc, clip_norm) -> tuple[Tensor, Tensor]:
+  avg_grads = [(g / grad_acc).cast(g.dtype) for g in grads]
+  if isinstance(avg_grads[0].device, tuple):
+    n, device = len(avg_grads[0].device), avg_grads[0].device
+    dnum = UOp.range(n, -1, AxisType.DEVICE)
+    local_sq = [Tensor(g.uop._shard(0, dnum)).float().square().sum() if g.ndim and g.shape[0] % n == 0 else g.float().square().sum() / n
+                for g in avg_grads]
+    local_norm = Tensor.stack(*local_sq).sum()
+    total_norm = Tensor(local_norm.uop.allreduce(Ops.ADD, device)).sqrt().contiguous()
+  else:
+    total_norm = Tensor.stack(*[g.float().square().sum() for g in avg_grads]).sum().sqrt().contiguous()
+  return total_norm, (clip_norm / (total_norm + 1e-6)).clamp(max_=1.0).contiguous()
 
 @functools.cache
-def _fused_adamw_kernel(m:UOp, v:UOp, w:UOp, p:UOp, g:UOp, lr:UOp, b1_t:UOp, b2_t:UOp,
-                        *, b1:float, b2:float, eps:float, wd:float) -> UOp:
+def _fused_adamw_kernel(m:UOp, v:UOp, w:UOp, p:UOp, g:UOp, lr:UOp, b1_t:UOp, b2_t:UOp, clip_coeff:UOp,
+                        *, b1:float, b2:float, eps:float, wd:float, grad_acc:int) -> UOp:
   m, v, w, p, g = (x.flatten() for x in (m, v, w, p, g))
   assert m.shape == v.shape == w.shape == p.shape and g.numel() % m.numel() == 0
   i = UOp.range(m.numel(), 0)
   gi = i if g.numel() == m.numel() else i + UOp.range(g.numel() // m.numel(), -1, AxisType.DEVICE) * m.numel()
-  gf, mf, vf, wf = g[gi].cast(dtypes.float32), m[i].cast(dtypes.float32), v[i].cast(dtypes.float32), w[i].cast(dtypes.float32)
+  gf = (g[gi] / grad_acc).cast(g.dtype).cast(dtypes.float32)
+  gf = (gf * clip_coeff.flatten()[0]).cast(g.dtype).cast(dtypes.float32)
+  mf, vf, wf = m[i].cast(dtypes.float32), v[i].cast(dtypes.float32), w[i].cast(dtypes.float32)
   m_new = b1 * mf + (1.0 - b1) * gf
   v_new = b2 * vf + (1.0 - b2) * gf * gf
   update = (m_new / (1.0 - b1_t.flatten()[0])) / ((v_new / (1.0 - b2_t.flatten()[0])).sqrt() + eps)
@@ -45,11 +54,11 @@ def _fused_adamw_kernel(m:UOp, v:UOp, w:UOp, p:UOp, g:UOp, lr:UOp, b1_t:UOp, b2_
   return UOp.group(*stores).end(i).sink(arg=KernelInfo(f"fused_adamw_{m.numel()}"))
 
 def _fused_adamw_step(param:Tensor, grad:Tensor, m:Tensor, v:Tensor, master:Tensor, lr:Tensor, b1_t:Tensor, b2_t:Tensor,
-                      b1:float, b2:float, eps:float, wd:float) -> None:
-  fxn = functools.partial(_fused_adamw_kernel, b1=b1, b2=b2, eps=eps, wd=wd)
+                      clip_coeff:Tensor, b1:float, b2:float, eps:float, wd:float, grad_acc:int) -> None:
+  fxn = functools.partial(_fused_adamw_kernel, b1=b1, b2=b2, eps=eps, wd=wd, grad_acc=grad_acc)
   dsts = (m, v, master, param)
   views = tuple(x.reshape(x.shape[0], 1) if x.uop.axis == 0 and x.ndim == 1 else x for x in dsts)
-  srcs = tuple(x.uop for x in (*views, grad, lr, b1_t, b2_t))
+  srcs = tuple(x.uop for x in (*views, grad, lr, b1_t, b2_t, clip_coeff))
   assert all(x.has_buffer_identity(after_ok=True) for x in srcs)
   kernel = fxn(*[UOp.placeholder_like(s, slot=i) for i,s in enumerate(srcs)]).call(*srcs)
   for dst, view in zip(dsts, views): dst.replace(Tensor(view.uop.after(kernel)).reshape(dst.shape))
@@ -78,7 +87,7 @@ class GradAccClipAdamW(Optimizer):
     n, sz = len(t.device), t.shape[0] // len(t.device)
     return Tensor.cat(*[t[p*sz:(p+1)*sz] for p in range(n)], dim=0)
 
-  def fschedule_step(self, grads:list[Tensor]) -> list[Tensor]:
+  def fschedule_step(self, grads:list[Tensor], clip_coeff:Tensor) -> list[Tensor]:
     if self.master_params is not None and not STOCHASTIC_ROUND and all(
       p.dtype == g.dtype == dtypes.bfloat16 and m.dtype in (dtypes.bfloat16, dtypes.float32) and v.dtype == m.dtype and
       master.dtype == dtypes.float32 and p.device == g.device == m.device == v.device == master.device
@@ -87,17 +96,19 @@ class GradAccClipAdamW(Optimizer):
       self.b1_t *= self.b1
       self.b2_t *= self.b2
       for p, p_shard, g, m, v, master in zip(self.params, self.param_shards, grads, self.m, self.v, self.master_params):
-        _fused_adamw_step(p_shard, g, m, v, master, self.lr, self.b1_t, self.b2_t, self.b1, self.b2, self.eps, self.wd)
+        _fused_adamw_step(p_shard, g, m, v, master, self.lr, self.b1_t, self.b2_t, clip_coeff,
+                          self.b1, self.b2, self.eps, self.wd, self.grad_acc)
         if p_shard is not p: p.assign(self._zero_gather(p_shard))
       return [self.b1_t, self.b2_t] + self.m + self.v + self.params + self.master_params
+    grads = [((g / self.grad_acc).cast(g.dtype) * clip_coeff).cast(g.dtype) for g in grads]
     updates, extra = self._step([], grads)
     for i, tt in enumerate(self.params): tt.assign(self._apply_update(tt, updates[i], self.master_params[i] if self.master_params else None))
     fp8_inv_scales = [tt._inv_scale for tt in self.params if hasattr(tt, '_inv_scale')]
     fp8_next_inv_scales = [tt._next_inv_scale for tt in self.params if hasattr(tt, '_next_inv_scale')]
     return extra + self.params + self.buffers + (self.master_params or []) + fp8_inv_scales + fp8_next_inv_scales
 
-  def fstep(self, grads:list[Tensor], grad_norm:Tensor|None=None):
-    Tensor.realize(*([grad_norm] if grad_norm is not None else []), *self.fschedule_step(grads))
+  def fstep(self, grads:list[Tensor], grad_norm:Tensor, clip_coeff:Tensor):
+    Tensor.realize(grad_norm, *self.fschedule_step(grads, clip_coeff))
 
   def _step(self, params:list[Tensor], grads:list[Tensor]) -> tuple[list[Tensor], list[Tensor]]:
     grads = list(grads)
@@ -164,14 +175,14 @@ class GradAccClipAdamWGroup(OptimizerGroup):
   def __init__(self, *optimizers:GradAccClipAdamW):
     super().__init__(*optimizers)
     for o in self.optimizers[1:]: o.lr = self.optimizers[0].lr
-  def fstep(self, grads:list[Tensor], grad_norm:Tensor|None=None):
+  def fstep(self, grads:list[Tensor], grad_norm:Tensor, clip_coeff:Tensor):
     offset = 0
     to_realize = []
     for o in self.optimizers:
       n = len(o.params)
-      to_realize += o.fschedule_step(grads[offset:offset+n])
+      to_realize += o.fschedule_step(grads[offset:offset+n], clip_coeff)
       offset += n
-    Tensor.realize(*to_realize, *([grad_norm] if grad_norm is not None else []))
+    Tensor.realize(*to_realize, grad_norm)
   @property
   def lr(self): return self.optimizers[0].lr
   @property

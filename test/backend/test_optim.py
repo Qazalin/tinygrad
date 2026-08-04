@@ -46,6 +46,17 @@ def step(tensor, optim, steps=1, teeny=False, **kwargs):
   return net.x.detach().numpy(), net.W.detach().numpy()
 
 class TestMLPerfOptim(unittest.TestCase):
+  def test_clip_grads_sharded(self):
+    from examples.mlperf.optim import clip_grads
+    devs = ("CPU:0", "CPU:1")
+    grads = [Tensor.arange(32).cast(dtypes.bfloat16).clone().shard(devs, None).realize(),
+             Tensor.arange(12, 20).cast(dtypes.bfloat16).clone().shard(devs, None).realize()]
+    norm, coeff = clip_grads(grads, 2, 1.0)
+    Tensor.realize(norm, coeff)
+    ref = np.sqrt(sum(np.square((g / 2).cast(g.dtype).float().numpy()).sum() for g in grads))
+    np.testing.assert_allclose(norm.numpy(), ref, rtol=1e-6)
+    np.testing.assert_allclose(coeff.numpy(), min(1.0, 1.0 / (ref + 1e-6)), rtol=1e-6)
+
   def test_fused_adamw(self):
     from examples.mlperf.optim import _fused_adamw_step
     rng = np.random.default_rng(4)
@@ -62,7 +73,7 @@ class TestMLPerfOptim(unittest.TestCase):
     master_new = master_ref - lr * ((m_calc / (1.0 - b1_t)) / ((v_calc / (1.0 - b2_t)).sqrt() + 1e-5) + 0.1 * master_ref)
     param_ref = master_new.cast(dtypes.bfloat16)
     Tensor.realize(m_new, v_new, master_new, param_ref)
-    _fused_adamw_step(param, grad, m, v, master, lr, b1_t, b2_t, 0.9, 0.95, 1e-5, 0.1)
+    _fused_adamw_step(param, grad, m, v, master, lr, b1_t, b2_t, Tensor.ones(1).realize(), 0.9, 0.95, 1e-5, 0.1, 1)
     Tensor.realize(param, m, v, master)
     np.testing.assert_array_equal(param.numpy(), param_ref.numpy())
     np.testing.assert_array_equal(m.numpy(), m_new.numpy())
@@ -75,15 +86,16 @@ class TestMLPerfOptim(unittest.TestCase):
     param = Tensor.arange(32).cast(dtypes.bfloat16).clone().shard(devs, None).is_param_(True).realize()
     grad = Tensor.arange(32, 64).cast(dtypes.bfloat16).clone().shard(devs, None).realize()
     with patch("examples.mlperf.optim.ZERO_OPTIM", 1), patch("examples.mlperf.optim.MASTER_WEIGHTS", 1):
-      optim = GradAccClipAdamW([param], lr=1e-3, b1=0.9, b2=0.95, eps=1e-5, weight_decay=0.1)
+      optim = GradAccClipAdamW([param], lr=1e-3, b1=0.9, b2=0.95, eps=1e-5, weight_decay=0.1, grad_acc=2)
     Tensor.realize(*optim.m, *optim.v, *optim.master_params, *optim.param_shards, optim.lr, optim.b1_t, optim.b2_t)
     self.assertEqual(optim.m[0].uop.axis, 0)
-    w_ref, g_ref = param.numpy().astype(np.float32), grad.numpy().astype(np.float32)
+    w_ref = param.numpy().astype(np.float32)
+    g_ref = ((grad / 2).cast(grad.dtype).float() * 0.75).cast(grad.dtype).float().numpy()
     m_ref, v_ref = np.zeros_like(g_ref), np.zeros_like(g_ref)
     for step in range(1, 3):
       m_ref, v_ref = 0.9 * m_ref + 0.1 * g_ref, 0.95 * v_ref + 0.05 * g_ref * g_ref
       w_ref -= 1e-3 * ((m_ref / (1 - 0.9**step)) / (np.sqrt(v_ref / (1 - 0.95**step)) + 1e-5) + 0.1 * w_ref)
-      optim.fstep([grad])
+      optim.fstep([grad], Tensor(0).realize(), Tensor.full((1,), 0.75, device=devs).realize())
       np.testing.assert_allclose(optim.m[0].numpy(), m_ref, rtol=1e-2)
       np.testing.assert_allclose(optim.v[0].numpy(), v_ref, rtol=1e-2)
       np.testing.assert_allclose(optim.master_params[0].numpy(), w_ref, rtol=2e-7, atol=2e-7)

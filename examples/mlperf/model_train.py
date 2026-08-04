@@ -1493,8 +1493,9 @@ def train_llama3():
 
   @TinyJit
   def optim_step():
-    grad_norm = clip_grads(grads, grad_acc, 1.0)
-    optim.fstep(grads, grad_norm)
+    grad_norm, clip_coeff = clip_grads(grads, grad_acc, 1.0)
+    clip_coeff.realize()
+    optim.fstep(grads, grad_norm, clip_coeff)
     scheduler.step()
     refreshed_mxfp4 = model.refresh_mxfp4_weights(mxfp4_weights) if mxfp4_weights is not None else []
 
@@ -1797,8 +1798,9 @@ def train_gptoss():
 
   @TinyJit
   def optim_step():
-    grad_norm = clip_grads(grads, grad_acc, 1.0)
-    optim.fstep(grads, grad_norm)
+    grad_norm, clip_coeff = clip_grads(grads, grad_acc, 1.0)
+    clip_coeff.realize()
+    optim.fstep(grads, grad_norm, clip_coeff)
     scheduler.step()
 
     for g in grads: g.assign(0)

@@ -281,12 +281,23 @@ class TestCustomKernel(unittest.TestCase):
   def test_simple_reshape(self):
     a = Tensor.ones(2,3,4).realize()
     b = Tensor.custom_kernel(Tensor.empty_like(a), a, fxn=custom_add_one_kernel)[0]
-    b2 = b.reshape(2,12)
+    b2 = b.reshape(24).reshape(2,12)
     c = Tensor.custom_kernel(Tensor.empty_like(b2), b2, fxn=custom_add_one_kernel)[0]
     GlobalCounters.reset()
     c.realize()
     assert all(i == 3. for i in c.flatten().tolist()), f"all 3 {c.tolist()}"
-    self.assertEqual(GlobalCounters.kernel_count, 3)
+    self.assertEqual(GlobalCounters.kernel_count, 2)
+
+    from tinygrad import function
+    from tinygrad.engine.realize import compile_linear
+    @function(precompile=True)
+    def run(x:Tensor) -> Tensor:
+      y = Tensor.custom_kernel(Tensor.invalids(*x.shape, dtype=x.dtype), x, fxn=custom_add_one_kernel)[0]
+      return Tensor.custom_kernel(Tensor.invalids(2, 12, dtype=x.dtype), y.reshape(24).reshape(2, 12), fxn=custom_add_one_kernel)[0]
+    out = run(a)
+    programs = [c.src[0].arg.name for c in compile_linear(out.schedule_linear()).src if c.src[0].op is Ops.PROGRAM]
+    self.assertEqual(programs[:2], ["add_one_24", "add_one_24"])
+    self.assertEqual(out.flatten().tolist(), [3.]*24)
 
   def test_multi_after_schedule_order(self):
     """Test correct scheduling order when custom_kernel has multiple outputs.
