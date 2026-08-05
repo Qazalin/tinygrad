@@ -15,7 +15,7 @@ def _compact_params(body:UOp, all_args:tuple[UOp, ...]) -> tuple[UOp, tuple[UOp,
   body = body.substitute({p: p.replace(arg=dataclasses.replace(p.arg, slot=j)) for j,(_, p) in enumerate(used)}, walk=True)
   return body, tuple(all_args[i] for i,_ in used)
 
-def call_gradient(ctx:UOp, k:UOp, needed:set[int]) -> tuple[UOp|None, ...]:
+def call_gradient(ctx:UOp, k:UOp, needed:set[int], local_targets:set[UOp]|None=None) -> tuple[UOp|None, ...]:
   fxn, args = k.src[0], k.src[1:]
   if k.arg.grad_fxn is not None:
     # put const on a device, also TODO why do we still have NOOP...
@@ -34,7 +34,9 @@ def call_gradient(ctx:UOp, k:UOp, needed:set[int]) -> tuple[UOp|None, ...]:
   fwd_subs = {src: src.param_like(len(args)+len(grad_args)+i) for i, src in enumerate(fxn.src)} if k.arg.precompile else {}
   fwd_outs = tuple(k.gettuple(i) for i in range(len(fxn.src))) if k.arg.precompile else ()
   # collect needed gradient bodies, compact unused params, create a single backward CALL
-  grad_bodies = [(i, grads[p]) for i in needed if (p:=params.get(i)) is not None and p in grads]
+  local_bufs = {x.buf_uop for x in local_targets} if local_targets is not None else set()
+  grad_bodies = [(i, UOp(Ops.LOCAL_GRAD, src=(grads[p],)) if args[i].buf_uop in local_bufs else grads[p])
+                 for i in needed if (p:=params.get(i)) is not None and p in grads]
   unique_bodies = list(dict.fromkeys(gb for _, gb in grad_bodies))
   bwd_body = UOp.maketuple(*unique_bodies).substitute(fwd_subs, walk=True)
   bwd_body, compact_args = _compact_params(bwd_body, (*args, *grad_args, *fwd_outs))
@@ -88,7 +90,7 @@ def _deepwalk(root:UOp, targets:set[UOp]) -> tuple[list[UOp], dict[UOp, bool]]:
   # don't flow through DETACH or anything not in target path
   return [node for node in in_target_path if node.op is not Ops.DETACH and in_target_path[node]], in_target_path
 
-def compute_gradient(root:UOp, root_grad:UOp, targets:set[UOp]) -> dict[UOp, UOp]:
+def compute_gradient(root:UOp, root_grad:UOp, targets:set[UOp], local_targets:set[UOp]|None=None) -> dict[UOp, UOp]:
   walk, in_target_path = _deepwalk(root, targets)
   grads: dict[UOp, UOp] = {root: root_grad}
   for t0 in reversed(walk):
@@ -106,7 +108,7 @@ def compute_gradient(root:UOp, root_grad:UOp, targets:set[UOp]) -> dict[UOp, UOp
     # (FUNCTION uses implicit TUPLE gradient or grad_fxn; CALL requires an explicit grad_fxn)
     if t0.op in {Ops.FUNCTION, Ops.CALL}:
       needed = {i for i, arg in enumerate(t0.src[1:]) if arg in targets or in_target_path.get(arg, False)}
-      lgrads:tuple[UOp|None, ...]|None = call_gradient(grads[t0], t0, needed)
+      lgrads:tuple[UOp|None, ...]|None = call_gradient(grads[t0], t0, needed, local_targets)
     else:
       lgrads = cast(tuple[UOp|None, ...]|None, pm_gradient.rewrite(t0, ctx=grads[t0]))
     if lgrads is None: raise RuntimeError(f"failed to compute gradient for {t0.op}\n\nin {str(t0)[0:1000]}...")

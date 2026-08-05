@@ -395,21 +395,24 @@ def _get_pads(uop:UOp) -> list[UOp]:
   if uop.op == Ops.ADD: return _get_pads(uop.src[0]) + _get_pads(uop.src[1])
   return [uop]
 
-def apply_grad(grad_buf:Tensor, new_grad:UOp):
+def apply_grad(grad_buf:Tensor, new_grad:UOp, local=False, reduce_device:tuple[str, ...]|None=None):
+  def local_grad(x:UOp): return UOp(Ops.LOCAL_GRAD, src=(x,)) if local else x
+  def store(dest:UOp, val:UOp): return dest.store(val.allreduce(Ops.ADD, reduce_device) if reduce_device is not None else val)
   pads = _get_pads(new_grad)
   if len(pads) <= 1:
-    new_grad = new_grad.cast(grad_buf.dtype)
-    grad_buf.uop = grad_buf.uop.after(grad_buf.uop.store(grad_buf.uop + new_grad))
+    new_grad = local_grad(new_grad).cast(grad_buf.dtype)
+    grad_buf.uop = grad_buf.uop.after(store(grad_buf.uop, grad_buf.uop + new_grad))
     return
   cur = grad_buf.uop
+  stores = []
   for pad in sorted(pads, key=lambda p: p.marg[0][0] if p.op == Ops.PAD else 0, reverse=True):
     if pad.op == Ops.PAD:
       grad_shrink = tuple([(p[0], s+p[0]) for s,p in zip(pad.src[0].shape, pad.marg)])
       buf_slice = cur.shrink(grad_shrink)
-      cur = cur.after(buf_slice.store(buf_slice + pad.src[0].cast(cur.dtype)))
+      stores.append(store(buf_slice, buf_slice + local_grad(pad.src[0]).cast(cur.dtype)))
     else:
-      cur = cur.after(cur.store(cur + pad.cast(cur.dtype)))
-  grad_buf.uop = cur
+      stores.append(store(cur, cur + local_grad(pad).cast(cur.dtype)))
+  grad_buf.uop = cur.after(*stores)
 
 if __name__ == "__main__":
   config = {}

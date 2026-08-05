@@ -2,7 +2,7 @@ from tinygrad.helpers import all_same, prod, getenv, ALLREDUCE_CAST
 from tinygrad.uop.ops import Ops, UOp, PatternMatcher, UPat, GroupOp, AxisType, graph_rewrite, broadcast_axes, _broadcast_shape, sint_to_uop, resolve
 from tinygrad.uop.ops import sint, ssimplify
 from tinygrad.dtype import dtypes
-from tinygrad.schedule.allreduce import handle_allreduce, create_allreduce_function
+from tinygrad.schedule.allreduce import handle_allreduce, create_allreduce_function, use_amd_allreduce
 
 # ***** multi rewrite MSELECT/MSTACK *****
 
@@ -119,6 +119,12 @@ def reduce_multi(root:UOp, multi:UOp):
   new_axes = tuple(ax - num_axes for ax, _ in remaining)
   new_rngs = tuple(rng for _, rng in remaining)
   return local.unshard(new_axes, new_rngs)
+
+def local_grad_multi(local:UOp):
+  # Lower the complete custom backward body here: FUNCTION rewrites can introduce ALLREDUCE in their replacement,
+  # which the outer rewrite does not revisit. Keep the local input and reduce once after gradient accumulation.
+  lowered = graph_rewrite(local.src[0], multi_pm, name="local gradient multi", enter_calls=True)
+  return graph_rewrite(lowered, local_grad_pm, name="local gradient", enter_calls=True)
 
 def reshape_multi(root:UOp, multi:UOp):
   if prod(multi.shape) != prod(new_shape:=root.marg): raise RuntimeError("reshape must maintain prod(shape)")
@@ -252,11 +258,19 @@ def copy_multi(multi:UOp, device:str | tuple[str, ...]):
 def store_after_multi(dest:UOp, src:UOp): return dest.after(dest.store(src.src[0])).unshard(src.arg, src.src[1:])
 
 def allreduce_store(output:UOp, target:UOp, src:UOp) -> UOp|None:
-  if output is not target: return None
+  same_output = output is target
+  def storage_root(x:UOp) -> UOp:
+    while x.op in {Ops.RESHAPE, Ops.AFTER, Ops.SLICE}: x = x.src[0]
+    return x
+  if not same_output and storage_root(output) is not storage_root(target): return None
   while src.op in {Ops.RESHAPE, Ops.CAST}: src = src.src[0]
-  if src.op is not Ops.ALLREDUCE or output.numel() != src.numel(): return None
-  ret = create_allreduce_function(src.src[0], src, output.reshape(src.shape))
-  return ret.reshape(output.shape) if ret is not None else None
+  if src.op is not Ops.ALLREDUCE or target.numel() != src.numel(): return None
+  if not same_output and not use_amd_allreduce(src.src[0], src): return None
+  ret = create_allreduce_function(src.src[0], src, target.reshape(src.shape))
+  if ret is None: return None
+  ret = ret.reshape(target.shape)
+  if same_output: return ret
+  return output.after(*ret.src[1:]) if ret.op is Ops.AFTER else None
 
 def store_value_multi(dest:UOp, multi:UOp):
   # storing a sharded value into an unsharded dest: every shard stores into its own sub-view of the dest
@@ -292,6 +306,7 @@ def param_to_multi(p:UOp):
 
 # NOTE: this is the same pattern as unrolled ranges
 multi_pm = PatternMatcher([
+  (UPat(Ops.LOCAL_GRAD, name="local"), local_grad_multi),
   (UPat(Ops.PARAM, name="p"), param_to_multi),
   (UPat(GroupOp.ALU, name="root", custom_early_reject=set([Ops.UNSHARD])), alu_multi),
   (UPat(Ops.REDUCE, src=(UPat(Ops.UNSHARD, name="multi"), ), name="root"), reduce_multi),
@@ -327,3 +342,7 @@ multi_pm = PatternMatcher([
   # STORE into a sharded dest (e.g. the fragment init): every shard stores into its own shard
   (UPat(Ops.STORE, src=(UPat(Ops.UNSHARD, name="multi"), ), name="root", allow_any_len=True), store_dest_multi),
 ])+replace_allreduce
+
+local_grad_pm = PatternMatcher([
+  (UPat(Ops.ALLREDUCE, src=(UPat.var("buf"),)), lambda buf: buf.contiguous()),
+])

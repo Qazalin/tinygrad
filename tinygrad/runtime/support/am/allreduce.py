@@ -135,14 +135,144 @@ extern "C" __attribute__((global)) void __attribute__((amdgpu_flat_work_group_si
     __builtin_amdgcn_s_barrier();
   }
 }
+
+// The reduce-scatter phase of amd_allreduce_ring, with each rank's reduced chunk written compactly to out.
+extern "C" __attribute__((global)) void __attribute__((amdgpu_flat_work_group_size(256, 256))) amd_reduce_scatter_ring(
+    bf16 *out, const bf16 *in, bf16 *comm0, bf16 *comm1, bf16 *comm2, bf16 *comm3,
+    bf16 *comm4, bf16 *comm5, bf16 *comm6, bf16 *comm7,
+    unsigned rank, unsigned nranks, unsigned numel, unsigned channels, unsigned epoch, unsigned capacity) {
+  const unsigned tid = __builtin_amdgcn_workitem_id_x();
+  const unsigned channel = __builtin_amdgcn_workgroup_id_x();
+  bf16 *comms[8] = {comm0, comm1, comm2, comm3, comm4, comm5, comm6, comm7};
+  unsigned pos = 0;
+  while (rings[channel][pos] != rank) pos++;
+  bf16 *local = comms[rank];
+  bf16 *next = comms[rings[channel][(pos + 1) % nranks]];
+  bf16 *prev = comms[rings[channel][(pos + nranks - 1) % nranks]];
+  const unsigned chunk = (numel + nranks - 1) / nranks;
+  const unsigned vecs = chunk / 8;
+  const unsigned stride = channels * 256;
+  const unsigned data_elems = 2 * capacity;
+  unsigned __attribute__((address_space(1))) *local_ready = (unsigned __attribute__((address_space(1))) *)(local + data_elems);
+  unsigned __attribute__((address_space(1))) *local_ack = local_ready + 2 * 112;
+  unsigned __attribute__((address_space(1))) *next_ready = (unsigned __attribute__((address_space(1))) *)(next + data_elems);
+  unsigned __attribute__((address_space(1))) *prev_ack = (unsigned __attribute__((address_space(1))) *)(prev + data_elems) + 2 * 112;
+
+  for (unsigned step = 0; step < nranks - 1; step++) {
+    const unsigned seq = epoch + step + 1, slot = step & 1;
+    const unsigned send_chunk = rings[channel][(pos + nranks - step - 1) % nranks];
+    const unsigned recv_chunk = rings[channel][(pos + nranks - step - 1) % nranks];
+    if (tid == 0 && step >= 2)
+      while (LOAD_FLAG(local_ack + slot * 112 + channel) < seq - 2) { }
+    __builtin_amdgcn_s_barrier();
+    for (unsigned v = channel * 256 + tid; v < vecs; v += stride) {
+      unsigned src = send_chunk * chunk + v * 8;
+      bf16x8 value = {};
+      if (src + 8 <= numel) value = step == 0 ? *(const bf16x8 *)(in + src) : LOAD_FIFO8(local + ((step-1)&1) * capacity + v * 8);
+      STORE_FIFO8(next + slot * capacity + v * 8, value);
+    }
+    for (unsigned i = vecs * 8 + channel * 256 + tid; i < chunk; i += stride) {
+      unsigned src = send_chunk * chunk + i;
+      STORE_FIFO(next + slot * capacity + i, src < numel ? (step == 0 ? in[src] : LOAD_FIFO(local + ((step-1)&1) * capacity + i)) : (bf16)0.0f);
+    }
+    __builtin_amdgcn_s_barrier();
+    if (tid == 0 && step != 0) STORE_FLAG(prev_ack + ((step-1)&1) * 112 + channel, seq - 1);
+    if (tid == 0) STORE_FLAG(next_ready + slot * 112 + channel, seq);
+    if (tid == 0) while (LOAD_FLAG(local_ready + slot * 112 + channel) < seq) { }
+    __builtin_amdgcn_s_barrier();
+    for (unsigned v = channel * 256 + tid; v < vecs; v += stride) {
+      unsigned dst = recv_chunk * chunk + v * 8;
+      if (dst + 8 <= numel) {
+        bf16x8 value = LOAD_FIFO8(local + slot * capacity + v * 8) + *(const bf16x8 *)(in + dst);
+        if (step == nranks-2) *(bf16x8 *)(out + v * 8) = value;
+        else STORE_FIFO8(local + slot * capacity + v * 8, value);
+      }
+    }
+    for (unsigned i = vecs * 8 + channel * 256 + tid; i < chunk; i += stride) {
+      unsigned dst = recv_chunk * chunk + i;
+      if (dst < numel) {
+        bf16 value = (bf16)((float)LOAD_FIFO(local + slot * capacity + i) + (float)in[dst]);
+        if (step == nranks-2) out[i] = value;
+        else STORE_FIFO(local + slot * capacity + i, value);
+      }
+    }
+    __builtin_amdgcn_s_barrier();
+    if (tid == 0 && step == nranks-2) STORE_FLAG(prev_ack + slot * 112 + channel, seq);
+    __builtin_amdgcn_s_barrier();
+  }
+}
+
+// Inverse of amd_reduce_scatter_ring: gather one compact rank-owned chunk into a replicated full output.
+extern "C" __attribute__((global)) void __attribute__((amdgpu_flat_work_group_size(256, 256))) amd_allgather_ring(
+    bf16 *out, const bf16 *in, bf16 *comm0, bf16 *comm1, bf16 *comm2, bf16 *comm3,
+    bf16 *comm4, bf16 *comm5, bf16 *comm6, bf16 *comm7,
+    unsigned rank, unsigned nranks, unsigned numel, unsigned channels, unsigned epoch, unsigned capacity) {
+  const unsigned tid = __builtin_amdgcn_workitem_id_x();
+  const unsigned channel = __builtin_amdgcn_workgroup_id_x();
+  bf16 *comms[8] = {comm0, comm1, comm2, comm3, comm4, comm5, comm6, comm7};
+  unsigned pos = 0;
+  while (rings[channel][pos] != rank) pos++;
+  bf16 *local = comms[rank];
+  bf16 *next = comms[rings[channel][(pos + 1) % nranks]];
+  bf16 *prev = comms[rings[channel][(pos + nranks - 1) % nranks]];
+  const unsigned chunk = numel / nranks;
+  const unsigned vecs = chunk / 8;
+  const unsigned stride = channels * 256;
+  const unsigned data_elems = 2 * capacity;
+  unsigned __attribute__((address_space(1))) *local_ready = (unsigned __attribute__((address_space(1))) *)(local + data_elems);
+  unsigned __attribute__((address_space(1))) *local_ack = local_ready + 2 * 112;
+  unsigned __attribute__((address_space(1))) *next_ready = (unsigned __attribute__((address_space(1))) *)(next + data_elems);
+  unsigned __attribute__((address_space(1))) *prev_ack = (unsigned __attribute__((address_space(1))) *)(prev + data_elems) + 2 * 112;
+
+  for (unsigned v = channel * 256 + tid; v < vecs; v += stride)
+    *(bf16x8 *)(out + rank * chunk + v * 8) = *(const bf16x8 *)(in + v * 8);
+  for (unsigned i = vecs * 8 + channel * 256 + tid; i < chunk; i += stride) out[rank * chunk + i] = in[i];
+
+  for (unsigned step = 0; step < nranks - 1; step++) {
+    const unsigned seq = epoch + step + 1, slot = step & 1;
+    const unsigned recv_chunk = rings[channel][(pos + nranks - step - 2) % nranks];
+    if (tid == 0 && step >= 2)
+      while (LOAD_FLAG(local_ack + slot * 112 + channel) < seq - 2) { }
+    __builtin_amdgcn_s_barrier();
+    for (unsigned v = channel * 256 + tid; v < vecs; v += stride) {
+      bf16x8 value = step == 0 ? *(const bf16x8 *)(in + v * 8) : LOAD_FIFO8(local + ((step-1)&1) * capacity + v * 8);
+      STORE_FIFO8(next + slot * capacity + v * 8, value);
+    }
+    for (unsigned i = vecs * 8 + channel * 256 + tid; i < chunk; i += stride) {
+      bf16 value = step == 0 ? in[i] : LOAD_FIFO(local + ((step-1)&1) * capacity + i);
+      STORE_FIFO(next + slot * capacity + i, value);
+    }
+    __builtin_amdgcn_s_barrier();
+    if (tid == 0 && step != 0) STORE_FLAG(prev_ack + ((step-1)&1) * 112 + channel, seq - 1);
+    if (tid == 0) STORE_FLAG(next_ready + slot * 112 + channel, seq);
+    if (tid == 0) while (LOAD_FLAG(local_ready + slot * 112 + channel) < seq) { }
+    __builtin_amdgcn_s_barrier();
+    for (unsigned v = channel * 256 + tid; v < vecs; v += stride)
+      *(bf16x8 *)(out + recv_chunk * chunk + v * 8) = LOAD_FIFO8(local + slot * capacity + v * 8);
+    for (unsigned i = vecs * 8 + channel * 256 + tid; i < chunk; i += stride)
+      out[recv_chunk * chunk + i] = LOAD_FIFO(local + slot * capacity + i);
+    __builtin_amdgcn_s_barrier();
+    if (tid == 0 && step == nranks-2) STORE_FLAG(prev_ack + slot * 112 + channel, seq);
+    __builtin_amdgcn_s_barrier();
+  }
+}
 '''.replace("$RINGS", _RING_SRC)
+_KERNEL_START = 'extern "C" __attribute__((global)) void __attribute__((amdgpu_flat_work_group_size(256, 256))) amd_allreduce_ring('
+_RS_START = '// The reduce-scatter phase of amd_allreduce_ring'
+_AG_START = '// Inverse of amd_reduce_scatter_ring'
+RS_SRC = SRC[:SRC.index(_KERNEL_START)] + SRC[SRC.index(_RS_START):SRC.index(_AG_START)]
+AG_SRC = SRC[:SRC.index(_KERNEL_START)] + SRC[SRC.index(_AG_START):]
 
 class AMDAllReduce:
   def __init__(self, devices:tuple[str, ...]):
     self.devices = tuple(Device[d] for d in devices)
     self.lib = self.devices[0].compiler.compile_cached(SRC)
+    self.rs_lib = self.devices[0].compiler.compile_cached(RS_SRC)
+    self.ag_lib = self.devices[0].compiler.compile_cached(AG_SRC)
     sig = tuple((None, 0, dtypes.uint32, ()) for _ in range(6))
     self.prgs = [d.runtime(TinyELF(self.lib, "amd_allreduce_ring", Target("AMD", arch=d.arch), sig)) for d in self.devices]
+    self.rs_prgs = [d.runtime(TinyELF(self.rs_lib, "amd_reduce_scatter_ring", Target("AMD", arch=d.arch), sig)) for d in self.devices]
+    self.ag_prgs = [d.runtime(TinyELF(self.ag_lib, "amd_allgather_ring", Target("AMD", arch=d.arch), sig)) for d in self.devices]
     self.comm:list[Any] = []
     self.comm_size, self.comm_capacity, self.epoch = 0, 0, 0
     self.comm_uops, self.comm_owner_bufs, self.comm_mbufs = None, [], []
@@ -170,6 +300,34 @@ class AMDAllReduce:
     channels = min(CHANNELS, max(1, ((numel + len(self.devices) - 1) // len(self.devices) * 2 + (32 << 10) - 1) // (32 << 10)))
     self.epoch += 32
     for rank,(d,prg) in enumerate(zip(self.devices, self.prgs)):
+      prg(out.bufs[rank].get_buf(d.device), inp.bufs[rank].get_buf(d.device), *self.comm,
+          vals=(rank, len(self.devices), numel, channels, self.epoch, self.comm_capacity),
+          global_size=(channels, 1, 1), local_size=(THREADS, 1, 1), wait=False)
+    if wait:
+      for d in self.devices: d.synchronize()
+
+  def reduce_scatter(self, out:MultiBuffer, inp:MultiBuffer, wait=False):
+    assert len(out.bufs) == len(inp.bufs) == len(self.devices)
+    numel = inp.bufs[0].size
+    assert numel % len(self.devices) == 0 and out.bufs[0].size == numel // len(self.devices)
+    self._ensure_comm(numel)
+    channels = min(CHANNELS, max(1, ((numel + len(self.devices) - 1) // len(self.devices) * 2 + (32 << 10) - 1) // (32 << 10)))
+    self.epoch += 32
+    for rank,(d,prg) in enumerate(zip(self.devices, self.rs_prgs)):
+      prg(out.bufs[rank].get_buf(d.device), inp.bufs[rank].get_buf(d.device), *self.comm,
+          vals=(rank, len(self.devices), numel, channels, self.epoch, self.comm_capacity),
+          global_size=(channels, 1, 1), local_size=(THREADS, 1, 1), wait=False)
+    if wait:
+      for d in self.devices: d.synchronize()
+
+  def allgather(self, out:MultiBuffer, inp:MultiBuffer, wait=False):
+    assert len(out.bufs) == len(inp.bufs) == len(self.devices)
+    numel = out.bufs[0].size
+    assert numel % len(self.devices) == 0 and inp.bufs[0].size == numel // len(self.devices)
+    self._ensure_comm(numel)
+    channels = min(CHANNELS, max(1, (inp.bufs[0].nbytes + (32 << 10) - 1) // (32 << 10)))
+    self.epoch += 32
+    for rank,(d,prg) in enumerate(zip(self.devices, self.ag_prgs)):
       prg(out.bufs[rank].get_buf(d.device), inp.bufs[rank].get_buf(d.device), *self.comm,
           vals=(rank, len(self.devices), numel, channels, self.epoch, self.comm_capacity),
           global_size=(channels, 1, 1), local_size=(THREADS, 1, 1), wait=False)

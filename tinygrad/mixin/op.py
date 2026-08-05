@@ -444,7 +444,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
           for s, x in zip(inputs, xs)]
     return xs[0].uprod(*xs[1:]).sum([i for i,c in enumerate(alpha) if c not in rhs], dtype=dtype).permute(argsort(argsort(list(rhs))))
 
-  def gradient(self, *targets:Self, gradient:Self|None=None) -> list[Self]:
+  def gradient(self, *targets:Self, gradient:Self|None=None, local:bool=False) -> list[Self]:
     """
     Computes the gradient of the targets with respect to self.
 
@@ -463,7 +463,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     from tinygrad.mixin.gradient import compute_gradient
     if gradient is None: gradient = self.const_like(1.0)
     target_uops = [t._uop for t in targets]
-    grads = compute_gradient(self._uop, gradient._uop, set(target_uops))
+    grads = compute_gradient(self._uop, gradient._uop, set(target_uops), set(target_uops) if local else None)
     return [self._wrap_uop(grads[x] if x in grads else x.const_like(0)) for x in target_uops]
 
   def min(self, axis:int|Sequence[int]|None=None, keepdim=False) -> Self:

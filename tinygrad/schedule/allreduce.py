@@ -16,7 +16,8 @@ def use_amd_allreduce(buf:UOp, red:UOp) -> bool:
 
 def amd_allreduce(buf:UOp, output:UOp|None=None) -> UOp:
   if output is None: output = UOp.invalids(buf.shape, dtype=buf.dtype, device=buf.device)
-  return output.after(UOp.custom_function("amd_allreduce").call(output, buf.contiguous(), name="amd_allreduce"))
+  inp = buf if buf.has_buffer_identity(after_ok=True) else buf.contiguous()
+  return output.after(UOp.custom_function("amd_allreduce").call(output, inp, name="amd_allreduce"))
 
 def handle_allreduce(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
   if not isinstance(buf.device, tuple): return None

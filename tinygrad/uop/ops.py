@@ -131,7 +131,7 @@ def dtype_from_uop(op:Ops, src:tuple[UOp,...], arg:Any) -> DType|None:
     case Ops.NOOP:
       # NOOP can be void or carry any dtype (e.g. x.f(Ops.NOOP) or substitute base with NOOP)
       return None
-    case Ops.LOAD | Ops.INDEX | Ops.UNSHARD | Ops.REDUCE | Ops.AFTER | Ops.RANGE | \
+    case Ops.LOAD | Ops.INDEX | Ops.UNSHARD | Ops.REDUCE | Ops.LOCAL_GRAD | Ops.AFTER | Ops.RANGE | \
          Ops.CONTIGUOUS | Ops.CONTIGUOUS_BACKWARD | Ops.COPY | Ops.STAGE | Ops.DETACH | \
          Ops.MSTACK | Ops.MSELECT | Ops.ALLREDUCE | Ops.SPECIAL:
       # pass through first
@@ -422,7 +422,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
 
     # movement ops change the shape
     # NOTE: ssimplify is required because the shape needs to be canonical for broadcasting and same shape checking
-    if self.op in GroupOp.Movement.union({Ops.UNSHARD, Ops.REDUCE}):
+    if self.op in GroupOp.Movement.union({Ops.UNSHARD, Ops.REDUCE, Ops.LOCAL_GRAD}):
       ps = self.src[0]._shape
       if ps is None: raise RuntimeError(f"movement op {self.op} requires shape, {self.src[0].op} doesn't have one")
       match self.op:
@@ -449,6 +449,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
           if len(ps) != len(self.marg) or not all(isinstance(x, bool) for x in self.marg): raise ValueError(f"bad flip on {ps}, {self.marg}")
           return ps
         case Ops.UNSHARD: return tuple(s*(int(self.src[1:][self.arg.index(a)].vmax)+1) if a in self.arg else s for a,s in enumerate(ps))
+        case Ops.LOCAL_GRAD: return ps
         case Ops.REDUCE:
           num_axes = self.arg[1]
           if not isinstance(num_axes, int) or num_axes < 0 or num_axes > len(ps):

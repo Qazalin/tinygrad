@@ -1472,8 +1472,7 @@ def train_llama3():
   Tensor.realize(*optim.params, *fp8_inv_scales, *fp8_amax_state, *fp8_next_amax_state, *fp8_grad_amax_state, *fp8_next_grad_amax_state)
   loss_acc = Tensor.zeros(1, dtype=dtypes.float32, device=device).contiguous().realize()
 
-  @TinyJit
-  def minibatch(tokens:Tensor):
+  def minibatch_impl(tokens:Tensor, sync:bool):
     for nxt in fp8_next_amax: nxt.assign(0)
     for nxt in fp8_next_grad_amax: nxt.assign(0)
     if is_dp: tokens = tokens.to(None).shard(device, 0)
@@ -1486,10 +1485,14 @@ def train_llama3():
     else:
       loss = vocab_mask.where(-1e9, logits).sparse_categorical_crossentropy(tokens[:, 1:])
 
-    for g, new_g in zip(grads, loss.gradient(*optim.params)):
-      apply_grad(g, new_g.uop)
+    for g, new_g in zip(grads, loss.gradient(*optim.params, local=is_dp)):
+      apply_grad(g, new_g.uop, local=is_dp, reduce_device=device if sync and is_dp else None)
 
     loss_acc.assign(loss_acc + loss.flatten().float())
+
+  @TinyJit
+  def minibatches(*tokens:Tensor):
+    for microbatch, batch in enumerate(tokens): minibatch_impl(batch, microbatch == len(tokens)-1)
     return loss_acc.realize(*grads, *fp8_amax, *fp8_next_amax, *fp8_grad_amax, *fp8_next_grad_amax)
 
   @TinyJit
@@ -1566,6 +1569,7 @@ def train_llama3():
 
       stopped = False
       data_time, dev_time = 0, 0
+      batches = []
       for _ in range(grad_acc):
         ist = time.perf_counter()
         try: tokens = next(train_iter)
@@ -1574,9 +1578,11 @@ def train_llama3():
           break
         mst = time.perf_counter()
         data_time += mst - ist
-        minibatch(tokens)
-        dev_time += time.perf_counter() - mst
+        batches.append(tokens)
       if stopped: break
+      mst = time.perf_counter()
+      minibatches(*batches)
+      dev_time += time.perf_counter() - mst
 
       gt = time.perf_counter()
       ret = optim_step()
