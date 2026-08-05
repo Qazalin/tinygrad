@@ -130,8 +130,12 @@ def transform_precompiled_call(c:UOp) -> UOp|None:
 
   return UOp.maketuple(*rets)
 
+def call_src_is_contiguous(x:UOp) -> bool:
+  while x.op is Ops.AFTER: x = x.src[0]
+  return x.op in {Ops.CONTIGUOUS, Ops.BIND} or x.contiguous_view_offset() == 0
+
 def make_call_srcs_contiguous(ctx:dict[UOp, dict[UOp, UOp]], c:UOp) -> UOp|None:
-  replacements = {x:x if x.op in {Ops.CONTIGUOUS, Ops.BIND} or x.contiguous_view_offset() == 0 else x.contiguous() for x in c.src[1:]}
+  replacements = {x:x if call_src_is_contiguous(x) else x.contiguous() for x in c.src[1:]}
   if all(x is replacements[x] for x in c.src[1:]): return None
   ret = c.replace(src=(c.src[0],)+tuple(replacements[x] for x in c.src[1:]))
   ctx[ret] = replacements
