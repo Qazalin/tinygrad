@@ -477,6 +477,20 @@ class TestCustomKernelInput(unittest.TestCase):
   def test_2d_shrink(self): self._test_mop(lambda x: x.reshape(4, 8)[:, 2:6], max_kernels=3)
   def test_expand(self): self._test_mop(lambda x: x.reshape(16, 2)[:, :1].expand(16, 2), max_kernels=3)
 
+  def test_multi_invalids(self):
+    devs = ("CPU:0", "CPU:1")
+    x = Tensor.ones(4, 4).shard(devs, axis=0).realize()
+    def sharded_empty(): return Tensor(Tensor.invalids(2, 4, dtype=x.dtype, device=devs).uop.unshard(0), device=devs)
+
+    y = Tensor.custom_kernel(sharded_empty(), x, fxn=custom_add_one_kernel)[0]
+    y = Tensor.custom_kernel(y, y, fxn=custom_add_one_kernel)[0]
+    z = Tensor.custom_kernel(sharded_empty(), y, fxn=custom_add_one_kernel)[0]
+
+    GlobalCounters.reset()
+    z.realize()
+    assert_kernel_count(3 * len(devs))
+    self.assertEqual(z.tolist(), [[4.0] * 4] * 4)
+
 class TestUnshardIndex(unittest.TestCase):
   """Regression tests for INDEX on UNSHARD (fragment) resolution in schedule/multi.py.
 
