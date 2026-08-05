@@ -420,8 +420,9 @@ class TestCustomKernel(unittest.TestCase):
     assert_kernel_count(1)
     self.assertEqual(y.tolist(), [1, 2, 3, 4])
 
+  @Context(DEV="CPU")
   def test_simple_from_source(self):
-    a = Tensor.arange(4).clone("CPU").realize()
+    a = Tensor.arange(4).clone().realize()
     src = "void test_src(int* restrict a) { a[0] = 1; }"
     # TODO: it currently requires a compiler for Ops.BINARY
     from tinygrad.device import Device
