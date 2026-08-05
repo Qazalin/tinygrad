@@ -25,11 +25,6 @@ def realize_store_after_src(ctx:dict[UOp, None], dest:UOp, src:UOp):
   # you don't usually have to do this for assign unless there's a WAR hazard like TestAssign.test_assign_double_diamond_reduce
   if dest.base in src.backward_slice_with_self: ctx[src] = None
 
-def realize_call_srcs(ctx:dict[UOp, None], call:UOp, after:UOp):
-  for x in call.src[1:]:
-    if x.op not in ALWAYS_CONTIGUOUS:
-      ctx[x] = None
-
 pm_generate_realize_map = PatternMatcher([
   # always realize
   (UPat({Ops.CONTIGUOUS, Ops.STORE}, name="tr"), realize),
@@ -37,8 +32,6 @@ pm_generate_realize_map = PatternMatcher([
   (UPat((Ops.MSELECT, Ops.MSTACK), name="rb"), realize_srcs),
   # sometimes we need to realize the src of STORE if there's a self-access
   (UPat(Ops.STORE, src=(UPat.var("dest"), UPat.var("src"))), realize_store_after_src),
-  #(UPat(Ops.CALL, name="call").after(), realize_call_srcs),
-  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.CALL, name="call"), ), name="after"), realize_call_srcs),
 ])
 
 @dataclass(frozen=True)
@@ -130,18 +123,6 @@ def convert_stack_to_where(ctx:IndexingContext, x:UOp):
 def remove_movement_op_after_rangeify(ctx:IndexingContext, x:UOp):
   if x in ctx.range_map or x.src[0].op is Ops.INDEX: return x.src[0]
 
-def use_stage_input(after:UOp, call:UOp):
-  stage_srcs = {x.src[0].buf_uop:x for x in call.src if x.op is Ops.STAGE and x.src[0].buf_uop in after.src}
-  if not stage_srcs: return None
-  new_srcs: list[UOp] = []
-  for s in after.src:
-    stage = stage_srcs.get(s)
-    if stage is not None:
-      new_srcs.append(stage)
-    else: new_srcs.append(s)
-  return after.replace(src=tuple(new_srcs))
-
-
 pm_apply_rangeify = PatternMatcher([
   # REDUCE(op, axis) -> REDUCE(op) with ranges
   (UPat(Ops.REDUCE, name="x"), convert_reduce_to_reduce_with_ranges),
@@ -153,8 +134,6 @@ pm_apply_rangeify = PatternMatcher([
   (UPat(GroupOp.All, name="x"), create_bufferize_and_index_based_on_ranges),
   # remove movement op
   (UPat(GroupOp.Movement, name="x"), remove_movement_op_after_rangeify),
-  # AFTER consumes the STAGE source of PARAM
-  (UPat(Ops.AFTER, name="after", src=(UPat(), UPat(Ops.CALL, name="call"))), use_stage_input),
 ])
 
 pm_fix_deviceless = PatternMatcher([
