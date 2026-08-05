@@ -17,11 +17,6 @@ def realize_srcs(ctx:dict[UOp, None], rb:UOp) -> None:
   for s in rb.src:
     if s.base.op not in ALWAYS_CONTIGUOUS: ctx[s] = None
 
-def realize_call_srcs(ctx:dict[UOp, None], cl:UOp) -> None:
-  if cl.src[0].op not in {Ops.SINK, Ops.PROGRAM}: return None
-  for s in cl.src[1:]:
-    if s.base.op not in ALWAYS_CONTIGUOUS or s.get_offset() != 0: ctx[s] = None
-
 def realize_store_after_src(ctx:dict[UOp, None], dest:UOp, src:UOp):
   # don't realize SLICE when it's the direct source of STORE+AFTER — the target buffer is the output
   if src.op is Ops.SLICE and src in ctx \
@@ -35,7 +30,6 @@ pm_generate_realize_map = PatternMatcher([
   (UPat({Ops.CONTIGUOUS, Ops.STORE}, name="tr"), realize),
   # realize srcs of these
   (UPat((Ops.MSELECT, Ops.MSTACK), name="rb"), realize_srcs),
-  (UPat(Ops.CALL, name="cl"), realize_call_srcs),
   # sometimes we need to realize the src of STORE if there's a self-access
   (UPat(Ops.STORE, src=(UPat.var("dest"), UPat.var("src"))), realize_store_after_src),
 ])
