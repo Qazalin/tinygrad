@@ -1,5 +1,5 @@
 import unittest
-from tinygrad import Tensor, UOp, GlobalCounters, Context, Device
+from tinygrad import Tensor, UOp, GlobalCounters, Context, Device, function
 import numpy as np
 from tinygrad.dtype import AddrSpace, dtypes, Invalid
 from tinygrad.uop.ops import KernelInfo, AxisType, Ops
@@ -480,16 +480,20 @@ class TestCustomKernelInput(unittest.TestCase):
   def test_multi_invalids(self):
     devs = ("CPU:0", "CPU:1")
     x = Tensor.ones(4, 4).shard(devs, axis=0).realize()
-    def sharded_empty(): return Tensor(Tensor.invalids(2, 4, dtype=x.dtype, device=devs).uop.unshard(0), device=devs)
+    def sharded_empty(dtype): return Tensor(Tensor.invalids(2, 4, dtype=dtype, device=devs).uop.unshard(0), device=devs)
 
-    y = Tensor.custom_kernel(sharded_empty(), x, fxn=custom_add_one_kernel)[0]
-    y = Tensor.custom_kernel(y, y, fxn=custom_add_one_kernel)[0]
-    z = Tensor.custom_kernel(sharded_empty(), y, fxn=custom_add_one_kernel)[0]
+    @function(precompile=True)
+    def run(a:Tensor):
+      y = Tensor.custom_kernel(sharded_empty(a.dtype), a, fxn=custom_add_one_kernel)[0]
+      y = Tensor.custom_kernel(y, y, fxn=custom_add_one_kernel)[0]
+      return (y * a).sum((0, 1))
 
     GlobalCounters.reset()
-    z.realize()
-    assert_kernel_count(3 * len(devs))
-    self.assertEqual(z.tolist(), [[4.0] * 4] * 4)
+    out = run(x).realize()
+    # 2 custom kernels + local reduction + 3 allreduce stages, on each device.
+    # TODO: +2 extra copy!
+    assert_kernel_count(6 * len(devs) + 2)
+    self.assertEqual(out.item(), 48.0)
 
 class TestUnshardIndex(unittest.TestCase):
   """Regression tests for INDEX on UNSHARD (fragment) resolution in schedule/multi.py.
