@@ -491,8 +491,7 @@ class TestCustomKernelInput(unittest.TestCase):
     GlobalCounters.reset()
     out = run(x).realize()
     # 2 custom kernels + local reduction + 3 allreduce stages, on each device.
-    # TODO: +2 extra copy!
-    assert_kernel_count(6 * len(devs) + 2)
+    assert_kernel_count(6 * len(devs))
     self.assertEqual(out.item(), 48.0)
 
 class TestUnshardIndex(unittest.TestCase):
