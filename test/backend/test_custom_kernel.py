@@ -280,7 +280,7 @@ class TestCustomKernel(unittest.TestCase):
     assert_kernel_count(5)
 
   def test_simple_reshape(self):
-    a = Tensor.ones(2,3,4).realize()
+    a = Tensor.ones((2,3,4), device="CPU").realize()
     b = Tensor.custom_kernel(Tensor.empty_like(a), a, fxn=custom_add_one_kernel)[0]
     b2 = b.reshape(2,12)
     c = Tensor.custom_kernel(Tensor.empty_like(b2), b2, fxn=custom_add_one_kernel)[0]
@@ -393,7 +393,7 @@ class TestCustomKernel(unittest.TestCase):
     assert all(x == expected for x in result), f"expected all {expected}, got {result}"
 
   def test_custom_kernel_sched(self, use_custom=False):
-    x = Tensor.arange(32).reshape(8, 4).clone().realize()
+    x = Tensor.arange(32).reshape(8, 4).clone("CPU").realize()
     y = Tensor.empty_like(x)
     y = Tensor.custom_kernel(y, x, fxn=custom_add_one_kernel)[0]
     if use_custom:
@@ -408,11 +408,11 @@ class TestCustomKernel(unittest.TestCase):
   def test_custom_kernel_sched_copy(self): self.test_custom_kernel_sched(use_custom=True)
 
   def test_sliced_buffer_function(self):
-    x = Tensor.arange(32).reshape(8, 4).clone().realize()
+    x = Tensor.arange(32).reshape(8, 4).clone("CPU").realize()
     from tinygrad import function
     @function(precompile=True)
     def run(x:Tensor) -> Tensor:
-      y = Tensor.invalids(*x.shape, dtype=x.dtype)
+      y = Tensor.invalids(*x.shape, dtype=x.dtype, device=x.device)
       return Tensor.custom_kernel(y, x, fxn=custom_add_one_kernel)[0]
     GlobalCounters.reset()
     y = run(x[0]).realize()
@@ -420,9 +420,8 @@ class TestCustomKernel(unittest.TestCase):
     assert_kernel_count(1)
     self.assertEqual(y.tolist(), [1, 2, 3, 4])
 
-  @Context(DEV="CPU")
   def test_simple_from_source(self):
-    a = Tensor.arange(4).clone().realize()
+    a = Tensor.arange(4).clone("CPU").realize()
     src = "void test_src(int* restrict a) { a[0] = 1; }"
     # TODO: it currently requires a compiler for Ops.BINARY
     from tinygrad.device import Device
