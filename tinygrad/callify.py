@@ -130,6 +130,22 @@ def transform_precompiled_call(c:UOp) -> UOp|None:
 
   return UOp.maketuple(*rets)
 
+def make_call_srcs_contiguous(ctx:dict[UOp, dict[UOp, UOp]], c:UOp) -> UOp|None:
+  replacements = {x:x if x.op in {Ops.CONTIGUOUS, Ops.BIND} or x.contiguous_view_offset() == 0 else x.contiguous() for x in c.src[1:]}
+  if all(x is replacements[x] for x in c.src[1:]): return None
+  ret = c.replace(src=(c.src[0],)+tuple(replacements[x] for x in c.src[1:]))
+  ctx[ret] = replacements
+  return ret
+
+def use_contiguous_call_src(ctx:dict[UOp, dict[UOp, UOp]], a:UOp, c:UOp) -> UOp|None:
+  if (replacements:=ctx.get(c)) is None or (src:=replacements.get(a.src[0])) is None: return None
+  return a.replace(src=(src,)+a.src[1:])
+
+pm_make_call_srcs_contiguous = PatternMatcher([
+  (UPat(Ops.CALL, name="c", allow_any_len=True), make_call_srcs_contiguous),
+  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.CALL, name="c")), name="a"), use_contiguous_call_src),
+])
+
 # NOTE: adding rules to here is bad. these all need to run before the schedule cache
 pm_early_transform_tensor_graph = PatternMatcher([
   # transform precompiled FUNCTIONs into CALLs (body becomes SINK with stores)
@@ -211,6 +227,7 @@ def transform_to_call(big_sink:UOp) -> tuple[UOp, dict[UOp, UOp]]:
   big_sink = graph_rewrite(big_sink, add_tags, ctx=ctx, bottom_up=True, name="number the uops")
 
   # here we can break the tensor graph. this is the only place you need to maintain numbered tags
+  big_sink = graph_rewrite(big_sink, pm_make_call_srcs_contiguous, ctx={}, name="make call srcs contiguous", enter_calls=True)
   big_sink = graph_rewrite(big_sink, pm_early_transform_tensor_graph, name="early transform tensor graph")
 
   # here we construct the final buffer_map: as-built nodes -> their final storage. values are never keys

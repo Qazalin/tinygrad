@@ -19,7 +19,7 @@ def custom_eye_kernel(C:UOp) -> UOp:
 
 def custom_add_one_kernel(B:UOp, A:UOp) -> UOp:
   A,B = A.flatten(), B.flatten()
-  assert B.numel() >= A.numel()
+  assert B.numel() == A.numel()
   i = UOp.range(A.numel(), 0)
   return B[i].store(A[i] + 1).end(i).sink(arg=KernelInfo(name=f"add_one_{A.numel()}"))
 
@@ -287,7 +287,7 @@ class TestCustomKernel(unittest.TestCase):
     GlobalCounters.reset()
     c.realize()
     assert all(i == 3. for i in c.flatten().tolist()), f"all 3 {c.tolist()}"
-    assert_kernel_count(3)
+    assert_kernel_count(2)
 
   def test_multi_after_schedule_order(self):
     """Test correct scheduling order when custom_kernel has multiple outputs.
@@ -469,7 +469,7 @@ class TestCustomKernelInput(unittest.TestCase):
 
   def test_reshape(self): self._test_mop(lambda x: x.reshape(16, 2), max_kernels=2)
   def test_permute(self): self._test_mop(lambda x: x.reshape(4, 8).T, max_kernels=3)
-  def test_double_permute(self): self._test_mop(lambda x: x.reshape(4, 8).T.T, max_kernels=3)
+  def test_double_permute(self): self._test_mop(lambda x: x.reshape(4, 8).T.T, max_kernels=2)
   def test_shrink(self): self._test_mop(lambda x: x[:4], max_kernels=2)
   def test_pad(self): self._test_mop(lambda x: x[:4].pad(((0, 4),)), max_kernels=2)
   def test_flip(self): self._test_mop(lambda x: x.flip(0), max_kernels=2)
