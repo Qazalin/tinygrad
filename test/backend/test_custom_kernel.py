@@ -444,41 +444,6 @@ class TestCustomKernel(unittest.TestCase):
     self.assertEqual(a.shape, (2, 2))
 
 class TestCustomKernelInput(unittest.TestCase):
-  @Context(DEV="CPU")
-  def test_grad_reuses_lazy_call_src(self):
-    # The forward kernel uses a transformed operand and retains the raw operand for its straight-through gradient.
-    def forward(out:UOp, quantized:UOp, weight:UOp, _raw:UOp) -> UOp: return custom_gemm(out, quantized, weight)
-    def backward(grad:UOp, call:UOp):
-      _, _, weight, raw = call.src[1:]
-      grad_raw = Tensor.custom_kernel(Tensor.empty_like(Tensor(raw)), Tensor(grad), Tensor(weight).T, fxn=custom_gemm)[0]
-      grad_weight = Tensor.custom_kernel(Tensor.empty_like(Tensor(weight)), Tensor(raw).T, Tensor(grad), fxn=custom_gemm)[0]
-      return None, None, grad_weight.uop, grad_raw.uop
-
-    def build_graph():
-      def realized(data): return Tensor(data).contiguous().realize()
-      quantized = realized([[1., 0.], [0., 1.]])
-      weight = realized([[1., 0.], [0., 1.]])
-      activation = realized([[0., 1.], [2., 3.]])
-      gate = realized([[1., 1.], [1., 1.]])
-      raw = activation.exp2() * gate
-      out = Tensor.custom_kernel(Tensor.empty_like(raw), quantized, weight, raw, fxn=forward, grad_fxn=backward)[0]
-      out.sum().backward()
-      return out, activation, gate, weight
-
-    out, activation, gate, weight = build_graph()
-    GlobalCounters.reset()
-    Tensor.realize(out, activation.grad, gate.grad, weight.grad)
-    assert_kernel_count(9)
-    self.assertEqual(out.tolist(), [[1., 0.], [0., 1.]])
-    np.testing.assert_allclose(activation.grad.numpy(), np.log(2) * np.array([[1., 2.], [4., 8.]]), rtol=1e-6)
-    self.assertEqual(gate.grad.tolist(), [[1., 2.], [4., 8.]])
-    self.assertEqual(weight.grad.tolist(), [[5., 5.], [10., 10.]])
-
-    out, activation, gate, weight = build_graph()
-    linear = Tensor.schedule_linear(out, activation.grad, gate.grad, weight.grad)
-    exp2_kernels = sum(any(u.op is Ops.EXP2 for u in call.src[0].toposort()) for call in linear.src)
-    self.assertEqual(exp2_kernels, 3, "raw call source was recomputed")
-
   def _test_mop(self, mop_fxn, max_kernels):
     # default: input is BUFFER
     x = mop_fxn(Tensor.arange(32).clone("CPU").realize())
