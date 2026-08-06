@@ -92,7 +92,7 @@ def norm_quantize_matmul(x:Tensor, norm:Tensor, w:Tensor, w_inv_scale:Tensor, ep
                        grad_amax_state=grad_amax_state, next_grad_amax_state=next_grad_amax_state)
     return out, x_normed, rrms, ret
   x_normed, rrms = rmsnorm(x, eps)
-  out, *ret = matmul((x_normed * norm).contiguous(), w, amax_x=amax_x, w_inv_scale=w_inv_scale, grad_amax_state=grad_amax_state,
+  out, *ret = matmul(x_normed * norm, w, amax_x=amax_x, w_inv_scale=w_inv_scale, grad_amax_state=grad_amax_state,
                      next_grad_amax_state=next_grad_amax_state, next_amax_x=next_amax_x)
   return out, x_normed, rrms, ret
 
@@ -106,7 +106,7 @@ def add_norm_quantize_matmul(x:Tensor, residual:Tensor, norm:Tensor, w:Tensor, w
     return out, h, x_normed, rrms, ret
   h = x + residual
   x_normed, rrms = rmsnorm(h, eps)
-  out, *ret = matmul((x_normed * norm).contiguous(), w, amax_x=amax_x, w_inv_scale=w_inv_scale, grad_amax_state=grad_amax_state,
+  out, *ret = matmul(x_normed * norm, w, amax_x=amax_x, w_inv_scale=w_inv_scale, grad_amax_state=grad_amax_state,
                      next_grad_amax_state=next_grad_amax_state, next_amax_x=next_amax_x)
   return out, h, x_normed, rrms, ret
 
@@ -123,8 +123,7 @@ def silu_w13_quantize_matmul(x_w13:Tensor, w2:Tensor, s_2:Tensor,
     return out, ret
   hidden = x_w13.shape[-1] // 2
   x_w1, x_w3 = x_w13[..., :hidden], x_w13[..., hidden:]
-  x2 = x_w1.silu().contiguous() * x_w3
-  out, *ret = matmul(x2, w2, amax_x=amax_x2, w_inv_scale=s_2, grad_amax_state=grad_amax_xout,
+  out, *ret = matmul(x_w1.silu() * x_w3, w2, amax_x=amax_x2, w_inv_scale=s_2, grad_amax_state=grad_amax_xout,
                      next_grad_amax_state=next_grad_amax_xout, next_amax_x=next_amax_x2)
   return out, ret
 
