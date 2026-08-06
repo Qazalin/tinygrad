@@ -111,7 +111,7 @@ def _precompiled_output_redirect(s:UOp, t:UOp) -> UOp|None:
 def transform_precompiled_call(c:UOp) -> UOp|None:
   if not c.arg.precompile: return None
   assert c.src[0].op is Ops.TUPLE, f"expected TUPLE body for precompiled FUNCTION, got {c.src[0].op}"
-  input_buffers = tuple(x.contiguous() if x.op not in {Ops.AFTER, Ops.BIND} else x for x in c.src[1:])
+  input_buffers = tuple(make_call_src_contiguous(x) if x.op not in {Ops.AFTER, Ops.BIND} else x for x in c.src[1:])
 
   # add the outputs to the call
   srcs = c.src[0].src
@@ -143,12 +143,31 @@ def transform_precompiled_call(c:UOp) -> UOp|None:
 
   return UOp.maketuple(*rets)
 
-def call_src_is_contiguous(x:UOp) -> bool:
-  while x.op is Ops.AFTER: x = x.src[0]
-  return x.op in {Ops.CONTIGUOUS, Ops.BIND} or x.contiguous_view_offset() == 0
+def make_call_src_contiguous(x:UOp) -> UOp:
+  check = x
+  while check.op is Ops.AFTER: check = check.src[0]
+  if check.op in {Ops.CONTIGUOUS, Ops.BIND} or check.contiguous_view_offset() == 0: return x
+  if check.op not in GroupOp.Movement or isinstance(check.device, str): return x.contiguous()
+  # annoying hack for multi because it still needs to push the UNSHARD
+  from tinygrad.schedule.multi import multi_pm
+  resolved = graph_rewrite(x, multi_pm, name="multi_call_src")
+  local = resolved.src[0] if resolved.op is Ops.UNSHARD else resolved
+  mops:list[UOp] = []
+  while local.op in GroupOp.Movement:
+    mops.append(local)
+    local = local.src[0]
+  # rebuild movement ops before AFTER
+  value, deps = (local.src[0], local.src[1:]) if local.op is Ops.AFTER else (local, ())
+  for mop in reversed(mops): value = mop.replace(src=(value,)+mop.src[1:])
+  value = value.simplify()
+  # use a view if the source doesn't need contiguous
+  if value.base.op not in {Ops.CONTIGUOUS, Ops.BIND} and not value.has_buffer_identity(after_ok=True) and value.contiguous_view_offset() != 0:
+    return x.contiguous()
+  if resolved.op is Ops.UNSHARD: value = value.unshard(resolved.arg, resolved.src[1:])
+  return value.after(*deps) if deps else value
 
 def make_call_srcs_contiguous(ctx:dict[UOp, dict[UOp, UOp]], c:UOp) -> UOp|None:
-  replacements = {x:x if call_src_is_contiguous(x) else x.contiguous() for x in c.src[1:]}
+  replacements = {x:make_call_src_contiguous(x) for x in c.src[1:]}
   if all(x is replacements[x] for x in c.src[1:]): return None
   ret = c.replace(src=(c.src[0],)+tuple(replacements[x] for x in c.src[1:]))
   ctx[ret] = replacements

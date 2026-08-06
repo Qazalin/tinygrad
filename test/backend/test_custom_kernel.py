@@ -494,6 +494,29 @@ class TestCustomKernelInput(unittest.TestCase):
     assert_kernel_count(6 * len(devs))
     self.assertEqual(out.item(), 48.0)
 
+  def test_multi_double_permute_replicated_input(self):
+    devs = ("CPU:0", "CPU:1")
+    x = Tensor.ones(4, 8).to(devs).realize()
+    out = Tensor.custom_kernel(Tensor.invalids(4, 8, dtype=x.dtype, device=devs), x.T.T, fxn=custom_add_one_kernel)[0]
+
+    GlobalCounters.reset()
+    out.realize()
+    assert_kernel_count(len(devs))
+    self.assertEqual(out.tolist(), [[2.0] * 8] * 4)
+
+  def test_multi_reshape_custom_output(self):
+    devs = ("CPU:0", "CPU:1")
+    x = Tensor.ones(1, 4, 4).shard(devs, axis=1).realize()
+    def sharded_empty(dtype): return Tensor(Tensor.invalids(1, 2, 4, dtype=dtype, device=devs).uop.unshard(1), device=devs)
+
+    y = Tensor.custom_kernel(sharded_empty(x.dtype), x, fxn=custom_add_one_kernel)[0]
+    y = y.reshape(4, 4).reshape(1, 4, 4)
+    out = Tensor.custom_kernel(sharded_empty(x.dtype), y, fxn=custom_add_one_kernel)[0]
+    GlobalCounters.reset()
+    out.realize()
+    assert_kernel_count(2 * len(devs))
+    self.assertEqual(out.tolist(), [[[3.0] * 4] * 4])
+
 class TestUnshardIndex(unittest.TestCase):
   """Regression tests for INDEX on UNSHARD (fragment) resolution in schedule/multi.py.
 
