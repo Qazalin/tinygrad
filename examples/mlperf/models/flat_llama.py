@@ -123,7 +123,8 @@ def silu_w13_quantize_matmul(x_w13:Tensor, w2:Tensor, s_2:Tensor,
     return out, ret
   hidden = x_w13.shape[-1] // 2
   x_w1, x_w3 = x_w13[..., :hidden], x_w13[..., hidden:]
-  out, *ret = matmul(x_w1.silu() * x_w3, w2, amax_x=amax_x2, w_inv_scale=s_2, grad_amax_state=grad_amax_xout,
+  x2 = x_w1.silu().contiguous() * x_w3
+  out, *ret = matmul(x2, w2, amax_x=amax_x2, w_inv_scale=s_2, grad_amax_state=grad_amax_xout,
                      next_grad_amax_state=next_grad_amax_xout, next_amax_x=next_amax_x2)
   return out, ret
 
