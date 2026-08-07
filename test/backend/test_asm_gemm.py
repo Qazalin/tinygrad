@@ -182,6 +182,87 @@ class TestMXFP4(unittest.TestCase):
     ref = a.numpy().astype(np.float32) @ b.numpy().astype(np.float32).T
     self.assertLess(np.linalg.norm(out-ref) / np.linalg.norm(ref), 0.2)
 
+  def test_dual_quantize(self):
+    import numpy as np
+    from extra.gemm.cdna_asm_gemm import quantize_mxfp4
+    from extra.llama_kernels.quantize_mxfp4_fused import quantize_mxfp4_dual
+    rng = np.random.default_rng(5)
+    x = Tensor(rng.standard_normal((2, 128, 256), dtype=np.float32), dtype=dtypes.bfloat16).contiguous()
+    row_q, row_s, col_q, col_s = quantize_mxfp4_dual(x, use_hadamard=False, shuffle_scales=False)
+    ref_row_q, ref_row_s, _ = quantize_mxfp4(x.reshape(256, 256))
+    ref_col_q, ref_col_s, _ = quantize_mxfp4(x.reshape(256, 256).T.contiguous())
+    Tensor.realize(row_q, row_s, col_q, col_s, ref_row_q, ref_row_s, ref_col_q, ref_col_s)
+    np.testing.assert_array_equal(row_q.numpy().reshape(256, 128), ref_row_q.numpy())
+    np.testing.assert_array_equal(row_s.numpy().reshape(256, 8), ref_row_s.numpy())
+    np.testing.assert_array_equal(col_q.numpy(), ref_col_q.numpy())
+    np.testing.assert_array_equal(col_s.numpy(), ref_col_s.numpy())
+
+  def test_swiglu(self):
+    import numpy as np
+    from extra.llama_kernels.quantize_mxfp4_fused import swiglu
+    rng = np.random.default_rng(4)
+    x = Tensor(rng.standard_normal((32, 512), dtype=np.float32), dtype=dtypes.bfloat16)
+    x_ref = Tensor(x.numpy(), dtype=dtypes.bfloat16)
+    Tensor.realize(x, x_ref)
+    act = swiglu(x)
+    x1, x3 = x_ref[..., :256].float(), x_ref[..., 256:].float()
+    ref = (x1.silu() * x3).cast(dtypes.bfloat16)
+    act.sum().backward()
+    ref.sum().backward()
+    Tensor.realize(act, ref, x.grad, x_ref.grad)
+    np.testing.assert_allclose(act.numpy(), ref.numpy(), rtol=2e-2, atol=2e-2)
+    np.testing.assert_allclose(x.grad.numpy(), x_ref.grad.numpy(), rtol=0, atol=2e-2)
+
+  def test_save_original_input(self):
+    import numpy as np
+    rng = np.random.default_rng(11)
+    a = Tensor(rng.standard_normal((256, 256), dtype=np.float32), dtype=dtypes.bfloat16)
+    w = Tensor(rng.standard_normal((256, 256), dtype=np.float32), dtype=dtypes.bfloat16)
+    a_ref, w_ref = Tensor(a.numpy(), dtype=dtypes.bfloat16), Tensor(w.numpy(), dtype=dtypes.bfloat16)
+    Tensor.realize(a, w, a_ref, w_ref)
+    out = asm_gemm(a, w.T, mxfp4=True, save_original_input=True)
+    ref = asm_gemm(a_ref, w_ref.T, mxfp4=True)
+    out.sum().backward()
+    ref.sum().backward()
+    Tensor.realize(out, ref, a.grad, a_ref.grad, w.grad, w_ref.grad)
+    np.testing.assert_array_equal(out.numpy(), ref.numpy())
+    np.testing.assert_array_equal(a.grad.numpy(), a_ref.grad.numpy())
+    np.testing.assert_array_equal(w.grad.numpy(), w_ref.grad.numpy())
+
+  def test_prequant_weight(self):
+    import numpy as np
+    from extra.llama_kernels.quantize_mxfp4_fused import quantize_mxfp4_dual
+    rng = np.random.default_rng(8)
+    a = Tensor(rng.standard_normal((256, 256), dtype=np.float32), dtype=dtypes.bfloat16)
+    w = Tensor(rng.standard_normal((256, 256), dtype=np.float32), dtype=dtypes.bfloat16)
+    a_ref, w_ref = Tensor(a.numpy(), dtype=dtypes.bfloat16), Tensor(w.numpy(), dtype=dtypes.bfloat16)
+    Tensor.realize(a, w, a_ref, w_ref)
+    out = asm_gemm(a, w.T, mxfp4=True, mxfp4_w=quantize_mxfp4_dual(w, shuffle_row=True, shuffle_col=True))
+    ref = asm_gemm(a_ref, w_ref.T, mxfp4=True)
+    out.sum().backward()
+    ref.sum().backward()
+    Tensor.realize(out, ref, a.grad, a_ref.grad, w.grad, w_ref.grad)
+    np.testing.assert_array_equal(out.numpy(), ref.numpy())
+    np.testing.assert_array_equal(a.grad.numpy(), a_ref.grad.numpy())
+    np.testing.assert_array_equal(w.grad.numpy(), w_ref.grad.numpy())
+
+  def test_prequant_weight_refresh(self):
+    import numpy as np
+    from extra.llama_kernels.quantize_mxfp4_fused import quantize_mxfp4_dual
+    rng = np.random.default_rng(9)
+    a = Tensor(rng.standard_normal((256, 256), dtype=np.float32), dtype=dtypes.bfloat16)
+    w = Tensor(rng.standard_normal((256, 256), dtype=np.float32), dtype=dtypes.bfloat16).contiguous().realize()
+    cached = quantize_mxfp4_dual(w, shuffle_row=True, shuffle_col=True)
+    Tensor.realize(*cached)
+    cached_ids = tuple(id(x) for x in cached)
+    w.assign((w + 0.25).contiguous()).realize()
+    self.assertIs(quantize_mxfp4_dual(w, shuffle_row=True, shuffle_col=True, out=cached), cached)
+    self.assertEqual(tuple(id(x) for x in cached), cached_ids)
+    out = asm_gemm(a, w.T, mxfp4=True, mxfp4_w=cached)
+    ref = asm_gemm(a, w.T, mxfp4=True)
+    Tensor.realize(out, ref)
+    np.testing.assert_array_equal(out.numpy(), ref.numpy())
+
   def test_empty(self):
     M, N, K = getenv("M", 16384), getenv("N", 4096), getenv("K", 14336)
     a = Tensor.empty(M, K, dtype=dtypes.bfloat16)

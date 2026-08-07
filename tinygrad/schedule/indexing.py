@@ -36,10 +36,20 @@ def realize_srcs(ctx:IndexingContext, rb:UOp) -> None:
 def realize_store_after_src(ctx:IndexingContext, dest:UOp, src:UOp):
   # don't realize SLICE when it's the direct source of STORE+AFTER — the target buffer is the output
   if src.op is Ops.SLICE and src in ctx.realize_map \
-     and not dest.op_in_backward_slice_with_self(Ops.SHRINK, Ops.PERMUTE, Ops.FLIP, Ops.PAD):
+     and (dest.op is Ops.SLICE or not dest.op_in_backward_slice_with_self(Ops.SHRINK, Ops.PERMUTE, Ops.FLIP, Ops.PAD)):
     del ctx.realize_map[src]
   # you don't usually have to do this for assign unless there's a WAR hazard like TestAssign.test_assign_double_diamond_reduce
-  if dest.base in src.backward_slice_with_self: ctx.realize_map[src] = None
+  if dest.base in src.backward_slice_with_self and not safe_self_store(dest, src): ctx.realize_map[src] = None
+
+def safe_self_store(dest:UOp, src:UOp) -> bool:
+  if dest.shape != src.shape: return False
+  reaches_dest: dict[UOp, bool] = {}
+  unsafe = {Ops.PERMUTE, Ops.FLIP, Ops.SHRINK, Ops.PAD, Ops.STACK}
+  for s in src.toposort(gate=lambda s: s.op not in {Ops.CONTIGUOUS, Ops.AFTER}):
+    if s.op is Ops.REDUCE: return False
+    reaches_dest[s] = s is dest.base or any(reaches_dest.get(x, False) for x in s.src)
+    if reaches_dest[s] and s.op in unsafe: return False
+  return reaches_dest.get(src, False)
 
 def realize_custom_kernel_srcs(ctx:IndexingContext, c:UOp) -> None:
   for s in c.src[1:]:

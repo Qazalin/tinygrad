@@ -1,8 +1,8 @@
 from tinygrad.helpers import all_same, prod, getenv, ALLREDUCE_CAST
-from tinygrad.uop.ops import Ops, UOp, PatternMatcher, UPat, GroupOp, AxisType, graph_rewrite, broadcast_axes, _broadcast_shape, sint_to_uop
+from tinygrad.uop.ops import Ops, UOp, PatternMatcher, UPat, GroupOp, AxisType, graph_rewrite, broadcast_axes, _broadcast_shape, sint_to_uop, resolve
 from tinygrad.uop.ops import sint, ssimplify
 from tinygrad.dtype import dtypes
-from tinygrad.schedule.allreduce import handle_allreduce
+from tinygrad.schedule.allreduce import handle_allreduce, create_allreduce_function
 
 # ***** multi rewrite MSELECT/MSTACK *****
 
@@ -111,7 +111,9 @@ def reduce_multi(root:UOp, multi:UOp):
     # all sharded axes are reduced: full allreduce
     if ALLREDUCE_CAST and multi.src[0].op is Ops.CAST and multi.src[0].src[0].dtype in (dtypes.bfloat16, dtypes.half):
       orig_dtype = multi.src[0].src[0].dtype
-      return local.cast(orig_dtype).allreduce(op, multi.device).cast(local.dtype)
+      local_to_reduce = multi.src[0].src[0].reshape(local.shape) if all(resolve(s == 1) for s in multi.src[0].shape[:num_axes]) \
+                        else local.cast(orig_dtype)
+      return local_to_reduce.allreduce(op, multi.device).cast(local.dtype)
     return local.allreduce(op, multi.device)
   # no sharded axes reduced: piecewise, keep all remaining sharding
   new_axes = tuple(ax - num_axes for ax, _ in remaining)
@@ -249,6 +251,13 @@ def copy_multi(multi:UOp, device:str | tuple[str, ...]):
 
 def store_after_multi(dest:UOp, src:UOp): return dest.after(dest.store(src.src[0])).unshard(src.arg, src.src[1:])
 
+def allreduce_store(output:UOp, target:UOp, src:UOp) -> UOp|None:
+  if output is not target: return None
+  while src.op in {Ops.RESHAPE, Ops.CAST}: src = src.src[0]
+  if src.op is not Ops.ALLREDUCE or output.numel() != src.numel(): return None
+  ret = create_allreduce_function(src.src[0], src, output.reshape(src.shape))
+  return ret.reshape(output.shape) if ret is not None else None
+
 def store_value_multi(dest:UOp, multi:UOp):
   # storing a sharded value into an unsharded dest: every shard stores into its own sub-view of the dest
   return shard_subview(dest, multi).store(multi.src[0])
@@ -286,6 +295,7 @@ multi_pm = PatternMatcher([
   (UPat(Ops.PARAM, name="p"), param_to_multi),
   (UPat(GroupOp.ALU, name="root", custom_early_reject=set([Ops.UNSHARD])), alu_multi),
   (UPat(Ops.REDUCE, src=(UPat(Ops.UNSHARD, name="multi"), ), name="root"), reduce_multi),
+  (UPat(Ops.AFTER, src=(UPat.var("output"), UPat(Ops.STORE, src=(UPat.var("target"), UPat.var("src"))))), allreduce_store),
   (UPat(Ops.RESHAPE, src=(UPat(Ops.UNSHARD, name="multi"), UPat()), name="root"), reshape_multi),
   (UPat(Ops.EXPAND, src=(UPat(Ops.UNSHARD, name="multi"), UPat()), name="root"), expand_multi),
   (UPat(Ops.PAD, src=(UPat(Ops.UNSHARD, name="multi"), UPat(), UPat()), name="root"), pad_multi),

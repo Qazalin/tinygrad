@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import unittest
+from unittest.mock import patch
 from tinygrad import Tensor, Device, dtypes
 from tinygrad.nn.optim import Adam, SGD, AdamW, Muon, LAMB
 from tinygrad.helpers import Context
@@ -43,6 +44,60 @@ def step(tensor, optim, steps=1, teeny=False, **kwargs):
     out.backward()
     optim.step()
   return net.x.detach().numpy(), net.W.detach().numpy()
+
+class TestMLPerfOptim(unittest.TestCase):
+  def test_clip_grads_sharded(self):
+    from examples.mlperf.optim import clip_grads
+    devs = ("CPU:0", "CPU:1")
+    grads = [Tensor.arange(32).cast(dtypes.bfloat16).clone().shard(devs, 0).realize(),
+             Tensor.arange(12, 20).cast(dtypes.bfloat16).clone().shard(devs, None).realize()]
+    norm, coeff = clip_grads(grads, 2, 1.0)
+    Tensor.realize(norm, coeff)
+    ref = np.sqrt(sum(np.square((g / 2).cast(g.dtype).float().to(None).numpy()).sum() for g in grads))
+    np.testing.assert_allclose(norm.numpy(), ref, rtol=1e-6)
+    np.testing.assert_allclose(coeff.to(None).numpy(), min(1.0, 1.0 / (ref + 1e-6)), rtol=1e-6)
+
+  def test_fused_adamw(self):
+    from examples.mlperf.optim import _fused_adamw_step
+    rng = np.random.default_rng(4)
+    param = Tensor(rng.standard_normal(256, dtype=np.float32), dtype=dtypes.bfloat16).realize()
+    grad = Tensor(rng.standard_normal(256, dtype=np.float32), dtype=dtypes.bfloat16).realize()
+    m, v = Tensor.randn(256, dtype=dtypes.bfloat16).realize(), Tensor.rand(256, dtype=dtypes.bfloat16).realize()
+    master = param.float().contiguous().realize()
+    m_ref, v_ref, master_ref = m.clone().realize(), v.clone().realize(), master.clone().realize()
+    lr, b1_t, b2_t = Tensor([1e-3]).realize(), Tensor([0.9]).realize(), Tensor([0.95]).realize()
+    m_calc, v_calc = 0.9 * m_ref.float() + 0.1 * grad.float(), 0.95 * v_ref.float() + 0.05 * grad.float().square()
+    m_new, v_new = m_calc.cast(dtypes.bfloat16), v_calc.cast(dtypes.bfloat16)
+    master_new = master_ref - lr * ((m_calc / (1.0-b1_t)) / ((v_calc / (1.0-b2_t)).sqrt()+1e-5) + 0.1*master_ref)
+    param_ref = master_new.cast(dtypes.bfloat16)
+    Tensor.realize(m_new, v_new, master_new, param_ref)
+    _fused_adamw_step(param, grad, m, v, master, lr, b1_t, b2_t, Tensor.ones(1).realize(), 0.9, 0.95, 1e-5, 0.1, 1)
+    Tensor.realize(param, m, v, master)
+    np.testing.assert_array_equal(param.numpy(), param_ref.numpy())
+    np.testing.assert_array_equal(m.numpy(), m_new.numpy())
+    np.testing.assert_array_equal(v.numpy(), v_new.numpy())
+    np.testing.assert_allclose(master.numpy(), master_new.numpy(), rtol=2e-7, atol=2e-7)
+
+  def test_fused_adamw_zero(self):
+    from examples.mlperf.optim import GradAccClipAdamW
+    devs = ("CPU:0", "CPU:1")
+    param = Tensor.arange(32).cast(dtypes.bfloat16).clone().shard(devs, None).is_param_(True).realize()
+    grad = Tensor.arange(32, 64).cast(dtypes.bfloat16).clone().shard(devs, None).realize()
+    with patch("examples.mlperf.optim.ZERO_OPTIM", 1), patch("examples.mlperf.optim.MASTER_WEIGHTS", 1):
+      optim = GradAccClipAdamW([param], lr=1e-3, b1=0.9, b2=0.95, eps=1e-5, weight_decay=0.1, grad_acc=2)
+    Tensor.realize(*optim.m, *optim.v, *optim.master_params, *optim.param_shards, optim.lr, optim.b1_t, optim.b2_t)
+    self.assertEqual(optim.m[0].uop.axis, 0)
+    w_ref = param.numpy().astype(np.float32)
+    g_ref = ((grad/2).cast(grad.dtype).float()*0.75).cast(grad.dtype).float().to(None).numpy()
+    m_ref, v_ref = np.zeros_like(g_ref), np.zeros_like(g_ref)
+    for step_idx in range(1, 3):
+      m_ref, v_ref = 0.9*m_ref+0.1*g_ref, 0.95*v_ref+0.05*g_ref*g_ref
+      w_ref -= 1e-3*((m_ref/(1-0.9**step_idx))/(np.sqrt(v_ref/(1-0.95**step_idx))+1e-5)+0.1*w_ref)
+      optim.fstep([grad], Tensor(0).realize(), Tensor.full((1,), 0.75, device=devs).realize())
+      np.testing.assert_allclose(optim.m[0].numpy(), m_ref, rtol=1e-2)
+      np.testing.assert_allclose(optim.v[0].numpy(), v_ref, rtol=1e-2)
+      np.testing.assert_allclose(optim.master_params[0].numpy(), w_ref, rtol=2e-7, atol=2e-7)
+      np.testing.assert_allclose(param.numpy(), w_ref, rtol=5e-3, atol=5e-3)
 
 @slow
 class TestOptim(unittest.TestCase):

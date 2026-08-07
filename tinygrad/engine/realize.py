@@ -245,9 +245,15 @@ pm_beam = PatternMatcher([
    lambda ctx,call,sink: call.replace(src=(sink.replace(arg=replace(sink.arg, beam=ctx)), *call.src[1:])) if sink.arg.beam == 0 else None),
 ])
 
+def compile_call(call:UOp, ast:UOp) -> UOp:
+  prg = to_program(ast, Device[call.device if isinstance(call.device, str) else call.device[0]].renderer)
+  is_program_outputs = isinstance(call.arg.aux, tuple) and call.arg.aux[:1] == ("program_outputs",)
+  if is_program_outputs:
+    prg = prg.replace(arg=replace(prg.arg, outs=tuple(sorted(set(prg.arg.outs) | set(call.arg.aux[1])))))
+  return call.replace(src=(prg, *call.src[1:]), arg=replace(call.arg, aux=None) if is_program_outputs else call.arg)
+
 pm_compile = PatternMatcher([
-  (UPat(Ops.CALL, src=(UPat((Ops.SINK, Ops.PROGRAM), name="ast"),), name="call", allow_any_len=True), lambda call,ast:
-    call.replace(src=(to_program(ast, Device[call.device if isinstance(call.device, str) else call.device[0]].renderer), *call.src[1:]))),
+  (UPat(Ops.CALL, src=(UPat((Ops.SINK, Ops.PROGRAM), name="ast"),), name="call", allow_any_len=True), compile_call),
 ])
 
 pm_optimize_local_size = PatternMatcher([

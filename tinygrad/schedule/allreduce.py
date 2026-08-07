@@ -1,9 +1,15 @@
 import functools, itertools
-from tinygrad.helpers import all_int, prod, DEBUG, RING, ALL2ALL, getenv
-from tinygrad.uop.ops import UOp
+from tinygrad.helpers import all_int, all_same, prod, DEBUG, RING, ALL2ALL, getenv
+from tinygrad.uop.ops import Ops, UOp
+from tinygrad.dtype import dtypes
 
 # *** allreduce implementation ***
-def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
+def allreduce_modes(ndev:int, numel:int, concrete:bool=True) -> tuple[bool, bool]:
+  use_all2all = concrete and (ALL2ALL >= 2 or (ndev > 2 and numel > getenv("RING_ALLREDUCE_THRESHOLD", 256_000) and ALL2ALL >= 1))
+  use_ring = concrete and not use_all2all and (RING >= 2 or (ndev > 2 and numel > getenv("RING_ALLREDUCE_THRESHOLD", 256_000) and RING >= 1))
+  return use_all2all, use_ring
+
+def handle_allreduce(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
   if not isinstance(buf.device, tuple): return None
   ndev, shape, numel = len(buf.device), buf.shape, prod(buf.shape)
   op, device = red.arg
@@ -11,8 +17,7 @@ def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
   # ring allreduce doesn't provide a benefit with only 2 nodes or where number of elements is less than 256k (empirically)
   # fallback to naive allreduce to save on kernel dispatch, chunking and reassembling chunks.
   concrete = all_int(shape)
-  use_all2all = concrete and (ALL2ALL >= 2 or (ndev > 2 and numel > getenv("RING_ALLREDUCE_THRESHOLD", 256_000) and ALL2ALL >= 1))
-  use_ring = concrete and not use_all2all and (RING >= 2 or (ndev > 2 and numel > getenv("RING_ALLREDUCE_THRESHOLD", 256_000) and RING >= 1))
+  use_all2all, use_ring = allreduce_modes(ndev, numel, concrete)
   if DEBUG >= 2: print(f"{'ALL2ALL' if use_all2all else 'RING' if use_ring else 'NAIVE'} ALLREDUCE {ndev}x{numel} | {buf.dtype}")
 
   if not concrete: buf = buf.pad_to(buf.max_shape)
@@ -32,10 +37,18 @@ def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
 
   # reduce-scatter
   reduced_chunks:list[UOp] = []
+  reduced_deps:list[UOp|None] = []
   for i,(s,e) in enumerate(chunks):
     if use_all2all:
       chunks_on_i = [buf.mselect(j).reshape((numel,)).shrink(((s,e),)).copy_to_device(buf.device[i]) for j in range(ndev)]
-      reduced_chunks.append(functools.reduce(lambda x,y: x.alu(op, y), chunks_on_i))
+      reduced = functools.reduce(lambda x,y: x.alu(op, y), chunks_on_i)
+      dep = None
+      if not isinstance(device, str) and not all_same([e-s for s,e in chunks]):
+        tmp = reduced.empty_like()
+        dep = tmp.after(tmp.store(reduced))
+        reduced = dep if output is None else tmp
+      reduced_chunks.append(reduced)
+      reduced_deps.append(dep)
     else:
       chunk, reduced = buf.reshape((numel,)).shrink(((s,e),)), buf.reshape((numel,)).shrink(((s,e),))
       for step in range(ndev-1):
@@ -43,12 +56,35 @@ def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
         cp = reduced.copy_to_device(buf.device[dest], src if isinstance(reduced.device, tuple) else None)
         reduced = cp.alu(op, chunk.copy_to_device(buf.device[dest], dest))
       reduced_chunks.append(reduced)
+      reduced_deps.append(None)
+
+  # Equal chunks can be written directly into their final output slices. The subsequent all-gather then lowers to SDMA copies.
+  if all_same([e-s for s,e in chunks]):
+    stack = UOp(Ops.STACK, src=tuple(reduced_chunks))
+    if output is None: output = UOp.empty(*shape, dtype=stack.dtype, device=device)
+    states = [[UOp(Ops.SLICE, output.dtype, (output.mselect(i), UOp.const(s, dtypes.weakint)), e-s)
+               for s,e in chunks] for i in range(ndev)]
+    for i,rc in enumerate(stack.src):
+      owner = i if use_all2all else (i-1)%ndev
+      target_slice = states[owner][i]
+      states[owner][i] = target_slice.after(target_slice.store(rc.cast(output.dtype)))
+      source = states[owner][i]
+      for step in range(1, ndev):
+        dest_idx = (owner+step)%ndev
+        cp = source.copy_to_device(buf.device[dest_idx])
+        target_slice = states[dest_idx][i]
+        states[dest_idx][i] = target_slice.after(target_slice.store(cp))
+        if use_ring: source = states[dest_idx][i]
+    return output.after(*itertools.chain.from_iterable(states))
 
   # allgather
   copied_chunks:list[UOp] = []
   for i,rc in enumerate(reduced_chunks):
     if isinstance(device, str): copied_chunks.append(rc.copy_to_device(device))
-    elif use_all2all: copied_chunks.append(UOp.mstack(*(rc.copy_to_device(buf.device[j]) for j in range(ndev))))
+    elif use_all2all:
+      dep = reduced_deps[i]
+      copy_src = dep if dep is not None else rc
+      copied_chunks.append(UOp.mstack(*(copy_src if j == i else copy_src.copy_to_device(buf.device[j]) for j in range(ndev))))
     else:
       chain:list[UOp] = [rc]
       for step in range(ndev-1):
@@ -56,11 +92,22 @@ def handle_allreduce(buf:UOp, red:UOp) -> UOp|None:
       copied_chunks.append(UOp.mstack(*(chain[(j-i+1)%ndev] for j in range(ndev))))
 
   # reassemble
+  if output is not None and use_all2all:
+    flat_out = output.reshape((numel,))
+    deps = [d for d in reduced_deps if d is not None]
+    return output.after(*deps, *[flat_out.shrink(((s,e),)).store(c) for (s,e),c in zip(chunks, copied_chunks)])
   return UOp.usum(*[c.pad(((s,numel-e),)) for (s,e),c in zip(chunks, copied_chunks)]).reshape(shape)
 
 def create_allreduce_function(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
   if output is None: output = UOp.invalids(red.shape, dtype=red.dtype, device=red.device)
-  to = red.param_like(0)
+  if isinstance(buf.device, tuple) and all_int(buf.shape) and allreduce_modes(len(buf.device), prod(buf.shape))[0]:
+    ret = handle_allreduce(buf, red, output)
+    assert ret is not None
+    return ret if ret.op is Ops.AFTER and ret.src[0] is output else output.after(output.store(ret.cast(output.dtype)))
+  to = output.param_like(0)
   src = buf.param_like(1)
   red = src.allreduce(*red.arg)
-  return output.after(to.after(to.store(handle_allreduce(src, red))).sink().call(output, buf.contiguous(), name="allreduce", precompile=True))
+  ret = handle_allreduce(src, red, to)
+  assert ret is not None
+  body = ret if ret.op is Ops.AFTER and ret.src[0] is to else to.after(to.store(ret.cast(to.dtype)))
+  return output.after(body.sink().call(output, buf.contiguous(), name="allreduce", precompile=True))
