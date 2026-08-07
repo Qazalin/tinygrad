@@ -1187,11 +1187,10 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     # value-producing bodies are always wrapped in TUPLE so FUNCTION dtype is always void
     body = self if self.op is Ops.TUPLE else UOp.maketuple(self)
     return UOp(Ops.FUNCTION, src=(body,)+srcs, arg=CallInfo(grad_fxn, name, precompile, precompile_backward, aux))
-  def custom_kernel(*srcs:UOp, fxn:Callable, grad_fxn:Callable|None=None, contiguous=False) -> list[UOp]:
-    kernel_srcs = tuple(x.contiguous() if contiguous and x.op is not Ops.AFTER else x for x in srcs)
-    placeholders = [UOp.placeholder_like(s, slot=i) for i,s in enumerate(kernel_srcs)]
-    kernel = fxn(*placeholders).call(*kernel_srcs, grad_fxn=grad_fxn)
-    return [s.after(kernel) for s in kernel_srcs]
+  def custom_kernel(*srcs:UOp, fxn:Callable, grad_fxn:Callable|None=None) -> list[UOp]:
+    placeholders = [UOp.placeholder_like(s, slot=i) for i,s in enumerate(srcs)]
+    kernel = fxn(*placeholders).call(*srcs, grad_fxn=grad_fxn)
+    return [s.after(kernel) for s in srcs]
 
   def to_elf(self) -> TinyELF:
     assert self.op is Ops.PROGRAM and isinstance(self.arg, ProgramInfo), "to_elf should only be called on a PROGRAM ast"

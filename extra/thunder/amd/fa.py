@@ -80,7 +80,7 @@ def _fused_qkv_rope_grad(dq_u:UOp, dk_u:UOp, dv_u:UOp, call:UOp) -> tuple[None, 
   dxqkv = _sharded_empty_like(xqkv, axis=xqkv.uop.axis if isinstance(xqkv.device, tuple) else None)
   fxn = functools.partial(custom_fused_qkv_rope_backward, device=single_device, arch=arch,
                           B=B_local, N=N, H=H_local, H_KV=H_KV_local, D=D)
-  dxqkv = Tensor.custom_kernel(dxqkv, dq, dk, dv, freqs_cis, fxn=fxn, contiguous=True)[0]
+  dxqkv = Tensor.custom_kernel(dxqkv, dq, dk, dv, freqs_cis, fxn=fxn)[0]
   return None, None, None, dxqkv.uop, None
 
 def fused_qkv_rope(xqkv:Tensor, freqs_cis:Tensor, n_heads:int, n_kv_heads:int, head_dim:int) -> tuple[Tensor, Tensor, Tensor]:
@@ -103,7 +103,7 @@ def fused_qkv_rope(xqkv:Tensor, freqs_cis:Tensor, n_heads:int, n_kv_heads:int, h
   v = _sharded_empty((B, N, n_kv_heads, head_dim), xqkv, axis=axis, dtype=dtypes.bfloat16)
   fxn = functools.partial(custom_fused_qkv_rope_forward, device=single_device, arch=arch,
                           B=B_local, N=N, H=H_local, H_KV=H_KV_local, D=head_dim)
-  q, k, v, *_ = Tensor.custom_kernel(q, k, v, xqkv, freqs_cis, fxn=fxn, grad_fxn=_fused_qkv_rope_grad, contiguous=True)
+  q, k, v, *_ = Tensor.custom_kernel(q, k, v, xqkv, freqs_cis, fxn=fxn, grad_fxn=_fused_qkv_rope_grad)
   return q, k, v
 
 def _sharded_empty_like(ref:Tensor, axis:int|None=None) -> Tensor:
@@ -127,9 +127,9 @@ def _fa_grad_fxn(B, H, N, D, H_local, H_KV_local, H_KV, B_local, shard_axis, sha
 
     # delta_vec = (do * attn).sum(-1, dtype=dtypes.float32).transpose(1, 2).unsqueeze(-2).detach()
     delta_vec = _sharded_empty((B, H, 1, N), xq, dtype=dtypes.float32, axis=shard_axis_t)
-    delta_vec, dq = Tensor.custom_kernel(delta_vec, dq, attn, do, fxn=functools.partial(custom_fa_backward_pre, device=single_device, arch=arch, B=B_local, N=N, H=H_local, H_KV=H_KV_local, D=D), contiguous=True)[:2]
+    delta_vec, dq = Tensor.custom_kernel(delta_vec, dq, attn, do, fxn=functools.partial(custom_fa_backward_pre, device=single_device, arch=arch, B=B_local, N=N, H=H_local, H_KV=H_KV_local, D=D))[:2]
 
-    dq, dk_partial, dv_partial = Tensor.custom_kernel(dq, dk_partial, dv_partial, do, xq, xk, xv, l_vec, delta_vec, fxn=functools.partial(custom_fa_backward, device=single_device, arch=arch, B=B_local, N=N, H=H_local, H_KV=H_KV_local, D=D), contiguous=True)[:3]
+    dq, dk_partial, dv_partial = Tensor.custom_kernel(dq, dk_partial, dv_partial, do, xq, xk, xv, l_vec, delta_vec, fxn=functools.partial(custom_fa_backward, device=single_device, arch=arch, B=B_local, N=N, H=H_local, H_KV=H_KV_local, D=D))[:3]
 
     if D == 64:
       dq = dq.reshape(B, H, N//16, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2).permute(0, 1, 2, 8, 9, 10, 11, 3, 4, 6, 7, 5, 12).reshape(B, H, N, D).transpose(1, 2)
@@ -179,7 +179,7 @@ def flash_attention(xq, xk, xv, attn_mask:Tensor|None=None, is_causal:bool=False
   grad = _fa_grad_fxn(B, H, N, D, H_local, H_KV_local, H_KV, B_local, shard_axis, shard_axis_t, single_device, arch, has_sink)
 
   fwd_inputs = (attn, l_vec, xq, xk, xv) + ((sinks,) if has_sink else ())
-  attn, l_vec = Tensor.custom_kernel(*fwd_inputs, fxn=functools.partial(custom_fa_forward, device=single_device, arch=arch, B=B_local, N=N, H=H_local, H_KV=H_KV_local, D=D, has_sink=has_sink), grad_fxn=grad, contiguous=True)[:2]
+  attn, l_vec = Tensor.custom_kernel(*fwd_inputs, fxn=functools.partial(custom_fa_forward, device=single_device, arch=arch, B=B_local, N=N, H=H_local, H_KV=H_KV_local, D=D, has_sink=has_sink), grad_fxn=grad)[:2]
 
   return attn, attn, l_vec
 

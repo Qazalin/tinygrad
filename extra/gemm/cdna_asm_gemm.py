@@ -81,7 +81,7 @@ def hk_fp8_atb_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, g_amax:Tensor|
   dname = dname.split(":")[0]
   scales = tuple(s for s in (x_scale, g_amax) if s is not None)
   scale_mode = (1 if x_scale is not None else 0) | (4 if g_amax is not None else 0)
-  out = Tensor.custom_kernel(out, a, b, *scales, fxn=functools.partial(custom_hk_fp8_atb_gemm, dname=dname, scale_mode=scale_mode), contiguous=True)[0]
+  out = Tensor.custom_kernel(out, a, b, *scales, fxn=functools.partial(custom_hk_fp8_atb_gemm, dname=dname, scale_mode=scale_mode))[0]
   if reduce_out: out = out.sum(0)
   return out.squeeze(0) if out.ndim == 3 else out
 
@@ -141,7 +141,7 @@ def _mxfp4_gemm_quantized(a_q:Tensor, b_q:Tensor, scale_a:Tensor, scale_b:Tensor
   else: out = Tensor.invalids(1, M, N, dtype=dtypes.bfloat16, device=a_q.device)
   tile_m, tile_n = next((tm, tn) for tm, tn in ((256, 256), (192, 256), (128, 512)) if M % tm == N % tn == 0)
   out = Tensor.custom_kernel(out, a_q, b_q, scale_a, scale_b,
-                             fxn=functools.partial(custom_mxfp4_gemm, tile_m=tile_m, tile_n=tile_n), contiguous=True)[0]
+                             fxn=functools.partial(custom_mxfp4_gemm, tile_m=tile_m, tile_n=tile_n))[0]
   if reduce_out: out = out.sum(0)
   return out.squeeze(0)
 
@@ -309,7 +309,7 @@ def hk_bf16_atb_gemm(a:Tensor, b:Tensor) -> Tensor:
     out = Tensor.invalids(1, M, N, dtype=a.dtype, device=a.device)
     dname = a.device
   dname = dname.split(":")[0]
-  out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_hk_bf16_atb_gemm, dname=dname), contiguous=True)[0]
+  out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_hk_bf16_atb_gemm, dname=dname))[0]
   if reduce_out: out = out.sum(0)
   return out.squeeze(0) if out.ndim == 3 else out
 
@@ -490,7 +490,7 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
         saved = [a_col, scale_a_col, b_col, scale_b_col]
       out = Tensor.custom_kernel(out, a_q.reshape(*a.shape[:-1], a_q.shape[-1]), b_q, scale_a, scale_b, a, w, *saved,
                                  fxn=fxn, grad_fxn=functools.partial(custom_mxfp4_gemm_bw,
-                                                                   save_original_input=save_original_input), contiguous=True)[0]
+                                                                   save_original_input=save_original_input))[0]
     elif mx:
       # mxfp8 1x32 block scaling
       if mx_scales is not None:
@@ -508,8 +508,7 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
       fxn = functools.partial(custom_hk_mxfp8_gemm, dname=dname)
       grad_fxn = functools.partial(custom_mx_gemm_bw, has_w_post=has_w_post, w_stored=mx_w_stored)
       extra = [w_post_scale] if w_post_scale is not None else []
-      out = Tensor.custom_kernel(out, a_q.reshape(a.shape), b_q, a_si, b_si, a_e8, b_e8, *extra,
-                                 fxn=fxn, grad_fxn=grad_fxn, contiguous=True)[0]
+      out = Tensor.custom_kernel(out, a_q.reshape(a.shape), b_q, a_si, b_si, a_e8, b_e8, *extra, fxn=fxn, grad_fxn=grad_fxn)[0]
     # fp8 gemm computes a@b.T, kernel multiplies output by x_scale * w_scale before bf16 store
     elif a.dtype == FP8_DTYPE:
       scales = tuple(s for s in (x_scale, w_scale, g_amax) if s is not None)
@@ -518,12 +517,11 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
       extra = ([grad_amax_state, next_grad_amax_state] if grad_amax_state is not None else []) + ([w_post_scale] if w_post_scale is not None else [])
       fxn = functools.partial(custom_hk_fp8_gemm, dname=dname, scale_mode=scale_mode)
       bw = functools.partial(custom_gemm_bw, n_scales=len(scales), has_grad_amax=grad_amax_state is not None, has_w_post=w_post_scale is not None)
-      out = Tensor.custom_kernel(out, a, b.T, *scales, *extra, fxn=fxn, grad_fxn=bw, contiguous=True)[0]
+      out = Tensor.custom_kernel(out, a, b.T, *scales, *extra, fxn=fxn, grad_fxn=bw)[0]
     elif a.dtype == dtypes.bfloat16:
-      out = Tensor.custom_kernel(out, a, b.T, b, fxn=functools.partial(custom_hk_bf16_gemm, dname=dname),
-                                 grad_fxn=custom_gemm_bw, contiguous=True)[0]
+      out = Tensor.custom_kernel(out, a, b.T, b, fxn=functools.partial(custom_hk_bf16_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
   else:
-    out = Tensor.custom_kernel(out, a, b, fxn=custom_uop_gemm, grad_fxn=custom_gemm_bw, contiguous=True)[0]
+    out = Tensor.custom_kernel(out, a, b, fxn=custom_uop_gemm, grad_fxn=custom_gemm_bw)[0]
   if k_sharded: out = out.sum(0)
   out = out.squeeze(0) if squeeze else out
   if unfold_batch: out = out.reshape(orig_batch, -1, out.shape[-1])
