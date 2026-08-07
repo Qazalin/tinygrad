@@ -127,7 +127,7 @@ class TestMultiTensor(unittest.TestCase):
     with Context(RING=use_ring):
       np.testing.assert_equal(t.shard(devices_2, axis=axis).sum().item(), 10)
 
-  def test_allreduce_cast_half(self, assign=False, kernel_count=8):
+  def test_allreduce_cast_half(self, assign=False, kernel_count=6):
     devices = tuple(f"{Device.DEFAULT}:{i}" for i in range(2))
     a_src = Tensor.arange(2*3, dtype=dtypes.half).reshape(2, 3).clone().realize()
     b_src = Tensor.arange(2*3, dtype=dtypes.half).reshape(2, 3).clone().realize()
@@ -146,7 +146,7 @@ class TestMultiTensor(unittest.TestCase):
     assert_kernel_count(kernel_count)
     np.testing.assert_allclose(tst.numpy(), (a_src.numpy()+b_src.numpy()).sum(0))
 
-  def test_allreduce_cast_half_assign(self): self.test_allreduce_cast_half(assign=True, kernel_count=10)
+  def test_allreduce_cast_half_assign(self): self.test_allreduce_cast_half(assign=True, kernel_count=8)
 
   def test_multiple_to_single_device(self):
     kernel_counts = {}

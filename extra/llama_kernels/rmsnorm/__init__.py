@@ -39,7 +39,7 @@ def _rmsnorm_mul_bwd(gradient:UOp, call:UOp) -> tuple:
   partial = alloc_local((NUM_WG_BWD, x_u.shape[-1]), dtypes.float32, device, axis)
   dx, partial, *_ = Tensor.custom_kernel(dx, partial, Tensor(gradient, device=device).cast(dtypes.bfloat16),
                                           Tensor(x_u, device=device), Tensor(rrms_u.after(call), device=device),
-                                          Tensor(weight_u, device=device), fxn=_custom_rmsnorm_mul_bwd)
+                                          Tensor(weight_u, device=device), fxn=_custom_rmsnorm_mul_bwd, contiguous=True)
   return (None, None, dx.uop, partial.sum(axis=0).cast(dtypes.bfloat16).uop)
 
 def rmsnorm_mul(x:Tensor, weight:Tensor, eps:float) -> tuple[Tensor, Tensor]:
@@ -49,7 +49,7 @@ def rmsnorm_mul(x:Tensor, weight:Tensor, eps:float) -> tuple[Tensor, Tensor]:
   rrms_axis = axis if axis is None or axis < x.ndim-1 else None
   rrms = alloc_like(x.shape[:-1], dtypes.float32, x.device, rrms_axis)
   out, rrms, *_ = Tensor.custom_kernel(out, rrms, x, weight,
-                                        fxn=functools.partial(_custom_rmsnorm_mul_fwd, eps=eps), grad_fxn=_rmsnorm_mul_bwd)
+                                        fxn=functools.partial(_custom_rmsnorm_mul_fwd, eps=eps), grad_fxn=_rmsnorm_mul_bwd, contiguous=True)
   return out, rrms
 
 def rmsnorm_fwd(x_in:Tensor, eps:float) -> tuple[Tensor, Tensor]:

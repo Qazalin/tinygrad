@@ -96,7 +96,7 @@ def quantize_mxfp4_dual(x:Tensor, *, use_hadamard:bool=True, shuffle_row:bool=Fa
   else: outputs = list(out)
   fxn = functools.partial(_custom_quantize_mxfp4_directional, use_hadamard=use_hadamard, shuffle_row=shuffle_row,
                           shuffle_col=shuffle_col, shuffle_scales=shuffle_scales, rowwise=rowwise, columnwise=columnwise)
-  ret = Tensor.custom_kernel(*outputs, x, fxn=fxn)[:len(outputs)]
+  ret = Tensor.custom_kernel(*outputs, x, fxn=fxn, contiguous=True)[:len(outputs)]
   if out is not None:
     for dst, src in zip(out, ret): dst.replace(src)
     return out
@@ -137,7 +137,7 @@ def quantize_mxfp4_fused(x:Tensor, packed_shape:tuple[int, ...]|None=None, packe
   axis = x.uop.axis if isinstance(x.device, tuple) else None
   packed = alloc_like(packed_shape or (*batch, K//2), dtypes.uint8, x.device, packed_axis if packed_shape is not None else axis)
   e8 = alloc_like((*batch, K//BLK), dtypes.uint8, x.device, axis)
-  packed, e8, *_ = Tensor.custom_kernel(packed, e8, x, fxn=_custom_quantize_mxfp4)
+  packed, e8, *_ = Tensor.custom_kernel(packed, e8, x, fxn=_custom_quantize_mxfp4, contiguous=True)
   return packed, e8
 
 @functools.cache
@@ -167,7 +167,7 @@ def _swiglu_bwd(gradient:UOp, kernel:UOp):
   axis = x_w13.axis if isinstance(x_w13.device, tuple) else None
   grad_out = alloc_like(x_w13.shape, dtypes.bfloat16, x_w13.device, axis)
   grad_out, *_ = Tensor.custom_kernel(grad_out, Tensor(x_w13, device=x_w13.device), Tensor(gradient, device=x_w13.device),
-                                      fxn=_custom_swiglu_bwd)
+                                      fxn=_custom_swiglu_bwd, contiguous=True)
   return (None, grad_out.uop)
 
 def swiglu(x_w13:Tensor) -> Tensor:
@@ -176,5 +176,4 @@ def swiglu(x_w13:Tensor) -> Tensor:
   K = two_k//2
   axis = x_w13.uop.axis if isinstance(x_w13.device, tuple) else None
   out = alloc_like((*prefix, K), dtypes.bfloat16, x_w13.device, axis)
-  return Tensor.custom_kernel(out, x_w13, fxn=_custom_swiglu, grad_fxn=_swiglu_bwd)[0]
-
+  return Tensor.custom_kernel(out, x_w13, fxn=_custom_swiglu, grad_fxn=_swiglu_bwd, contiguous=True)[0]

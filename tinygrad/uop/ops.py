@@ -899,16 +899,15 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     from tinygrad.schedule.rangeify import pm_mops
     from tinygrad.uop.symbolic import symbolic
 
-    # WEBGPU and CL do not support views.
-    # WEBGPU requires that minUniformBufferOffsetAlignment be at least 32 bytes: https://gpuweb.github.io/gpuweb/#adapter-capability-guarantees
-    # CL 1.1 provides the clCreateSubBuffer API, but at the time of writing, relevant CL runtimes (rusticl, adreno, nvidia, amd) do not provide
-    # reasonable values for CL_DEVICE_MEM_BASE_ADDR_ALIGN. cl_ext_buffer_device_address could potentially help, but this extension is not provided
-    # by relevant CL runtimes at time of writing.
-    if (dev:=self.device) is not None and any(d.startswith(("WEBGPU", "CL")) for d in ((dev,) if isinstance(dev, str) else dev)): return None
-
+    if not self.can_buffer_view(): return None
     idx = self.flatten().index(UOp.range(self.numel(), 0))
     out = graph_rewrite(idx, pm_mops+symbolic+pm_contiguous_view_offset, ctx=self, name="contiguous_view_offset")
     return out.val if out.op is Ops.CONST and isinstance(out.val, int) else None
+
+  def can_buffer_view(self) -> bool:
+    """Whether the backing devices support buffer views."""
+    # WEBGPU requires 32-byte-aligned uniform-buffer offsets, and relevant CL runtimes do not expose useful sub-buffer alignment.
+    return (dev:=self.device) is None or not any(d.startswith(("WEBGPU", "CL")) for d in ((dev,) if isinstance(dev, str) else dev))
 
   def has_buffer_identity(self, after_ok=False):
     """Check if this UOp has a concrete buffer identity in the graph (RESHAPE/UNSHARD -> BUFFER chain)."""
@@ -1188,10 +1187,11 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     # value-producing bodies are always wrapped in TUPLE so FUNCTION dtype is always void
     body = self if self.op is Ops.TUPLE else UOp.maketuple(self)
     return UOp(Ops.FUNCTION, src=(body,)+srcs, arg=CallInfo(grad_fxn, name, precompile, precompile_backward, aux))
-  def custom_kernel(*srcs:UOp, fxn:Callable, grad_fxn:Callable|None=None) -> list[UOp]:
-    placeholders = [UOp.placeholder_like(s, slot=i) for i,s in enumerate(srcs)]
-    kernel = fxn(*placeholders).call(*srcs, grad_fxn=grad_fxn)
-    return [s.after(kernel) for s in srcs]
+  def custom_kernel(*srcs:UOp, fxn:Callable, grad_fxn:Callable|None=None, contiguous=False) -> list[UOp]:
+    kernel_srcs = tuple(x.contiguous() if contiguous and x.op is not Ops.AFTER else x for x in srcs)
+    placeholders = [UOp.placeholder_like(s, slot=i) for i,s in enumerate(kernel_srcs)]
+    kernel = fxn(*placeholders).call(*kernel_srcs, grad_fxn=grad_fxn)
+    return [s.after(kernel) for s in kernel_srcs]
 
   def to_elf(self) -> TinyELF:
     assert self.op is Ops.PROGRAM and isinstance(self.arg, ProgramInfo), "to_elf should only be called on a PROGRAM ast"
