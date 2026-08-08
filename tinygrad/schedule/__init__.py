@@ -133,7 +133,8 @@ def create_schedule(sched_sink:UOp) -> UOp:
         queue.remove(rk)
       elif overlapping and continuation:
         reachable = [x for x in continuation if distance_to_precompiled(x) is not None]
-        rk = min(reachable, key=lambda x: distance_to_precompiled(x) or 0) if stop_at_precompiled and reachable else max(continuation, key=downstream_path)
+        rk = min(reachable, key=lambda x: distance_to_precompiled(x) or 0) if stop_at_precompiled and reachable \
+          else max(continuation, key=downstream_path)
         continuation.remove(rk)
       elif continuation and queue and queue[0] in copy_children:
         overlap_group = {x for x in queue if x in copy_children}

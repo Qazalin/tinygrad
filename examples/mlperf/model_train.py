@@ -1439,12 +1439,10 @@ def train_llama3():
     print(f"loading optim checkpoint from {fn}")
     load_state_dict(scheduler, safe_load(fn), realize=False)
 
-  fp8_amax_state = [t for ts in model._fp8_amax.values() for t in ts]
-  fp8_next_amax_state = [t for ts in model._fp8_next_amax.values() for t in ts]
-  fp8_grad_amax_state = [t for ts in model._fp8_grad_amax.values() for t in ts]
-  fp8_next_grad_amax_state = [t for ts in model._fp8_next_grad_amax.values() for t in ts]
-  fp8_amax, fp8_next_amax = ([], []) if MXFP4 else (fp8_amax_state, fp8_next_amax_state)
-  fp8_grad_amax, fp8_next_grad_amax = ([], []) if MXFP4 else (fp8_grad_amax_state, fp8_next_grad_amax_state)
+  fp8_amax = [t for ts in model._fp8_amax.values() for t in ts]
+  fp8_next_amax = [t for ts in model._fp8_next_amax.values() for t in ts]
+  fp8_grad_amax = [t for ts in model._fp8_grad_amax.values() for t in ts]
+  fp8_next_grad_amax = [t for ts in model._fp8_next_grad_amax.values() for t in ts]
   fp8_inv_scales = list(model._fp8_inv_scale.values()) + list(model._fp8_next_inv_scale.values())
 
   from tinygrad.nn.state import get_state_dict
@@ -1469,13 +1467,12 @@ def train_llama3():
   Tensor.realize(*[x for o in optim.optimizers for x in o.m + o.v + o.param_shards])
   mxfp4_weights = model.mxfp4_weights() if MXFP4 else None
   if mxfp4_weights is not None: Tensor.realize(*[x for layers in mxfp4_weights.values() for outputs in layers for x in outputs])
-  Tensor.realize(*optim.params, *fp8_inv_scales, *fp8_amax_state, *fp8_next_amax_state, *fp8_grad_amax_state, *fp8_next_grad_amax_state)
+  Tensor.realize(*optim.params, *fp8_inv_scales, *fp8_amax, *fp8_next_amax, *fp8_grad_amax, *fp8_next_grad_amax)
   loss_acc = Tensor.zeros(1, dtype=dtypes.float32, device=device).contiguous().realize()
 
   @TinyJit
   def minibatch(tokens:Tensor):
-    for nxt in fp8_next_amax: nxt.assign(0)
-    for nxt in fp8_next_grad_amax: nxt.assign(0)
+    model.reset_amax()
     if is_dp: tokens = tokens.to(None).shard(device, 0)
     if is_mp: tokens = tokens.shard(device)
     if not is_sharding: tokens = tokens.to(None)
@@ -1501,8 +1498,7 @@ def train_llama3():
     refreshed_mxfp4 = model.refresh_mxfp4_weights(mxfp4_weights) if mxfp4_weights is not None else []
 
     for g in grads: g.assign(0)
-    for cur, nxt in zip(fp8_amax, fp8_next_amax): cur.assign(nxt)
-    for cur, nxt in zip(fp8_grad_amax, fp8_next_grad_amax): cur.assign(nxt)
+    model.update_amax()
 
     lr_cpu = optim.lr.float().to("CPU")
     grad_norm_cpu = grad_norm.float().to("CPU")

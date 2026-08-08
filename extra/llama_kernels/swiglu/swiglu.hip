@@ -23,7 +23,7 @@
 #define THREADS_PER_WG 512
 #endif
 
-constexpr int VEC = 16;  // TransformerEngine uses 32-byte vectors.
+constexpr int VEC = 16;
 static_assert(N_ELEMS % VEC == 0);
 static_assert(HIDDEN % VEC == 0);
 
@@ -112,4 +112,3 @@ swiglu_bwd(__hip_bfloat16* __restrict__ grad_input,
   }
 }
 #endif
-

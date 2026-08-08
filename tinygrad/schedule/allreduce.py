@@ -17,7 +17,7 @@ def handle_allreduce(buf:UOp, red:UOp, output:UOp|None=None) -> UOp|None:
   # ring allreduce doesn't provide a benefit with only 2 nodes or where number of elements is less than 256k (empirically)
   # fallback to naive allreduce to save on kernel dispatch, chunking and reassembling chunks.
   concrete = all_int(shape)
-  use_all2all, use_ring = allreduce_modes(ndev, numel, concrete)
+  use_all2all, use_ring = allreduce_modes(ndev, numel if isinstance(numel, int) else 0, concrete)
   if DEBUG >= 2: print(f"{'ALL2ALL' if use_all2all else 'RING' if use_ring else 'NAIVE'} ALLREDUCE {ndev}x{numel} | {buf.dtype}")
 
   if not concrete: buf = buf.pad_to(buf.max_shape)

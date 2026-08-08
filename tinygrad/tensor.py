@@ -65,20 +65,6 @@ def replace_store_after_with_contig(u:UOp, src:UOp):
   while assigned_to.op in {Ops.BITCAST, Ops.AFTER, Ops.UNSHARD}: assigned_to = assigned_to.src[0].base
   if assigned_to.op not in {Ops.BUFFER, Ops.SLICE}: return src.contiguous(tag=u.tag)
 
-def remove_contiguous_reshape_after(r:UOp, c:UOp, flatten_deps:bool=False) -> UOp|None:
-  a = r
-  while a.op is Ops.RESHAPE: a = a.src[0]
-  if a.op is not Ops.AFTER: return None
-  if a.src[0].op is not Ops.CONTIGUOUS and not a.src[0].has_buffer_identity(after_ok=True): return None
-  target = r.substitute({a:a.src[0]})
-  return target.after(*(a.src[1:] if flatten_deps else (a,))).rtag(c.tag)
-
-remove_contiguous_after_views = PatternMatcher([
-  (UPat(Ops.CONTIGUOUS, src=(UPat(Ops.AFTER, name="a"),)),
-   lambda a: a if a.src[0].op is Ops.CONTIGUOUS or a.src[0].has_buffer_identity(after_ok=True) else None),
-  (UPat(Ops.CONTIGUOUS, src=(UPat(Ops.RESHAPE, name="r"),), name="c"), lambda r,c: remove_contiguous_reshape_after(r, c, True)),
-])
-
 def _make_buffer_view(src:UOp) -> UOp|None:
   """If movement ops on src collapse to a contiguous range, return SLICE. Otherwise None."""
   if (offset := src.contiguous_view_offset()) is None: return None
@@ -125,11 +111,10 @@ def _precompiled_output_redirect(s:UOp, t:UOp) -> UOp|None:
 def transform_precompiled_call(c:UOp) -> UOp|None:
   if not c.arg.precompile: return None
   assert c.src[0].op is Ops.TUPLE, f"expected TUPLE body for precompiled FUNCTION, got {c.src[0].op}"
-  body = graph_rewrite(c.src[0], remove_contiguous_after_views, name="remove contiguous AFTER views")
   input_buffers = tuple(x.contiguous() if x.op not in {Ops.AFTER, Ops.BIND} else x for x in c.src[1:])
 
   # add the outputs to the call
-  srcs = body.src
+  srcs = c.src[0].src
   resolved = [c.gettuple(i) for i in range(len(srcs))]
   outs = tuple(r.empty_like() for r in resolved)
   targets = [o.param_like(len(c.src)-1+i).shrink_to(s.shape) for i,(o,s) in enumerate(zip(outs, srcs))]
@@ -183,8 +168,6 @@ pm_early_transform_tensor_graph = PatternMatcher([
   # remove extra CONTIGUOUS on AFTER (only when target is contiguous)
   (UPat(Ops.CONTIGUOUS, src=(UPat(Ops.AFTER, name="a"),), name="c"),
    lambda a,c: a.replace(tag=(a.tag or ())+(c.tag or ())) if a.src[0].has_buffer_identity() else None),
-  # reshapes of a contiguous AFTER are views of the same target buffer
-  (UPat(Ops.CONTIGUOUS, src=(UPat(Ops.RESHAPE, name="r"),), name="c"), remove_contiguous_reshape_after),
   # replace AFTER+STORE with CONTIGUOUS when target is not a buffer
   (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat(), UPat(name="src")))), name="u"), replace_store_after_with_contig),
   # replace CONTIGUOUS with STORE+AFTER
