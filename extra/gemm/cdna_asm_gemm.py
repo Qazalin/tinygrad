@@ -141,6 +141,9 @@ def _mxfp4_gemm_quantized(a_q:Tensor, b_q:Tensor, scale_a:Tensor, scale_b:Tensor
     out = Tensor(Tensor.invalids(1, M, N//len(a_q.device), dtype=dtypes.bfloat16, device=a_q.device).uop.unshard(2), device=a_q.device)
   else: out = Tensor.invalids(1, M, N, dtype=dtypes.bfloat16, device=a_q.device)
   tile_m, tile_n = next((tm, tn) for tm, tn in ((256, 256), (192, 256), (128, 512)) if M % tm == N % tn == 0)
+  # The K-sharded GEMM result is the ring all-reduce input. Make that output allocation the dense reduction buffer:
+  # custom_mxfp4_gemm writes C.base densely, and otherwise the UNSHARD view is copied into a second buffer before the ring.
+  if reduce_out: out = out.contiguous()
   out = Tensor.custom_kernel(out, a_q, b_q, scale_a, scale_b,
                              fxn=functools.partial(custom_mxfp4_gemm, tile_m=tile_m, tile_n=tile_n))[0]
   if reduce_out: out = out.sum(0)
@@ -387,7 +390,7 @@ def custom_mxfp4_gemm_bw(gradient:UOp, kernel:UOp, save_original_input:bool=Fals
   a, w = Tensor(inputs[5], device=inputs[5].device), Tensor(inputs[6], device=inputs[6].device)
   if save_original_input:
     w_col, scale_w_col = Tensor(inputs[7], device=a.device), Tensor(inputs[8], device=a.device)
-    _, _, a_col, scale_a_col = quantize_mxfp4(a, shuffle_col=True)
+    _, _, a_col, scale_a_col = quantize_mxfp4(a, shuffle_col=True, row=False)
   else:
     a_col, scale_a_col = Tensor(inputs[7], device=a.device), Tensor(inputs[8], device=a.device)
     w_col, scale_w_col = Tensor(inputs[9], device=a.device), Tensor(inputs[10], device=a.device)
@@ -446,7 +449,7 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
       fxn = functools.partial(custom_mxfp4_gemm, tile_m=tile_m, tile_n=tile_n)
       w = b.T
       if save_original_input:
-        a_q, scale_a, _, _ = quantize_mxfp4(a, shuffle_col=True)
+        a_q, scale_a, _, _ = quantize_mxfp4(a, shuffle_col=True, col=False)
         a_col = scale_a_col = None
       else: a_q, scale_a, a_col, scale_a_col = quantize_mxfp4(a, shuffle_col=True)
       if mxfp4_w is None: b_q, scale_b, b_col, scale_b_col = quantize_mxfp4(w, shuffle_row=True, shuffle_col=True)

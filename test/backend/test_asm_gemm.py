@@ -172,6 +172,14 @@ class TestMXFP4(unittest.TestCase):
     self.assertTrue((row_scale == 127).any())
     self.assertTrue((row_scale != 127).any())
 
+    row_only, row_scale_only, _, _ = quantize_mxfp4(Tensor(x, dtype=dtypes.bfloat16), col=False)
+    _, _, col_only, col_scale_only = quantize_mxfp4(Tensor(x, dtype=dtypes.bfloat16), row=False)
+    Tensor.realize(row_only, row_scale_only, col_only, col_scale_only)
+    np.testing.assert_array_equal(row_only.numpy(), row)
+    np.testing.assert_array_equal(row_scale_only.numpy(), row_scale)
+    np.testing.assert_array_equal(col_only.numpy(), col)
+    np.testing.assert_array_equal(col_scale_only.numpy(), col_scale)
+
   def test_correctness(self):
     import numpy as np
     M = N = K = 256
