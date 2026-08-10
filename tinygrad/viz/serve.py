@@ -192,7 +192,7 @@ def get_full_rewrite(data:VizData, ctx:TrackedGraphRewrite, depth:int|None=None,
     if not ctx.bottom_up: next_sink = new_sink
 
 def get_sink_at(upats:tuple[str, ...], viz_data:VizData, kernel_idx:int, lin_idx:int, depth:int|None=None) -> UOp|None:
-  if len(rewrites:=viz_data.trace.rewrites[kernel_idx]) > lin_idx+1: return _reconstruct(viz_data, rewrites[lin_idx+1].sink)
+  if lin_idx+1 < len(rewrites:=viz_data.trace.rewrites[kernel_idx]): return _reconstruct(viz_data, rewrites[lin_idx+1].sink)
   for s in get_full_rewrite(viz_data, ctx:=rewrites[lin_idx], depth=depth):
     if (s["upat"] is not None and any(n in s["upat"][1] for n in upats)) or len(ctx.matches) == 0: return s["_sink"]
   return None
