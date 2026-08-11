@@ -453,13 +453,14 @@ def run_atb_gemm(rows, M, N, a_shard=None, b_shard=None, gpus=1, atol=1.0, rtol=
     devs = tuple(f"{Device.DEFAULT}:{i}" for i in range(gpus))
     a, b = a.shard(devs, axis=a_shard), b.shard(devs, axis=b_shard)
   out = hk_bf16_atb_gemm(a, b)
-  np.testing.assert_allclose(out.float().numpy(), ref.numpy(), atol=atol, rtol=rtol)
+  assert out.allclose(ref, atol=atol, rtol=rtol).item(), "forward mismatch"
 
 @unittest.skipUnless(has_hipcc(), "requires hipcc to compile")
 class TestHkBf16AtbGemm(unittest.TestCase):
   def setUp(self):
     if not is_cdna4(): self.skipTest("hk bf16 atb gemm is cdna4 only")
   def test_single(self): run_atb_gemm(256, 256, 256)
+  def test_mlperf(self): run_atb_gemm(16384, 4096, 128256)
   @needs_second_gpu
   def test_k_sharded(self): run_atb_gemm(512, 256, 256, a_shard=1, b_shard=1, gpus=2)
   @needs_second_gpu
