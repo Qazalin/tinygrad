@@ -221,6 +221,77 @@ def custom_uop_gemm(C:UOp, A:UOp, B:UOp) -> UOp:
 # ** bf16 A @ B.T kernel in C
 
 @functools.cache
+def custom_asm_bf16_mlperf_gemm(D:UOp, C:UOp, A:UOp, B:UOp, WS:UOp, Flags:UOp, *, variant:int) -> UOp:
+  if variant == 1:
+    from extra.gemm.asm_bf16_gemm1 import build_kernel
+    M, N, K, groups, lds_size = 128256, 16384, 4096, 255, 135168
+  elif variant == 2:
+    from extra.gemm.asm_bf16_gemm2 import build_kernel
+    M, N, K, groups, lds_size = 4096, 16384, 128256, 256, 133120
+  else: raise ValueError(f"unknown BF16 MLPerf GEMM variant {variant}")
+  threads, workgroups = UOp.special(256, "lidx0"), UOp.special(groups, "gidx0")
+  lds = UOp.placeholder((lds_size,), dtypes.uint8, 0, AddrSpace.LOCAL)
+  sink = UOp.sink(D.base, C.base, A.base, B.base, WS.base, Flags.base, lds, threads, workgroups,
+                  arg=KernelInfo(f"asm_bf16_gemm{variant}_{M}_{N}_{K}",
+                                 estimates=Estimates(ops=2*M*N*K, mem=(M*K+N*K+M*N)*2)))
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=x) for x in build_kernel(M, N, K)))))
+
+_asm_bf16_live_resources: dict[tuple[str, int], tuple[Tensor, Tensor, Tensor]] = {}
+
+def _get_asm_bf16_mlperf_resources(device:str, variant:int) -> tuple[Tensor, Tensor, Tensor]:
+  workspace = Tensor.empty(1 << 30, dtype=dtypes.uint8, device=device)
+  flags = Tensor.empty(1 << 20, dtype=dtypes.uint8, device=device)
+  c_dummy = Tensor.empty(1, dtype=dtypes.bfloat16, device=device)
+  # Flags encode synchronization state tied to the launch's operand addresses. Clear them synchronously when constructing a
+  # new launch, outside the scheduled graph; fixed-address TinyJit replays can then reuse the state left by the kernel.
+  wbuf, fbuf = workspace.uop.buffer, flags.uop.buffer
+  Device[device].synchronize()
+  Device[device].allocator._copyin(wbuf.ensure_allocated()._buf, memoryview(bytearray(wbuf.nbytes)))
+  Device[device].allocator._copyin(fbuf.ensure_allocated()._buf, memoryview(bytearray(fbuf.nbytes)))
+  Device[device].synchronize()
+  ret = workspace, flags, c_dummy
+  _asm_bf16_live_resources[(device, variant)] = ret
+  return ret
+
+def _asm_bf16_mlperf_gemm(a:Tensor, b:Tensor, variant:int) -> Tensor:
+  M, N, K = ((128256, 16384, 4096) if variant == 1 else (4096, 16384, 128256))
+  assert a.dtype == b.dtype == dtypes.bfloat16
+  assert a.shape == ((M, K) if variant == 1 else (K, M))
+  assert b.shape == (N, K)
+  raw = Tensor.invalids(N, M, dtype=dtypes.bfloat16, device=a.device)
+  assert isinstance(a.device, str), "BF16 MLPerf assembly GEMMs require a single device"
+  workspace, flags, c_dummy = _get_asm_bf16_mlperf_resources(a.device, variant)
+  raw = Tensor.custom_kernel(raw, c_dummy, a, b, workspace, flags,
+                             fxn=functools.partial(custom_asm_bf16_mlperf_gemm, variant=variant))[0]
+  return raw.transpose(0, 1)
+
+def asm_bf16_gemm1(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_mlperf_gemm(a, b, 1)
+def asm_bf16_gemm2(a:Tensor, b:Tensor) -> Tensor: return _asm_bf16_mlperf_gemm(a, b, 2)
+
+def custom_asm_bf16_mlperf_gemm_bw(gradient:UOp, kernel:UOp):
+  # Forward sources are (out, unused C, A[M,K], B physical [N,K], workspace, flags).
+  _, _, a, b_phys, _, _ = kernel.src[1:]
+  b_phys_t = Tensor(b_phys, device=b_phys.device)
+  g = Tensor(gradient.after(kernel), device=a.device).reshape(128256, 16384).cast(dtypes.bfloat16)
+  g_phys = g.T.contiguous()
+  # dA = (B @ G.T).T, using the fixed A.T@B kernel; dB = A.T @ G.
+  grad_a = asm_bf16_atb_gemm(b_phys_t.reshape(1, 16384, 4096), g_phys.reshape(1, 16384, 128256)).T
+  a_serial = Tensor(a.after(grad_a.uop), device=a.device)
+  grad_b_phys = asm_bf16_gemm2(a_serial.reshape(128256, 4096), g_phys).T
+  return None, None, grad_a.uop, grad_b_phys.uop, None, None
+
+def custom_asm_bf16_mlperf_gemm2_bw(gradient:UOp, kernel:UOp):
+  # Forward sources hold transposed physical inputs A[K,M] and B[N,K].
+  _, _, a_phys, b_phys, _, _ = kernel.src[1:]
+  b_phys_t = Tensor(b_phys, device=b_phys.device)
+  g_phys = Tensor(gradient.after(kernel), device=a_phys.device).reshape(4096, 16384).T.contiguous()
+  # Physical gradients are dA.T = (G.T @ B).T and dB.T = (A.T @ G).T.
+  grad_a_phys = asm_bf16_atb_gemm(g_phys.reshape(1, 16384, 4096), b_phys_t.reshape(1, 16384, 128256)).T
+  a_serial = Tensor(a_phys.after(grad_a_phys.uop), device=a_phys.device)
+  grad_b_phys = asm_bf16_gemm1(a_serial.reshape(128256, 4096), g_phys).T
+  return None, None, grad_a_phys.uop, grad_b_phys.uop, None, None
+
+@functools.cache
 def custom_hk_bf16_gemm(C:UOp, A:UOp, B:UOp, *args:UOp, dname:str) -> UOp:
   M, K = A.shape[0]*A.shape[1], A.shape[2]
   N, K2 = B.shape[(1 if B.ndim == 3 else 0):]
@@ -293,8 +364,8 @@ def asm_bf16_atb_gemm(a:Tensor, b:Tensor) -> Tensor:
     dname = a.device
   dname = dname.split(":")[0]
   if not is_multi and is_asm_fixed:
-    workspace = Tensor.empty(1 << 30, dtype=dtypes.uint8, device=a.device)
-    flags = Tensor.zeros(1 << 20, dtype=dtypes.uint8, device=a.device)
+    assert isinstance(a.device, str)
+    workspace, flags, _ = _get_asm_bf16_mlperf_resources(a.device, 0)
     out = Tensor.custom_kernel(out, a, b, workspace, flags, fxn=functools.partial(custom_hk_bf16_atb_gemm, dname=dname))[0]
   else:
     out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_hk_bf16_atb_gemm, dname=dname))[0]
@@ -523,7 +594,24 @@ def asm_gemm(a:Tensor, b:Tensor, x_scale:Tensor|None=None, w_scale:Tensor|None=N
       bw = functools.partial(custom_gemm_bw, n_scales=len(scales), has_grad_amax=grad_amax_state is not None, has_w_post=w_post_scale is not None)
       out = Tensor.custom_kernel(out, a, b.T, *scales, *extra, fxn=fxn, grad_fxn=bw)[0]
     elif a.dtype == dtypes.bfloat16:
-      out = Tensor.custom_kernel(out, a, b.T, b, fxn=functools.partial(custom_hk_bf16_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
+      if not is_multi and (batch, M, N, K) == (1, 128256, 16384, 4096):
+        assert isinstance(a.device, str)
+        workspace, flags, c_dummy = _get_asm_bf16_mlperf_resources(a.device, 1)
+        raw = Tensor.invalids(N, M, dtype=dtypes.bfloat16, device=a.device)
+        raw = Tensor.custom_kernel(raw, c_dummy, a.reshape(M, K), b.T.contiguous(), workspace, flags,
+                                   fxn=functools.partial(custom_asm_bf16_mlperf_gemm, variant=1),
+                                   grad_fxn=custom_asm_bf16_mlperf_gemm_bw)[0]
+        out = raw.transpose(0, 1).unsqueeze(0)
+      elif not is_multi and (batch, M, N, K) == (1, 4096, 16384, 128256):
+        assert isinstance(a.device, str)
+        workspace, flags, c_dummy = _get_asm_bf16_mlperf_resources(a.device, 2)
+        raw = Tensor.invalids(N, M, dtype=dtypes.bfloat16, device=a.device)
+        raw = Tensor.custom_kernel(raw, c_dummy, a.reshape(M, K).T.contiguous(), b.T.contiguous(), workspace, flags,
+                                   fxn=functools.partial(custom_asm_bf16_mlperf_gemm, variant=2),
+                                   grad_fxn=custom_asm_bf16_mlperf_gemm2_bw)[0]
+        out = raw.transpose(0, 1).unsqueeze(0)
+      else:
+        out = Tensor.custom_kernel(out, a, b.T, b, fxn=functools.partial(custom_hk_bf16_gemm, dname=dname), grad_fxn=custom_gemm_bw)[0]
   else:
     out = Tensor.custom_kernel(out, a, b, fxn=custom_uop_gemm, grad_fxn=custom_gemm_bw)[0]
   if k_sharded: out = out.sum(0)
