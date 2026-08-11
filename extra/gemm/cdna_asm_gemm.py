@@ -244,6 +244,16 @@ def custom_hk_bf16_atb_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
   K, M = A.shape[0]*A.shape[1], A.shape[2]
   K2, N = B.shape[0]*B.shape[1], B.shape[2]
   assert K == K2, f"{A.shape} {B.shape}"
+  if (M, N, K) == (4096, 128256, 16384):
+    from extra.gemm.asm_bf16_atb import build_kernel
+    threads = UOp.special(256, "lidx0")
+    workgroups = UOp.special(8016, "gidx0")
+    lds = UOp.placeholder((131072,), dtypes.uint8, 0, AddrSpace.LOCAL)
+    sink = UOp.sink(C.base, A.base, B.base, lds, threads, workgroups,
+                    arg=KernelInfo(f"asm_bf16_atb_gemm_{M}_{N}_{K}",
+                                   estimates=Estimates(ops=2*M*N*K, mem=(M*K+N*K+M*N)*A.dtype.itemsize)))
+    insts = build_kernel(M, N, K)
+    return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=x) for x in insts))))
   block_m, block_n, block_k, num_warps = 256, 256, 64, 8
   assert M % block_m == 0 and N % block_n == 0 and K % block_k == 0, f"invalid bf16 atb tile {(block_m, block_n, block_k)} for {(M, N, K)}"
   threads = UOp.special(64 * num_warps, "lidx0")
@@ -257,7 +267,7 @@ def custom_hk_bf16_atb_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
                                 UOp(Ops.BINARY, arg=lib)))
 
-def hk_bf16_atb_gemm(a:Tensor, b:Tensor) -> Tensor:
+def asm_bf16_atb_gemm(a:Tensor, b:Tensor) -> Tensor:
   assert a.dtype == b.dtype == dtypes.bfloat16, f"expected bf16, got {a.dtype} {b.dtype}"
   assert a.ndim == b.ndim == 3 and a.shape[:2] == b.shape[:2], f"{a.shape} {b.shape}"
   batch, rows, M = a.shape
@@ -281,6 +291,9 @@ def hk_bf16_atb_gemm(a:Tensor, b:Tensor) -> Tensor:
   out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_hk_bf16_atb_gemm, dname=dname))[0]
   if reduce_out: out = out.sum(0)
   return out.squeeze(0) if out.ndim == 3 else out
+
+def hk_bf16_atb_gemm(a:Tensor, b:Tensor) -> Tensor:
+  return asm_bf16_atb_gemm(a, b)
 
 # ** backward gemm, might use the asm gemm
 

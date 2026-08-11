@@ -453,7 +453,36 @@ def run_atb_gemm(rows, M, N, a_shard=None, b_shard=None, gpus=1, atol=1.0, rtol=
     devs = tuple(f"{Device.DEFAULT}:{i}" for i in range(gpus))
     a, b = a.shard(devs, axis=a_shard), b.shard(devs, axis=b_shard)
   out = hk_bf16_atb_gemm(a, b)
-  assert out.allclose(ref, atol=atol, rtol=rtol).item(), "forward mismatch"
+  matches = out.allclose(ref, atol=atol, rtol=rtol).item()
+  if not matches:
+    diff = (out.float() - ref).abs()
+    bad = diff > (atol + rtol * ref.abs())
+    bad_tiles = bad.reshape(M//256, 256, N//256, 256).max(axis=(1, 3)).numpy()
+    bad_tile_coords = np.argwhere(bad_tiles)
+    rmse = diff.square().mean().sqrt().item()
+    rel_l2 = (diff.square().sum() / ref.square().sum()).sqrt().item()
+    abs_error_counts = {threshold: (diff > threshold).sum().item() for threshold in (1, 2, 4, 8, 16, 32)}
+    print(f"max_abs={diff.max().item()} rmse={rmse} rel_l2={rel_l2} bad_elements={bad.sum().item()} bad_tiles={len(bad_tile_coords)}")
+    print(f"abs_error_counts={abs_error_counts}")
+    print(f"first_bad_tile_coords={bad_tile_coords[:16].tolist()}")
+    if len(bad_tile_coords):
+      tm, tn = (int(x) for x in bad_tile_coords[0])
+      rs, cs = slice(tm*256, tm*256+8), slice(tn*256, tn*256+8)
+      out_sample, ref_sample = out[rs, cs].float().numpy(), ref[rs, cs].numpy()
+      err_sample = out_sample - ref_sample
+      print(f"first bad tile {(tm, tn)} out:\n{out_sample}")
+      print(f"first bad tile {(tm, tn)} ref:\n{ref_sample}")
+      print(f"first bad tile {(tm, tn)} error:\n{err_sample}")
+      aa = a[0, :, rs].float().numpy().reshape(rows//64, 64, 8)
+      bb = b[0, :, cs].float().numpy().reshape(rows//64, 64, 8)
+      partials = np.einsum("tki,tkj->tij", aa, bb)
+      numpy_sample = partials.sum(axis=0)
+      print(f"sample_error_vs_numpy: out={np.linalg.norm(out_sample-numpy_sample)} ref={np.linalg.norm(ref_sample-numpy_sample)}")
+      missing_scores = np.linalg.norm(partials + err_sample, axis=(1, 2))
+      duplicate_scores = np.linalg.norm(partials - err_sample, axis=(1, 2))
+      print(f"closest missing K step={missing_scores.argmin()} score={missing_scores.min()}")
+      print(f"closest duplicate K step={duplicate_scores.argmin()} score={duplicate_scores.min()}")
+  assert matches, "forward mismatch"
 
 @unittest.skipUnless(has_hipcc(), "requires hipcc to compile")
 class TestHkBf16AtbGemm(unittest.TestCase):
