@@ -1,7 +1,10 @@
 import unittest
+from unittest.mock import patch
+import numpy as np
 from tinygrad import Tensor, Device, dtypes, Context
 from tinygrad.helpers import getenv, system, DEV
 from extra.gemm.cdna_asm_gemm import asm_gemm, hk_bf16_atb_gemm
+from extra.gemm.gemm_bf16 import build_kernel as build_bf16_kernel, code_object_text as bf16_code_object_text
 from test.helpers import needs_second_gpu
 from examples.mlperf.models.flat_llama import FP8_DTYPE, quantize_fp8, FP8_MAX
 
@@ -120,6 +123,28 @@ class TestAsmGEMM(unittest.TestCase):
       self.skipTest("assembly gemm is only for cdna4")
 
   def test_tiny(self): verify_asm_gemm(1, 256, 256, 256)
+
+  def test_bf16_dsl_roundtrip(self):
+    for kind in ("ab", "atb"):
+      self.assertEqual(b"".join(x.to_bytes() for x in build_bf16_kernel(256, 256, 256, kind)),
+                       bf16_code_object_text(256, 256, 256, kind))
+
+  def test_mutated_bf16_asm_fails_numerical_oracle(self):
+    from tinygrad.runtime.autogen.amd.cdna.ins import v_mfma_f32_16x16x32_bf16
+    from extra.gemm.cdna_asm_gemm import custom_hk_bf16_gemm
+    original = build_bf16_kernel(256, 256, 256)
+    # Keep every instruction the same size, but reverse A/B for each MFMA.
+    mutated = tuple(v_mfma_f32_16x16x32_bf16(x.vdst, x.src1, x.src0, x.src2, x.cbsz, x.abid, x.blgp, x.opsel, x.opsel_hi, x.neg_hi)
+                    if x.op.name == "V_MFMA_F32_16X16X32_BF16" else x for x in original)
+    self.assertNotEqual(b"".join(x.to_bytes() for x in mutated), b"".join(x.to_bytes() for x in original))
+    rng = np.random.default_rng(7)
+    a_np, b_np = (rng.standard_normal((256, 256), dtype=np.float32) for _ in range(2))
+    a, b = Tensor(a_np, dtype=dtypes.bfloat16), Tensor(b_np, dtype=dtypes.bfloat16)
+    custom_hk_bf16_gemm.cache_clear()
+    with patch("extra.gemm.gemm_bf16.build_kernel", return_value=mutated): bad = asm_gemm(a, b).realize()
+    custom_hk_bf16_gemm.cache_clear()
+    with self.assertRaises(AssertionError):
+      np.testing.assert_allclose(bad.float().numpy(), a.float().numpy() @ b.float().numpy(), atol=2e-1, rtol=1e-2)
 
   def test_verify_with_numpy(self):
     import numpy as np

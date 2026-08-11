@@ -218,10 +218,11 @@ def custom_uop_gemm(C:UOp, A:UOp, B:UOp) -> UOp:
   store = C.flatten().index((m*UOp.const(N)+n)).store(red).end(m, n)
   return store.sink(arg=KernelInfo(name=f'uop_gemm_{M}_{N}_{K}'))
 
-# ** bf16 A @ B.T kernel in C
+# ** bf16 A @ B.T kernel in the AMD Python instruction DSL
 
 @functools.cache
 def custom_hk_bf16_gemm(C:UOp, A:UOp, B:UOp, *args:UOp, dname:str) -> UOp:
+  from extra.gemm.gemm_bf16 import build_kernel
   M, K = A.shape[0]*A.shape[1], A.shape[2]
   N, K2 = B.shape[(1 if B.ndim == 3 else 0):]
   assert K == K2, f"{A.shape} {B.shape}"
@@ -230,17 +231,14 @@ def custom_hk_bf16_gemm(C:UOp, A:UOp, B:UOp, *args:UOp, dname:str) -> UOp:
   threads = UOp.special(64 * num_warps, "lidx0")
   workgroups = UOp.special((M // block_m) * (N // block_n), "gidx0")
   b_extra = args[0].base if len(args) >= 1 else B.base
-  sink = UOp.sink(C.base, A.base, B.base, b_extra, threads, workgroups,
+  lds = UOp.placeholder((160000,), dtypes.uint8, 0, AddrSpace.LOCAL)
+  sink = UOp.sink(C.base, A.base, B.base, b_extra, lds, threads, workgroups,
                   arg=KernelInfo(f"hk_bf16_gemm_{M}_{N}_{K}", estimates=Estimates(ops=2*M*N*K, mem=(M*K+N*K+M*N)*A.dtype.itemsize)))
-  kittens_path = pathlib.Path(__file__).parent.parent/"thunder"/"amd"
-  src = (kittens_path/"gemm_bf16.cpp").read_text()
-  lib = HIPCCCompiler("gfx950", [f"-I{(kittens_path/'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math",
-                                 "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DGEMM_M={M}", f"-DGEMM_N={N}", f"-DGEMM_K={K}"]).compile_cached(src)
-  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
-                                UOp(Ops.BINARY, arg=lib)))
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=x) for x in build_kernel(M, N, K)))))
 
 @functools.cache
 def custom_hk_bf16_atb_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
+  from extra.gemm.gemm_bf16 import build_kernel
   K, M = A.shape[0]*A.shape[1], A.shape[2]
   K2, N = B.shape[0]*B.shape[1], B.shape[2]
   assert K == K2, f"{A.shape} {B.shape}"
@@ -248,14 +246,10 @@ def custom_hk_bf16_atb_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
   assert M % block_m == 0 and N % block_n == 0 and K % block_k == 0, f"invalid bf16 atb tile {(block_m, block_n, block_k)} for {(M, N, K)}"
   threads = UOp.special(64 * num_warps, "lidx0")
   workgroups = UOp.special((M // block_m) * (N // block_n), "gidx0")
-  sink = UOp.sink(C.base, A.base, B.base, threads, workgroups,
+  lds = UOp.placeholder((160000,), dtypes.uint8, 0, AddrSpace.LOCAL)
+  sink = UOp.sink(C.base, A.base, B.base, lds, threads, workgroups,
                   arg=KernelInfo(f"hk_bf16_atb_gemm_{M}_{N}_{K}", estimates=Estimates(ops=2*M*N*K, mem=(M*K+N*K+M*N)*A.dtype.itemsize)))
-  kittens_path = pathlib.Path(__file__).parent.parent/"thunder"/"amd"
-  src = (kittens_path/"gemm_bf16_atb.cpp").read_text()
-  lib = HIPCCCompiler("gfx950", [f"-I{(kittens_path/'include').as_posix()}", "-std=c++20", "-DKITTENS_CDNA4", "-ffast-math",
-                                 "-DHIP_ENABLE_WARP_SYNC_BUILTINS", f"-DGEMM_M={M}", f"-DGEMM_N={N}", f"-DGEMM_K={K}"]).compile_cached(src)
-  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=src),
-                                UOp(Ops.BINARY, arg=lib)))
+  return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=x) for x in build_kernel(M, N, K, "atb")))))
 
 def hk_bf16_atb_gemm(a:Tensor, b:Tensor) -> Tensor:
   assert a.dtype == b.dtype == dtypes.bfloat16, f"expected bf16, got {a.dtype} {b.dtype}"
