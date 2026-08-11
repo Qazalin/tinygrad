@@ -240,7 +240,7 @@ def custom_hk_bf16_gemm(C:UOp, A:UOp, B:UOp, *args:UOp, dname:str) -> UOp:
                                 UOp(Ops.BINARY, arg=lib)))
 
 @functools.cache
-def custom_hk_bf16_atb_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
+def custom_hk_bf16_atb_gemm(C:UOp, A:UOp, B:UOp, *extra:UOp, dname:str) -> UOp:
   K, M = A.shape[0]*A.shape[1], A.shape[2]
   K2, N = B.shape[0]*B.shape[1], B.shape[2]
   assert K == K2, f"{A.shape} {B.shape}"
@@ -249,7 +249,8 @@ def custom_hk_bf16_atb_gemm(C:UOp, A:UOp, B:UOp, dname:str) -> UOp:
     threads = UOp.special(256, "lidx0")
     workgroups = UOp.special(8016, "gidx0")
     lds = UOp.placeholder((131072,), dtypes.uint8, 0, AddrSpace.LOCAL)
-    sink = UOp.sink(C.base, A.base, B.base, lds, threads, workgroups,
+    assert len(extra) == 2
+    sink = UOp.sink(C.base, A.base, B.base, extra[0].base, extra[1].base, lds, threads, workgroups,
                     arg=KernelInfo(f"asm_bf16_atb_gemm_{M}_{N}_{K}",
                                    estimates=Estimates(ops=2*M*N*K, mem=(M*K+N*K+M*N)*A.dtype.itemsize)))
     insts = build_kernel(M, N, K)
@@ -285,10 +286,19 @@ def asm_bf16_atb_gemm(a:Tensor, b:Tensor) -> Tensor:
     out = Tensor(inv.uop.unshard(out_axis), device=a.device)
     dname = a.device[0]
   else:
-    out = Tensor.invalids(1, M, N, dtype=a.dtype, device=a.device)
+    # The imported Cijk kernel writes column-major [N,M]. Expose the logical
+    # [M,N] result as a view after the custom kernel has run.
+    is_asm_fixed = (M, N, batch * rows) == (4096, 128256, 16384)
+    out = Tensor.invalids(M*N, dtype=a.dtype, device=a.device) if is_asm_fixed else Tensor.invalids(1, M, N, dtype=a.dtype, device=a.device)
     dname = a.device
   dname = dname.split(":")[0]
-  out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_hk_bf16_atb_gemm, dname=dname))[0]
+  if not is_multi and is_asm_fixed:
+    workspace = Tensor.empty(1 << 30, dtype=dtypes.uint8, device=a.device)
+    flags = Tensor.zeros(1 << 20, dtype=dtypes.uint8, device=a.device)
+    out = Tensor.custom_kernel(out, a, b, workspace, flags, fxn=functools.partial(custom_hk_bf16_atb_gemm, dname=dname))[0]
+  else:
+    out = Tensor.custom_kernel(out, a, b, fxn=functools.partial(custom_hk_bf16_atb_gemm, dname=dname))[0]
+  if not is_multi and is_asm_fixed: out = out[:M*N].reshape(N, M).transpose(0, 1)
   if reduce_out: out = out.sum(0)
   return out.squeeze(0) if out.ndim == 3 else out
 
