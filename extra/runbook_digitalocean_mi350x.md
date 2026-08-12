@@ -94,6 +94,11 @@ Enter API key from https://wandb.ai/authorize
 ## Phase 5: Run Training
 
 ### 5.1 Smoke test (beam search, 2 layers, real data)
+
+Copy the cache file to tmp:
+
+`cp llama31_8b_mi350x_beam.db3 /tm`
+
 Always run beam first to validate the pipeline:
 ```bash
 cd /root/tinygrad
@@ -102,7 +107,7 @@ COMGR_3_PATH=/opt/rocm/lib/libamd_comgr.so \
 CC=/opt/rocm/core-7.14/lib/llvm/bin/clang \
 DEV=AMD:HIP \
 ROCM_PATH=/opt/rocm \
-CACHEDB=llama31_8b_mi350x_beam.db3 \
+CACHEDB=/tmp/llama31_8b_mi350x_beam.db3 \
   bash examples/mlperf/training_submission_v6.0/tinycorp/benchmarks/llama31_8b/implementations/tinybox_8xMI350X/dev_beam.sh
 ```
 
@@ -114,7 +119,7 @@ COMGR_3_PATH=/opt/rocm/lib/libamd_comgr.so \
 CC=/opt/rocm/core-7.14/lib/llvm/bin/clang \
 DEV=AMD:HIP \
 ROCM_PATH=/opt/rocm \
-CACHEDB=llama31_8b_mi350x_beam.db3 \
+CACHEDB=/tmp/llama31_8b_mi350x_beam.db3 \
 WANDB=1 \
   bash examples/mlperf/training_submission_v6.0/tinycorp/benchmarks/llama31_8b/implementations/tinybox_8xMI350X/dev_run.sh
 ```
