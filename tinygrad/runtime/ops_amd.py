@@ -472,6 +472,10 @@ class AMDCopyQueue(HWQueue):
     self.internal_cmd_sizes.append(len(arr))
 
   def copy(self, dest:HCQBuffer, src:HCQBuffer, copy_size:int):
+    if isinstance(self.dev.iface, KFDIface) and isinstance(dest.owner, AMDDevice) and isinstance(dest.owner.iface, KFDIface):
+      if (engine_id:=self.dev.iface.sdma_engine_ids.get(dest.owner.iface.node_id)) is not None:
+        assert getattr(self, "sdma_engine_id", engine_id) == engine_id, "an SDMA queue cannot target multiple engines"
+        self.sdma_engine_id = engine_id
     copied, copy_commands = 0, (copy_size + self.max_copy_size - 1) // self.max_copy_size
 
     for _ in range(copy_commands):
@@ -520,7 +524,7 @@ class AMDCopyQueue(HWQueue):
     self._q, self.cmd_sizes = hw_view, [len(self.indirect_cmd)]
 
   def _submit(self, dev:AMDDevice):
-    sdma_queue = dev.sdma_queue(self.queue_idx)
+    sdma_queue = dev.sdma_queue(self.queue_idx, getattr(self, "sdma_engine_id", None))
     if self.binded_device == dev:
       # An IB packet must end on a 8 DW boundary.
       add = (8 - (((sdma_queue.put_value % 32) // 4) + len(self.indirect_cmd) % 8)) % 8
@@ -712,7 +716,14 @@ class KFDIface:
     if device_id >= len(KFDIface.gpus): raise RuntimeError(f"No device found for {device_id}. Requesting more devices than the system has?")
 
     self.gpu_id = int(FileIOInterface(f"{kfd_topo_path}/{KFDIface.gpus[device_id]}/gpu_id").read())
+    self.node_id = int(KFDIface.gpus[device_id].split('/')[-1])
     self.props = {(p:=l.split())[0]: int(p[1]) for l in FileIOInterface(f"{kfd_topo_path}/{KFDIface.gpus[device_id]}/properties").read().splitlines()}
+    self.sdma_engine_ids:dict[int, int] = {}
+    for link in FileIOInterface(f"{kfd_topo_path}/{KFDIface.gpus[device_id]}/io_links").listdir():
+      link_path = f"{kfd_topo_path}/{KFDIface.gpus[device_id]}/io_links/{link}/properties"
+      link_props = {(p:=l.split())[0]: int(p[1]) for l in FileIOInterface(link_path).read().splitlines()}
+      if (mask:=link_props.get("recommended_sdma_engine_id_mask", 0)) and mask.bit_count() == 1:
+        self.sdma_engine_ids[link_props["node_to"]] = mask.bit_length() - 1
     self.dev_sysfs_path = f"/sys/class/drm/renderD{self.props['drm_render_minor']}/device"
     ip_base = f"{self.dev_sysfs_path}/ip_discovery/die/0"
     id2ip = {am.GC_HWID: am.GC_HWIP, am.SDMA0_HWID: am.SDMA0_HWIP, am.NBIF_HWID: am.NBIF_HWIP}
@@ -789,12 +800,14 @@ class KFDIface:
     return HCQBuffer(mem.va_addr, mem.size, meta=mem.meta, owner=mem.owner)
 
   def create_queue(self, queue_type, ring, gart, rptr, wptr, eop_buffer=None, cwsr_buffer=None, ctl_stack_size=0, ctx_save_restore_size=0,
-                   xcc_id=0, idx=0):
+                   xcc_id=0, idx=0, sdma_engine_id=None):
+    if queue_type == kfd.KFD_IOC_QUEUE_TYPE_SDMA and sdma_engine_id is not None and self.kfd_ver >= (1, 17):
+      queue_type = kfd.KFD_IOC_QUEUE_TYPE_SDMA_BY_ENG_ID
     queue = kfd.AMDKFD_IOC_CREATE_QUEUE(KFDIface.kfd, ring_base_address=ring.va_addr, ring_size=ring.size, gpu_id=self.gpu_id,
       queue_type=queue_type, queue_percentage=kfd.KFD_MAX_QUEUE_PERCENTAGE|(xcc_id<<8), queue_priority=getenv("AMD_KFD_QUEUE_PRIORITY", 7),
       eop_buffer_address=eop_buffer.va_addr if eop_buffer else 0, eop_buffer_size=eop_buffer.size if eop_buffer else 0, ctl_stack_size=ctl_stack_size,
       ctx_save_restore_address=cwsr_buffer.va_addr if cwsr_buffer else 0, ctx_save_restore_size=ctx_save_restore_size,
-      write_pointer_address=gart.va_addr+wptr, read_pointer_address=gart.va_addr+rptr+8*xcc_id)
+      write_pointer_address=gart.va_addr+wptr, read_pointer_address=gart.va_addr+rptr+8*xcc_id, sdma_engine_id=sdma_engine_id or 0)
 
     if not hasattr(self, 'doorbells'):
       self.doorbells_base = queue.doorbell_offset & (~0x1fff) # doorbell is two pages
@@ -1027,7 +1040,8 @@ class AMDDevice(HCQCompiled):
       self.sqtt_wptrs = self.allocator.alloc(round_up(self.se_cnt * self.xccs * 4, 0x1000), BufferSpec(cpu_access=True, nolru=True))
       self.sqtt_next_cmd_id = itertools.count(0)
 
-  def create_queue(self, queue_type, ring_size, ctx_save_restore_size=0, eop_buffer_size=0, ctl_stack_size=0, debug_memory_size=0, idx=0):
+  def create_queue(self, queue_type, ring_size, ctx_save_restore_size=0, eop_buffer_size=0, ctl_stack_size=0, debug_memory_size=0, idx=0,
+                   sdma_engine_id=None):
     ring = self.iface.alloc(ring_size, uncached=True, cpu_access=True)
     gart = self.iface.alloc(0x100, uncached=True, cpu_access=True)
 
@@ -1042,16 +1056,19 @@ class AMDDevice(HCQCompiled):
     cwsr_buffer = self.iface.alloc(cwsr_buffer_size) if ctx_save_restore_size else None
     eop_buffer = self.iface.alloc(eop_buffer_size) if eop_buffer_size else None
 
+    kwargs = {"sdma_engine_id":sdma_engine_id} if sdma_engine_id is not None and isinstance(self.iface, KFDIface) else {}
     return (self.iface.create_queue(queue_type, ring, gart, rptr=getattr(hsa.amd_queue_t, 'read_dispatch_id').offset,
             wptr=getattr(hsa.amd_queue_t, 'write_dispatch_id').offset, eop_buffer=eop_buffer, cwsr_buffer=cwsr_buffer,
-            ctx_save_restore_size=ctx_save_restore_size, ctl_stack_size=ctl_stack_size, idx=idx))
+            ctx_save_restore_size=ctx_save_restore_size, ctl_stack_size=ctl_stack_size, idx=idx, **kwargs))
 
-  def sdma_queue(self, idx:int):
+  def sdma_queue(self, idx:int, engine_id:int|None=None):
     if getenv("AMD_DISABLE_SDMA"): return None
-    if idx in self.sdma_queues: return self.sdma_queues[idx]
+    key = (idx, engine_id) if engine_id is not None else idx
+    if key in self.sdma_queues: return self.sdma_queues[key]
     with contextlib.suppress(OSError):
-      self.sdma_queues[idx] = self.create_queue(kfd.KFD_IOC_QUEUE_TYPE_SDMA, 0x200 if self.is_usb() else (16 << 20), idx=idx)
-    return self.sdma_queues.get(idx, None)
+      kwargs = {"sdma_engine_id":engine_id} if engine_id is not None and isinstance(self.iface, KFDIface) else {}
+      self.sdma_queues[key] = self.create_queue(kfd.KFD_IOC_QUEUE_TYPE_SDMA, 0x200 if self.is_usb() else (16 << 20), idx=idx, **kwargs)
+    return self.sdma_queues.get(key, None)
 
   def _ensure_has_local_memory(self, private_segment_size):
     if self.max_private_segment_size >= private_segment_size: return
@@ -1098,6 +1115,8 @@ class AMDDevice(HCQCompiled):
 
   def device_props(self): return self.iface.props
 
-  def hw_copy_queues(self): return [(f"SDMA:{i}", functools.partial(unwrap(self.hw_copy_queue_t), queue_idx=i)) for i in self.sdma_queues]
+  def hw_copy_queues(self):
+    return [(f"SDMA:{idx}", functools.partial(unwrap(self.hw_copy_queue_t), queue_idx=idx)) for i in self.sdma_queues
+            for idx in [i[0] if isinstance(i, tuple) else i]]
 
 if getenv("HCQ2"): from extra.hcq2.ops_amd2 import * # noqa: F401, F403 # pylint: disable=unused-import
