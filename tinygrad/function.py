@@ -21,7 +21,7 @@ pm_ctx = PatternMatcher([
 def invalid_outputs(uret:UOp) -> set[UOp]:
   # invalids() returns fresh write-only scratch: a clone storing CONST(Invalid)
   # don't capture it as an input; only skip fresh buffers, not realized ones
-  return {u.src[0].buf_uop for u in uret.backward_slice_with_self
+  return {u.src[0].buf_uop for u in uret.toposort(enter_calls=False)
           if u.op is Ops.STORE and u.src[1].base.is_invalid and not u.src[0].buf_uop.is_realized}
 
 def renumber_invalid_outputs(uret:UOp) -> UOp:
