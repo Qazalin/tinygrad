@@ -1702,7 +1702,7 @@ def _compile_vop3p(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P | irc.VOP3PX2, ctx: _
   lane = ctx.range()
   exec_mask = ctx.rexec()
   vdst_reg = ctx.inst_field(type(inst).vdst)
-  is_pk_f32 = 'PK' in op_name and 'F32' in op_name and 'MOV' not in op_name  # CDNA packed F32 ops
+  is_pk_f32 = op_name.startswith('V_PK_') and 'F32' in op_name  # CDNA packed F32 arithmetic
   is_pk_mov_b32 = 'PK_MOV_B32' in op_name  # CDNA packed MOV needs special handling
   do_cast = any(x in op_name for x in ('F16', 'F32', 'BF16')) and 'IU' not in op_name and not is_pk_f32
   literal = ctx.inst_field(type(inst).literal) if hasattr(type(inst), 'literal') else None  # type: ignore[union-attr]
@@ -1712,28 +1712,6 @@ def _compile_vop3p(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P | irc.VOP3PX2, ctx: _
   opsel, opsel_hi = getattr(inst, 'opsel', 0) or 0, getattr(inst, 'opsel_hi', 3) if getattr(inst, 'opsel_hi', 3) is not None else 3
   opsel_hi2 = getattr(inst, 'opsel_hi2', 1) if getattr(inst, 'opsel_hi2', 1) is not None else 1
   neg, neg_hi = getattr(inst, 'neg', 0) or 0, getattr(inst, 'neg_hi', 0) or 0
-
-  if op_name == 'V_PK_ADD_F32':
-    src_offs = [ctx.inst_field(type(inst).src0), ctx.inst_field(type(inst).src1)]
-    def _pk_f32(off: UOp, hi: bool, negate: bool) -> UOp:
-      is_vgpr, is_sgpr = off >= _c(256), off < _c(128)
-      vgpr = ctx.rvgpr_dyn(is_vgpr.where(off - _c(256) + _c(int(hi)), _c(0)), lane)
-      scalar = is_sgpr.where(ctx.rsgpr_dyn(is_sgpr.where(off + _c(int(hi)), _c(0))), ctx.rsrc_dyn(off, lane))
-      bits = is_vgpr.where(vgpr, scalar)
-      if negate: bits = bits ^ UOp.const(0x80000000, dtypes.uint32)
-      return bits.bitcast(dtypes.float32)
-    lo = _pk_f32(src_offs[0], bool(opsel & 1), bool(neg & 1)) + _pk_f32(src_offs[1], bool(opsel & 2), bool(neg & 2))
-    hi = _pk_f32(src_offs[0], bool(opsel_hi & 1), bool(neg_hi & 1)) + _pk_f32(src_offs[1], bool(opsel_hi & 2), bool(neg_hi & 2))
-    stores = [ctx.wvgpr_dyn(vdst_reg, lane, lo.bitcast(dtypes.uint32), exec_mask),
-              ctx.wvgpr_dyn(vdst_reg + _c(1), lane, hi.bitcast(dtypes.uint32), exec_mask)]
-    return UOp.sink(UOp.group(*stores).end(lane), *ctx.inc_pc())
-
-  # For packed FP4 conversion OPSEL[3:2] chooses the destination byte; it does
-  # not select halves of the three f32 sources as it does for arithmetic VOP3P.
-  if 'CVT_SCALEF32_PK_FP4_F32' in op_name:
-    fp4_srcs: dict[str, UOp | int] = {f'S{i}': ctx.rsrc_dyn(ctx.inst_field(getattr(type(inst), f'src{i}')), lane) for i in range(3)}
-    fp4_srcs['OPSEL'] = UOp.const(opsel, dtypes.uint32)
-    return ctx.compile_vop_pcode(inst.op, fp4_srcs, lane, vdst_reg, exec_mask)
 
   if is_pk_mov_b32:
     # v_pk_mov_b32: D[lo] = src0[opsel_bit0 ? hi : lo], D[hi] = src1[opsel_bit1 ? hi : lo]
@@ -1812,6 +1790,7 @@ def _compile_vop3p(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P | irc.VOP3PX2, ctx: _
             'S1': build_remapped_src(src1, opsel & 2, opsel_hi & 2, n1, nh1),
             'S2': build_remapped_src(src2, opsel & 4, 1 if opsel_hi2 else 0, n2, nh2)}
     if is_dot_iu: srcs['NEG'] = UOp.const(neg, dtypes.uint32)
+  srcs.setdefault('OPSEL', UOp.const(opsel, dtypes.uint32))
   return ctx.compile_vop_pcode(inst.op, srcs, lane, vdst_reg, exec_mask)
 
 def _compile_vopd(inst: ir3.VOPD | ir4.VOPD, ctx: _Ctx) -> UOp:
@@ -1962,7 +1941,7 @@ def _compile_mem_op(inst: ir3.DS|ir3.FLAT|ir3.GLOBAL|ir3.SCRATCH|ir4.DS|ir4.VFLA
         data = {'DATA': _u64(ctx.rvgpr_dyn(vdata_reg, lane), ctx.rvgpr_dyn(vdata_reg + _c(1), lane)),
                 'DATA2': _u64(ctx.rvgpr_dyn(data1_reg, lane), ctx.rvgpr_dyn(data1_reg + _c(1), lane)) if has_data1 else UOp.const(0, dtypes.uint64)}
       # RDNA3 uses ADDR/OFFSET, RDNA4 uses vgpr_a/offset (lowercase) + CalcDsAddr function
-      pcode_addr = addr_reg if 'VGPR[' in pcode and 'MEM[' not in pcode else addr
+      pcode_addr = addr_reg if 'VGPR[' in pcode else addr
       return {'ADDR': pcode_addr, 'ADDR_BASE': addr, 'OFFSET': offset, 'OFFSET0': offset0, 'OFFSET1': offset1,
               '_lds': mem, 'laneId': lane,
               '_vgpr': ctx.vgpr, '_wave_size': ctx.wave_size,
@@ -2046,8 +2025,7 @@ def _compile_mem_op(inst: ir3.DS|ir3.FLAT|ir3.GLOBAL|ir3.SCRATCH|ir4.DS|ir4.VFLA
   lane = ctx.range()
   active = _lane_active(exec_mask, lane)
   pcode_vars, assigns = parse_pcode(pcode, make_srcs(lane))
-  writes_return_data = '_RTN' in op_name or (is_lds and (op_name.startswith('DS_LOAD') or op_name.startswith('DS_READ'))) or \
-                       bool(is_atomic and glc) or any(dest.startswith('RETURN_DATA') for dest, _ in assigns)
+  writes_return_data = (is_lds and 'vdst' in inst.operands) or bool(is_atomic and glc)
   stores = [s for dest, val in assigns for s in make_stores(dest, val, lane, active, writes_return_data)]
 
   # FLAT/GLOBAL/SCRATCH: collect VDATA slices for loads
@@ -2087,8 +2065,7 @@ def _compile_mubuf(inst: irc.MUBUF, ctx: _Ctx) -> UOp:
   buffer_offset = (stride * index + voff + offset.cast(dtypes.uint64)).cast(dtypes.uint32)
   in_bounds = active & buffer_offset.__lt__(num_records)
   addr = base + soff + buffer_offset.cast(dtypes.uint64)
-  # Keep speculative host loads inside the mapped resource even when the lane is masked out below.
-  addr = in_bounds.where(addr, base + soff)
+  addr = in_bounds.where(addr, base)
   mem = ctx.vmem
 
   stores: list[UOp] = []

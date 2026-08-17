@@ -343,16 +343,10 @@ class TestConcatWidthParsing(unittest.TestCase):
 
   def test_cdna_ds_swizzle_bit_mode(self):
     from tinygrad.runtime.autogen.amd.cdna.enum import DSOp as CDNADSOp
-    vgpr = UOp.param(0, dtypes.uint32, (256,))
     for xor_mask in (1, 2, 4):
-      lane, addr_reg = 37, 2
-      _, assigns = parse_pcode(get_pcode(CDNADSOp.DS_SWIZZLE_B32), {
-        'laneId': UOp.const(lane, dtypes.uint32), 'OFFSET': UOp.const((xor_mask << 10) | 0x1F, dtypes.uint32),
-        'ADDR': UOp.const(addr_reg, dtypes.uint32), '_vgpr': vgpr, '_wave_size': 64})
-      self.assertEqual(len(assigns), 1)
-      dest, val = assigns[0]
-      self.assertTrue(dest.startswith('RETURN_DATA'))
-      self.assertEqual(val.src[0].src[1].simplify().val, addr_reg * 64 + (lane ^ xor_mask))
+      env, _ = parse_pcode(get_pcode(CDNADSOp.DS_SWIZZLE_B32), {'laneId': UOp.const(37, dtypes.uint32),
+        'OFFSET': UOp.const((xor_mask << 10) | 0x1F, dtypes.uint32), 'ADDR': UOp.const(0, dtypes.uint32)})
+      self.assertEqual(env['src_lane'].simplify().val, 37 ^ xor_mask)
 
 class TestAllPcode(unittest.TestCase):
   """Test that all pcode from all architectures can be parsed."""

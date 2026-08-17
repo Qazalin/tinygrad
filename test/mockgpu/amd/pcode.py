@@ -140,7 +140,10 @@ def _f32_to_fp4_scale(v: UOp, scale: UOp) -> UOp:
   # Midpoints between the finite positive E2M1 values. Ties select the even encoding.
   code = _u32(7)
   for threshold, lower_code in reversed(((0.25, 0), (0.75, 1), (1.25, 2), (1.75, 3), (2.5, 4), (3.5, 5), (5.0, 6))):
-    code = (mag < _const(dtypes.float32, threshold)).where(_u32(lower_code), code)
+    midpoint = _const(dtypes.float32, threshold)
+    below = mag < midpoint
+    if lower_code % 2 == 0: below = below | mag.eq(midpoint)
+    code = below.where(_u32(lower_code), code)
   # Keep the final mask explicit: _expr_bits uses it to preserve the 4-bit width in pcode concatenations.
   return (code | (_sign(value) << _u32(3))) & _u32(0xF)
 
