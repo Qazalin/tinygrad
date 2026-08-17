@@ -280,11 +280,6 @@ _pcode_fixes = {
   'V_TRIG_PREOP_F64': ("result = 64'F((1201'B(2.0 / PI)[1200 : 0] << shift.u32) & 1201'0x1fffffffffffff)", "result = trig_preop_result(shift)"),
 }
 
-# Some CDNA ISA manual entries are descriptive tables rather than executable pseudocode.
-_cdna_pcode_overrides = {
-  'DS_SWIZZLE_B32': 'RETURN_DATA.u32 = VGPR[ds_swizzle_lane(laneId, OFFSET)][ADDR_VGPR].u32',
-}
-
 def _get_pcode_dict(op) -> dict:
   """Return the PCODE dictionary for the given opcode based on its architecture."""
   return PCODE_CDNA if 'cdna' in type(op).__module__ else PCODE_RDNA4 if 'rdna4' in type(op).__module__ else PCODE_RDNA3
@@ -303,7 +298,6 @@ def get_pcode(op) -> str:
     if vop1_cls and hasattr(vop1_cls, e32_name): op = vop1_cls[e32_name]
   pcode = pcode_dict[op]
   fix_name = op_name.replace('_E64', '').replace('_E32', '')
-  if pcode_dict is PCODE_CDNA and fix_name in _cdna_pcode_overrides: return _cdna_pcode_overrides[fix_name]
   if fix_name in _pcode_fixes: pcode = pcode.replace(*_pcode_fixes[fix_name])
   if 'V_DIV_SCALE' in op_name:
     dt, exp_lim, ldexp_val = ('f32', '23', '64') if 'F32' in op_name else ('f64', '52', '128')
@@ -1968,7 +1962,8 @@ def _compile_mem_op(inst: ir3.DS|ir3.FLAT|ir3.GLOBAL|ir3.SCRATCH|ir4.DS|ir4.VFLA
         data = {'DATA': _u64(ctx.rvgpr_dyn(vdata_reg, lane), ctx.rvgpr_dyn(vdata_reg + _c(1), lane)),
                 'DATA2': _u64(ctx.rvgpr_dyn(data1_reg, lane), ctx.rvgpr_dyn(data1_reg + _c(1), lane)) if has_data1 else UOp.const(0, dtypes.uint64)}
       # RDNA3 uses ADDR/OFFSET, RDNA4 uses vgpr_a/offset (lowercase) + CalcDsAddr function
-      return {'ADDR': addr, 'ADDR_VGPR': addr_reg, 'ADDR_BASE': addr, 'OFFSET': offset, 'OFFSET0': offset0, 'OFFSET1': offset1,
+      pcode_addr = addr_reg if 'VGPR[' in pcode and 'MEM[' not in pcode else addr
+      return {'ADDR': pcode_addr, 'ADDR_BASE': addr, 'OFFSET': offset, 'OFFSET0': offset0, 'OFFSET1': offset1,
               '_lds': mem, 'laneId': lane,
               '_vgpr': ctx.vgpr, '_wave_size': ctx.wave_size,
               'vgpr_a': ctx.rvgpr_dyn(addr_reg, lane), 'offset': offset, 'offset0': offset0, 'offset1': offset1, **data}

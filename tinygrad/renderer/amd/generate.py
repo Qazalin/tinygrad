@@ -25,6 +25,11 @@ FIXES = {"rdna3": {"SOPK": {22: "S_SUBVECTOR_LOOP_BEGIN", 23: "S_SUBVECTOR_LOOP_
                   "VOP3P": {44: "V_MFMA_LD_SCALE_B32", 62: "V_MFMA_F32_16X16X8_XF32", 63: "V_MFMA_F32_32X32X4_XF32"}}}
 # Fields missing from XML but present in hardware (format: {arch: {encoding: [(name, hi, lo), ...]}})
 FIELD_FIXES = {"cdna": {"VOP3P": [("opsel_hi2", 14, 14)]}}
+# Pseudocode entries which the PDF presents as descriptive tables instead of executable code.
+PCODE_FIXES = {"cdna": {("DS_SWIZZLE_B32", 61):
+  "and_mask = OFFSET[4 : 0];\nor_mask = OFFSET[9 : 5];\nxor_mask = OFFSET[14 : 10];\n"
+  "src_lane = (laneId & 0x20U) | ((((laneId & 0x1fU) & and_mask) | or_mask) ^ xor_mask);\n"
+  "RETURN_DATA.u32 = VGPR[src_lane][ADDR].u32"}}
 # Encoding suffixes to strip (variants we don't generate separate classes for)
 _ENC_SUFFIXES = ("_NSA1",)
 # Encoding suffix to class suffix mapping (for variants we DO generate)
@@ -526,6 +531,7 @@ if __name__ == "__main__":
     pages = extract_pdf_text(cfg["pdf"])
     name_to_op = {name: op for ops in arch_data[arch]["enums"].values() for op, name in ops.items()}
     pcode = extract_pcode(pages, name_to_op)
+    pcode.update(PCODE_FIXES.get(arch, {}))
     base = autogen_base / arch
     write_pcode(pcode, arch_data[arch]["enums"], arch, base / "str_pcode.py")
     print(f"  {arch}: {len(pcode)} pcode entries")

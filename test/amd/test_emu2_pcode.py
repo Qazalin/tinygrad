@@ -348,7 +348,7 @@ class TestConcatWidthParsing(unittest.TestCase):
       lane, addr_reg = 37, 2
       _, assigns = parse_pcode(get_pcode(CDNADSOp.DS_SWIZZLE_B32), {
         'laneId': UOp.const(lane, dtypes.uint32), 'OFFSET': UOp.const((xor_mask << 10) | 0x1F, dtypes.uint32),
-        'ADDR_VGPR': UOp.const(addr_reg, dtypes.uint32), '_vgpr': vgpr, '_wave_size': 64})
+        'ADDR': UOp.const(addr_reg, dtypes.uint32), '_vgpr': vgpr, '_wave_size': 64})
       self.assertEqual(len(assigns), 1)
       dest, val = assigns[0]
       self.assertTrue(dest.startswith('RETURN_DATA'))
