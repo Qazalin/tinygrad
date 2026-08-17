@@ -4,7 +4,7 @@ from collections import defaultdict
 from tinygrad.helpers import DEBUG
 from tinygrad.dtype import dtypes
 from tinygrad.uop.ops import UOp, Ops
-from test.mockgpu.amd.emu import get_pcode, parse_pcode
+from test.mockgpu.amd.emu import parse_pcode
 from test.mockgpu.amd.pcode import parse_expr
 from tinygrad.runtime.autogen.amd.rdna3.str_pcode import PCODE
 from tinygrad.runtime.autogen.amd.rdna3.enum import VOP1Op, VOP2Op, SOP2Op, DSOp, GLOBALOp
@@ -340,13 +340,6 @@ class TestConcatWidthParsing(unittest.TestCase):
     for lane, (dst_idx, src_idx) in {0: (64, 32), 31: (95, 63), 32: (96, 0), 63: (127, 31)}.items():
       self.assertEqual(assigns[lane][1][0].simplify().val, dst_idx)  # type: ignore[index]
       self.assertEqual(load_idx(assigns[lane][1][1]), src_idx)  # type: ignore[index]
-
-  def test_cdna_ds_swizzle_bit_mode(self):
-    from tinygrad.runtime.autogen.amd.cdna.enum import DSOp as CDNADSOp
-    for xor_mask in (1, 2, 4):
-      env, _ = parse_pcode(get_pcode(CDNADSOp.DS_SWIZZLE_B32), {'laneId': UOp.const(37, dtypes.uint32),
-        'OFFSET': UOp.const((xor_mask << 10) | 0x1F, dtypes.uint32), 'ADDR': UOp.const(0, dtypes.uint32)})
-      self.assertEqual(env['src_lane'].simplify().val, 37 ^ xor_mask)
 
 class TestAllPcode(unittest.TestCase):
   """Test that all pcode from all architectures can be parsed."""

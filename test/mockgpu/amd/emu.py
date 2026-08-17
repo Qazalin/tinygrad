@@ -1053,8 +1053,7 @@ def _compile_vop12(inst: ir3.VOP1 | ir3.VOP1_SDST | ir3.VOP1_DPP16 | ir3.VOP2 | 
                    ir4.VOP1 | ir4.VOP1_SDST | ir4.VOP1_DPP16 | ir4.VOP2 | ir4.VOP2_DPP16 |
                    irc.VOP1 | irc.VOP1_DPP16 | irc.VOP2 | irc.VOP2_DPP16, ctx: _Ctx) -> UOp:
   op_name = _op_name(inst)
-  if op_name in ('V_READFIRSTLANE_B32_E32', 'V_PERMLANE64_B32_E32',
-                  'V_PERMLANE16_SWAP_B32_E32', 'V_PERMLANE32_SWAP_B32_E32'):
+  if op_name in ('V_READFIRSTLANE_B32_E32', 'V_PERMLANE64_B32_E32', 'V_PERMLANE16_SWAP_B32_E32', 'V_PERMLANE32_SWAP_B32_E32'):
     return ctx.compile_lane_pcode(inst.op, inst)
   # v_accvgpr_mov_b32: ACCVGPR[vdst] = ACCVGPR[src0] (VOP1 encoding, no pcode)
   if 'ACCVGPR_MOV' in op_name:
@@ -1360,11 +1359,9 @@ def _compile_mfma(inst: irc.VOP3P|irc.VOP3PX2, ctx: _Ctx) -> UOp:
     if (src0_fmt == 4) != (src1_fmt == 4):
       raise RuntimeError(f"mixed FP4 scaled MFMA formats are not supported cbsz={src0_fmt} blgp={src1_fmt}")
     # scale_src0/scale_src1 are source operands pointing at 32-bit registers holding 4 packed E8M0 scale exponents.
-    # The 2-bit opsel/opsel_hi select which byte applies to A/B for this instruction.
+    # The opsel/opsel_hi bit planes select which byte applies to A/B for this instruction.
     scale0_off = ctx.inst_field(type(inst).scale_src0)
     scale1_off = ctx.inst_field(type(inst).scale_src1)
-    # Each operand's selector is split across OPSEL and OPSEL_HI: A uses bit 0,
-    # B uses bit 1. Recombine those bit planes into a 2-bit byte index.
     opsel, opsel_hi = int(inst.opsel), int(inst.opsel_hi)
     sel0 = ((opsel_hi & 1) << 1) | (opsel & 1)
     sel1 = (opsel_hi & 2) | ((opsel >> 1) & 1)
@@ -1372,7 +1369,7 @@ def _compile_mfma(inst: irc.VOP3P|irc.VOP3PX2, ctx: _Ctx) -> UOp:
       sv = ctx.rsrc_dyn(off, lane, 32)
       byte = (sv >> UOp.const(sel * 8, dtypes.uint32)) & UOp.const(0xFF, dtypes.uint32)
       return byte.cast(dtypes.int32) - UOp.const(127, dtypes.int32)
-    # Each lane carries the scale for one matrix row and one 32-element K block.
+    # combined A*B scale for this row/column and 32-element K block: 2^(ea-127) * 2^(eb-127)
     def scale_factor(m_idx: UOp, n_idx: UOp, k_block: int) -> UOp:
       a_lane = m_idx + UOp.const(M * k_block, dtypes.int)
       b_lane = n_idx + UOp.const(N * k_block, dtypes.int)
