@@ -280,6 +280,11 @@ _pcode_fixes = {
   'V_TRIG_PREOP_F64': ("result = 64'F((1201'B(2.0 / PI)[1200 : 0] << shift.u32) & 1201'0x1fffffffffffff)", "result = trig_preop_result(shift)"),
 }
 
+# Some CDNA ISA manual entries are descriptive tables rather than executable pseudocode.
+_cdna_pcode_overrides = {
+  'DS_SWIZZLE_B32': 'RETURN_DATA.u32 = VGPR[ds_swizzle_lane(laneId, OFFSET)][ADDR_VGPR].u32',
+}
+
 def _get_pcode_dict(op) -> dict:
   """Return the PCODE dictionary for the given opcode based on its architecture."""
   return PCODE_CDNA if 'cdna' in type(op).__module__ else PCODE_RDNA4 if 'rdna4' in type(op).__module__ else PCODE_RDNA3
@@ -298,6 +303,7 @@ def get_pcode(op) -> str:
     if vop1_cls and hasattr(vop1_cls, e32_name): op = vop1_cls[e32_name]
   pcode = pcode_dict[op]
   fix_name = op_name.replace('_E64', '').replace('_E32', '')
+  if pcode_dict is PCODE_CDNA and fix_name in _cdna_pcode_overrides: return _cdna_pcode_overrides[fix_name]
   if fix_name in _pcode_fixes: pcode = pcode.replace(*_pcode_fixes[fix_name])
   if 'V_DIV_SCALE' in op_name:
     dt, exp_lim, ldexp_val = ('f32', '23', '64') if 'F32' in op_name else ('f64', '52', '128')
@@ -1053,21 +1059,9 @@ def _compile_vop12(inst: ir3.VOP1 | ir3.VOP1_SDST | ir3.VOP1_DPP16 | ir3.VOP2 | 
                    ir4.VOP1 | ir4.VOP1_SDST | ir4.VOP1_DPP16 | ir4.VOP2 | ir4.VOP2_DPP16 |
                    irc.VOP1 | irc.VOP1_DPP16 | irc.VOP2 | irc.VOP2_DPP16, ctx: _Ctx) -> UOp:
   op_name = _op_name(inst)
-  if op_name in ('V_READFIRSTLANE_B32_E32', 'V_PERMLANE64_B32_E32'): return ctx.compile_lane_pcode(inst.op, inst)
-  if op_name in ('V_PERMLANE16_SWAP_B32_E32', 'V_PERMLANE32_SWAP_B32_E32'):
-    exec_mask = ctx.rexec()
-    src_reg = ctx.inst_field(type(inst).src0) - _c(256)
-    dst_reg = ctx.inst_field(type(inst).vdst)
-    pairs = [(lane, lane + 16) for base in (0, 32) for lane in range(base, base + 16)] if '16_SWAP' in op_name \
-      else [(lane, lane + 32) for lane in range(32)]
-    tmp = UOp.placeholder((len(pairs),), dtypes.uint32, slot=0, addrspace=AddrSpace.LOCAL)
-    reads = UOp.group(*(tmp.index(i).store(ctx.rvgpr_dyn(src_reg, _c(lo, dtypes.int))) for i, (lo, _) in enumerate(pairs)))
-    cached = tmp.after(reads)
-    writes: list[UOp] = []
-    for i, (lo, hi) in enumerate(pairs):
-      writes.extend((ctx.wvgpr_dyn(src_reg, _c(lo, dtypes.int), ctx.rvgpr_dyn(dst_reg, _c(hi, dtypes.int)), exec_mask),
-                     ctx.wvgpr_dyn(dst_reg, _c(hi, dtypes.int), cached.index(i), exec_mask)))
-    return UOp.sink(reads, *writes, *ctx.inc_pc())
+  if op_name in ('V_READFIRSTLANE_B32_E32', 'V_PERMLANE64_B32_E32',
+                  'V_PERMLANE16_SWAP_B32_E32', 'V_PERMLANE32_SWAP_B32_E32'):
+    return ctx.compile_lane_pcode(inst.op, inst)
   # v_accvgpr_mov_b32: ACCVGPR[vdst] = ACCVGPR[src0] (VOP1 encoding, no pcode)
   if 'ACCVGPR_MOV' in op_name:
     lane, exec_mask = ctx.range(), ctx.rexec()
@@ -1908,18 +1902,6 @@ def _compile_mem_op(inst: ir3.DS|ir3.FLAT|ir3.GLOBAL|ir3.SCRATCH|ir4.DS|ir4.VFLA
   has_data1 = is_lds and hasattr(inst, 'data1') and inst.data1 is not None
   data1_reg = ctx.inst_field(type(inst).data1) if is_lds else _c(0)  # type: ignore[union-attr]
 
-  # CDNA DS_SWIZZLE_B32 bit mode is a cross-lane register read. The generated
-  # pcode only documents the encoding, so implement it directly.
-  if is_lds and op_name == 'DS_SWIZZLE_B32':
-    swizzle = (ctx.inst_field(getattr(type(inst), 'offset1')) << _c(8)) | ctx.inst_field(getattr(type(inst), 'offset0'))
-    and_mask, or_mask, xor_mask = swizzle & _c(0x1F), (swizzle >> _c(5)) & _c(0x1F), (swizzle >> _c(10)) & _c(0x1F)
-    lane = ctx.range()
-    src_lane = (lane & UOp.const(0x20, dtypes.int)) | \
-      ((((lane & UOp.const(0x1F, dtypes.int)) & and_mask.cast(dtypes.int)) |
-        or_mask.cast(dtypes.int)) ^ xor_mask.cast(dtypes.int))
-    val = ctx.rvgpr_dyn(addr_reg, src_lane)
-    return UOp.sink(ctx.wvgpr_dyn(vdst_reg, lane, val, exec_mask).end(lane), *ctx.inc_pc())
-
   # DS_PERMUTE/DS_BPERMUTE: cross-lane VGPR access via pcode
   if is_lds and 'PERMUTE' in op_name:
     pcode = get_pcode(inst.op)
@@ -1986,7 +1968,9 @@ def _compile_mem_op(inst: ir3.DS|ir3.FLAT|ir3.GLOBAL|ir3.SCRATCH|ir4.DS|ir4.VFLA
         data = {'DATA': _u64(ctx.rvgpr_dyn(vdata_reg, lane), ctx.rvgpr_dyn(vdata_reg + _c(1), lane)),
                 'DATA2': _u64(ctx.rvgpr_dyn(data1_reg, lane), ctx.rvgpr_dyn(data1_reg + _c(1), lane)) if has_data1 else UOp.const(0, dtypes.uint64)}
       # RDNA3 uses ADDR/OFFSET, RDNA4 uses vgpr_a/offset (lowercase) + CalcDsAddr function
-      return {'ADDR': addr, 'ADDR_BASE': addr, 'OFFSET': offset, 'OFFSET0': offset0, 'OFFSET1': offset1, '_lds': mem, 'laneId': lane,
+      return {'ADDR': addr, 'ADDR_VGPR': addr_reg, 'ADDR_BASE': addr, 'OFFSET': offset, 'OFFSET0': offset0, 'OFFSET1': offset1,
+              '_lds': mem, 'laneId': lane,
+              '_vgpr': ctx.vgpr, '_wave_size': ctx.wave_size,
               'vgpr_a': ctx.rvgpr_dyn(addr_reg, lane), 'offset': offset, 'offset0': offset0, 'offset1': offset1, **data}
     active = _lane_active(exec_mask, lane)
     # saddr < 124 means valid SGPR pair, otherwise use 0 (NULL means no saddr contribution)
@@ -2064,10 +2048,11 @@ def _compile_mem_op(inst: ir3.DS|ir3.FLAT|ir3.GLOBAL|ir3.SCRATCH|ir4.DS|ir4.VFLA
       return UOp.sink(*ended, *ctx.inc_pc())
 
   # Standard path: single lane range
-  writes_return_data = '_RTN' in op_name or (is_lds and (op_name.startswith('DS_LOAD') or op_name.startswith('DS_READ'))) or bool(is_atomic and glc)
   lane = ctx.range()
   active = _lane_active(exec_mask, lane)
   pcode_vars, assigns = parse_pcode(pcode, make_srcs(lane))
+  writes_return_data = '_RTN' in op_name or (is_lds and (op_name.startswith('DS_LOAD') or op_name.startswith('DS_READ'))) or \
+                       bool(is_atomic and glc) or any(dest.startswith('RETURN_DATA') for dest, _ in assigns)
   stores = [s for dest, val in assigns for s in make_stores(dest, val, lane, active, writes_return_data)]
 
   # FLAT/GLOBAL/SCRATCH: collect VDATA slices for loads

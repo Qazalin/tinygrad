@@ -308,6 +308,13 @@ def _sad_u8(a: UOp, b: UOp, acc: UOp, masked: bool = False) -> UOp:
     result = result + (a_byte.ne(_u32(0)).where(diff, _u32(0)) if masked else diff)
   return result
 
+def _ds_swizzle_lane(lane: UOp, offset: UOp) -> UOp:
+  """Source lane for DS_SWIZZLE bit mode. Unsupported modes preserve the lane."""
+  lane, offset = lane.cast(dtypes.uint32), offset.cast(dtypes.uint32)
+  and_mask, or_mask, xor_mask = offset & _u32(0x1F), (offset >> _u32(5)) & _u32(0x1F), (offset >> _u32(10)) & _u32(0x1F)
+  bit_lane = (lane & _u32(0x20)) | ((((lane & _u32(0x1F)) & and_mask) | or_mask) ^ xor_mask)
+  return (offset & _u32(0x8000)).eq(_u32(0)).where(bit_lane, lane)
+
 _FUNCS: dict[str, Callable[..., UOp]] = {
   'sqrt': lambda a: UOp(Ops.SQRT, src=(a,)), 'trunc': lambda a: UOp(Ops.TRUNC, src=(a,)),
   'log2': lambda a: UOp(Ops.LOG2, src=(a,)), 'sin': lambda a: _trig_reduce(a),
@@ -369,6 +376,7 @@ _FUNCS: dict[str, Callable[..., UOp]] = {
   # SAD (Sum of Absolute Differences) - sum |a_i - b_i| for 4 bytes + accumulator
   'v_sad_u8': lambda a, b, c: _sad_u8(a, b, c),
   'v_msad_u8': lambda a, b, c: _sad_u8(a, b, c, masked=True),
+  'ds_swizzle_lane': _ds_swizzle_lane,
   # System NOPs - these are scheduling hints, no effect on emulation
   'MIN': lambda a, b: (a < b).where(a, b),
   's_nop': lambda a: _u32(0),
