@@ -1054,6 +1054,20 @@ def _compile_vop12(inst: ir3.VOP1 | ir3.VOP1_SDST | ir3.VOP1_DPP16 | ir3.VOP2 | 
                    irc.VOP1 | irc.VOP1_DPP16 | irc.VOP2 | irc.VOP2_DPP16, ctx: _Ctx) -> UOp:
   op_name = _op_name(inst)
   if op_name in ('V_READFIRSTLANE_B32_E32', 'V_PERMLANE64_B32_E32'): return ctx.compile_lane_pcode(inst.op, inst)
+  if op_name in ('V_PERMLANE16_SWAP_B32_E32', 'V_PERMLANE32_SWAP_B32_E32'):
+    exec_mask = ctx.rexec()
+    src_reg = ctx.inst_field(type(inst).src0) - _c(256)
+    dst_reg = ctx.inst_field(type(inst).vdst)
+    pairs = [(lane, lane + 16) for base in (0, 32) for lane in range(base, base + 16)] if '16_SWAP' in op_name \
+      else [(lane, lane + 32) for lane in range(32)]
+    tmp = UOp.placeholder((len(pairs),), dtypes.uint32, slot=0, addrspace=AddrSpace.LOCAL)
+    reads = UOp.group(*(tmp.index(i).store(ctx.rvgpr_dyn(src_reg, _c(lo, dtypes.int))) for i, (lo, _) in enumerate(pairs)))
+    cached = tmp.after(reads)
+    writes: list[UOp] = []
+    for i, (lo, hi) in enumerate(pairs):
+      writes.extend((ctx.wvgpr_dyn(src_reg, _c(lo, dtypes.int), ctx.rvgpr_dyn(dst_reg, _c(hi, dtypes.int)), exec_mask),
+                     ctx.wvgpr_dyn(dst_reg, _c(hi, dtypes.int), cached.index(i), exec_mask)))
+    return UOp.sink(reads, *writes, *ctx.inc_pc())
   # v_accvgpr_mov_b32: ACCVGPR[vdst] = ACCVGPR[src0] (VOP1 encoding, no pcode)
   if 'ACCVGPR_MOV' in op_name:
     lane, exec_mask = ctx.range(), ctx.rexec()
@@ -1351,21 +1365,30 @@ def _compile_mfma(inst: irc.VOP3P|irc.VOP3PX2, ctx: _Ctx) -> UOp:
   scaled = isinstance(inst, irc.VOP3PX2)
   if scaled:
     assert isinstance(inst, irc.VOP3PX2)
-    # F8F6F4 input formats: 0=FP8(E4M3), 1=BF8(E5M2). FP6/FP4 (2-4) not emulated.
+    # F8F6F4 input formats: 0=FP8(E4M3), 1=BF8(E5M2), 4=FP4(E2M1).
     src0_fmt, src1_fmt = int(inst.cbsz), int(inst.blgp)
-    if src0_fmt > 1 or src1_fmt > 1: raise RuntimeError(f"unsupported scaled MFMA formats cbsz={src0_fmt} blgp={src1_fmt}")
+    if src0_fmt not in (0, 1, 4) or src1_fmt not in (0, 1, 4):
+      raise RuntimeError(f"unsupported scaled MFMA formats cbsz={src0_fmt} blgp={src1_fmt}")
+    if (src0_fmt == 4) != (src1_fmt == 4):
+      raise RuntimeError(f"mixed FP4 scaled MFMA formats are not supported cbsz={src0_fmt} blgp={src1_fmt}")
     # scale_src0/scale_src1 are source operands pointing at 32-bit registers holding 4 packed E8M0 scale exponents.
     # The 2-bit opsel/opsel_hi select which byte applies to A/B for this instruction.
     scale0_off = ctx.inst_field(type(inst).scale_src0)
     scale1_off = ctx.inst_field(type(inst).scale_src1)
-    sel0, sel1 = int(inst.opsel) & 3, int(inst.opsel_hi) & 3
+    # Each operand's selector is split across OPSEL and OPSEL_HI: A uses bit 0,
+    # B uses bit 1. Recombine those bit planes into a 2-bit byte index.
+    opsel, opsel_hi = int(inst.opsel), int(inst.opsel_hi)
+    sel0 = ((opsel_hi & 1) << 1) | (opsel & 1)
+    sel1 = (opsel_hi & 2) | ((opsel >> 1) & 1)
     def _scale_exp(off: UOp, sel: int, lane: UOp) -> UOp:
       sv = ctx.rsrc_dyn(off, lane, 32)
       byte = (sv >> UOp.const(sel * 8, dtypes.uint32)) & UOp.const(0xFF, dtypes.uint32)
       return byte.cast(dtypes.int32) - UOp.const(127, dtypes.int32)
-    # combined A*B scale for this lane: 2^(ea-127) * 2^(eb-127)
-    def scale_factor(lane: UOp) -> UOp:
-      return UOp.exp2((_scale_exp(scale0_off, sel0, lane) + _scale_exp(scale1_off, sel1, lane)).cast(dtypes.float32))
+    # Each lane carries the scale for one matrix row and one 32-element K block.
+    def scale_factor(m_idx: UOp, n_idx: UOp, k_block: int) -> UOp:
+      a_lane = m_idx + UOp.const(M * k_block, dtypes.int)
+      b_lane = n_idx + UOp.const(N * k_block, dtypes.int)
+      return UOp.exp2((_scale_exp(scale0_off, sel0, a_lane) + _scale_exp(scale1_off, sel1, b_lane)).cast(dtypes.float32))
 
   m = _re.search(r'(\d+)X(\d+)X(\d+)', op_name)
   if m is None: raise ValueError(f"could not parse MFMA dimensions from {op_name}")
@@ -1382,6 +1405,7 @@ def _compile_mfma(inst: irc.VOP3P|irc.VOP3PX2, ctx: _Ctx) -> UOp:
   # Determine elements per VGPR and conversion function
   if is_i8: vpg = 4
   elif is_f32_src: vpg = 1
+  elif scaled and src0_fmt == src1_fmt == 4: vpg = 8
   elif is_fp8: vpg = 4
   else: vpg = 2
 
@@ -1425,7 +1449,7 @@ def _compile_mfma(inst: irc.VOP3P|irc.VOP3PX2, ctx: _Ctx) -> UOp:
   # Per-operand fp8 format ("fp8"=E4M3, "bf8"=E5M2) for A and B
   if 'F8F6F4' in op_name:
     assert isinstance(inst, (irc.VOP3P_MFMA, irc.VOP3PX2))
-    _fmts = {0: "fp8", 1: "bf8"}
+    _fmts = {0: "fp8", 1: "bf8", 4: "fp4"}
     a_fmt, b_fmt = _fmts.get(int(inst.cbsz), "fp8"), _fmts.get(int(inst.blgp), "fp8")
   elif is_fp8:
     # A/B formats from name suffix, e.g. V_MFMA_F32_16X16X32_BF8_FP8
@@ -1441,7 +1465,8 @@ def _compile_mfma(inst: irc.VOP3P|irc.VOP3PX2, ctx: _Ctx) -> UOp:
     elif is_f32_src:
       return raw  # already uint32 (f32 bit pattern)
     elif is_fp8:
-      return _FUNCS[f"{fp8_fmt}_to_f32"](raw >> UOp.const(sub_idx * 8, dtypes.uint32)).bitcast(dtypes.uint32)
+      elem_bits = 4 if fp8_fmt == 'fp4' else 8
+      return _FUNCS[f"{fp8_fmt}_to_f32"](raw >> UOp.const(sub_idx * elem_bits, dtypes.uint32)).bitcast(dtypes.uint32)
     elif is_bf16:
       # bf16→f32 bits: just shift left by 16 (bf16 is upper 16 bits of f32)
       return ((raw >> UOp.const(sub_idx * 16, dtypes.uint32)) & UOp.const(0xFFFF, dtypes.uint32)) << UOp.const(16, dtypes.uint32)
@@ -1509,16 +1534,18 @@ def _compile_mfma(inst: irc.VOP3P|irc.VOP3PX2, ctx: _Ctx) -> UOp:
   #   Actually: 16 ACCVGPRs per lane, organized as 4 groups (l//32 gives half, each half has 2 sub-groups) of 4 rows
   tmp2 = tmp.after(read_phase)
 
-  def _dot_accum(acc: UOp, a_row: UOp, b_row: UOp, lane: UOp) -> UOp:
+  def _dot_accum(acc: UOp, a_row: UOp, b_row: UOp, m_idx: UOp, n_idx: UOp) -> UOp:
     """acc += sum_k A[a_row+k] * B[b_row+k]. For scaled MFMA, only the dot product is scaled: D = dot*scale + C."""
     def prod(k: int) -> UOp:
       return tmp2.index(a_row + UOp.const(k, dtypes.int)).bitcast(acc_dt) * tmp2.index(b_row + UOp.const(k, dtypes.int)).bitcast(acc_dt)
     if not scaled:
       for k in range(K): acc = acc + prod(k)
       return acc
-    dot = prod(0)
-    for k in range(1, K): dot = dot + prod(k)
-    return acc + dot * scale_factor(lane)
+    for k_block in range(K // 32):
+      dot = prod(k_block * 32)
+      for k in range(k_block * 32 + 1, (k_block + 1) * 32): dot = dot + prod(k)
+      acc = acc + dot * scale_factor(m_idx, n_idx, k_block)
+    return acc
 
   compute_lane = ctx.range()
   compute_stores = []
@@ -1550,7 +1577,7 @@ def _compile_mfma(inst: irc.VOP3P|irc.VOP3PX2, ctx: _Ctx) -> UOp:
       else: acc_v = acc_v.bitcast(dtypes.float32)
       acc = src2_is_vgpr.where(acc_v, acc_scalar)
 
-      acc = _dot_accum(acc, m_base * UOp.const(K, dtypes.int), b_off + n_idx * UOp.const(K, dtypes.int), compute_lane)
+      acc = _dot_accum(acc, m_base * UOp.const(K, dtypes.int), b_off + n_idx * UOp.const(K, dtypes.int), m_base, n_idx)
 
       if is_int_out:
         compute_stores.append((ctx.waccvgpr_dyn if use_acc else ctx.wvgpr_dyn)(
@@ -1578,7 +1605,8 @@ def _compile_mfma(inst: irc.VOP3P|irc.VOP3PX2, ctx: _Ctx) -> UOp:
         m_base = c_grp * UOp.const(out_per_lane, dtypes.int) + UOp.const(out_reg, dtypes.int)
         b_base = b_off + n_idx * UOp.const(K, dtypes.int)
 
-      acc = _dot_accum(acc, m_base if M == 4 else m_base * UOp.const(K, dtypes.int), b_base, compute_lane)
+      acc = _dot_accum(acc, m_base if M == 4 else m_base * UOp.const(K, dtypes.int), b_base,
+                       UOp.const(out_reg, dtypes.int) if M == 4 else m_base, n_idx)
 
       if is_int_out:
         compute_stores.append((ctx.waccvgpr_dyn if use_acc else ctx.wvgpr_dyn)(
@@ -1696,6 +1724,28 @@ def _compile_vop3p(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P | irc.VOP3PX2, ctx: _
   opsel, opsel_hi = getattr(inst, 'opsel', 0) or 0, getattr(inst, 'opsel_hi', 3) if getattr(inst, 'opsel_hi', 3) is not None else 3
   opsel_hi2 = getattr(inst, 'opsel_hi2', 1) if getattr(inst, 'opsel_hi2', 1) is not None else 1
   neg, neg_hi = getattr(inst, 'neg', 0) or 0, getattr(inst, 'neg_hi', 0) or 0
+
+  if op_name == 'V_PK_ADD_F32':
+    src_offs = [ctx.inst_field(type(inst).src0), ctx.inst_field(type(inst).src1)]
+    def _pk_f32(off: UOp, hi: bool, negate: bool) -> UOp:
+      is_vgpr, is_sgpr = off >= _c(256), off < _c(128)
+      vgpr = ctx.rvgpr_dyn(is_vgpr.where(off - _c(256) + _c(int(hi)), _c(0)), lane)
+      scalar = is_sgpr.where(ctx.rsgpr_dyn(is_sgpr.where(off + _c(int(hi)), _c(0))), ctx.rsrc_dyn(off, lane))
+      bits = is_vgpr.where(vgpr, scalar)
+      if negate: bits = bits ^ UOp.const(0x80000000, dtypes.uint32)
+      return bits.bitcast(dtypes.float32)
+    lo = _pk_f32(src_offs[0], bool(opsel & 1), bool(neg & 1)) + _pk_f32(src_offs[1], bool(opsel & 2), bool(neg & 2))
+    hi = _pk_f32(src_offs[0], bool(opsel_hi & 1), bool(neg_hi & 1)) + _pk_f32(src_offs[1], bool(opsel_hi & 2), bool(neg_hi & 2))
+    stores = [ctx.wvgpr_dyn(vdst_reg, lane, lo.bitcast(dtypes.uint32), exec_mask),
+              ctx.wvgpr_dyn(vdst_reg + _c(1), lane, hi.bitcast(dtypes.uint32), exec_mask)]
+    return UOp.sink(UOp.group(*stores).end(lane), *ctx.inc_pc())
+
+  # For packed FP4 conversion OPSEL[3:2] chooses the destination byte; it does
+  # not select halves of the three f32 sources as it does for arithmetic VOP3P.
+  if 'CVT_SCALEF32_PK_FP4_F32' in op_name:
+    fp4_srcs: dict[str, UOp | int] = {f'S{i}': ctx.rsrc_dyn(ctx.inst_field(getattr(type(inst), f'src{i}')), lane) for i in range(3)}
+    fp4_srcs['OPSEL'] = UOp.const(opsel, dtypes.uint32)
+    return ctx.compile_vop_pcode(inst.op, fp4_srcs, lane, vdst_reg, exec_mask)
 
   if is_pk_mov_b32:
     # v_pk_mov_b32: D[lo] = src0[opsel_bit0 ? hi : lo], D[hi] = src1[opsel_bit1 ? hi : lo]
@@ -1857,6 +1907,18 @@ def _compile_mem_op(inst: ir3.DS|ir3.FLAT|ir3.GLOBAL|ir3.SCRATCH|ir4.DS|ir4.VFLA
   is_atomic, glc = 'ATOMIC' in op_name, getattr(inst, 'glc', 0)
   has_data1 = is_lds and hasattr(inst, 'data1') and inst.data1 is not None
   data1_reg = ctx.inst_field(type(inst).data1) if is_lds else _c(0)  # type: ignore[union-attr]
+
+  # CDNA DS_SWIZZLE_B32 bit mode is a cross-lane register read. The generated
+  # pcode only documents the encoding, so implement it directly.
+  if is_lds and op_name == 'DS_SWIZZLE_B32':
+    swizzle = (ctx.inst_field(getattr(type(inst), 'offset1')) << _c(8)) | ctx.inst_field(getattr(type(inst), 'offset0'))
+    and_mask, or_mask, xor_mask = swizzle & _c(0x1F), (swizzle >> _c(5)) & _c(0x1F), (swizzle >> _c(10)) & _c(0x1F)
+    lane = ctx.range()
+    src_lane = (lane & UOp.const(0x20, dtypes.int)) | \
+      ((((lane & UOp.const(0x1F, dtypes.int)) & and_mask.cast(dtypes.int)) |
+        or_mask.cast(dtypes.int)) ^ xor_mask.cast(dtypes.int))
+    val = ctx.rvgpr_dyn(addr_reg, src_lane)
+    return UOp.sink(ctx.wvgpr_dyn(vdst_reg, lane, val, exec_mask).end(lane), *ctx.inc_pc())
 
   # DS_PERMUTE/DS_BPERMUTE: cross-lane VGPR access via pcode
   if is_lds and 'PERMUTE' in op_name:
@@ -2045,7 +2107,8 @@ def _compile_mubuf(inst: irc.MUBUF, ctx: _Ctx) -> UOp:
   buffer_offset = (stride * index + voff + offset.cast(dtypes.uint64)).cast(dtypes.uint32)
   in_bounds = active & buffer_offset.__lt__(num_records)
   addr = base + soff + buffer_offset.cast(dtypes.uint64)
-  addr = in_bounds.where(addr, UOp.const(0, dtypes.uint64))  # safe address when OOB
+  # Keep speculative host loads inside the mapped resource even when the lane is masked out below.
+  addr = in_bounds.where(addr, base + soff)
   mem = ctx.vmem
 
   stores: list[UOp] = []

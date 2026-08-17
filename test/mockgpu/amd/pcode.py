@@ -123,6 +123,27 @@ def _f32_to_bf16_sr(v: UOp, stoch: UOp) -> UOp:
   rounded = bits + (stoch & _u32(0xFFFF))
   return (rounded >> _u32(16)).cast(dtypes.uint16)
 
+def _fp4_to_f32(v: UOp) -> UOp:
+  """Decode an OCP E2M1 nibble to f32."""
+  code = v.cast(dtypes.uint32) & _u32(0xF)
+  mag = code & _u32(0x7)
+  out = _const(dtypes.float32, 0.0)
+  for i, value in enumerate((0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0)):
+    out = mag.eq(_u32(i)).where(_const(dtypes.float32, value), out)
+  return (code & _u32(0x8)).ne(_u32(0)).where(out.neg(), out)
+
+def _f32_to_fp4_scale(v: UOp, scale: UOp) -> UOp:
+  """Quantize f32/2**(scale-127) to an OCP E2M1 nibble, round-to-nearest-even."""
+  value = v.bitcast(dtypes.float32) if v.dtype != dtypes.float32 else v
+  scaled = value * UOp(Ops.EXP2, src=((_const(dtypes.int, 127) - scale.cast(dtypes.int)).cast(dtypes.float32),))
+  mag = _abs(scaled)
+  # Midpoints between the finite positive E2M1 values. Ties select the even encoding.
+  code = _u32(7)
+  for threshold, lower_code in reversed(((0.25, 0), (0.75, 1), (1.25, 2), (1.75, 3), (2.5, 4), (3.5, 5), (5.0, 6))):
+    code = (mag < _const(dtypes.float32, threshold)).where(_u32(lower_code), code)
+  # Keep the final mask explicit: _expr_bits uses it to preserve the 4-bit width in pcode concatenations.
+  return (code | (_sign(value) << _u32(3))) & _u32(0xF)
+
 def _check_nan(v: UOp, quiet: bool) -> UOp:
   if v.op == Ops.CAST and v.dtype == dtypes.float64: v = v.src[0]
   bits, exp_m, mant_m, qb, _ = _float_info(v)
@@ -359,6 +380,7 @@ _FUNCS: dict[str, Callable[..., UOp]] = {
   # FP8/BF8/BF16 conversion functions
   'fp8_to_f32': _fp8_to_f32, 'bf8_to_f32': _bf8_to_f32, 'f32_to_fp8': _f32_to_fp8, 'f32_to_bf8': _f32_to_bf8,
   'f32_to_bf16': _f32_to_bf16, 'f32_to_bf16_SR': _f32_to_bf16_sr, 'f32_to_bf16_sr': _f32_to_bf16_sr,
+  'fp4_to_f32': _fp4_to_f32, 'f32_to_fp4_scale': _f32_to_fp4_scale,
 }
 for is_max, name in [(False, 'min'), (True, 'max')]:
   for dt, sfx in [(dtypes.float32, 'f32'), (dtypes.int, 'i32'), (dtypes.uint32, 'u32'), (dtypes.int16, 'i16'), (dtypes.uint16, 'u16')]:
@@ -1087,7 +1109,11 @@ def parse_block(lines: list[str], start: int, env: dict[str, VarVal], funcs: dic
           j, slice_toks = _match_bracket(toks, j)
           slice_str = _tok_str(slice_toks)
           hi_str, lo_str = slice_str.split(':')
-          hi_val, lo_val = int(eval(hi_str.strip())), int(eval(lo_str.strip()))
+          hi, lo = parse_expr(hi_str, env, funcs).simplify(), parse_expr(lo_str, env, funcs).simplify()
+          while hi.op in (Ops.CAST, Ops.BITCAST): hi = hi.src[0]
+          while lo.op in (Ops.CAST, Ops.BITCAST): lo = lo.src[0]
+          assert hi.op == lo.op == Ops.CONST, f"VGPR slice must be constant, got [{hi}:{lo}]"
+          hi_val, lo_val = int(hi.val), int(lo.val)
           if j < len(toks) and toks[j].type == 'DOT': j += 2  # skip .type suffix
           if j < len(toks) and toks[j].type == 'EQUALS': j += 1
           ln = parse_tokens(lane_toks, env, funcs)

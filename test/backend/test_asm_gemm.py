@@ -152,8 +152,7 @@ class TestAsmGEMM(unittest.TestCase):
 
 class TestMXFP4(unittest.TestCase):
   def setUp(self):
-    if not is_cdna4() or DEV.interface.startswith("MOCK"):
-      self.skipTest("requires real amd machine")
+    if not is_cdna4(): self.skipTest("requires cdna4")
 
   def test_quantize(self):
     import numpy as np
@@ -182,6 +181,7 @@ class TestMXFP4(unittest.TestCase):
     ref = a.numpy().astype(np.float32) @ b.numpy().astype(np.float32).T
     self.assertLess(np.linalg.norm(out-ref) / np.linalg.norm(ref), 0.2)
 
+  @unittest.skipIf(DEV.interface.startswith("MOCK"), "too large for mockgpu")
   def test_empty(self):
     M, N, K = getenv("M", 16384), getenv("N", 4096), getenv("K", 14336)
     a = Tensor.empty(M, K, dtype=dtypes.bfloat16)
