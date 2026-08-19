@@ -369,6 +369,9 @@ class MetalRenderer(CStyleLanguage):
 
   string_rewrite = PatternMatcher([
     (UPat(Ops.BITCAST, name="x"), lambda ctx,x: f"as_type<{ctx.render_dtype(x.dtype)}>(({ctx.render_dtype(x.src[0].dtype)})({ctx[x.src[0]]}))"),
+    # Metal requires an explicit conversion when narrowing float expressions into native bfloat storage.
+    (UPat(Ops.STORE, src=(UPat.var("bidx", dtypes.bfloat16), UPat.var("var", dtypes.float))),
+      lambda ctx,bidx,var: f"{ctx.render_access(bidx)} = {ctx._render_dtype(bidx.dtype, bidx.max_numel())}({ctx[var]});"),
   ]) + base_rewrite
 
   def render_kernel(self, function_name, kernel, bufs, uops, prefix=None):

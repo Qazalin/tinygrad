@@ -303,10 +303,10 @@ class Qwen3TTS:
     for i in range(codes.shape[1]-1): codec_embed = codec_embed + self.talker.code_predictor.model.codec_embedding[i](codes[:, i+1:i+2])
     codec_embed = Tensor.cat(self.talker.model.codec_embedding(Tensor([[cfg["codec_bos_id"]]], dtype=dtypes.int32, device=dev)),
                              codec_embed.squeeze(1).unsqueeze(0), dim=1)
-    if text_embed.shape[1] > codec_embed.shape[1]:
-      raise ValueError("reference audio is too short for its transcript; use a longer voice sample")
-    text_embed = Tensor.cat(text_embed, tts_pad.expand(1, codec_embed.shape[1]-text_embed.shape[1], -1), dim=1)
-    icl = text_embed + codec_embed
+    codec_pad = self.talker.model.codec_embedding(Tensor([[cfg["codec_pad_id"]]], dtype=dtypes.int32, device=dev))
+    # Qwen's non-streaming ICL layout: all text first, followed by the reference speech codes.
+    icl = Tensor.cat(text_embed + codec_pad.expand(1, text_embed.shape[1], -1),
+                     codec_embed + tts_pad.expand(1, codec_embed.shape[1], -1), dim=1)
     model_prompt = Tensor.cat(role, prefix, icl, dim=1).contiguous()
     return self._rollout(model_prompt, tts_pad, max_new_tokens, temperature, top_k)
 

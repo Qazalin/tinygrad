@@ -1,6 +1,9 @@
 import unittest
+from tinygrad import dtypes
+from tinygrad.codegen import to_program
 from tinygrad.device import CompileError, Device, BufferSpec, TinyELF
 from tinygrad.helpers import Target
+from tinygrad.uop.ops import UOp, KernelInfo
 if Device.DEFAULT=="METAL":
   from tinygrad.runtime.ops_metal import MetalDevice, MetalCompiler
 @unittest.skipIf(Device.DEFAULT!="METAL", "Metal support required")
@@ -37,6 +40,13 @@ class TestMetal(unittest.TestCase):
   }
 """)
     assert ret is not None
+
+  def test_float_store_to_bfloat(self):
+    out, inp, idx = UOp.param(0, dtypes.bfloat16, (1,)), UOp.param(1, dtypes.float, (1,)), UOp.const(0)
+    sink = UOp.store(out.index(idx), inp.index(idx).load()).sink(arg=KernelInfo())
+    src = to_program(sink, Device[Device.DEFAULT].renderer).src[2].arg
+    self.assertIn(" = bfloat(", src)
+    self.assertIsNotNone(MetalCompiler().compile(src))
 
   def test_failed_newLibraryWithData(self):
     device = MetalDevice("metal")
