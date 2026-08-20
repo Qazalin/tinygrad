@@ -12,7 +12,7 @@ DEV=CPU python3 examples/au/main.py narrator.wav short_story.txt
 
 To test a PDF on a small inclusive page range before committing to a full
 render, use `--pages`. Its default work directory includes the range, so the
-preview cannot be confused with or resumed as a full-book render:
+preview cannot be confused with a full-book render:
 
 ```sh
 DEV=METAL python3 examples/au/main.py narrator.mp3 book.pdf --pages 1-3
@@ -25,9 +25,9 @@ transcribes it locally.
 
 The CLI is one Python process: it loads the model and voice prompt once, renders
 chunks sequentially, and packages them in process. Intermediate chunks live in
-`build/au/<source-name>/`. Existing WAVs are skipped, so the same command
-resumes an interrupted render. Use `--work` and `--output` to choose other
-locations. Tinygrad's `DEBUG` output goes directly to the terminal.
+`build/au/<source-name>/` and are regenerated on every run. Use `--work` and
+`--output` to choose other locations. Tinygrad's `DEBUG` output goes directly
+to the terminal.
 
 Model inference, reference speech encoding, speaker embedding, autoregressive
 generation, and waveform decoding are tinygrad graphs. PyMuPDF/librosa/

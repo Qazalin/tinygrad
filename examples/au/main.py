@@ -88,10 +88,7 @@ def render(work:Path, model_path:Path, voice:Path, voice_text:str, language:str,
 
   manifest = json.loads((work/"manifest.json").read_text())
   outdir = work/"chunks_wav"; outdir.mkdir(exist_ok=True)
-  missing = [x for x in manifest["chunks"] if not (outdir/f"{x['id']:05d}.wav").exists()]
-  if not missing:
-    print(f"rendered chunks already complete ({len(manifest['chunks'])}/{len(manifest['chunks'])})")
-    return
+  chunks = manifest["chunks"]
 
   tok = load_tokenizer(model_path)
   target_ids = lambda text: tok.encode(f"<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n")
@@ -100,9 +97,9 @@ def render(work:Path, model_path:Path, voice:Path, voice_text:str, language:str,
   model = Qwen3TTS.from_pretrained(model_path, max_context=max_frames+len(ref_ids)+512)
   codec = Qwen3TTSCodec.from_pretrained(model_path/"speech_tokenizer", encoder=True)
   prompt = model.create_voice_clone_prompt(wav, sr, ref_ids, codec)
-  print(f"prompt={prompt.codes.shape[0]} frames, chunks={len(missing)} remaining", flush=True)
+  print(f"prompt={prompt.codes.shape[0]} frames, chunks={len(chunks)}", flush=True)
   ref_codes = prompt.codes.transpose(0,1).unsqueeze(0)
-  for n,chunk in enumerate(missing,1):
+  for n,chunk in enumerate(chunks,1):
     started = time.perf_counter()
     codes = model.generate_voice_clone_codes(target_ids(chunk["text"]), prompt, language, max_frames, temperature, top_k)
     joined = Tensor.cat(ref_codes, codes, dim=2)
@@ -111,7 +108,7 @@ def render(work:Path, model_path:Path, voice:Path, voice_text:str, language:str,
     dst = outdir/f"{chunk['id']:05d}.wav"; tmp = outdir/f".{chunk['id']:05d}.tmp.wav"
     sf.write(tmp, samples, model.SAMPLE_RATE); os.replace(tmp, dst)
     elapsed, duration = time.perf_counter()-started, len(samples)/model.SAMPLE_RATE
-    print(f"{n}/{len(missing)} id={chunk['id']} {len(chunk['text'].split())}w -> {duration:.1f}s "
+    print(f"{n}/{len(chunks)} id={chunk['id']} {len(chunk['text'].split())}w -> {duration:.1f}s "
           f"in {elapsed:.1f}s, speed={duration/elapsed:.2f}x", flush=True)
 
 
@@ -173,7 +170,7 @@ def main():
   work = args.work or Path("build/au")/f"{args.source.stem}{page_suffix}"
   output = args.output or work/f"{args.source.stem}.m4b"
   model_path, voice_text = resolve_model(args.model), args.voice_text or transcribe(args.voice)
-  if not (work/"manifest.json").exists(): prepare(args.source, work, args.words, args.pages)
+  prepare(args.source, work, args.words, args.pages)
   (work/"voice_text.txt").write_text(voice_text+"\n")
   render(work, model_path, args.voice, voice_text, args.language, args.max_frames, args.temperature, args.top_k)
   package(work, output, args.title or args.source.stem.replace("_", " "), args.author)
