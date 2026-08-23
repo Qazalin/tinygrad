@@ -61,6 +61,43 @@ def main():
       insts = build_kernel(16384, N, 4096, 256, 256, variant)
       _ = b"".join(x.to_bytes() for x in insts)
 
+  # Phase 2 architectural gate: 8 waves, 128 accumulators and <=256 combined VGPRs.
+  p2 = build_kernel(16384, 4096, 4096, 256, 256, "phase2_8w")
+  p2r = scan_resources(p2)
+  assert p2r.regular_vgprs <= 128, p2r
+  assert p2r.accvgprs == 128, p2r
+  assert p2r.allocated_combined_vgprs <= 256, p2r
+  assert len(b"".join(x.to_bytes() for x in p2)) == p2r.code_bytes
+  print(f"phase2_8w resources: {p2r.one_line()}")
+
+  # Wave-id extraction must preserve the known-good reference dependency spacing:
+  # shift -> 3 independent instructions -> readfirstlane, then an explicit 4-cycle SGPR drain.
+  raw = build_kernel(256, 4096, 4096, 256, 256, "phase2_8w_waveid_raw")
+  rawr = scan_resources(raw)
+  assert rawr.accvgprs == 0 and rawr.regular_vgprs <= 113, rawr
+  rt = [repr(x) for x in raw]
+  shift_i = rt.index("v_lshrrev_b32_e32(v[103], 6)")
+  read_i = rt.index("v_readfirstlane_b32_e32(v[49], v[103])")
+  assert read_i - shift_i == 4, (shift_i, read_i, rt[shift_i:read_i+1])
+  assert rt[read_i+1] == "s_nop(3)", rt[read_i:read_i+3]
+  print(f"phase2_8w_waveid_raw resources: {rawr.one_line()}")
+
+  # Phase-2 allocation probes must stay genuinely disentangled.  In particular,
+  # wavefill is forbidden from touching AccVGPRs and accscalar* may touch only AccVGPR0.
+  alloc_expect = {
+    "phase2_8w_wavefill": (113, 0, 0, 120),
+    "phase2_8w_accscalar": (113, 1, 116, 120),
+    "phase2_8w_accscalar128": (128, 1, 128, 136),
+    "phase2_8w_accscalar252": (252, 1, 252, 256),
+    "phase2_8w_accwave128": (128, 128, 128, 256),
+    "phase2_8w_accwave252": (252, 128, 252, 384),
+  }
+  for variant, expected in alloc_expect.items():
+    r = scan_resources(build_kernel(256, 4096, 4096, 256, 256, variant))
+    got = (r.regular_vgprs, r.accvgprs, r.accum_offset, r.allocated_combined_vgprs)
+    assert got == expected, (variant, got, expected, r)
+    print(f"{variant:24s} allocation: {r.one_line()} offset={r.accum_offset}")
+
   # Identity must be rejected once the reference WGM32 mapper starts reordering tiles.
   try: build_kernel(16384, 14336, 4096, 256, 256, "identity")
   except ValueError: pass

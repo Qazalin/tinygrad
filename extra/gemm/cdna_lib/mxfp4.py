@@ -12,7 +12,7 @@ from typing import Literal
 from tinygrad.runtime.autogen.amd.cdna.ins import s_branch, s_nop
 from extra.gemm.gemm_mxfp4 import build_kernel as build_reference_kernel
 
-Variant = Literal["reference", "auto", "identity", "wgm8", "wgm16", "wgm32"]
+Variant = Literal["reference", "ref128x512", "ref192x256", "auto", "identity", "wgm8", "wgm16", "wgm32", "phase2_8w", "phase2_8w_barrier", "phase2_8w_store", "phase2_8w_load", "phase2_8w_acczero", "phase2_8w_accwave", "phase2_8w_accwave128", "phase2_8w_accwave252", "phase2_8w_waveid_raw", "phase2_8w_wavefill", "phase2_8w_accscalar", "phase2_8w_accscalar128", "phase2_8w_accscalar252", "phase2_8w_acc128", "phase2_8w_acc252", "phase2_8w_refregs", "phase2_8w_refgap", "phase2_8w_nop7", "phase2_8w_postgap", "phase2_8w_fast", "phase2_8w_compact"]
 
 # (M, N, K) from the production table in this tuning session.
 LLAMA_SHAPES = (
@@ -28,6 +28,12 @@ LLAMA_SHAPES = (
   (6144, 4096, 16384),
   (4096, 4096, 16384),
 )
+
+
+def variant_tile(variant: str) -> tuple[int,int]:
+  if variant == "ref128x512": return (128, 512)
+  if variant == "ref192x256": return (192, 256)
+  return (256, 256)
 
 
 def choose_auto_variant(M: int, N: int, K: int, tile_m: int = 256, tile_n: int = 256) -> Variant:
@@ -98,6 +104,19 @@ def build_kernel(M: int, N: int, K: int, tile_m: int = 256, tile_n: int = 256,
   count and epilogue untouched.  This makes them suitable as the first A/B baseline
   before the higher-risk 8-wave short-K rewrite.
   """
+  if variant in ("ref128x512", "ref192x256"):
+    tm, tn = variant_tile(variant)
+    if M % tm or N % tn: raise ValueError(f"{variant} invalid for {M}x{N}")
+    return build_reference_kernel(M, N, K, tm, tn)
+
+  if variant.startswith("phase2_8w"):
+    from extra.gemm.cdna_lib.phase2 import build_phase2_kernel
+    if (tile_m, tile_n) != (256, 256): raise ValueError("phase2_8w requires 256x256 WG tile")
+    modes = {"phase2_8w": "full", "phase2_8w_barrier": "barrier", "phase2_8w_store": "store", "phase2_8w_load": "load",
+             "phase2_8w_acczero": "acczero", "phase2_8w_accwave": "accwave", "phase2_8w_accwave128": "accwave128", "phase2_8w_accwave252": "accwave252", "phase2_8w_waveid_raw": "waveid_raw", "phase2_8w_wavefill": "wavefill", "phase2_8w_accscalar": "accscalar", "phase2_8w_accscalar128": "accscalar128", "phase2_8w_accscalar252": "accscalar252", "phase2_8w_acc128": "acc128", "phase2_8w_acc252": "acc252", "phase2_8w_refregs": "refregs", "phase2_8w_refgap": "refgap", "phase2_8w_nop7": "nop7", "phase2_8w_postgap": "postgap", "phase2_8w_fast": "fast", "phase2_8w_compact": "compact"}
+    if variant not in modes: raise ValueError(f"unknown phase2 variant {variant}")
+    return build_phase2_kernel(M, N, K, modes[variant])
+
   insts = build_reference_kernel(M, N, K, tile_m, tile_n)
   if variant == "auto": variant = choose_auto_variant(M, N, K, tile_m, tile_n)
   if variant == "reference": return insts

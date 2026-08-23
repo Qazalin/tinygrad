@@ -47,12 +47,28 @@ def main():
     assert ref_info.global_size == prod_info.global_size and ref_info.local_size == prod_info.local_size
 
     for variant in VARIANTS:
-      if not valid_variant(variant, N): continue
+      if not valid_variant(variant, N, M, K): continue
       out = launch_tensor(bufs.a_q, bufs.b_q, bufs.scale_a, bufs.scale_b, variant)
       binary, info = extract_binary(compile_linear(out.schedule_linear()))
       assert info.global_size == (N // 256, M // 256, 1), info.global_size
       assert info.local_size == (256, 1, 1), info.local_size
       print(f"compiled {M:5d}x{N:5d}x{K:5d} {variant:9s} ELF={len(binary):5d} B")
+      compiled_count += 1
+
+
+  # Phase 2: compile staged probes plus the full higher-residency 8-wave kernel.
+  for M in (256, 16384):
+    N, K = 4096, 4096
+    bufs = make_empty_quantized(M, N, K, Device.DEFAULT)
+    for variant in ("phase2_8w_barrier", "phase2_8w_store", "phase2_8w_load", "phase2_8w_acczero", "phase2_8w_waveid_raw", "phase2_8w_wavefill",
+                    "phase2_8w_accscalar", "phase2_8w_accscalar128", "phase2_8w_accscalar252",
+                    "phase2_8w_accwave", "phase2_8w_accwave128", "phase2_8w_accwave252",
+                    "phase2_8w_acc128", "phase2_8w_acc252", "phase2_8w_refregs", "phase2_8w_refgap", "phase2_8w_nop7", "phase2_8w_postgap", "phase2_8w"):
+      out = launch_tensor(bufs.a_q, bufs.b_q, bufs.scale_a, bufs.scale_b, variant)
+      binary, info = extract_binary(compile_linear(out.schedule_linear()))
+      assert info.global_size == (16, M // 256, 1), info.global_size
+      assert info.local_size == (512, 1, 1), info.local_size
+      print(f"compiled {M:5d}x{N:5d}x{K:5d} {variant:18s} ELF={len(binary):5d} B")
       compiled_count += 1
 
   print(f"gfx950 compile checks passed: {compiled_count} kernels")

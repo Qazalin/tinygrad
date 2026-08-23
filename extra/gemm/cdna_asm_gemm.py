@@ -113,18 +113,35 @@ def custom_hk_mxfp8_gemm(C:UOp, A:UOp, B:UOp, scale_A:UOp, scale_B:UOp, *extra:U
 
 @functools.cache
 def custom_mxfp4_gemm(C:UOp, A:UOp, B:UOp, scale_a:UOp, scale_b:UOp, *extra:UOp, tile_m:int, tile_n:int) -> UOp:
-  from extra.gemm.gemm_mxfp4 import build_kernel
   M, half_k = math.prod(A.shape[:-1]), A.shape[-1]
   N, half_k_b = math.prod(B.shape[:-1]), B.shape[-1]
   K = half_k * 2
   assert half_k == half_k_b and math.prod(C.shape[:-1]) == M and C.shape[-1] == N
-  threads = UOp.special(256, "lidx0")
+
+  # A locally generated correctness-gated dispatch file opts the production path in
+  # automatically. CDNA_LIB_MXFP4=1 can also force the measured baseline table before
+  # autotuning. Non-256 tiles keep the original handwritten kernel unchanged.
+  use_cdna_lib, variant = False, "reference"
+  if (tile_m, tile_n) == (256, 256):
+    try:
+      from extra.gemm.cdna_lib.production import DISPATCH_PATH, choose_production_variant, launch_config
+      use_cdna_lib = DISPATCH_PATH.exists() or bool(getenv("CDNA_LIB_MXFP4", 0))
+      if use_cdna_lib: variant = choose_production_variant(M, N, K)
+    except ImportError: pass
+  if use_cdna_lib:
+    from extra.gemm.cdna_lib.mxfp4 import build_kernel
+    nthreads, lds_bytes, tile_m, tile_n = launch_config(variant)
+  else:
+    from extra.gemm.gemm_mxfp4 import build_kernel
+    nthreads, lds_bytes = 256, 163840
+
+  threads = UOp.special(nthreads, "lidx0")
   groups_x, groups_y = UOp.special(ceildiv(N, tile_n), "gidx0"), UOp.special(ceildiv(M, tile_m), "gidx1")
-  lds = UOp.placeholder((163840,), dtypes.uint8, 0, AddrSpace.LOCAL)
+  lds = UOp.placeholder((lds_bytes,), dtypes.uint8, 0, AddrSpace.LOCAL)
   sink = UOp.sink(C.base, A.base, B.base, scale_a.base, scale_b.base, *(x.base for x in extra), lds, threads, groups_x, groups_y,
-                  arg=KernelInfo(f"mxfp4_gemm_{M}_{N}_{K}",
+                  arg=KernelInfo(f"mxfp4_gemm_{variant}_{M}_{N}_{K}" if use_cdna_lib else f"mxfp4_gemm_{M}_{N}_{K}",
                                  estimates=Estimates(ops=2*M*N*K, mem=(M*half_k+N*half_k)*A.dtype.itemsize+M*N*C.dtype.itemsize)))
-  insts = build_kernel(M, N, K, tile_m, tile_n)
+  insts = build_kernel(M, N, K, tile_m, tile_n, variant) if use_cdna_lib else build_kernel(M, N, K, tile_m, tile_n)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=x) for x in insts))))
 
 def _mxfp4_gemm_quantized(a_q:Tensor, b_q:Tensor, scale_a:Tensor, scale_b:Tensor) -> Tensor:

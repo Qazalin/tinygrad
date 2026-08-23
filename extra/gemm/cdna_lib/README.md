@@ -1,67 +1,74 @@
-# CDNA4 MXFP4 tuning library
+# gfx950 MXFP4 Llama GEMM finish-line tuner
 
-This directory starts from the known-good `extra/gemm/gemm_mxfp4.py` instruction stream and applies low-risk mapper specializations before attempting the larger 8-wave short-K rewrite.
+This directory contains two layers:
 
-## Implemented kernels
+1. **Measured safe baseline** — the fastest bit-correct reference/mapper/tile choice from the MI350X results collected in this tuning session.
+2. **8-wave Phase 2 candidates** — `256x256`, 512-thread, 2M x 4N wave decomposition with 128 AccVGPRs/wave.  The production form forces a 128 regular-VGPR boundary (`128+128=256 combined`) and explicitly sets M0 to an unclamped LDS size before normal DS reads, per the CDNA4 LDS requirements.
 
-- `reference`: byte-for-byte instruction objects from the existing MXFP4 GEMM.
-- `identity`: keeps the existing 256x256 MFMA/LDS/epilogue body, but skips the generic WGM32 mapper. `s46/s47` already contain `gidx0/gidx1`, so this is especially useful for `N=4096` and `N=6144`, where the reference mapper eventually computes the same coordinates through its slow remainder divide path.
-- `wgm8`: changes only the five WGM constants in the reference mapper from 32 to 8. Requires `N/256` divisible by 8.
-- `wgm16`: same, using WGM=16. Requires `N/256` divisible by 16.
-- `auto`: `identity` for `N/256 <= 32`, otherwise WGM16 when possible, then WGM8.
+The tuner never installs an 8-wave kernel merely because it compiles.  It first compares BF16 output bit-for-bit against the existing handwritten reference using row/K-dependent packed FP4 and E8M0 scale patterns.  Only correct candidates are benchmarked and eligible for dispatch.
 
-All variants currently use 256 threads and 163,840 B LDS. They intentionally keep the known-good MFMA body untouched. `resources.py` mirrors tinygrad's typed operand scanner in `tinygrad/renderer/amd/elf.py`.
+## One command on MI350X
 
-## CPU-only codegen check
+From the repo root:
 
-```sh
-PYTHONPATH=. python extra/gemm/cdna_lib/test_codegen.py
+```bash
+DEV=AMD PYTHONPATH=. python extra/gemm/cdna_lib/finish_llama.py \
+  --warmup 10 --rounds 8 --per-round 7
 ```
 
-This serializes every production-shape variant, checks code-byte preservation, and verifies the register footprint remains unchanged.
+It tests all 11 Llama shapes, interleaves candidate timing to reduce shared-GPU bias, and writes:
 
-## gfx950 assembly/ELF compile gate (no GPU required)
+```text
+extra/gemm/cdna_lib/llama_dispatch.json
+```
 
-```sh
+`extra/gemm/cdna_asm_gemm.py` automatically consumes that file on subsequent MXFP4 GEMMs.  A candidate must be at least 1% faster than the measured baseline to replace it (change with `--min-gain`).
+
+The final output explicitly reports whether every selected shape reached 70% MFU.  If a Phase-2 variant is not bit-identical, it is discarded automatically and cannot enter production dispatch.
+
+## Compile-only gate
+
+The package has already been run through the gfx950 compile path. To reproduce the basic gate:
+
+```bash
+PYTHONPATH=. python extra/gemm/cdna_lib/test_codegen.py
 DEV=NULL:NULL:gfx950 PYTHONPATH=. python extra/gemm/cdna_lib/test_compile.py
 ```
 
-This goes through the real `Tensor.custom_kernel -> schedule_linear -> compile_linear` path, assembles the CDNA instructions, and packs the gfx950 ELF/kernel descriptor. It also requires the `reference` wrapper to produce an ELF byte-for-byte identical to the repo's existing `_mxfp4_gemm_quantized` path for every production shape. Run this before any GPU benchmark.
+The finish-line compile matrix used during development additionally compiled every applicable candidate on all 11 Llama shapes (83 custom kernels total).
 
-## gfx950 correctness
+## Production behavior
 
-```sh
-PYTHONPATH=. DEV=AMD python extra/gemm/cdna_lib/bench_mxfp4.py --check
+If `llama_dispatch.json` exists, `cdna_asm_gemm.py` uses it automatically for 256-compatible MXFP4 GEMMs.  Without that file, the original path remains unchanged unless you explicitly set:
+
+```bash
+CDNA_LIB_MXFP4=1
 ```
 
-For all production N mapper sizes:
+That opt-in uses the measured safe baseline table in `production.py`.
 
-```sh
-PYTHONPATH=. DEV=AMD python extra/gemm/cdna_lib/bench_mxfp4.py --check-all-mappers
+Current baseline choices before local autotuning:
+
+```text
+28672,4096,16384   identity
+16384,28672,4096   wgm16
+16384,4096,28672   identity
+16384,14336,4096   reference
+4096,14336,16384   ref128x512
+16384,4096,14336   identity
+16384,4096,4096    wgm16
+16384,6144,4096    identity
+16384,4096,6144    identity
+6144,4096,16384    ref192x256
+4096,4096,16384    reference
 ```
 
-The test quantizes one set of BF16 matrices with the existing quantizer, runs the existing FP4 GEMM as the reference, then requires tuned outputs to be bit-identical.
+## 8-wave candidates
 
-## Benchmark the main short-K shape
+The finish-line tuner tries all three and keeps only bit-correct ones:
 
-```sh
-PYTHONPATH=. DEV=AMD python extra/gemm/cdna_lib/bench_mxfp4.py \
-  --shape 16384,4096,4096 --warmup 20 --count 101 \
-  --variants reference,auto,identity,wgm8,wgm16
-```
+- `phase2_8w` — 128 regular + 128 AccVGPR, conservative post-MFMA drain.
+- `phase2_8w_fast` — same 128+128 allocation without the conservative drain.
+- `phase2_8w_compact` — 115 regular + 128 AccVGPR (`248 combined`), with conservative drain.
 
-For `N=4096`, `auto` resolves to `identity`, so duplicate mapper streams are skipped automatically.
-
-## Benchmark all Llama production shapes
-
-```sh
-PYTHONPATH=. DEV=AMD python extra/gemm/cdna_lib/bench_mxfp4.py \
-  --llama --warmup 20 --count 101 \
-  --variants reference,auto,identity,wgm8,wgm16
-```
-
-The timing buffers are allocated directly in the packed FP4/scales physical shapes, so quantization is not part of the measured schedule. The script reports median/best kernel time, PFLOP/s, MFU against 9.2 PFLOP/s, and static register resources.
-
-## Next kernel
-
-The next step is a separate short-K `256x256`, 8-wave (`2M x 4N`) body targeting 128 AccVGPRs/wave and <=256 combined VGPRs. It should be added as a new builder rather than mutating the 4-wave reference schedule; the mapper experiments here provide a stable baseline first.
+All use 512 threads and the same `256x256` workgroup tile.  The implementation is generalized to M/N/K multiples of 256, covering all Llama shapes in `LLAMA_SHAPES`.

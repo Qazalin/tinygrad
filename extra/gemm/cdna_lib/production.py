@@ -1,0 +1,53 @@
+"""Production dispatch for gfx950 MXFP4 Llama GEMMs.
+
+The fallback table contains the fastest bit-correct variants measured in this tuning
+session.  finish_llama.py can overwrite those choices with locally correctness-gated
+measurements in llama_dispatch.json.
+"""
+from __future__ import annotations
+import json
+from pathlib import Path
+from extra.gemm.cdna_lib.mxfp4 import choose_auto_variant
+
+# Best *correct* lower-envelope results supplied by the MI350X runs before the 8-wave kernel.
+BASELINE_DISPATCH = {
+  (28672, 4096, 16384): "identity",
+  (16384, 28672, 4096): "wgm16",
+  (16384, 4096, 28672): "identity",
+  (16384, 14336, 4096): "reference",
+  (4096, 14336, 16384): "ref128x512",
+  (16384, 4096, 14336): "identity",
+  (16384, 4096, 4096): "wgm16",
+  (16384, 6144, 4096): "identity",
+  (16384, 4096, 6144): "identity",
+  (6144, 4096, 16384): "ref192x256",
+  (4096, 4096, 16384): "reference",
+}
+DISPATCH_PATH = Path(__file__).with_name("llama_dispatch.json")
+
+
+def _load_local() -> dict[tuple[int,int,int], str]:
+  if not DISPATCH_PATH.exists(): return {}
+  try: raw = json.loads(DISPATCH_PATH.read_text())
+  except Exception: return {}
+  out = {}
+  for key, val in raw.get("dispatch", raw).items():
+    try: shape = tuple(int(x) for x in key.replace("x", ",").split(","))
+    except Exception: continue
+    if len(shape) == 3:
+      out[shape] = val["variant"] if isinstance(val, dict) else str(val)
+  return out
+
+
+def choose_production_variant(M: int, N: int, K: int) -> str:
+  shape = (M,N,K)
+  local = _load_local()
+  if shape in local: return local[shape]
+  if shape in BASELINE_DISPATCH: return BASELINE_DISPATCH[shape]
+  return choose_auto_variant(M,N,K)
+
+
+def launch_config(variant: str) -> tuple[int,int,int,int]:
+  from extra.gemm.cdna_lib.mxfp4 import variant_tile
+  tm, tn = variant_tile(variant)
+  return (512 if variant.startswith("phase2_8w") else 256, 163840, tm, tn)

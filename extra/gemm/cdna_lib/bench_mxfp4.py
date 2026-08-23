@@ -17,13 +17,16 @@ from tinygrad.helpers import ceildiv
 from tinygrad.renderer import Estimates
 from tinygrad.uop.ops import KernelInfo, Ops, UOp
 
-from extra.gemm.cdna_lib.mxfp4 import LLAMA_SHAPES, build_kernel, choose_auto_variant
+from extra.gemm.cdna_lib.mxfp4 import LLAMA_SHAPES, build_kernel, choose_auto_variant, variant_tile
 from extra.gemm.cdna_lib.resources import scan_resources
 
 PEAK_MXFP4_PFLOPS = 9.2
-LDS_BYTES = 163_840
-THREADS = 256
+REF_LDS_BYTES = 163_840
+REF_THREADS = 256
 TILE_M = TILE_N = 256
+
+def launch_config(variant: str) -> tuple[int, int]:
+  return (512, REF_LDS_BYTES) if variant.startswith("phase2_8w") else (REF_THREADS, REF_LDS_BYTES)
 
 
 @functools.cache
@@ -32,11 +35,13 @@ def custom_mxfp4_cdna_lib(C: UOp, A: UOp, B: UOp, scale_a: UOp, scale_b: UOp, *,
   N, half_k_b = math.prod(B.shape[:-1]), B.shape[-1]
   K = half_k * 2
   assert half_k == half_k_b and math.prod(C.shape[:-1]) == M and C.shape[-1] == N
-  insts = build_kernel(M, N, K, TILE_M, TILE_N, variant)
+  tile_m, tile_n = variant_tile(variant)
+  insts = build_kernel(M, N, K, tile_m, tile_n, variant)
 
-  threads = UOp.special(THREADS, "lidx0")
-  groups_x, groups_y = UOp.special(ceildiv(N, TILE_N), "gidx0"), UOp.special(ceildiv(M, TILE_M), "gidx1")
-  lds = UOp.placeholder((LDS_BYTES,), dtypes.uint8, 0, AddrSpace.LOCAL)
+  nthreads, lds_bytes = launch_config(variant)
+  threads = UOp.special(nthreads, "lidx0")
+  groups_x, groups_y = UOp.special(ceildiv(N, tile_n), "gidx0"), UOp.special(ceildiv(M, tile_m), "gidx1")
+  lds = UOp.placeholder((lds_bytes,), dtypes.uint8, 0, AddrSpace.LOCAL)
   sink = UOp.sink(C.base, A.base, B.base, scale_a.base, scale_b.base, lds, threads, groups_x, groups_y,
                   arg=KernelInfo(f"cdna_lib_mxfp4_{variant}_{M}_{N}_{K}",
                                  estimates=Estimates(ops=2*M*N*K,
@@ -75,9 +80,12 @@ def make_empty_quantized(M: int, N: int, K: int, device: str) -> BenchBuffers:
   return bufs
 
 
-def valid_variant(variant: str, N: int) -> bool:
+def valid_variant(variant: str, N: int, M: int | None = None, K: int | None = None) -> bool:
   ntiles = N // TILE_N
   if variant in ("reference", "auto"): return True
+  if variant == "ref128x512": return (M is None or M % 128 == 0) and N % 512 == 0
+  if variant == "ref192x256": return (M is None or M % 192 == 0) and N % 256 == 0
+  if variant.startswith("phase2_8w"): return (M is None or M % 256 == 0) and N % 256 == 0 and (K is None or K % 256 == 0)
   if variant == "identity": return ntiles <= 32
   if variant.startswith("wgm"):
     return ntiles % int(variant[3:]) == 0
@@ -92,7 +100,7 @@ def bench_one(M: int, N: int, K: int, variant: str, bufs: BenchBuffers, warmup: 
   # and makes compile failures happen before any timing loop. UOp has no boolean truth value.
   compiled = compile_linear(linear)
 
-  with Context(DEBUG=2):
+  with Context(DEBUG=debug):
     for _ in range(warmup): run_linear(compiled)
     samples = []
     for _ in range(count):
@@ -103,7 +111,8 @@ def bench_one(M: int, N: int, K: int, variant: str, bufs: BenchBuffers, warmup: 
   med, best = statistics.median(samples), min(samples)
   pflows = 2*M*N*K / med / 1e15
   best_pflows = 2*M*N*K / best / 1e15
-  resources = scan_resources(build_kernel(M, N, K, TILE_M, TILE_N, variant))
+  tm, tn = variant_tile(variant)
+  resources = scan_resources(build_kernel(M, N, K, tm, tn, variant))
   return {"variant": variant, "actual": actual, "median": med, "best": best, "pflows": pflows,
           "best_pflows": best_pflows, "mfu": 100*pflows/PEAK_MXFP4_PFLOPS,
           "best_mfu": 100*best_pflows/PEAK_MXFP4_PFLOPS, "resources": resources}
@@ -157,7 +166,7 @@ def main() -> None:
   ap.add_argument("--variants", default="reference,auto,identity,wgm8,wgm16")
   ap.add_argument("--warmup", type=int, default=10)
   ap.add_argument("--count", type=int, default=101)
-  ap.add_argument("--debug", type=int, default=0)
+  ap.add_argument("--debug", type=int, default=2)
   ap.add_argument("--check", action="store_true", help="run a bit-exact reference-vs-tuned correctness check first")
   ap.add_argument("--check-all-mappers", action="store_true", help="check all production N sizes (implies --check)")
   args = ap.parse_args()
@@ -185,7 +194,7 @@ def main() -> None:
     bufs = make_empty_quantized(M, N, K, device)
     seen_actual = set()
     for variant in variants:
-      if not valid_variant(variant, N):
+      if not valid_variant(variant, N, M, K):
         print(f"  {variant:16s} skip (Ntiles={N//256} not divisible)")
         continue
       actual = choose_auto_variant(M, N, K) if variant == "auto" else variant
