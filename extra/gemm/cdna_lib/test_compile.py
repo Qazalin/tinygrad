@@ -83,16 +83,28 @@ def main():
       compiled_count += 1
 
 
-  # Transparent-LDS 8-wave Phase 2: compile all Llama shapes.
+  # Transparent-LDS 8-wave Phase 2: compile serialized and software-pipelined candidates on all Llama shapes.
   for M, N, K in LLAMA_SHAPES:
     bufs = make_empty_quantized(M, N, K, Device.DEFAULT)
-    variant = "phase2_lds"
-    out = launch_tensor(bufs.a_q, bufs.b_q, bufs.scale_a, bufs.scale_b, variant)
-    binary, info = extract_binary(compile_linear(out.schedule_linear()))
-    assert info.global_size == (N // 256, M // 256, 1), info.global_size
-    assert info.local_size == (512, 1, 1), info.local_size
-    print(f"compiled {M:5d}x{N:5d}x{K:5d} {variant:18s} ELF={len(binary):5d} B")
-    compiled_count += 1
+    for variant in ("phase2_lds", "phase2_lds_pipe"):
+      out = launch_tensor(bufs.a_q, bufs.b_q, bufs.scale_a, bufs.scale_b, variant)
+      binary, info = extract_binary(compile_linear(out.schedule_linear()))
+      assert info.global_size == (N // 256, M // 256, 1), info.global_size
+      assert info.local_size == (512, 1, 1), info.local_size
+      print(f"compiled {M:5d}x{N:5d}x{K:5d} {variant:18s} ELF={len(binary):5d} B")
+      compiled_count += 1
+
+
+  # 4-wave 128x256 Phase 2: compile both safe and direct-to-LDS transport on all Llama shapes.
+  for M, N, K in LLAMA_SHAPES:
+    bufs = make_empty_quantized(M, N, K, Device.DEFAULT)
+    for variant in ("phase2_4w", "phase2_4w_d2l"):
+      out = launch_tensor(bufs.a_q, bufs.b_q, bufs.scale_a, bufs.scale_b, variant)
+      binary, info = extract_binary(compile_linear(out.schedule_linear()))
+      assert info.global_size == (N // 256, M // 128, 1), info.global_size
+      assert info.local_size == (256, 1, 1), info.local_size
+      print(f"compiled {M:5d}x{N:5d}x{K:5d} {variant:18s} ELF={len(binary):5d} B")
+      compiled_count += 1
 
   print(f"gfx950 compile checks passed: {compiled_count} kernels")
 

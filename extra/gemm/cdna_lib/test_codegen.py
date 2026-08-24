@@ -173,6 +173,15 @@ def main():
   assert pptext.count("v_mfma_scale_f32_16x16x128_f8f6f4") == 64
   print("phase2_direct_pingpong resources:", ppr.one_line())
 
+  # 4-wave 128x256 Phase 2: same 128x64 wave tile, but two WGs/CU.
+  from extra.gemm.cdna_lib.phase2_4w import build_4w_kernel, USED_LDS_BYTES as W4_USED, LDS_BYTES as W4_LDS
+  for direct in (False, True):
+    w4 = build_4w_kernel(16384,4096,4096,direct_lds=direct)
+    w4r = scan_resources(w4)
+    assert (w4r.regular_vgprs,w4r.accvgprs,w4r.accum_offset,w4r.allocated_combined_vgprs)==(128,128,128,256), w4r
+    assert W4_USED == 16384 and W4_LDS == 16640 and 2*W4_LDS < 160*1024
+    print(("phase2_4w_d2l" if direct else "phase2_4w")+" resources:", w4r.one_line())
+
   # Transparent-LDS Phase 2: same 128+128 residency, 68 KiB live LDS bytes.
   from extra.gemm.cdna_lib.phase2_lds import build_lds_kernel, USED_LDS_BYTES, LDS_BYTES
   lds = build_lds_kernel(16384, 4096, 4096)
