@@ -26,7 +26,10 @@ REF_THREADS = 256
 TILE_M = TILE_N = 256
 
 def launch_config(variant: str) -> tuple[int, int]:
-  return (512, REF_LDS_BYTES) if variant.startswith("phase2_8w") else (REF_THREADS, REF_LDS_BYTES)
+  if variant == "phase2_lds":
+    from extra.gemm.cdna_lib.phase2_lds import LDS_BYTES
+    return (512, LDS_BYTES)
+  return (512, REF_LDS_BYTES) if (variant.startswith("phase2_8w") or variant.startswith("phase2_direct")) else (REF_THREADS, REF_LDS_BYTES)
 
 
 @functools.cache
@@ -85,7 +88,7 @@ def valid_variant(variant: str, N: int, M: int | None = None, K: int | None = No
   if variant in ("reference", "auto"): return True
   if variant == "ref128x512": return (M is None or M % 128 == 0) and N % 512 == 0
   if variant == "ref192x256": return (M is None or M % 192 == 0) and N % 256 == 0
-  if variant.startswith("phase2_8w"): return (M is None or M % 256 == 0) and N % 256 == 0 and (K is None or K % 256 == 0)
+  if variant.startswith("phase2_8w") or variant.startswith("phase2_direct") or variant == "phase2_lds": return (M is None or M % 256 == 0) and N % 256 == 0 and (K is None or K % 256 == 0)
   if variant == "identity": return ntiles <= 32
   if variant.startswith("wgm"):
     return ntiles % int(variant[3:]) == 0

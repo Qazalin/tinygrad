@@ -132,23 +132,35 @@ def _emit_a_reads(k: Kernel) -> None:
   k.label("A_READ_DONE")
 
 
-def _emit_a_global_to_lds(k: Kernel) -> None:
-  """Only wave_m==0 loads the shared 256-row A tile and scales into LDS."""
+def _emit_a_global_to_lds(k: Kernel, K: int) -> None:
+  """Stage one complete 256xBK256 packed-A tile and its scales into LDS.
+
+  Four loader waves cooperate. Each wave contributes 8 x 16B/lane packed-A
+  loads (8 KiB), so the workgroup stages exactly 32 KiB = 256*256/2 bytes.
+  Likewise, 2 dword/lane scale loads per loader wave stage exactly
+  2 KiB = 256*256/32 bytes. This is one serial BK256 buffer; the second
+  33792-byte reference region is its software-pipelined next-BK buffer, not
+  a second half of the current tile.
+  """
   k.emit(s_cmp_eq_u32(s[51], 0))
   k.emit(s_cbranch_scc0(1), target="A_LOAD_DONE")
-  # A FP4: 8 x 16B/lane loads, each block 32 rows apart in the shuffled layout.
+
+  half_k, scale_k = K // 2, K // 32
+  row_group_stride = half_k * 32
+  row_half_scale_stride = scale_k * 128
+
   for i in range(8):
     k.emit(s_add_u32(NULL, s[59], 0) if i == 0 else s_add_u32(NULL, LIT, s[59], i * 4224))
-    if i == 0:
-      k.emit(buffer_load_dwordx4(v[0:3], v[104], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
+    if i == 0: addr = v[104]
     else:
-      k.emit(v_add_u32_e32(v[112], LIT, v[104], i * 65536))
-      k.emit(buffer_load_dwordx4(v[0:3], v[112], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
-  # A scales: two dwords/lane, for row halves 0..127 and 128..255.
+      k.emit(v_add_u32_e32(v[112], LIT, v[104], i * row_group_stride))
+      addr = v[112]
+    k.emit(buffer_load_dwordx4(v[0:3], addr, s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
+
   k.emit(s_add_u32(NULL, s[60], 0))
   k.emit(buffer_load_dword(v[0], v[106], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
   k.emit(s_add_u32(NULL, LIT, s[60], 1024))
-  k.emit(v_add_u32_e32(v[112], LIT, v[106], 16384))
+  k.emit(v_add_u32_e32(v[112], LIT, v[106], row_half_scale_stride))
   k.emit(buffer_load_dword(v[0], v[112], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
   k.label("A_LOAD_DONE")
 
@@ -368,8 +380,12 @@ def build_phase2_kernel(M: int, N: int, K: int, mode: str = "full"):
     k.emit(s_endpgm())
     return k.finalize()
 
+  # Reference input-address transforms use the logical 4-wave local thread id,
+  # not lane_id. Fold physical waves 4..7 back onto logical wave_n 0..3.
+  k.emit(v_and_b32_e32(v[115], 255))
+
   # A global shuffled address (same arithmetic as reference, using wave_n as loader-wave).
-  k.emit(v_lshrrev_b32_e32(v[112], 3, v[102]))
+  k.emit(v_lshrrev_b32_e32(v[112], 3, v[115]))
   k.emit(v_lshrrev_b32_e32(v[113], 2, v[112]))
   k.emit(v_lshlrev_b32_e32(v[113], 4, v[113]))
   k.emit(v_and_b32_e32(v[112], 3, v[112]))
@@ -379,7 +395,7 @@ def build_phase2_kernel(M: int, N: int, K: int, mode: str = "full"):
   k.emit(v_and_b32_e32(v[112], 1, v[112]))
   k.emit(v_add_u32_e32(v[113], v[113], v[112]))
   k.emit(v_mul_lo_u32(v[104], LIT, v[113], half_k))
-  k.emit(v_and_b32_e32(v[112], LIT, v[102], 7))
+  k.emit(v_and_b32_e32(v[112], LIT, v[115], 7))
   k.emit(v_lshlrev_b32_e32(v[112], 4, v[112]))
   k.emit(v_add_u32_e32(v[104], v[104], v[112]))
   k.emit(s_lshr_b32(s[52], s[50], 1))
@@ -395,28 +411,28 @@ def build_phase2_kernel(M: int, N: int, K: int, mode: str = "full"):
   k.emit(s_add_u32(s[59], LIT, s[59], 4096))
 
   # A LDS read address, identical for both wave_m halves; DS offset1 selects the half.
-  k.emit(v_and_b32_e32(v[112], LIT, v[102], 15))
+  k.emit(v_and_b32_e32(v[112], LIT, v[115], 15))
   k.emit(v_lshrrev_b32_e32(v[113], 3, v[112]))
   k.emit(v_mul_i32_i24_e32(v[113], 2, v[113]))
   k.emit(v_and_b32_e32(v[112], 3, v[112]))
   k.emit(v_lshrrev_b32_e32(v[114], 1, v[112]))
   k.emit(v_add_u32_e32(v[112], v[113], v[114]))
   k.emit(v_mul_i32_i24_e32(v[108], LIT, v[112], 1056))
-  k.emit(v_and_b32_e32(v[112], LIT, v[102], 7))
+  k.emit(v_and_b32_e32(v[112], LIT, v[115], 7))
   k.emit(v_lshrrev_b32_e32(v[113], 2, v[112]))
   k.emit(v_mul_i32_i24_e32(v[113], LIT, v[113], 256))
   k.emit(v_add_u32_e32(v[108], v[113], v[108]))
   k.emit(v_and_b32_e32(v[112], 1, v[112]))
   k.emit(v_mul_i32_i24_e32(v[114], LIT, v[112], 128))
   k.emit(v_add_u32_e32(v[108], v[114], v[108]))
-  k.emit(v_lshrrev_b32_e32(v[112], 4, v[102]))
+  k.emit(v_lshrrev_b32_e32(v[112], 4, v[115]))
   k.emit(v_mul_i32_i24_e32(v[112], 16, v[112]))
   k.emit(v_add_u32_e32(v[108], v[112], v[108]))
   k.emit(v_add_u32_e32(v[108], LIT, v[108], 4096))
-  k.emit(v_lshlrev_b32_e32(v[110], 2, v[102]))
+  k.emit(v_lshlrev_b32_e32(v[110], 2, v[115]))
 
   # A scale global address; loaders are wave_m0 only.
-  k.emit(v_lshlrev_b32_e32(v[106], 2, v[102]))
+  k.emit(v_lshlrev_b32_e32(v[106], 2, v[115]))
   k.emit(s_mul_i32(s[52], s[47], LIT, 256))
   k.emit(s_mul_i32(s[53], s[50], 32))
   k.emit(s_add_u32(s[52], s[52], s[53]))
@@ -425,13 +441,13 @@ def build_phase2_kernel(M: int, N: int, K: int, mode: str = "full"):
   k.emit(s_mul_i32(s[60], s[50], LIT, 256))
 
   # B global shuffled address for this wave_n.
-  k.emit(v_lshlrev_b32_e32(v[105], 4, v[102]))
+  k.emit(v_lshlrev_b32_e32(v[105], 4, v[115]))
   k.emit(s_mul_i32(s[52], s[46], LIT, 256))
   k.emit(s_mul_i32(s[53], s[50], 64))
   k.emit(s_add_u32(s[52], s[52], s[53]))
   k.emit(s_mul_i32(s[52], LIT, s[52], half_k))
   k.emit(v_add_u32_e32(v[105], s[52], v[105]))
-  k.emit(v_lshlrev_b32_e32(v[107], 2, v[102]))
+  k.emit(v_lshlrev_b32_e32(v[107], 2, v[115]))
   k.emit(s_mul_i32(s[52], s[46], LIT, 256))
   k.emit(s_mul_i32(s[53], s[50], 64))
   k.emit(s_add_u32(s[52], s[52], s[53]))
@@ -474,7 +490,7 @@ def build_phase2_kernel(M: int, N: int, K: int, mode: str = "full"):
   # the wave-level A-load/read branches unambiguous in the finalized label table.
   k.emit(s_mov_b32(s[56], K // 256))
   k.label("K_LOOP")
-  _emit_a_global_to_lds(k)
+  _emit_a_global_to_lds(k, K)
   _emit_b_global(k)
   k.emit(s_waitcnt())
   k.emit(s_barrier())

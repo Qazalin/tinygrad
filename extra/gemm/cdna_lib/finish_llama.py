@@ -18,7 +18,7 @@ from extra.gemm.cdna_lib.resources import scan_resources
 from extra.gemm.cdna_lib.mxfp4 import build_kernel
 
 PEAK = 9.2
-PHASE2 = ("phase2_8w", "phase2_8w_fast", "phase2_8w_compact")
+PHASE2 = ("phase2_lds",)
 
 
 def patterned_inputs(M: int, N: int, K: int, device: str):
@@ -40,8 +40,7 @@ def bits(x: Tensor) -> np.ndarray:
   return np.ascontiguousarray(x.realize().numpy()).view(np.uint16)
 
 
-def correctness_for_shape(N: int, K: int, variants: list[str], device: str) -> dict[str,bool]:
-  M = 256
+def correctness_for_shape(N: int, K: int, variants: list[str], device: str, M: int = 256) -> dict[str,bool]:
   a,b,sa,sb = patterned_inputs(M,N,K,device)
   ref = bits(launch_tensor(a,b,sa,sb,"reference"))
   verdict = {}
@@ -119,15 +118,19 @@ def main():
     shapes=[tuple(map(int,s.replace('x',',').split(','))) for s in args.shape]
   print(f"device={device} arch={arch}")
 
-  # Cache correctness by (N,K), because phase2's M mapping is fully exercised by M=256.
+  # Small bit-exact gate plus a separate static production-M address proof.
   corr_cache={}
   dispatch={}; results={}
+  from extra.gemm.cdna_lib.test_lds_mapping import prove_production_bounds, prove_stage_to_operands
+  for K0 in sorted({x[2] for x in shapes}): prove_stage_to_operands(K0)
   for M,N,K in shapes:
     print(f"\n=== {M}x{N}x{K} ===")
+    prove_production_bounds(M,N,K)
+    print("  static production bounds/C partition PASS")
     ck=(N,K)
     if ck not in corr_cache:
       print(f"  correctness gate 256x{N}x{K}")
-      corr_cache[ck]=correctness_for_shape(N,K,list(PHASE2),device)
+      corr_cache[ck]=correctness_for_shape(N,K,list(PHASE2),device,256)
     vs=[]
     for v in candidates(M,N,K):
       if v in PHASE2 and not corr_cache[ck].get(v,False): continue

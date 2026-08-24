@@ -12,7 +12,7 @@ from typing import Literal
 from tinygrad.runtime.autogen.amd.cdna.ins import s_branch, s_nop
 from extra.gemm.gemm_mxfp4 import build_kernel as build_reference_kernel
 
-Variant = Literal["reference", "ref128x512", "ref192x256", "auto", "identity", "wgm8", "wgm16", "wgm32", "phase2_8w", "phase2_8w_barrier", "phase2_8w_store", "phase2_8w_load", "phase2_8w_acczero", "phase2_8w_accwave", "phase2_8w_accwave128", "phase2_8w_accwave252", "phase2_8w_waveid_raw", "phase2_8w_wavefill", "phase2_8w_accscalar", "phase2_8w_accscalar128", "phase2_8w_accscalar252", "phase2_8w_acc128", "phase2_8w_acc252", "phase2_8w_refregs", "phase2_8w_refgap", "phase2_8w_nop7", "phase2_8w_postgap", "phase2_8w_fast", "phase2_8w_compact"]
+Variant = Literal["reference", "ref128x512", "ref192x256", "auto", "identity", "wgm8", "wgm16", "wgm32", "phase2_8w", "phase2_8w_barrier", "phase2_8w_store", "phase2_8w_load", "phase2_8w_acczero", "phase2_8w_accwave", "phase2_8w_accwave128", "phase2_8w_accwave252", "phase2_8w_waveid_raw", "phase2_8w_wavefill", "phase2_8w_accscalar", "phase2_8w_accscalar128", "phase2_8w_accscalar252", "phase2_8w_acc128", "phase2_8w_acc252", "phase2_8w_refregs", "phase2_8w_refgap", "phase2_8w_nop7", "phase2_8w_postgap", "phase2_8w_fast", "phase2_8w_compact", "phase2_direct", "phase2_direct_fast", "phase2_direct_pingpong", "phase2_lds"]
 
 # (M, N, K) from the production table in this tuning session.
 LLAMA_SHAPES = (
@@ -108,6 +108,17 @@ def build_kernel(M: int, N: int, K: int, tile_m: int = 256, tile_n: int = 256,
     tm, tn = variant_tile(variant)
     if M % tm or N % tn: raise ValueError(f"{variant} invalid for {M}x{N}")
     return build_reference_kernel(M, N, K, tm, tn)
+
+  if variant == "phase2_lds":
+    from extra.gemm.cdna_lib.phase2_lds import build_lds_kernel
+    if (tile_m, tile_n) != (256, 256): raise ValueError("phase2_lds requires 256x256 WG tile")
+    return build_lds_kernel(M, N, K)
+
+  if variant in ("phase2_direct", "phase2_direct_fast", "phase2_direct_pingpong"):
+    from extra.gemm.cdna_lib.phase2_direct import build_direct_kernel, build_direct_pingpong_kernel
+    if (tile_m, tile_n) != (256, 256): raise ValueError("phase2_direct requires 256x256 WG tile")
+    if variant == "phase2_direct_pingpong": return build_direct_pingpong_kernel(M, N, K)
+    return build_direct_kernel(M, N, K, fast=(variant == "phase2_direct_fast"))
 
   if variant.startswith("phase2_8w"):
     from extra.gemm.cdna_lib.phase2 import build_phase2_kernel

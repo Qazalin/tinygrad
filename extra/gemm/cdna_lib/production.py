@@ -42,7 +42,12 @@ def _load_local() -> dict[tuple[int,int,int], str]:
 def choose_production_variant(M: int, N: int, K: int) -> str:
   shape = (M,N,K)
   local = _load_local()
-  if shape in local: return local[shape]
+  # Never resurrect the retired experimental LDS/direct kernels from a stale
+  # dispatch file left by an interrupted autotune. phase2_lds is the only
+  # higher-residency candidate allowed into production in this revision.
+  if shape in local:
+    v = local[shape]
+    if not (v.startswith("phase2_8w") or v.startswith("phase2_direct")): return v
   if shape in BASELINE_DISPATCH: return BASELINE_DISPATCH[shape]
   return choose_auto_variant(M,N,K)
 
@@ -50,4 +55,7 @@ def choose_production_variant(M: int, N: int, K: int) -> str:
 def launch_config(variant: str) -> tuple[int,int,int,int]:
   from extra.gemm.cdna_lib.mxfp4 import variant_tile
   tm, tn = variant_tile(variant)
-  return (512 if variant.startswith("phase2_8w") else 256, 163840, tm, tn)
+  if variant == "phase2_lds":
+    from extra.gemm.cdna_lib.phase2_lds import LDS_BYTES
+    return (512, LDS_BYTES, tm, tn)
+  return (512 if (variant.startswith("phase2_8w") or variant.startswith("phase2_direct")) else 256, 163840, tm, tn)

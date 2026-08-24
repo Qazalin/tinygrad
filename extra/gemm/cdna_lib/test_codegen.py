@@ -70,6 +70,39 @@ def main():
   assert len(b"".join(x.to_bytes() for x in p2)) == p2r.code_bytes
   print(f"phase2_8w resources: {p2r.one_line()}")
 
+  # Phase-2 serial staging uses one reference LDS buffer per BK256. Four loader
+  # waves * 8 x4/lane loads = exactly 32 KiB packed A, and 4 * 2 dword/lane
+  # loads = exactly 2 KiB A scales. The reference's second 33792-byte region is
+  # the software-pipelined *next* BK buffer, not more data for this BK.
+  p2t = [repr(x) for x in p2]
+  a_x4 = [x for x in p2t if x.startswith("buffer_load_dwordx4(v[0:3]") and x.endswith(", 1)")]
+  a_sc = [x for x in p2t if x.startswith("buffer_load_dword(v[0]") and x.endswith(", 1)")]
+  assert len(a_x4) == 8, (len(a_x4), a_x4)
+  assert len(a_sc) == 2, (len(a_sc), a_sc)
+
+  # Critical input-address invariant: the reference address math uses the full
+  # logical 4-wave local thread id (wave_n*64 + lane), not lane alone. Physical
+  # waves 4..7 must therefore fold local_id modulo 256 before reusing the
+  # reference A/B/scale/LDS transforms. Prove the exact offsets lost by the old
+  # lane-only implementation and the equivalence of logical_tid for both M cohorts.
+  for wave_m in range(2):
+    for wave_n in range(4):
+      for lane in range(64):
+        physical_tid = (wave_m*4 + wave_n)*64 + lane
+        logical_tid = physical_tid & 255
+        assert logical_tid == wave_n*64 + lane
+        def af(t:int) -> int:
+          x = t >> 3
+          return ((x >> 2) << 4) + (((x & 3) >> 1) << 2) + (x & 1)
+        def lds(t:int) -> int:
+          return 1056*(2*((t & 15) >> 3) + ((t & 3) >> 1)) + 256*((t & 7) >> 2) + 128*(t & 1) + 16*(t >> 4) + 4096
+        # wave0 is the only case where lane-only accidentally matched reference.
+        assert af(logical_tid) - af(lane) == 32*wave_n
+        assert lds(logical_tid) - lds(lane) == 64*wave_n
+        assert 16*logical_tid - 16*lane == 1024*wave_n  # packed-B vaddr
+        assert 4*logical_tid - 4*lane == 256*wave_n    # A/B scale vaddr
+  assert "v_and_b32_e32(v[115], LIT, v[0], 255)" in p2t
+
   # Wave-id extraction must preserve the known-good reference dependency spacing:
   # shift -> 3 independent instructions -> readfirstlane, then an explicit 4-cycle SGPR drain.
   raw = build_kernel(256, 4096, 4096, 256, 256, "phase2_8w_waveid_raw")
@@ -102,6 +135,56 @@ def main():
   try: build_kernel(16384, 14336, 4096, 256, 256, "identity")
   except ValueError: pass
   else: raise AssertionError("identity unexpectedly accepted Ntiles>32")
+  # Direct-load 8-wave resource gate.  This path has no LDS/M0/barrier instructions
+  # and deliberately uses the GPU-proven 128+128 split.
+  from extra.gemm.cdna_lib.phase2_direct import build_direct_kernel, build_direct_pingpong_kernel
+  direct = build_direct_kernel(16384, 4096, 4096, fast=False)
+  # VOP3 cannot carry a trailing literal dword.  The old direct kernel emitted
+  # v_mul_lo_u32(v104, LIT, v112, half_k), which serialized src0/src2 as the
+  # literal marker without encoding half_k at all.  Reject that class of bug
+  # by inspecting the actual instruction objects, not the source formula.
+  from tinygrad.renderer.amd.dsl import Reg
+  for inst in direct:
+    if type(inst).__name__.startswith("VOP3") and type(inst).__name__ != "VOP3PX2":
+      for field in ("src0", "src1", "src2"):
+        val = getattr(inst, field, None)
+        assert not (isinstance(val, Reg) and val.offset == 255), (inst, field, inst.to_bytes().hex())
+  dt = [repr(x) for x in direct]
+  assert any(x.startswith("v_mul_i32_i24_e32(v[104], LIT, v[112]") for x in dt), [x for x in dt if "v[104]" in x and "mul" in x]
+  dr = scan_resources(direct)
+  assert dr.regular_vgprs == 128 and dr.accvgprs == 128 and dr.allocated_combined_vgprs == 256, dr
+  text = "\n".join(map(repr, direct))
+  assert "ds_read" not in text and "s_barrier" not in text and "s_mov_b32(NULL" not in text
+  assert text.count("buffer_load_ubyte") == 12 * 2, text.count("buffer_load_ubyte")
+  assert text.count("v_mfma_scale_f32_16x16x128_f8f6f4") == 64, text.count("v_mfma_scale_f32_16x16x128_f8f6f4")
+  print("phase2_direct resources:", dr.one_line())
+  pp = build_direct_pingpong_kernel(16384, 4096, 4096)
+  for inst in pp:
+    if type(inst).__name__.startswith("VOP3") and type(inst).__name__ != "VOP3PX2":
+      for field in ("src0", "src1", "src2"):
+        val = getattr(inst, field, None)
+        assert not (isinstance(val, Reg) and val.offset == 255), (inst, field, inst.to_bytes().hex())
+  ppt = [repr(x) for x in pp]
+  assert any(x.startswith("v_mul_i32_i24_e32(v[124], LIT, v[121]") for x in ppt), [x for x in ppt if "v[124]" in x and "mul" in x]
+  ppr = scan_resources(pp)
+  assert ppr.regular_vgprs == 128 and ppr.accvgprs == 128 and ppr.allocated_combined_vgprs == 256, ppr
+  pptext = "\n".join(map(repr, pp))
+  assert "ds_read" not in pptext and "s_barrier" not in pptext
+  assert pptext.count("v_mfma_scale_f32_16x16x128_f8f6f4") == 64
+  print("phase2_direct_pingpong resources:", ppr.one_line())
+
+  # Transparent-LDS Phase 2: same 128+128 residency, 68 KiB live LDS bytes.
+  from extra.gemm.cdna_lib.phase2_lds import build_lds_kernel, USED_LDS_BYTES, LDS_BYTES
+  lds = build_lds_kernel(16384, 4096, 4096)
+  lr = scan_resources(lds)
+  assert (lr.regular_vgprs, lr.accvgprs, lr.accum_offset, lr.allocated_combined_vgprs) == (128,128,128,256), lr
+  ltext = "\n".join(map(repr, lds))
+  assert ltext.count("ds_write_b128") == 8 and ltext.count("ds_write_b32") == 2
+  assert ltext.count("ds_read_b128") == 24 and ltext.count("ds_read_b32") == 6
+  assert ltext.count("s_barrier") == 2 and ltext.count("v_mfma_scale_f32_16x16x128_f8f6f4") == 64
+  assert USED_LDS_BYTES == 68*1024 and LDS_BYTES == 70*1024
+  print("phase2_lds resources:", lr.one_line(), f"lds={USED_LDS_BYTES}/{LDS_BYTES}")
+
   print("codegen + mapper semantics checks passed")
 
 
