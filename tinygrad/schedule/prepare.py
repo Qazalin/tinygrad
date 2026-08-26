@@ -46,6 +46,9 @@ pm_mops = PatternMatcher([
   (UPat(GroupOp.Movement, name="r").end(name="a", allow_any_len=True), lambda r,a: a.replace(src=(r.src[0],)+a.src[1:])),
 ])
 
+def is_contiguous_multi_param_view(x:UOp) -> bool:
+  return x.contiguous_view_offset() is not None and x.base.op is Ops.MSELECT and x.base.src[0].op is Ops.PARAM
+
 # *****************
 # 0. do some cleanup rewrites, mostly copied from the old stuff
 
@@ -135,9 +138,10 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 
   # ** copy rules **
 
-  # COPY transfers a contiguous range, so materialize a source that's resized (shrink/pad/expand) or reordered (permute/flip)
+  # COPY transfers a contiguous range, so materialize a source that's resized (shrink/pad/expand) and cannot be a contiguous view offset or reordered (permute/flip)
   (UPat(Ops.COPY, src=(UPat(GroupOp.Movement, name="r"),), name="c"),
-   lambda c,r: c.replace(src=(r.contiguous(),)) if resolve(r.numel() != r.base.numel(), False) or r.contiguous_view_offset() is None else None),
+   lambda c,r: c.replace(src=(r.contiguous(),)) if (resolve(r.numel() != r.base.numel(), False) and not is_contiguous_multi_param_view(r)) or \
+     r.contiguous_view_offset() is None else None),
 
   # copy to same device is a no-op
   (UPat(Ops.COPY, src=(UPat.var("x"),), name="copy"), lambda x,copy: x if x.device == copy.device else None),
@@ -178,7 +182,8 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 
 def convert_copy_to_store(ctx, copy:UOp, existing_buf:UOp|None=None):
   input_src = copy.src[0]
-  if not input_src.has_buffer_identity(after_ok=True): input_src = input_src.contiguous()
+  if not input_src.has_buffer_identity(after_ok=True) and not \
+     is_contiguous_multi_param_view(input_src): input_src = input_src.contiguous()
   input_src = input_src.flatten()
   if existing_buf is not None:
     # if the existing buffer is not a full buffer, we can't use it

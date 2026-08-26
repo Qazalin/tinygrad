@@ -149,9 +149,17 @@ def assert_all_same_devices(ast:UOp):
   devices = dedup([x.device for x in ast.toposort() if x.op is Ops.PARAM and x.device is not None])
   if len(devices) >= 2: raise RuntimeError(f"all buffers must be on the same device: {devices}")
 
-def copy_kernel_to_copy_uop(call:UOp, dst:UOp, src:UOp, r:UOp|None=None):
+def copy_kernel_to_copy_uop(call:UOp, dst:UOp, src:UOp, r:UOp|None=None, offset:UOp|None=None):
   if dst.device == src.device and not (isinstance(dst.device, str) and dst.device.startswith("DISK")): return None
-  return call.replace(src=(UOp(Ops.COPY, src=(src,), arg=dst.device),) + call.src[1:])
+  args, slot = call.src[1:], src.arg.slot
+  if args[slot].base.op is Ops.MSELECT and (offset is not None or src.max_numel() != dst.max_numel()):
+    if offset is not None and not isinstance(offset.val, int): return None
+    start = 0 if offset is None else offset.val
+    shrink = ((start, start+dst.numel()),)
+    src = src.flatten().shrink(shrink)
+    args = (*args[:slot], args[slot].flatten().shrink(shrink), *args[slot+1:])
+  elif offset is not None: return None
+  return call.replace(src=(UOp(Ops.COPY, src=(src,), arg=dst.device),) + tuple(args))
 
 def simplify_copy_kernel(call:UOp, ast:UOp, dst:UOp, src:UOp):
   # NOTE: this is a codegen for SDMA devices
@@ -169,6 +177,9 @@ pm_copy_from_store = PatternMatcher([
   # replace this with a copy if it's a copy
   (UPat(Ops.CALL, src=(UPat(Ops.PARAM, name="dst").index(UPat(Ops.CONST, arg=0))
                 .store(UPat(Ops.PARAM, name="src").index(UPat(Ops.CONST, arg=0))).sink(),),
+                name="call", allow_any_len=True), copy_kernel_to_copy_uop),
+  (UPat(Ops.CALL, src=(UPat(Ops.PARAM, name="dst").index(UPat(Ops.RANGE, name="r"))
+                .store(UPat(Ops.PARAM, name="src").index(UPat(Ops.RANGE, name="r")+UPat.cvar("offset"))).end(UPat(Ops.RANGE, name="r")).sink(),),
                 name="call", allow_any_len=True), copy_kernel_to_copy_uop),
   (UPat(Ops.CALL, src=(UPat(Ops.PARAM, name="dst").index(UPat(Ops.RANGE, name="r"))
                 .store(UPat(Ops.PARAM, name="src").index(UPat(Ops.RANGE, name="r"))).end(UPat(Ops.RANGE, name="r")).sink(),),
