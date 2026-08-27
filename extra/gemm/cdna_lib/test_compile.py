@@ -13,6 +13,7 @@ from tinygrad.engine.realize import compile_linear
 from tinygrad.uop.ops import Ops
 from extra.gemm.cdna_lib.bench_mxfp4 import launch_tensor, make_empty_quantized, valid_variant
 from extra.gemm.cdna_lib.mxfp4 import LLAMA_SHAPES
+from extra.gemm.cdna_lib.production import choose_production_variant, launch_config as production_launch_config, DISPATCH_PATH
 from extra.gemm.cdna_asm_gemm import _mxfp4_gemm_quantized
 
 VARIANTS = ("reference", "auto", "identity", "wgm8", "wgm16")
@@ -38,13 +39,18 @@ def main():
   for M, N, K in LLAMA_SHAPES:
     bufs = make_empty_quantized(M, N, K, Device.DEFAULT)
 
-    # Our reference wrapper must compile to exactly the same ELF as tinygrad's production MXFP4 path.
+    # Production must honor the selected dispatch geometry/resources, not silently
+    # fall back to the legacy 256x256 wrapper.
+    prod_variant=choose_production_variant(M,N,K)
     prod_binary, prod_info = extract_binary(compile_linear(_mxfp4_gemm_quantized(
       bufs.a_q, bufs.b_q, bufs.scale_a, bufs.scale_b).schedule_linear()))
+    pthreads, _plds, ptm, ptn = production_launch_config(prod_variant)
+    assert prod_info.global_size == (N//ptn, M//ptm, 1), (prod_variant,prod_info.global_size)
+    assert prod_info.local_size == (pthreads,1,1), (prod_variant,prod_info.local_size)
     ref_binary, ref_info = extract_binary(compile_linear(launch_tensor(
       bufs.a_q, bufs.b_q, bufs.scale_a, bufs.scale_b, "reference").schedule_linear()))
-    assert ref_binary == prod_binary, (M, N, K, len(ref_binary), len(prod_binary))
-    assert ref_info.global_size == prod_info.global_size and ref_info.local_size == prod_info.local_size
+    assert ref_info.global_size == (N//256,M//256,1) and ref_info.local_size == (256,1,1)
+    assert prod_binary.startswith(b"\x7fELF") and ref_binary.startswith(b"\x7fELF")
 
     for variant in VARIANTS:
       if not valid_variant(variant, N, M, K): continue
@@ -105,6 +111,31 @@ def main():
       assert info.local_size == (256, 1, 1), info.local_size
       print(f"compiled {M:5d}x{N:5d}x{K:5d} {variant:18s} ELF={len(binary):5d} B")
       compiled_count += 1
+
+  # 4-wave 64x256 maximum-residency candidate on all Llama shapes.
+  for M, N, K in LLAMA_SHAPES:
+    bufs = make_empty_quantized(M, N, K, Device.DEFAULT)
+    for variant in ("phase2_4w64", "phase2_4w64_pipe"):
+      out = launch_tensor(bufs.a_q, bufs.b_q, bufs.scale_a, bufs.scale_b, variant)
+      binary, info = extract_binary(compile_linear(out.schedule_linear()))
+      assert info.global_size == (N // 256, M // 64, 1), info.global_size
+      assert info.local_size == (256, 1, 1), info.local_size
+      print(f"compiled {M:5d}x{N:5d}x{K:5d} {variant:18s} ELF={len(binary):5d} B")
+      compiled_count += 1
+
+  # Prove a selected 64x256 dispatch reaches the actual production wrapper.
+  from extra.gemm.cdna_lib.production import DISPATCH_PATH
+  saved = DISPATCH_PATH.read_bytes() if DISPATCH_PATH.exists() else None
+  try:
+    DISPATCH_PATH.write_text('{"dispatch":{"16384,4096,4096":{"variant":"phase2_4w64_pipe"}}}\n')
+    bufs=make_empty_quantized(16384,4096,4096,Device.DEFAULT)
+    binary,info=extract_binary(compile_linear(_mxfp4_gemm_quantized(bufs.a_q,bufs.b_q,bufs.scale_a,bufs.scale_b).schedule_linear()))
+    assert info.global_size==(16,256,1) and info.local_size==(256,1,1),info
+    print(f"production dispatch phase2_4w64_pipe ELF={len(binary)} B global={info.global_size} local={info.local_size}")
+    compiled_count += 1
+  finally:
+    if saved is None: DISPATCH_PATH.unlink(missing_ok=True)
+    else: DISPATCH_PATH.write_bytes(saved)
 
   print(f"gfx950 compile checks passed: {compiled_count} kernels")
 

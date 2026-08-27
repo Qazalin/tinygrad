@@ -18,7 +18,7 @@ from extra.gemm.cdna_lib.resources import scan_resources
 from extra.gemm.cdna_lib.mxfp4 import build_kernel
 
 PEAK = 9.2
-PHASE2 = ("phase2_4w_d2l", "phase2_4w")
+PHASE2 = ("phase2_4w_sched", "phase2_4w_d2l", "phase2_4w")
 
 
 def patterned_inputs(M: int, N: int, K: int, device: str):
@@ -122,11 +122,12 @@ def main():
   corr_cache={}
   dispatch={}; results={}
   from extra.gemm.cdna_lib.test_phase2_4w_mapping import prove_production_bounds as prove_4w_bounds, prove_a_stage, prove_inputs
-  for K0 in sorted({x[2] for x in shapes}): prove_a_stage(K0); prove_inputs(K0)
+  from extra.gemm.cdna_lib.test_phase2_4w64_mapping import prove_production_bounds as prove_4w64_bounds, prove_a_stage as prove_4w64_a, prove_inputs as prove_4w64_inputs
+  for K0 in sorted({x[2] for x in shapes}): prove_a_stage(K0); prove_inputs(K0); prove_4w64_a(K0); prove_4w64_inputs(K0)
   for M,N,K in shapes:
     print(f"\n=== {M}x{N}x{K} ===")
-    prove_4w_bounds(M,N,K)
-    print("  static 4w production bounds/C partition PASS")
+    prove_4w_bounds(M,N,K); prove_4w64_bounds(M,N,K)
+    print("  static 4w/4w64 production bounds/C partition PASS")
     ck=(N,K)
     if ck not in corr_cache:
       print(f"  correctness gate 256x{N}x{K}")

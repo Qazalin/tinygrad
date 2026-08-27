@@ -182,6 +182,15 @@ def main():
     assert W4_USED == 16384 and W4_LDS == 16640 and 2*W4_LDS < 160*1024
     print(("phase2_4w_d2l" if direct else "phase2_4w")+" resources:", w4r.one_line())
 
+  # 4-wave 64x256 max-residency Phase 2: 64 accumulators keep combined allocation at 128.
+  from extra.gemm.cdna_lib.phase2_4w64 import build_4w64_kernel, USED_LDS_BYTES as W64_USED, LDS_BYTES as W64_LDS
+  for progressive in (False,True):
+    w64=build_4w64_kernel(16384,4096,4096,progressive=progressive)
+    w64r=scan_resources(w64)
+    assert (w64r.regular_vgprs,w64r.accvgprs,w64r.accum_offset,w64r.allocated_combined_vgprs)==(62,64,64,128),w64r
+    assert W64_USED==8192 and W64_LDS==8960 and 4*W64_LDS<160*1024
+    print(("phase2_4w64_pipe" if progressive else "phase2_4w64")+" resources:",w64r.one_line(),f"lds={W64_USED}/{W64_LDS}")
+
   # Transparent-LDS Phase 2: same 128+128 residency, 68 KiB live LDS bytes.
   from extra.gemm.cdna_lib.phase2_lds import build_lds_kernel, USED_LDS_BYTES, LDS_BYTES
   lds = build_lds_kernel(16384, 4096, 4096)

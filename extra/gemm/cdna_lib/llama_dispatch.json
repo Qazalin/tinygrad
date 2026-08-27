@@ -1,0 +1,72 @@
+{
+  "arch": "gfx950",
+  "dispatch": {
+    "16384,4096,4096": {
+      "best_us": 115.03999999999681,
+      "mfu": 51.94372976960899,
+      "pflows": 4.778823138804027,
+      "variant": "wgm16"
+    }
+  },
+  "peak_mxfp4_pflops": 9.2,
+  "results": {
+    "16384,4096,4096": {
+      "identity": {
+        "best_s": 0.00011587999999999876,
+        "mfu": 51.567196001861554,
+        "pflows": 4.744182032171262,
+        "resources": "vgpr=251 acc=256 combined=512 sgpr_ref=65 sgpr_desc=80 code=19192B insts=2127",
+        "round_best_median_s": 0.00011654000000000005
+      },
+      "phase2_4w": {
+        "best_s": 0.00014288000000000148,
+        "mfu": 41.82255510005313,
+        "pflows": 3.8476750692048873,
+        "resources": "vgpr=128 acc=128 combined=256 sgpr_ref=65 sgpr_desc=80 code=6208B insts=771",
+        "round_best_median_s": 0.00014424000000000034
+      },
+      "phase2_4w_d2l": {
+        "best_s": 0.00013552000000000008,
+        "mfu": 44.09390992248855,
+        "pflows": 4.056639712868947,
+        "resources": "vgpr=128 acc=128 combined=256 sgpr_ref=65 sgpr_desc=80 code=6248B insts=779",
+        "round_best_median_s": 0.00013719999999999878
+      },
+      "phase2_4w_sched": {
+        "best_s": 0.00012739999999999974,
+        "mfu": 46.90429099447147,
+        "pflows": 4.315194771491375,
+        "resources": "vgpr=128 acc=128 combined=256 sgpr_ref=65 sgpr_desc=80 code=7956B insts=968",
+        "round_best_median_s": 0.00012920000000000032
+      },
+      "ref128x512": {
+        "best_s": 0.00011672000000000071,
+        "mfu": 51.196081842834275,
+        "pflows": 4.710039529540753,
+        "resources": "vgpr=245 acc=256 combined=504 sgpr_ref=73 sgpr_desc=88 code=18432B insts=2031",
+        "round_best_median_s": 0.00011882000000000038
+      },
+      "reference": {
+        "best_s": 0.00011600000000000499,
+        "mfu": 51.51385062668445,
+        "pflows": 4.739274257654969,
+        "resources": "vgpr=251 acc=256 combined=512 sgpr_ref=65 sgpr_desc=80 code=19192B insts=2120",
+        "round_best_median_s": 0.0001167400000000006
+      },
+      "wgm16": {
+        "best_s": 0.00011503999999999681,
+        "mfu": 51.94372976960899,
+        "pflows": 4.778823138804027,
+        "resources": "vgpr=251 acc=256 combined=512 sgpr_ref=65 sgpr_desc=80 code=19192B insts=2120",
+        "round_best_median_s": 0.00011659999999999969
+      },
+      "wgm8": {
+        "best_s": 0.000123680000000001,
+        "mfu": 48.31506041959576,
+        "pflows": 4.444985558602809,
+        "resources": "vgpr=251 acc=256 combined=512 sgpr_ref=65 sgpr_desc=80 code=19192B insts=2120",
+        "round_best_median_s": 0.00012554000000000037
+      }
+    }
+  }
+}

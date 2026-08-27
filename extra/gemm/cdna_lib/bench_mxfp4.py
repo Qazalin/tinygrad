@@ -26,8 +26,11 @@ REF_THREADS = 256
 TILE_M = TILE_N = 256
 
 def launch_config(variant: str) -> tuple[int, int]:
-  if variant in ("phase2_4w", "phase2_4w_d2l"):
+  if variant in ("phase2_4w", "phase2_4w_d2l", "phase2_4w_sched"):
     from extra.gemm.cdna_lib.phase2_4w import LDS_BYTES
+    return (256, LDS_BYTES)
+  if variant in ("phase2_4w64", "phase2_4w64_pipe"):
+    from extra.gemm.cdna_lib.phase2_4w64 import LDS_BYTES
     return (256, LDS_BYTES)
   if variant in ("phase2_lds", "phase2_lds_pipe"):
     if variant == "phase2_lds_pipe":
@@ -94,7 +97,8 @@ def valid_variant(variant: str, N: int, M: int | None = None, K: int | None = No
   if variant in ("reference", "auto"): return True
   if variant == "ref128x512": return (M is None or M % 128 == 0) and N % 512 == 0
   if variant == "ref192x256": return (M is None or M % 192 == 0) and N % 256 == 0
-  if variant in ("phase2_4w", "phase2_4w_d2l"): return (M is None or M % 128 == 0) and N % 256 == 0 and (K is None or K % 256 == 0)
+  if variant in ("phase2_4w64", "phase2_4w64_pipe"): return (M is None or M % 64 == 0) and N % 256 == 0 and (K is None or K % 512 == 0)
+  if variant in ("phase2_4w", "phase2_4w_d2l", "phase2_4w_sched"): return (M is None or M % 128 == 0) and N % 256 == 0 and (K is None or K % 256 == 0)
   if variant.startswith("phase2_8w") or variant.startswith("phase2_direct") or variant in ("phase2_lds", "phase2_lds_pipe"): return (M is None or M % 256 == 0) and N % 256 == 0 and (K is None or K % 256 == 0)
   if variant == "identity": return ntiles <= 32
   if variant.startswith("wgm"):

@@ -49,7 +49,7 @@ def choose_production_variant(M: int, N: int, K: int) -> str:
     v = local[shape]
     # Only the current 4-wave Phase-2 family is allowed back into production.
     # Retire all previous 8-wave/direct/LDS experiments from stale dispatch files.
-    if not v.startswith("phase2_") or v in ("phase2_4w", "phase2_4w_d2l"): return v
+    if not v.startswith("phase2_") or v in ("phase2_4w", "phase2_4w_d2l", "phase2_4w64", "phase2_4w64_pipe"): return v
   if shape in BASELINE_DISPATCH: return BASELINE_DISPATCH[shape]
   return choose_auto_variant(M,N,K)
 
@@ -59,6 +59,9 @@ def launch_config(variant: str) -> tuple[int,int,int,int]:
   tm, tn = variant_tile(variant)
   if variant in ("phase2_4w", "phase2_4w_d2l"):
     from extra.gemm.cdna_lib.phase2_4w import LDS_BYTES
+    return (256, LDS_BYTES, tm, tn)
+  if variant in ("phase2_4w64", "phase2_4w64_pipe"):
+    from extra.gemm.cdna_lib.phase2_4w64 import LDS_BYTES
     return (256, LDS_BYTES, tm, tn)
   if variant in ("phase2_lds", "phase2_lds_pipe"):
     if variant == "phase2_lds_pipe":
