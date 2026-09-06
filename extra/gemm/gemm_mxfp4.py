@@ -1,5 +1,6 @@
 # ruff: noqa: E501,F403,F405
 from tinygrad.runtime.autogen.amd.cdna.ins import *
+from tinygrad.helpers import ceildiv
 
 class Kernel:
   def __init__(self): self.instructions, self.labels, self.pos = [], {}, 0
@@ -16,6 +17,9 @@ class Kernel:
 def v_mfma_fp4(dst, a, b, opsel, opsel_hi, scale_a, scale_b):
   # select fp4 for both inputs, 0xD3AC is the load scale encoding and write to acc vgprs
   return v_mfma_scale_f32_16x16x128_f8f6f4(dst, a, b, dst, 0, 0, opsel, opsel_hi, 4, 1, 1, 0, 4, 0xD3AC, scale_a.offset, scale_b.offset)
+
+def get_launch_config(M:int, N:int, K:int, tile_m:int, tile_n:int) -> tuple[int, tuple[int, int]]:
+  return 256, (ceildiv(N, tile_n), ceildiv(M, tile_m))
 
 def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
   k = Kernel()
