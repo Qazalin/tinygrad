@@ -117,18 +117,18 @@ def custom_mxfp4_gemm(C:UOp, A:UOp, B:UOp, scale_a:UOp, scale_b:UOp, *extra:UOp,
   N, half_k_b = math.prod(B.shape[:-1]), B.shape[-1]
   K = half_k * 2
   if K == 4096:
-    from extra.gemm.mxfp4_gemm_shortk import build_kernel, get_launch_config
-    assert (tile_m, tile_n) == (256, 256), "short-K GEMM requires a 256x256 tile"
+    from extra.gemm.mxfp4_gemm_shortk import build_kernel, get_launch_config, LDS_BYTES
     num_threads, (num_groups_x, num_groups_y) = get_launch_config(M, N, K)
     insts = build_kernel(M, N, K)
   else:
     from extra.gemm.gemm_mxfp4 import build_kernel, get_launch_config
+    LDS_BYTES = 163840
     num_threads, (num_groups_x, num_groups_y) = get_launch_config(M, N, K, tile_m, tile_n)
     insts = build_kernel(M, N, K, tile_m, tile_n)
   assert half_k == half_k_b and math.prod(C.shape[:-1]) == M and C.shape[-1] == N
   threads = UOp.special(num_threads, "lidx0")
   groups_x, groups_y = UOp.special(num_groups_x, "gidx0"), UOp.special(num_groups_y, "gidx1")
-  lds = UOp.placeholder((163840,), dtypes.uint8, 0, AddrSpace.LOCAL)
+  lds = UOp.placeholder((LDS_BYTES,), dtypes.uint8, 0, AddrSpace.LOCAL)
   sink = UOp.sink(C.base, A.base, B.base, scale_a.base, scale_b.base, *(x.base for x in extra), lds, threads, groups_x, groups_y,
                   arg=KernelInfo(f"mxfp4_gemm{'_sk' if K == 4096 else ''}_{M}_{N}_{K}",
                                  estimates=Estimates(ops=2*M*N*K, mem=(M*half_k+N*half_k)*A.dtype.itemsize+M*N*C.dtype.itemsize)))
