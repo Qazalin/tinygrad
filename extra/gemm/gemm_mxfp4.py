@@ -51,7 +51,6 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(s_mov_b32(s[47], s[3]))
   k.emit(v_readfirstlane_b32_e32(v[46], v[3]))
   k.emit(s_waitcnt(49279))
-  k.emit(s_endpgm())
 
   if (tile_m, tile_n) == (128, 512):
     for i in range(2):
