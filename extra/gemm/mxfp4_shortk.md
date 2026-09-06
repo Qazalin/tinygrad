@@ -1,79 +1,90 @@
-# Two-group MXFP4 short-K kernel
+# MXFP4 short-K optimization
 
-`mxfp4_gemm_shortk.py` is a standalone assembly generator for
-M=16384, N=4096, K=4096. It does not import or transform the generic GEMM.
-The dispatcher selects it for K=4096; the generator asserts the supported
-M and N. Other K values use the existing generic kernel.
+The selected kernel in `mxfp4_gemm_shortk.py` targets M=16384, N=4096,
+K=4096. It is a standalone assembly generator. The dispatcher selects it
+for K=4096 and retains the generic implementation for other K values.
 
-## Schedule
+## Selected implementation
 
-Each of 128 workgroups contains eight waves, arranged as two four-wave groups.
-Each group owns a 128x256 output tile, 128 accumulators per wave, and its own
-32 KiB LDS region. The kernel uses VGPRs 0:78 and AGPRs 0:127; the combined
-allocation rounds to 208 registers per thread. Each group computes eight tiles,
-so each workgroup computes sixteen tiles in total.
+The workgroup tile is 128x512, with four waves and a 128x128 output per
+wave. The launch is 8x128 workgroups. A uses two padded K256 LDS buffers
+(35,840 bytes total); B and packed scales are prefetched into registers.
+The allocation uses 248 regular VGPR entries and 256 accumulator entries
+per thread, allowing one resident wave per SIMD.
 
-Both groups prime their initial inputs. Group A computes tile 0; group B then
-computes tile 1 while A drains tile 0 and primes tile 2. They continue alternating.
-Each group reads and clears only its own accumulators. The last active group
-performs the final drain.
+The first K128 contribution initializes accumulators directly through the
+MFMA source operand, eliminating the separate accumulator-clear sequence.
+At the last K256 iteration, the lower output rows finish first. Their
+accumulator reads, BF16 conversions, and stores are interleaved with the
+remaining MFMAs for the upper rows. The remaining output batches have
+separate packed-value and address registers. Stores use sc1=1 and nt=1.
 
-Every tile has 32 K chunks of 128 elements. Between common workgroup barriers,
-the active group issues its next-chunk input loads and computes 32 MFMAs from
-current LDS operands. The service group drains one four-accumulator stripe;
-on its first chunk, it also loads the next tile's initial inputs. After all waves
-finish reading the old LDS contents, pending input data is written to LDS, then
-all waves rendezvous again. LDS operand waits leave pending global loads in flight.
-The generated source explicitly emits all addressing, loads, LDS accesses,
-MFMAs, stores, branches, and barriers.
+The source explicitly emits both wave schedules and the first/final K
+paths. It does not import, inspect, or transform another kernel's generated
+instruction stream. There is no runtime tile selection in this module.
 
-## Validation on MI350P, 2026-09-06
+## Measured performance
+
+Measurements below use the full correctness test on this MI350P, including
+the output stores in the timed GEMM. Input quantization is a separate kernel
+and is excluded consistently from both GEMM times.
+
+| Implementation | GEMM time | Result |
+| --- | ---: | --- |
+| Initial two-group prototype | about 880 us | Correct, substantial regression |
+| Original 256x256 kernel, seven-run median | 247.44 us | Correct |
+| Selected 128x512 pipeline, seven-run median | 234.92 us | Correct |
+| Final source with exact LDS allocation, five-run median | 236.52 us | Correct |
+
+The improvement over the original is approximately 4–5% in elapsed time,
+not a large MFU breakthrough. At 236.52 us, 2*M*N*K is about 2.324 PFLOPS,
+or 50.5% MFU using the 4.6 PFLOPS denominator from our previous comparisons.
+**The high-MFU objective has not been achieved.**
+
+Additional tested designs included staggered wave groups, independent
+smaller workgroups, direct global-to-LDS payloads and scales, deeper
+register prefetch, A-only shared memory, and independent waves without
+LDS. The correct variants were slower than the selected implementation.
+The 32x32 MFMA experiment was also discarded; its initial output-layout
+check failed, so its timing is not a valid performance result.
+
+## Profiling evidence
+
+The earlier 128x512 SQTT capture showed approximately 35–37k cycles of
+MFMA work per tile versus an ideal 32,768 issue cycles. Initialization,
+drain, and the interval before the next workgroup consumed another
+approximately 12–14k cycles. This motivated first-K initialization and
+final-K output overlap. It does not establish that every remaining delay
+is caused by one mechanism.
+
+The final capture verifies the intended overlap: on each traced SIMD,
+128 of 256 output-store instructions issue during the final MFMA span
+across eight tiles. Thus half the output stores overlap remaining matrix
+instructions. This is instruction overlap, not proof that all store latency
+is hidden. Counts are saved in `/tmp/mxfp4_opt_final_overlap.json`.
+
+Captures and logs are in `/tmp`:
+
+- `mxfp4_opt_128_sqtt.jsonl`: earlier 128x512 trace used for diagnosis.
+- `mxfp4_opt_final_sqtt.jsonl`: selected kernel's final trace.
+- `mxfp4_opt_baseline_final.log`: original 256x256 comparison.
+- `mxfp4_opt_candidate_final.log` and `mxfp4_opt_final.log`: candidate timings.
+- `mxfp4_opt_signed_final.log` and `mxfp4_opt_signed_exact_final.log`: signed random input checks.
+- `mxfp4_opt_mutation_final.log`: deliberate early-return failure.
+
+## Validation
 
 ```sh
-K=4096 DEV=AMD DEBUG=2 PYTHONPATH=. python test/backend/test_asm_gemm.py TestMXFP4.test_correctness2
+K=4096 CNT=5 DEV=AMD DEBUG=2 PYTHONPATH=. python test/backend/test_asm_gemm.py TestMXFP4.test_correctness2
 K=4096 VIZ=-2 DEV=AMD DEBUG=2 PYTHONPATH=. python test/backend/test_asm_gemm.py TestMXFP4.test_correctness2
-python -m tinygrad.viz.cli -s 'mxfp4_gemm_sk_16384_4096_4096 SQTT SE:0 PKTS' --json > /tmp/mxfp4_phase_final_sqtt.jsonl
+python -m tinygrad.viz.cli -s 'mxfp4_gemm_sk_16384_4096_4096 SQTT SE:0 PKTS' --json > /tmp/mxfp4_opt_final_sqtt.jsonl
+python -m ruff check .
+python -m ruff check extra/gemm/mxfp4_gemm_shortk.py
+python -m mypy tinygrad/
 ```
 
-- Full-output correctness passed three consecutive runs, with zero-initialized outputs.
-- A separate signed random input check passed the same rtol=0.005, atol=0.001 comparison.
-- Inserting `s_endpgm` at entry fails with zero output and `MXFP4 GEMM forward mismatch`.
-- Repository ruff and mypy checks passed; the new kernel also passed explicit ruff checking.
-
-The three unprofiled times were 881.12, 880.32, and 880.12 us. The median is
-880.32 us, about 624.5 TFLOPS and 13.6% of the 4.6 PFLOPS peak used in our previous
-comparisons. **This is an initial correct schedule, not a performance improvement.**
-The original 256x256 kernel was approximately 250 us on this shape.
-
-## Trace evidence and remaining work
-
-SE0 captured eight complete wave lifetimes, two per SIMD. Each wave issued
-8x1024 MFMAs, initialized 128 accumulators, and drained/cleared 8x128 accumulators.
-The analysis classifies these events using the explicit phase schedule; VALU_MAI
-also includes accumulator reads/writes, so it must not be counted directly as MFMA.
-
-Across the four SIMD pairs, 7,440 of 7,680 steady-state output-store instructions
-(96.9%) occur between the sibling tile's first and last MFMA. However, only 157
-(2.0%) occur inside a sibling chunk's first-to-last-MFMA span. Next-tile input reads
-also overlap chunk spans (249 of 672 read instructions). These are dispatch-time
-interval comparisons, not measurements of memory-transaction completion.
-
-Thus the persistent alternating schedule works and removes a separate full-tile
-epilogue between compute phases, but the fine-grained work is not balanced.
-Service stripes usually finish before the sibling's MFMA chunk starts. The active
-path has substantial address generation, LDS traffic/waits, and two barriers per
-128 K elements. The generated loop is also about 63 KiB. These are explicit costs
-of this initial implementation; the trace does not show a continuously occupied
-matrix pipe. Further work should improve the compute pipeline and place service
-work inside its execution windows, while retaining this ownership/barrier model.
-
-Local evidence:
-- `/tmp/mxfp4_phase_prefetch_correctness.log`
-- `/tmp/mxfp4_phase_signed.log`
-- `/tmp/mxfp4_phase_mutation.log`
-- `/tmp/mxfp4_phase_final_sqtt.jsonl`
-- `/tmp/mxfp4_phase_overlap.json`
-- `/tmp/analyze_mxfp4_phase.py`
-
-Instruction/layout references: the repository's quantize_mxfp4.cpp and
-[AMD CDNA4 ISA](https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-cdna4-instruction-set-architecture.pdf).
+Full-output comparisons pass with zero-initialized output and the existing
+rtol=0.005, atol=0.001 tolerance. Signed random inputs passed separately.
+Inserting `s_endpgm` at kernel entry produced ten printed zeros and the
+expected `MXFP4 GEMM forward mismatch` assertion. The mutation was removed
+before the final positive capture. Ruff and mypy passed.
