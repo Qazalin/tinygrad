@@ -7,7 +7,7 @@ from tinygrad.helpers import to_tuple, ContextVar, Context, panic, partition, pe
 from tinygrad.device import Device, Buffer, BufferSpec, Compiled, LRUAllocator, DepsTracker
 from tinygrad.device import ProfileGraphEntry, ProfileGraphEvent, ProfileDeviceEvent
 from tinygrad.uop.ops import Ops, sint, UOp, UPat, PatternMatcher, KernelInfo, GroupOp, graph_rewrite, rewrite_group, exec_alu
-from tinygrad.dtype import dtypes, DType, DTYPES_DICT
+from tinygrad.dtype import dtypes, DType, DTYPES_DICT, AddrSpace
 from tinygrad.runtime.support.memory import BumpAllocator, MMIOInterface
 from tinygrad.renderer import Renderer, Estimates
 from tinygrad.engine.realize import get_call_arg_uops, get_call_name, get_call_outs_ins, estimate_uop, pm_flatten_linear
@@ -58,6 +58,10 @@ def to_name(*parts:str) -> str: return "_".join(parts).replace(":", "_").lower()
 
 def timeline(devs:tuple[str, ...]) -> UOp: return UOp.placeholder((2,), dtypes.uint64, 0, device=devs, volatile=True, tag="timeline")
 def timeline_value(devs:tuple[str, ...]) -> UOp: return timeline(devs).index(1).load()
+
+def rt_addr(b:UOp, dev) -> UOp:
+  base, off = unwrap_view(b)
+  return patch(UOp.placeholder((1,), dtypes.uint64, device=base.device, tag="addr"), [(0, base.getaddr(dev))]).index(0).load() + off
 
 def make_submit(*cmds, devs:str|tuple[str, ...], queue:str) -> UOp:
   fn = to_name("submit", (devs:=to_tuple(devs))[0].split(":")[0], queue.split(":")[0])
@@ -227,9 +231,13 @@ def _finalize_batch(ctx:BatchCtx) -> UOp:
   submits += [_epilogue(ctx, dev) for dev in ctx.queues]
   fence = UOp.custom_function("hcq_fence", *[ctx.sched_timeline((dev,)) for dev in ctx.queues],
                               *[ctx.queue_signal((dev,), q) for dev, qs in ctx.queues.items() for q in qs])
-  merged = [m.after(fence) for m in _merge_queues(submits)]
+  merged:list[UOp] = [] # the submits in order, after the fence
+  for m in _merge_queues(submits): merged.append(m.after(fence, *merged[-1:]))
   estimates = sum((estimate_uop(call) for call, _, _ in ctx.batch), start=Estimates()).simplify()
-  return UOp.sink(*merged, arg=KernelInfo("hcq_submit", estimates=estimates), tag=1).call(aux=HCQInfo(tuple(ctx.queues), kernels=tuple(kerns)))
+  sink = UOp.sink(*merged, arg=KernelInfo("hcq_submit", estimates=estimates), tag=1)
+  for pm in [Device[d].pm_batch for d in ctx.queues if Device[d].pm_batch is not None]: # a device adds its own work to the batch
+    if (r:=pm.rewrite(sink)) is not None: sink = r
+  return sink.call(aux=HCQInfo(tuple(ctx.queues), kernels=tuple(kerns)))
 
 @rewrite_group(new_ctx=False)
 def sched_batches(l:UOp, profile:bool) -> UOp:
@@ -286,17 +294,24 @@ def hcq_fence(ctx:EncodeCtx, f:UOp) -> UOp:
   for i, dev in enumerate(ctx.devs):
     slots, off = unwrap_view(lasts[i])
     slots = patch(slots, [], bytes(slots.max_numel() * slots.dtype.itemsize)) # zeroed at link
-    done = timeline((dev,)).after(*last, loop:=UOp.loop(i)).index(0).load()
-    waited = done.end(loop, done < slots.index(off // slots.dtype.itemsize).load())
-    nxt = timeline_value((dev,)) + UOp.const(1, dtypes.uint64)
-    last = (timeline((dev,)).after(waited).index(1).store(nxt), slots.after(waited).index(off // slots.dtype.itemsize).store(nxt))
+    target = slots.after(*last, tv:=timeline_value((dev,))).index(off // slots.dtype.itemsize).load()
+    done = timeline((dev,)).after(target, loop:=UOp.loop(i)).index(0).load()
+    bumped = timeline((dev,)).after(done.end(loop, done < target)).index(1).store(nxt:=tv + UOp.const(1, dtypes.uint64))
+    last = (slots.after(bumped).index(off // slots.dtype.itemsize).store(nxt),)
 
   # re-arm the signals
   for sig in sigs:
     base, off = unwrap_view(sig)
     last = (base.after(*last).index(off // sig.dtype.itemsize).store(0),)
   return last[0].barrier(*last[1:])
-pm_hcq_encode = PatternMatcher([(UPat(Ops.CUSTOM_FUNCTION, arg="hcq_fence", name="f"), hcq_fence)])
+
+pm_hcq_encode = PatternMatcher([
+  (UPat(Ops.CUSTOM_FUNCTION, arg="hcq_fence", name="f"), hcq_fence),
+
+  # after blocks are lowered, rechain stores saving original order
+  (UPat(Ops.AFTER, src=(UPat(dtype=dtypes.void, name="root"),), allow_any_len=True, name="a"),
+    lambda root, a: root.substitute({s.buf_uop: s.buf_uop.after(*a.src[1:]) for s in root.toposort() if s.op is Ops.STORE}, walk=True)),
+])
 
 # *****************
 # 3.2. split
@@ -315,6 +330,7 @@ def addrs_to_table(ctx:EncodeCtx, g:UOp) -> UOp|None:
 def _is_link_patch(w:UOp) -> bool:
   if w.op is Ops.GETADDR: return not _is_input_addr(w)
   if w.op is Ops.PARAM: return w.tag is not None
+  if w.op is Ops.BUFFER: return w.addrspace is AddrSpace.GLOBAL # a register is written at runtime
   if w.op in {Ops.LOAD, Ops.AFTER} or w.is_variable: return False
   return all(_is_link_patch(s) for s in w.src)
 
@@ -327,12 +343,7 @@ def hoist_links(ctx:EncodeCtx, a:UOp) -> UOp|None:
   ctx.lt_patches.setdefault(unwrap_view(a.src[0])[0], []).extend(ws.substitute(sub).src)
   return a.src[0].after(*rest)
 
-pm_lower_body = PatternMatcher([
-  (UPat(Ops.GETADDR, name="g"), addrs_to_table),
-  (UPat(Ops.AFTER, name="a"), hoist_links),
-  (UPat(Ops.AFTER, src=(UPat(dtype=dtypes.void, name="root"),), allow_any_len=True, name="a"),
-    lambda root, a: root.substitute({s.buf_uop: s.buf_uop.after(*a.src[1:]) for s in root.toposort() if s.op is Ops.STORE}, walk=True)),
-])
+pm_patches = PatternMatcher([(UPat(Ops.GETADDR, name="g"), addrs_to_table), (UPat(Ops.AFTER, name="a"), hoist_links)])
 
 def patch(buf:UOp, rows:list[tuple[int, UOp]], blob:bytes|None=None) -> UOp:
   groups:dict[tuple[DType, int, bool], list[tuple[int, UOp]]] = {} # split by: dtype, alignment, is_link (rt/lt can't share a store)
@@ -368,9 +379,9 @@ def lower_call(call:UOp) -> UOp|None:
 
   # encode bodies
   ctx = EncodeCtx(call.arg.aux.device)
-  pm = sum([Device[d].pm_encode for d in dedup([d.split(":")[0] for d in ctx.devs])], pm_hcq_encode)
-  body = graph_rewrite(call.src[0], pm, ctx=ctx, walk=True, name="encode body")
-  body = graph_rewrite(body, pm_lower_body, ctx=ctx, name="lower body")
+  devs = [Device[d] for d in dedup([d.split(":")[0] for d in ctx.devs])]
+  body = graph_rewrite(call.src[0], sum([d.pm_encode for d in devs], PatternMatcher([])) + pm_hcq_encode, ctx=ctx, bpm=pm_patches, name="encode")
+  body = graph_rewrite(body, sum([d.pm_lower for d in devs if d.pm_lower is not None], PatternMatcher([])), ctx=ctx, bpm=pm_patches, name="lower")
 
   # resize table
   body = body.substitute({ctx.table: (table:=UOp.placeholder((len(ctx.inputs),), dtypes.uint64, device="CPU", tag="inputs"))})
@@ -432,7 +443,8 @@ def bufferize_buf(ctx:LinkCtx, b:UOp) -> UOp|None: # ctx: a kept link (the jit's
   # device owns the placeholders it names
   if (r:=cast(Buffer|None, dev.pm_bufferize.rewrite(b, ctx=dev))) is not None: pass
   elif not ctx.use_rt:
-    r = Buffer(dev.device, b.max_numel(), b.dtype, options=BufferSpec(host=b.arg.volatile, uncached=True, cpu_access=True), preallocate=True)
+    spec = BufferSpec(host=b.arg.volatile, uncached=b.arg.volatile, cpu_access=True)
+    r = Buffer(dev.device, b.max_numel(), b.dtype, options=spec, preallocate=True)
   else: r = dev.rt_view(b.max_numel() * b.dtype.itemsize, b.dtype, host=b.arg.volatile)
 
   return UOp.from_buffer(r, HCQ_RUNTIME_DEV.value)
@@ -511,8 +523,10 @@ class HCQ2Compiled(Compiled):
     self.prof_ents:dict[tuple[Buffer, int], ProfileGraphEntry] = {} # (a batch's timestamps, start slot) -> entry, read at synchronize
 
   @functools.cached_property
-  def timeline(self) -> Buffer: # [the signal, the value the last submitted batch signals]: zeroed host memory
-    return Buffer(self.device, 2, dtypes.uint64, options=BufferSpec(host=True, uncached=True, cpu_access=True), preallocate=True)
+  def timeline(self) -> Buffer: # [the signal, the value the last submitted batch signals]
+    buf = Buffer(self.device, 2, dtypes.uint64, options=BufferSpec(host=True, uncached=True, cpu_access=True), preallocate=True)
+    buf._buf.cpu_view().view(fmt='B')[:16] = bytes(16)
+    return buf
 
   def collect_prof(self):
     if PROFILE:
