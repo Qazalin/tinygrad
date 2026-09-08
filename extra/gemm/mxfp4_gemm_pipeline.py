@@ -28,14 +28,16 @@ def v_mfma_fp4(dst, a, b, opsel, opsel_hi, scale_a, scale_b):
 # A uses two padded K256 LDS buffers; B and packed scales are prefetched in VGPRs.
 LDS_BYTES = 150528
 
+# MI350X: fill complete rounds across 256 CUs.
+PERSISTENT_TILES = {4096: 4, 6144: 2, 14336: 2, 28672: 4}
+
 def get_launch_config(M: int, N: int, K: int) -> tuple[int, tuple[int, int]]:
-  assert M == 16384 and N in (4096, 6144, 14336, 28672) and K == 4096
-  tiles = 8 if N % 4096 == 0 else 4
-  return (256, (N//512, M//(128*tiles)))
+  assert M == 16384 and N in PERSISTENT_TILES and K == 4096
+  return (256, (N//512, M//(128*PERSISTENT_TILES[N])))
 
 def build_kernel(M: int, N: int, K: int):
-  assert M == 16384 and N in (4096, 6144, 14336, 28672) and K == 4096
-  tiles = 8 if N % 4096 == 0 else 4
+  assert M == 16384 and N in PERSISTENT_TILES and K == 4096
+  tiles = PERSISTENT_TILES[N]
   m_stride = M//tiles
   k = Kernel()
   scale_k = K // 32
@@ -278,7 +280,7 @@ def build_kernel(M: int, N: int, K: int):
   k.emit(s_mul_i32(s[62], s[36], 64))
   k.emit(v_add_u32_e32(v[242], s[62], v[240]))
   k.emit(v_add_u32_e32(v[243], s[62], v[241]))
-  # Persist M tiles; choose the worker count to fill complete 128-CU rounds.
+  # Persist M tiles; choose the worker count to fill complete CU rounds.
   for i in range(16): k.emit(s_mov_b32(s[76+i], s[12+i]))
   k.emit(s_mov_b32(s[92], tiles))
   for i in range(4): k.emit(s_mov_b32(s[96+i], s[4+i]))
