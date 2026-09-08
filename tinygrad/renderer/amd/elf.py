@@ -24,7 +24,10 @@ def assemble_linear(prg:UOp, lin:UOp, arch:str) -> bytes:
     for opr_name, (_, _, opr_type) in inst.operands.items():
       if opr_type in _ACCVGPR_TYPES: accvgpr_fields.add(opr_name)
       elif opr_type in {OpType.OPR_VGPR_OR_ACCVGPR, OpType.OPR_SRC_VGPR_OR_ACCVGPR, OpType.OPR_SRC_VGPR_OR_ACCVGPR_OR_CONST}:
-        if getattr(inst, 'acc_cd', 0) == 1: accvgpr_fields.add(opr_name)
+        if hasattr(inst, "acc_cd"):
+          is_acc = ((getattr(inst, "acc", 0) >> (opr_name == "src1")) & 1) if opr_name in {"src0", "src1"} else inst.acc_cd
+        else: is_acc = getattr(inst, "acc", 0)
+        if is_acc: accvgpr_fields.add(opr_name)
     for name, field in inst._fields:
       if isinstance(field, FixedBitField): continue
       val = getattr(inst, name)

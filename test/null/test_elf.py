@@ -35,5 +35,33 @@ class TestElfLoader(unittest.TestCase):
     with self.assertRaisesRegex(RuntimeError, 'powf'): elf_loader(obj)
     elf_loader(obj, link_libs=[DLL('m', 'm')])
 
+class TestAMDRegisterAllocation(unittest.TestCase):
+  def allocation(self, inst):
+    from tinygrad import dtypes
+    from tinygrad.uop.ops import UOp, Ops, KernelInfo
+    from tinygrad.renderer.amd.elf import assemble_linear
+    from tinygrad.runtime.autogen import amdgpu_kd
+    lin = UOp(Ops.LINEAR, src=(UOp(Ops.INS, arg=(inst, dtypes.void)),))
+    prg = UOp(Ops.PROGRAM, src=(UOp.sink(arg=KernelInfo("register_allocation")), lin))
+    _, sections, _ = elf_loader(assemble_linear(prg, lin, "gfx950"))
+    desc = amdgpu_kd.llvm_amdhsa_kernel_descriptor_t.from_buffer_copy(next(s.content for s in sections if s.name == ".rodata"))
+    total = ((desc.compute_pgm_rsrc1 & 63) + 1) * 8
+    offset = ((desc.compute_pgm_rsrc3 & 63) + 1) * 4
+    return total, offset
+
+  def test_matrix_register_files(self):
+    from tinygrad.runtime.autogen.amd.cdna.ins import v_mfma_f32_16x16x32_bf16, v
+    for acc, acc_cd, a, b, c, expected in [(0, 1, 64, 96, 0, (104, 100)), (1, 1, 128, 20, 0, (160, 24)),
+                                         (2, 1, 20, 128, 0, (160, 24)), (3, 0, 128, 128, 32, (168, 36))]:
+      with self.subTest(acc=acc, acc_cd=acc_cd):
+        inst = v_mfma_f32_16x16x32_bf16(v[c:c+3], v[a:a+3], v[b:b+3], v[c:c+3], acc=acc, acc_cd=acc_cd)
+        self.assertEqual(self.allocation(inst), expected)
+
+  def test_memory_accumulator_registers(self):
+    from tinygrad.runtime.autogen.amd.cdna.ins import buffer_load_dwordx4, buffer_store_dwordx4, ds_read_b128, v, s
+    for inst in [buffer_load_dwordx4(v[128:131], v[4], s[0:3], 0, offen=1, acc=1),
+                 buffer_store_dwordx4(v[128:131], v[4], s[0:3], 0, offen=1, acc=1), ds_read_b128(v[128:131], v[4], acc=1)]:
+      with self.subTest(inst=str(inst)): self.assertEqual(self.allocation(inst), (144, 8))
+
 if __name__ == '__main__':
   unittest.main()
