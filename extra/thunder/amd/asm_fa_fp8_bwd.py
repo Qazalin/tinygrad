@@ -476,6 +476,7 @@ def build_kernel(B:int, N:int, H:int, H_KV:int):
   k.emit(v_accvgpr_write(v[126], 0))
   k.emit(v_accvgpr_write(v[127], 0))
   k.emit(s_add_i32(s[60], s[34], LIT, 256))
+  k.emit(s_waitcnt(112))  # Complete the initial global-to-LDS loads before the loop-entry barrier.
   k.emit(s_branch(1008), "L1884")
   k.label("L8c4")
   k.emit(s_cmp_ge_i32(s[34], s[60]))
@@ -1023,6 +1024,7 @@ def build_kernel(B:int, N:int, H:int, H_KV:int):
   k.emit(v_cvt_pk_bf16_f32(v[2], v[2], v[3]))
   k.emit(v_add3_u32_e64(v[1], v[39], v[1], v[44]))
   k.emit(v_pk_mul_f32(v[4:5], v[4:5], v[34:35]))
+  k.emit(s_waitcnt(112))  # Prefetch is ready; leave this iteration's atomics in flight across the next iteration.
   k.emit(buffer_atomic_pk_add_bf16(v[2], v[1], s[36:39], 0, 0, 1))
   k.emit(s_add_u32(s[35], s[35], LIT, 256))
   k.emit(v_cvt_pk_bf16_f32(v[2], v[4], v[5]))
@@ -1061,7 +1063,6 @@ def build_kernel(B:int, N:int, H:int, H_KV:int):
   k.emit(s_barrier())
   k.emit(s_cbranch_vccnz(51), "L1950")
   k.label("L1884")
-  k.emit(s_waitcnt(112))
   k.emit(s_barrier())
   k.emit(s_cmpk_gt_i32(s[34], 8127))
   k.emit(s_cselect_b64(s[8:9], -1, 0))
@@ -1530,6 +1531,7 @@ def build_kernel(B:int, N:int, H:int, H_KV:int):
   k.emit(v_cvt_pk_bf16_f32(v[2], v[2], v[3]))
   k.emit(v_add3_u32_e64(v[1], v[39], v[1], v[44]))
   k.emit(v_pk_mul_f32(v[4:5], v[4:5], v[34:35]))
+  k.emit(s_waitcnt(112))  # Prefetch is ready; leave this iteration's atomics in flight across the next iteration.
   k.emit(buffer_atomic_pk_add_bf16(v[2], v[1], s[36:39], 0, 0, 1))
   k.emit(s_add_u32(s[35], s[35], LIT, 256))
   k.emit(v_cvt_pk_bf16_f32(v[2], v[4], v[5]))
@@ -1568,7 +1570,6 @@ def build_kernel(B:int, N:int, H:int, H_KV:int):
   k.emit(s_barrier())
   k.emit(s_cbranch_vccnz(51), "L1950")
   k.label("F1884")
-  k.emit(s_waitcnt(112))
   k.emit(s_barrier())
   k.emit(s_cmpk_gt_i32(s[34], 8127))
   k.emit(s_cselect_b64(s[8:9], -1, 0))
