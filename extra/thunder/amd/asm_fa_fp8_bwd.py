@@ -75,6 +75,12 @@ def build_kernel(B:int, N:int, H:int, H_KV:int):
   k.emit(v_and_b32_e32(v[5], LIT, v[5], 112))
   k.emit(s_and_b32(s[6], s[6], LIT, 2147482624))
   k.emit(v_and_b32_e32(v[6], LIT, v[6], 112))
+  # Invert physical LDS address bit 9 -> bit 4 for direct global-to-LDS loads.
+  # Each loader owns a 16-byte vector, with row = tid >> 3.
+  k.emit(v_lshrrev_b32_e32(v[9], 1, v[0]))
+  k.emit(v_and_b32_e32(v[9], 16, v[9]))
+  k.emit(v_xor_b32_e32(v[5], v[9], v[5]))
+  k.emit(v_xor_b32_e32(v[6], v[9], v[6]))
   k.emit(s_mov_b32(s[3], LIT, 1114112))
   k.emit(s_mov_b32(s[2], LIT, 262144))
   k.emit(v_bitop3_b32(v[1], v[5], v[1], v[4], 3, 6, 3))
@@ -212,6 +218,13 @@ def build_kernel(B:int, N:int, H:int, H_KV:int):
   k.emit(v_bitop3_b32(v[50], v[8], v[6], 64, 1, 4, 5))
   k.emit(v_or_b32_e32(v[59], 64, v[43]))
   k.emit(v_bitop3_b32(v[45], v[1], v[4], 64, 1, 4, 5))
+  # Apply the same permutation to ordinary and transposed LDS address families.
+  k.emit(v_lshrrev_b32_e32(v[10], 5, v[7]))
+  k.emit(v_and_b32_e32(v[10], 16, v[10]))
+  k.emit(v_xor_b32_e32(v[50], v[10], v[50]))
+  k.emit(v_lshlrev_b32_e32(v[10], 2, v[36]))
+  k.emit(v_and_b32_e32(v[10], 16, v[10]))
+  k.emit(v_xor_b32_e32(v[45], v[10], v[45]))
   k.emit(v_or_b32_e32(v[4], 32, v[3]))
   k.emit(v_xor_b32_e32(v[6], v[7], v[50]))
   k.emit(v_or_b32_e32(v[7], v[3], v[43]))
