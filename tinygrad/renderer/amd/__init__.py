@@ -22,6 +22,7 @@ def _matches(data: bytes, cls: type[Inst]) -> bool:
   # Check SDWA/DPP variant based on src0 field (bits 0-8) - only for variant classes
   name = cls.__name__
   word = int.from_bytes(data[:4], 'little')
+  if name == "VOP3PX2" and word >> 16 != 0xD3AC: return False
   for suffix, expected_src0 in _VARIANT_SRC0.items():
     if name.endswith(suffix): return (word & 0x1ff) == expected_src0
   return True

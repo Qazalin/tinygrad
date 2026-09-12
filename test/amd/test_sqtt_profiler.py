@@ -116,6 +116,24 @@ class TestSQTTProfiler(unittest.TestCase):
     with save_sqtt():
       t.custom_kernel(fxn=custom_asm_cdna if self.arch == "gfx950" else custom_asm_rdna)[0].realize()
 
+  def test_cdna_mfma(self):
+    if self.arch != "gfx950": self.skipTest("only runs on CDNA4")
+    from tinygrad.runtime.autogen.amd.cdna import ins as isa
+    insts = [isa.v_mov_b32_e32(v[i], 0) for i in range(16)] + [
+      isa.s_waitcnt(0), isa.s_nop(),
+      isa.v_mfma_f32_32x32x64_f8f6f4(v[16:31], v[0:7], v[8:15], 0),
+      isa.s_nop(7), isa.s_endpgm(),
+    ]
+    with save_sqtt():
+      Tensor.empty(1).custom_kernel(fxn=functools.partial(custom_asm, insts=insts, num_threads=64))[0].realize()
+
+  def test_cdna_endpgm(self):
+    if self.arch != "gfx950": self.skipTest("only runs on CDNA4")
+    from tinygrad.runtime.autogen.amd.cdna import ins as isa
+    insts = [isa.s_mov_b32(s[0], 1), isa.s_endpgm()]
+    with save_sqtt():
+      Tensor.empty(1).custom_kernel(fxn=functools.partial(custom_asm, insts=insts, num_threads=64))[0].realize()
+
   def test_setprio(self):
     if self.arch == "gfx950":
       from tinygrad.runtime.autogen.amd.cdna import ins as isa

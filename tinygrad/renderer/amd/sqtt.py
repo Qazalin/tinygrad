@@ -682,6 +682,9 @@ def map_insts(data:bytes, lib:bytes, target:str) -> Iterator[tuple[PacketType, I
     elif isinstance(p, CDNA_INST):
       cdna_imm_queue[(p.simd, p.wave)].pop(0)
       inst = pc_map[pc:=wave_pc[(p.simd, p.wave)]]
+      if p.op == InstOpCDNA.OTHER_MSG and inst.op_name == 'S_ENDPGM':
+        yield (p, None)  # WAVEEND maps the terminating instruction.
+        continue
       if p.op == InstOpCDNA.JUMP:
         x = getattr(inst, 'simm16') & 0xffff
         wave_pc[(p.simd, p.wave)] += inst.size() + (x - 0x10000 if x & 0x8000 else x)*4
