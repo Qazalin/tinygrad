@@ -187,8 +187,10 @@ class TestMXFP4(unittest.TestCase):
   def test_tile_selection(self):
     self.assertEqual(_select_mxfp4_tile(6144, 4096, 16384), (192, 256))
     self.assertEqual(_select_mxfp4_tile(16384, 4096, 6144), (128, 512))
-    self.assertEqual(_select_mxfp4_tile(16384, 6144, 4096), (128, 512))
+    self.assertEqual(_select_mxfp4_tile(16384, 6144, 4096), (256, 256))
+    self.assertEqual(_select_mxfp4_tile(16384, 4096, 4096), (256, 256))
     self.assertEqual(_select_mxfp4_tile(16384, 14336, 4096), (256, 256))
+    self.assertEqual(_select_mxfp4_tile(16384, 28672, 4096), (256, 256))
 
   def test_tile_variants(self):
     M, N, K = 256, 512, 256
