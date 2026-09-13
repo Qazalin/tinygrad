@@ -6,6 +6,7 @@ from extra.llama_kernels.fused_ce import fused_ce_loss
 from extra.llama_kernels import local_abs_max
 from extra.llama_kernels.quantize_fp8_delayed import quantize_fp8_delayed, quantize_fp8_scalar
 from extra.llama_kernels.swiglu import swiglu, swiglu_mxfp4
+from extra.llama_kernels.rmsnorm import rmsnorm_add_mul_mxfp4, rmsnorm_mul_mxfp4
 from extra.models.llama import apply_rotary_emb, precompute_freqs_cis
 from extra.thunder.amd.fa import custom_fused_qkv_rope_backward, fused_qkv_rope
 from test.helpers import needs_second_gpu, assert_kernel_count
@@ -212,6 +213,55 @@ class TestSwiGLU(unittest.TestCase):
     with Context(DEBUG=0):
       self.assertTrue(grad_x.allclose(grad_x_ref, atol=2.5e-1, rtol=3e-2).item(), "SwiGLU MXFP4 input gradient mismatch")
       self.assertTrue(grad_w.allclose(grad_w_ref, atol=2.5e-1, rtol=3e-2).item(), "SwiGLU MXFP4 weight gradient mismatch")
+
+@unittest.skipUnless(Device.DEFAULT == "AMD" and Device[Device.DEFAULT].renderer.target.arch.startswith("gfx950"),
+                     "MXFP4 RMSNorm requires gfx950")
+class TestMXFP4RMSNorm(unittest.TestCase):
+  SHAPE, EPS = (1, 256, 4096), 1e-5
+
+  def _inputs(self):
+    Tensor.manual_seed(0)
+    x = Tensor.randn(*self.SHAPE).cast(dtypes.bfloat16).realize()
+    residual = Tensor.randn(*self.SHAPE).cast(dtypes.bfloat16).realize()
+    weight = Tensor.randn(self.SHAPE[-1]).cast(dtypes.bfloat16).realize()
+    return x, residual, weight
+
+  def test_mul_forward_backward(self):
+    x, _, weight = self._inputs()
+    x_ref, weight_ref = x.detach().contiguous().realize(), weight.detach().contiguous().realize()
+    x.requires_grad = x_ref.requires_grad = weight.requires_grad = weight_ref.requires_grad = True
+    out, _, _ = rmsnorm_mul_mxfp4(x, weight, self.EPS)
+    xf = x_ref.float()
+    ref = (xf * (xf.square().mean(-1, keepdim=True) + self.EPS).rsqrt() * weight_ref.float()).cast(dtypes.bfloat16)
+    grad = Tensor.randn(*self.SHAPE).cast(dtypes.bfloat16).realize()
+    dx, dw = out.gradient(x, weight, gradient=grad)
+    dx_ref, dw_ref = ref.gradient(x_ref, weight_ref, gradient=grad)
+    Tensor.realize(out, ref, dx, dw, dx_ref, dw_ref)
+    with Context(DEBUG=0):
+      self.assertTrue(out.allclose(ref, atol=2e-2, rtol=2e-2).item(), "RMSNorm mul forward mismatch")
+      self.assertTrue(dx.allclose(dx_ref, atol=3e-2, rtol=3e-2).item(), "RMSNorm mul input gradient mismatch")
+      self.assertTrue(dw.allclose(dw_ref, atol=2e-1, rtol=3e-2).item(), "RMSNorm mul weight gradient mismatch")
+
+  def test_add_mul_forward_backward(self):
+    x, residual, weight = self._inputs()
+    x_ref, residual_ref = x.detach().contiguous().realize(), residual.detach().contiguous().realize()
+    weight_ref = weight.detach().contiguous().realize()
+    for t in (x, residual, weight, x_ref, residual_ref, weight_ref): t.requires_grad = True
+    out, h, _, _ = rmsnorm_add_mul_mxfp4(x, residual, weight, self.EPS)
+    h_ref = (x_ref + residual_ref).cast(dtypes.bfloat16)
+    hf = h_ref.float()
+    out_ref = (hf * (hf.square().mean(-1, keepdim=True) + self.EPS).rsqrt() * weight_ref.float()).cast(dtypes.bfloat16)
+    grad_out, grad_h = (Tensor.randn(*self.SHAPE).cast(dtypes.bfloat16).realize() for _ in range(2))
+    loss, loss_ref = (out*grad_out).sum() + (h*grad_h).sum(), (out_ref*grad_out).sum() + (h_ref*grad_h).sum()
+    dx, dr, dw = loss.gradient(x, residual, weight)
+    dx_ref, dr_ref, dw_ref = loss_ref.gradient(x_ref, residual_ref, weight_ref)
+    Tensor.realize(out, h, out_ref, h_ref, dx, dr, dw, dx_ref, dr_ref, dw_ref)
+    with Context(DEBUG=0):
+      self.assertTrue(out.allclose(out_ref, atol=2e-2, rtol=2e-2).item(), "add RMSNorm mul forward mismatch")
+      self.assertTrue(h.allclose(h_ref, atol=0, rtol=0).item(), "add RMSNorm residual mismatch")
+      self.assertTrue(dx.allclose(dx_ref, atol=3e-2, rtol=3e-2).item(), "add RMSNorm input gradient mismatch")
+      self.assertTrue(dr.allclose(dr_ref, atol=3e-2, rtol=3e-2).item(), "add RMSNorm residual gradient mismatch")
+      self.assertTrue(dw.allclose(dw_ref, atol=2e-1, rtol=3e-2).item(), "add RMSNorm weight gradient mismatch")
 
 if __name__ == '__main__':
   unittest.main()

@@ -216,4 +216,3 @@ __device__ __forceinline__ void store_fp4(uint8_t* output, int row, int col, int
 }
 
 } // namespace mxfp4
-
