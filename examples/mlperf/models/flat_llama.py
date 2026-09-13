@@ -254,7 +254,7 @@ class FlatTransformer:
       from extra.thunder.amd.fa import flash_attention, fused_qkv_rope
       fp8_fa = bool(getenv("FP8_FA"))
       xq, xk, xv, *fp8_qk = fused_qkv_rope(xqkv, freqs_cis, self.n_heads, self.n_kv_heads, self.head_dim,
-                                           prequantize_fp8=fp8_fa,
+                                           prequantize_grad_mxfp4=bool(MXFP4), prequantize_fp8=fp8_fa,
                                            write_bf16_qk=not (fp8_fa and getenv("ASM_FP8_FA")))
       attn, *save = flash_attention(xq, xk, xv, is_causal=True, write_flat=True, save_fp8=True,
                                     q_fp8=fp8_qk[0] if fp8_fa else None, k_fp8=fp8_qk[1] if fp8_fa else None,
@@ -280,6 +280,10 @@ class FlatTransformer:
     return out, saves
 
   def prepare_next_layer(self, h:Tensor, ffn:Tensor, attn_kwargs:dict):
+    if MXFP4:
+      from extra.llama_kernels.rmsnorm import rmsnorm_add_mul_mxfp4
+      normed, x, rrms, quant = rmsnorm_add_mul_mxfp4(h, ffn, attn_kwargs["attention_norm"], self.norm_eps)
+      return x, normed, quant[0], quant[1], [rrms]
     xqkv, x, x_normed, rrms, s = add_norm_quantize_matmul(h, ffn, attn_kwargs["attention_norm"], attn_kwargs["wqkv"],
                                                            attn_kwargs["s_qkv"], self.norm_eps,
                                                            amax_x=attn_kwargs["amax_xqkv"], next_amax_x=attn_kwargs["next_amax_xqkv"],
@@ -287,6 +291,17 @@ class FlatTransformer:
                                                            next_grad_amax_state=attn_kwargs["next_grad_amax_xqkv"],
                                                            mxfp4_w=attn_kwargs.get("mxfp4_wqkv"))
     return x, xqkv, [x, x_normed, rrms, *s, xqkv]
+
+  def attention_from_prepared(self, normed:Tensor, row_fp4:Tensor, row_scale:Tensor, freqs_cis:Tensor, **kwargs):
+    xqkv, *s = matmul(normed, kwargs["wqkv"], amax_x=kwargs["amax_xqkv"], w_inv_scale=kwargs["s_qkv"],
+                       grad_amax_state=kwargs["grad_amax_xqkv"], next_grad_amax_state=kwargs["next_grad_amax_xqkv"],
+                       next_amax_x=kwargs["next_amax_xqkv"], mxfp4_w=kwargs.get("mxfp4_wqkv"),
+                       x_prequant_mxfp4=(row_fp4, row_scale, None, None), save_original_input=True)
+    out, out_saves = self.attention_from_qkv(xqkv, freqs_cis, wo=kwargs["wo"], amax_xo=kwargs["amax_xo"], s_o=kwargs["s_o"],
+                                              next_amax_xo=kwargs["next_amax_xo"], grad_amax_xo=kwargs["grad_amax_xo"],
+                                              next_grad_amax_xo=kwargs["next_grad_amax_xo"], mxfp4_wo=kwargs.get("mxfp4_wo"),
+                                              fa_bwd_amax=kwargs.get("fa_bwd_amax"), next_fa_bwd_amax=kwargs.get("next_fa_bwd_amax"))
+    return out, [*s, xqkv, *out_saves]
 
   def feed_forward(self, x:Tensor, residual:Tensor, **kwargs):
     saves = []
@@ -338,9 +353,22 @@ class FlatTransformer:
   def run_layer(self, x:Tensor, freqs_cis:Tensor, attn_kwargs:dict, ffn_kwargs:dict, next_attn_kwargs:dict, save:bool=True):
     attn, attn_saves = self.attention(x, freqs_cis, **attn_kwargs)
     ffn, h, ffn_saves = self.feed_forward(x, attn, **ffn_kwargs)
-    x, xqkv, next_attn_saves = self.prepare_next_layer(h, ffn, next_attn_kwargs)
-    if save: return (x, xqkv, *attn_saves, *ffn_saves, *next_attn_saves[1:-1])
+    if MXFP4:
+      x, normed, row_fp4, row_scale, next_saves = self.prepare_next_layer(h, ffn, next_attn_kwargs)
+      if save: return (x, normed, row_fp4, row_scale, *attn_saves, *ffn_saves, *next_saves)
+      return x, normed, row_fp4, row_scale
+    x, xqkv, next_saves = self.prepare_next_layer(h, ffn, next_attn_kwargs)
+    if save: return (x, xqkv, *attn_saves, *ffn_saves, *next_saves[1:-1])
     else: return x, xqkv
+
+  @function(precompile=True, precompile_backward=True)
+  def run_layer_prepared(self, x:Tensor, normed:Tensor, row_fp4:Tensor, row_scale:Tensor, freqs_cis:Tensor,
+                         attn_kwargs:dict, ffn_kwargs:dict, next_attn_kwargs:dict, save:bool=True):
+    attn, attn_saves = self.attention_from_prepared(normed, row_fp4, row_scale, freqs_cis, **attn_kwargs)
+    ffn, h, ffn_saves = self.feed_forward(x, attn, **ffn_kwargs)
+    x, next_normed, next_row, next_scale, next_saves = self.prepare_next_layer(h, ffn, next_attn_kwargs)
+    if save: return (x, next_normed, next_row, next_scale, *attn_saves, *ffn_saves, *next_saves)
+    return x, next_normed, next_row, next_scale
 
   @function(precompile=True, precompile_backward=True)
   def run_layer_precomputed(self, x:Tensor, xqkv:Tensor, freqs_cis:Tensor, attn_out_kwargs:dict,
@@ -358,6 +386,15 @@ class FlatTransformer:
     h = h + ffn
     if save: return (h, *attn_saves, *ffn_saves)
     else: return (h,)
+
+  @function(precompile=True, precompile_backward=True)
+  def run_last_layer_prepared(self, x:Tensor, normed:Tensor, row_fp4:Tensor, row_scale:Tensor, freqs_cis:Tensor,
+                              attn_kwargs:dict, ffn_kwargs:dict, save:bool=True):
+    attn, attn_saves = self.attention_from_prepared(normed, row_fp4, row_scale, freqs_cis, **attn_kwargs)
+    ffn, h, ffn_saves = self.feed_forward(x, attn, **ffn_kwargs)
+    h = h + ffn
+    if save: return (h, *attn_saves, *ffn_saves)
+    return (h,)
 
   @function(precompile=True, precompile_backward=True)
   def run_only_layer(self, x:Tensor, freqs_cis:Tensor, attn_kwargs:dict, ffn_kwargs:dict, save:bool=True):
@@ -463,6 +500,15 @@ class FlatTransformer:
 
     if self.n_layers == 1:
       h, *_ = self.run_only_layer(h, freqs_cis, layer_kwargs[0][0], layer_kwargs[0][2], save=save)
+    elif MXFP4:
+      h, normed, row_fp4, row_scale, *_ = self.run_layer(h, freqs_cis, layer_kwargs[0][0], layer_kwargs[0][2],
+                                                         layer_kwargs[1][0], save=save)
+      for i in range(1, self.n_layers-1):
+        h, normed, row_fp4, row_scale, *_ = self.run_layer_prepared(h, normed, row_fp4, row_scale, freqs_cis,
+                                                                    layer_kwargs[i][0], layer_kwargs[i][2],
+                                                                    layer_kwargs[i+1][0], save=save)
+      h, *_ = self.run_last_layer_prepared(h, normed, row_fp4, row_scale, freqs_cis,
+                                            layer_kwargs[-1][0], layer_kwargs[-1][2], save=save)
     else:
       h, xqkv, *_ = self.run_layer(h, freqs_cis, layer_kwargs[0][0], layer_kwargs[0][2], layer_kwargs[1][0], save=save)
       for i in range(1, self.n_layers-1):
