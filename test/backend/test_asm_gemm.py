@@ -2,7 +2,7 @@ import unittest
 import functools
 from tinygrad import Tensor, Device, dtypes, Context
 from tinygrad.helpers import getenv, system, DEV
-from extra.gemm.cdna_asm_gemm import asm_gemm, hk_bf16_atb_gemm
+from extra.gemm.cdna_asm_gemm import MXFP4_TILES, _select_mxfp4_tile, asm_gemm, hk_bf16_atb_gemm
 from test.helpers import needs_second_gpu
 from examples.mlperf.models.flat_llama import FP8_DTYPE, quantize_fp8, FP8_MAX
 
@@ -183,6 +183,24 @@ class TestMXFP4(unittest.TestCase):
     out = asm_gemm(a, b.T, mxfp4=True).realize().numpy().astype(np.float32)
     ref = a.numpy().astype(np.float32) @ b.numpy().astype(np.float32).T
     self.assertLess(np.linalg.norm(out-ref) / np.linalg.norm(ref), 0.2)
+
+  def test_tile_selection(self):
+    self.assertEqual(_select_mxfp4_tile(6144, 4096, 16384), (192, 256))
+    self.assertEqual(_select_mxfp4_tile(16384, 4096, 6144), (128, 512))
+    self.assertEqual(_select_mxfp4_tile(16384, 6144, 4096), (128, 512))
+    self.assertEqual(_select_mxfp4_tile(16384, 14336, 4096), (256, 256))
+
+  def test_tile_variants(self):
+    M, N, K = 256, 512, 256
+    Tensor.manual_seed(4)
+    a = Tensor.randn(M, K, dtype=dtypes.bfloat16).contiguous()
+    b = Tensor.randn(N, K, dtype=dtypes.bfloat16).contiguous()
+    ref = a.float() @ b.float().T
+    for tile in MXFP4_TILES:
+      with self.subTest(tile=tile):
+        out = asm_gemm(a, b.T, mxfp4=True, mxfp4_tile=tile)
+        relative_l2 = ((out.float() - ref).square().sum() / ref.square().sum()).sqrt().item()
+        self.assertLess(relative_l2, 0.2)
 
   def test_empty(self):
     M, N, K = getenv("M", 16384), getenv("N", 4096), getenv("K", 14336)
