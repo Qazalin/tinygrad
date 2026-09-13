@@ -178,6 +178,9 @@ class FlatTransformer:
     grad_names += ["xw1", "xw3"] if SPLIT_W13 else ["xw13"]
     self._fp8_grad_amax = {name: [_amax() for _ in range(n_amax)] for name in grad_names}
     self._fp8_next_grad_amax = {name: [_amax() for _ in range(n_amax)] for name in grad_names}
+    if getenv("FP8_FA_BWD"):
+      for state in (self._fp8_grad_amax, self._fp8_next_grad_amax):
+        state["fa"] = [Tensor([1., 0.], dtype=dtypes.float32).contiguous().is_param_(False) for _ in range(n_layers)]
     w_scales = [("wqkv", s_qkv), ("wo", s_o), ("w2", s_2)]
     w_scales += [("w1", s_1), ("w3", s_3)] if SPLIT_W13 else [("w13", s_13)]
     self._fp8_inv_scale = {name: (s if MXFP8 else s.float()).contiguous().is_param_(False) for name, s in w_scales}
@@ -204,7 +207,8 @@ class FlatTransformer:
                 amax_xqkv:Tensor|None, amax_xo:Tensor|None, s_qkv:Tensor, s_o:Tensor,
                 next_amax_xqkv:Tensor|None, next_amax_xo:Tensor|None,
                 grad_amax_xqkv:Tensor|None, grad_amax_xo:Tensor|None,
-                next_grad_amax_xqkv:Tensor|None, next_grad_amax_xo:Tensor|None):
+                next_grad_amax_xqkv:Tensor|None, next_grad_amax_xo:Tensor|None,
+                fa_bwd_amax:Tensor|None=None, next_fa_bwd_amax:Tensor|None=None):
     bsz, seqlen, _ = x.shape
     saves = []
 
@@ -214,8 +218,15 @@ class FlatTransformer:
     saves.extend([x_normed, rrms, *s, xqkv])
     if getenv("HK_FLASH_ATTENTION"):
       from extra.thunder.amd.fa import flash_attention, fused_qkv_rope
-      xq, xk, xv = fused_qkv_rope(xqkv, freqs_cis, self.n_heads, self.n_kv_heads, self.head_dim)
-      attn, *save = flash_attention(xq, xk, xv, is_causal=True, write_flat=True)
+      fp8_fa = bool(getenv("FP8_FA"))
+      xq, xk, xv, *fp8_qk = fused_qkv_rope(xqkv, freqs_cis, self.n_heads, self.n_kv_heads, self.head_dim,
+                                           prequantize_fp8=fp8_fa,
+                                           write_bf16_qk=not (fp8_fa and getenv("ASM_FP8_FA")))
+      attn, *save = flash_attention(xq, xk, xv, is_causal=True, write_flat=True, save_fp8=True,
+                                    q_fp8=fp8_qk[0] if fp8_fa else None, k_fp8=fp8_qk[1] if fp8_fa else None,
+                                    fa_bwd_amax=fa_bwd_amax, next_fa_bwd_amax=next_fa_bwd_amax)
+      if not fp8_fa: saves.extend([xq, xk, xv])
+      elif not getenv("ASM_FP8_FA"): saves.append(xv)
       saves.extend(save)
     else:
       xqkv = xqkv.reshape(bsz, seqlen, self.n_kv_heads, self.n_rep + 2, self.head_dim)
@@ -348,6 +359,8 @@ class FlatTransformer:
     for i in range(self.n_layers):
       attn_kwargs = dict(attention_norm=self.attention_norm[i], wqkv=self.wqkv[i], wo=self.wo[i], s_qkv=s["wqkv"][i], s_o=s["wo"][i],
                          **amax_kwargs(i, ("xqkv", "xo"), ("xqkv", "xo")))
+      if getenv("FP8_FA_BWD"):
+        attn_kwargs.update(fa_bwd_amax=ga["fa"][i], next_fa_bwd_amax=nga["fa"][i])
       ffn_kwargs = dict(ffn_norm=self.ffn_norm[i], w2=self.w2[i], s_2=s["w2"][i], **amax_kwargs(i, ("x2",), ("xout",)))
       if SPLIT_W13:
         ffn_kwargs.update(w1=self.w1[i], w3=self.w3[i], s_1=s["w1"][i], s_3=s["w3"][i], **amax_kwargs(i, ("x1", "x3"), ("xw1", "xw3")))
