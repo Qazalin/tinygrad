@@ -154,9 +154,9 @@ class TestAsmGEMM(unittest.TestCase):
 
 class TestMXFP4(unittest.TestCase):
   def setUp(self):
-    if not is_cdna4() or DEV.interface.startswith("MOCK"):
-      self.skipTest("requires real amd machine")
+    if not is_cdna4(): self.skipTest("requires gfx950")
 
+  @unittest.skipUnless(has_hipcc(), "requires hipcc to compile")
   def test_quantize(self):
     import numpy as np
     from extra.llama_kernels.quantize_mxfp4 import quantize_mxfp4
@@ -174,6 +174,7 @@ class TestMXFP4(unittest.TestCase):
     self.assertTrue((row_scale == 127).any())
     self.assertTrue((row_scale != 127).any())
 
+  @unittest.skipIf(DEV.interface.startswith("MOCK"), "requires real amd machine")
   def test_correctness(self):
     import numpy as np
     M = N = K = 256
@@ -184,6 +185,7 @@ class TestMXFP4(unittest.TestCase):
     ref = a.numpy().astype(np.float32) @ b.numpy().astype(np.float32).T
     self.assertLess(np.linalg.norm(out-ref) / np.linalg.norm(ref), 0.2)
 
+  @unittest.skipIf(DEV.interface.startswith("MOCK"), "requires real amd machine")
   def test_empty(self):
     M, N, K = getenv("M", 16384), getenv("N", 4096), getenv("K", 14336)
     a = Tensor.empty(M, K, dtype=dtypes.bfloat16)

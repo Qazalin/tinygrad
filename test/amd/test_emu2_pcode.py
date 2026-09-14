@@ -17,6 +17,23 @@ def _srcs():
 class TestBasicParsing(unittest.TestCase):
   """Test basic pcode parsing for common instruction patterns."""
 
+  def test_cdna_swizzle_xor(self):
+    from tinygrad.runtime.autogen.amd.cdna.enum import DSOp as CDNA_DSOp
+    from test.mockgpu.amd.emu import get_pcode
+    from test.mockgpu.amd.pcode import _bitreverse, _countbits
+    for mask in (1, 2, 4, 16, 31):
+      result, _ = parse_pcode(get_pcode(CDNA_DSOp.DS_SWIZZLE_B32),
+                              {'offset0': UOp.const(31, dtypes.uint8), 'offset1': UOp.const(mask << 2, dtypes.uint8)},
+                              {'thread_in': lambda i: i + 100, 'thread_valid': lambda i: UOp.const(True, dtypes.bool),
+                               'reverse_bits': lambda i: _bitreverse(i, 32) >> 27, 'count_ones': _countbits})
+      self.assertEqual([int(result[f'thread_out@{i}'].simplify()) for i in range(64)], [100 + (i ^ mask) for i in range(64)])
+
+  def test_vgpr_computed_slice(self):
+    for byte in range(4):
+      _, assigns = parse_pcode('dstbyte = OPSEL[3:2].i32 * 8;\nVGPR[0][2][dstbyte + 7 : dstbyte].b8 = 42;',
+                               {'OPSEL': UOp.const(byte << 2, dtypes.uint32)})
+      self.assertEqual(assigns[-1][0], f'VGPR[0][2][{byte * 8 + 7}:{byte * 8}]')
+
   def test_c_style_blocks_and_array_access(self):
     code = """
       for (i = 0; i < 4; i+=2) {

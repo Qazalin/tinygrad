@@ -233,6 +233,20 @@ def _exponent(val: UOp) -> UOp:
   bits, _, _, _, shift = _float_info(val)
   return _get_exp(bits, shift)
 
+def _f32_to_fp4_scale(val: UOp, scale: UOp) -> UOp:
+  # E2M1 magnitudes are 0, .5, 1, 1.5, 2, 3, 4, 6. Compare midpoints with ties to even.
+  # Reconstruct in f64 so host f32 denormal flushing cannot affect the conversion.
+  bits = val.bitcast(dtypes.uint32)
+  exponent = (bits >> _u32(23)) & _u32(255)
+  significand = (bits & _u32(0x7fffff)) | exponent.ne(0).where(_u32(0x800000), _u32(0))
+  power = ((_u64(1000) + exponent.maximum(1).cast(dtypes.uint64) - scale.cast(dtypes.uint64)) << _u64(52)).bitcast(dtypes.float64)
+  magnitude = significand.cast(dtypes.float64) * power
+  result = _u32(0)
+  for i, midpoint in enumerate((0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0)):
+    above = magnitude >= midpoint if i & 1 else magnitude > midpoint
+    result = result + above.cast(dtypes.uint32)
+  return (exponent.eq(255).where(_u32(7), result) | ((bits >> _u32(28)) & _u32(8))) & _u32(15)
+
 def _div_would_be_denorm(a: UOp, b: UOp) -> UOp:
   bits_n, _, _, _, shift = _float_info(a)
   bits_d, _, _, _, _ = _float_info(b)
@@ -367,6 +381,7 @@ _FUNCS: dict[str, Callable[..., UOp]] = {
   'f64_to_u32': lambda a: _f_to_u(a.bitcast(dtypes.float64), dtypes.uint32),
   'f16_to_f32': lambda a: _f16_extract(a).cast(dtypes.float32),
   'f32_to_f16': lambda a: a.cast(dtypes.half),
+  'f32_to_fp4_scale': _f32_to_fp4_scale,
   'f32_to_f64': lambda a: a.bitcast(dtypes.float32).cast(dtypes.float64),
   'f64_to_f32': lambda a: a.bitcast(dtypes.float64).cast(dtypes.float32),
   'i32_to_f64': lambda a: a.cast(dtypes.int).cast(dtypes.float64),
@@ -1141,7 +1156,7 @@ def parse_block(lines: list[str], start: int, env: dict[str, VarVal], funcs: dic
           j, slice_toks = _match_bracket(toks, j)
           slice_str = _tok_str(slice_toks)
           hi_str, lo_str = slice_str.split(':')
-          hi_val, lo_val = _const_int(hi_str), _const_int(lo_str)
+          hi_val, lo_val = (int(parse_expr(s, env, funcs).simplify()) for s in (hi_str, lo_str))
           if j < len(toks) and toks[j].type == 'DOT': j += 2  # skip .type suffix
           if j < len(toks) and toks[j].type == 'EQUALS': j += 1
           ln = parse_tokens(lane_toks, env, funcs)

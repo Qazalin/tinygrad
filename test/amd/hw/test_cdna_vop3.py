@@ -99,6 +99,23 @@ def run_cdna(instructions: list, out_reg: int = 2) -> int:
   return hw
 
 class TestCDNAVOP3(unittest.TestCase):
+  def test_cvt_scalef32_pk_fp4_f32(self):
+    # Both signs, all rounding midpoints, saturation, signed zero, and non-unit scales.
+    cases = [(x, 127, expected) for x, expected in
+             [(0., 0), (.25, 0), (.5, 1), (.75, 2), (1., 2), (1.25, 2), (1.5, 3), (1.75, 4),
+              (2., 4), (2.5, 4), (3., 5), (3.5, 6), (4., 6), (5., 6), (6., 7), (100., 7), (float('inf'), 7)]]
+    cases += [(1., 126, 4), (1., 128, 1), (2.**-127, 0, 2), (2.**127, 254, 2)]
+    for value, exponent, expected in cases:
+      for byte in range(4):
+        with self.subTest(value=value, exponent=exponent, byte=byte):
+          instructions = []
+          for reg, bits in ((0, struct.unpack('<I', struct.pack('<f', value))[0]),
+                            (1, struct.unpack('<I', struct.pack('<f', -value))[0]), (2, 0xdeadbeef), (3, exponent << 23)):
+            instructions += [cdna.s_mov_b32(cdna.s[0], bits), cdna.v_mov_b32_e32(cdna.v[reg], cdna.s[0])]
+          out = run_cdna([*instructions, cdna.v_cvt_scalef32_pk_fp4_f32(cdna.v[2], cdna.v[0], cdna.v[1], cdna.v[3], opsel=byte << 2)])
+          packed = expected | ((expected | 8) << 4)
+          self.assertEqual(out, (0xdeadbeef & ~(255 << (byte * 8))) | (packed << (byte * 8)))
+
   def test_cvt_pk_fp8_f32_preserves_upper_half(self):
     """V_CVT_PK_FP8_F32 with OPSEL[3]=0 writes only D[15:0]."""
     out = run_cdna([

@@ -186,6 +186,8 @@ def _get_pcode_dict(op) -> dict:
 def get_pcode(op) -> str:
   op_name = op.name
   pcode_dict = _get_pcode_dict(op)
+  # The CDNA extraction contains only a swizzle table; use the shared lane-swizzle pseudocode.
+  if pcode_dict is PCODE_CDNA and op_name == 'DS_SWIZZLE_B32': return PCODE_RDNA3[ir3.DSOp.DS_SWIZZLE_B32]
   if op not in pcode_dict and op_name.endswith('_E64'):
     # VOP3 ops ending in _E64 may share pcode with VOP1 _E32 equivalents
     import importlib
