@@ -311,6 +311,10 @@ def create_linear_with_vars(big_sink:UOp) -> tuple[UOp, dict[str, int]]:
   # create copies
   linear = graph_rewrite(linear, pm_copy_from_store, name="create COPY kernels for SDMA")
 
+  from tinygrad.schedule.overlap import overlap_copies_once
+  linear = graph_rewrite(linear, PatternMatcher([(UPat(Ops.LINEAR, name="linear"), overlap_copies_once)]),
+                         ctx=set(), name="overlap copies with independent compute")
+
   # vars used in the schedule
   used_vars = set().union(*[{v.expr for v in si.src[0].variables()} for si in linear.src])
   # get var_vals from the bound Variables in the call args
