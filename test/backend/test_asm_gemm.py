@@ -1,6 +1,6 @@
-import unittest
+import unittest, statistics
 import functools
-from tinygrad import Tensor, Device, dtypes, Context
+from tinygrad import Tensor, Device, dtypes, Context, GlobalCounters
 from tinygrad.helpers import getenv, system, DEV
 from tinygrad.uop.ops import Ops, KernelInfo
 from extra.gemm.cdna_asm_gemm import MXFP4_TILES, _select_mxfp4_tile, asm_gemm, hk_bf16_atb_gemm
@@ -200,6 +200,40 @@ class TestMXFP4(unittest.TestCase):
     out = asm_gemm(a, b.T, mxfp4=True).realize().numpy().astype(np.float32)
     ref = a.numpy().astype(np.float32) @ b.numpy().astype(np.float32).T
     self.assertLess(np.linalg.norm(out-ref) / np.linalg.norm(ref), 0.2)
+
+  def _test_short_k_shape(self, N:int):
+    from extra.llama_kernels.quantize_mxfp4 import quantize_mxfp4
+
+    def dequantize(x:Tensor) -> Tensor:
+      rows, cols = x.shape
+      packed, scales, _, _ = quantize_mxfp4(x)
+      scales = scales.reshape(rows//32, cols//256, 4, 16, 2, 2).permute(0, 5, 3, 1, 4, 2).reshape(rows, cols//32)
+      codes = Tensor.stack(packed & 15, packed >> 4, dim=-1).reshape(rows, cols)
+      values = Tensor([0, 0.5, 1, 1.5, 2, 3, 4, 6], device=x.device)[(codes & 7).int()]
+      values = (codes < 8).where(values, -values).reshape(rows, cols//32, 32)
+      return (values * (scales.float()-127).exp2().unsqueeze(-1)).reshape(rows, cols).cast(dtypes.bfloat16).realize()
+
+    M, K = 16384, 4096
+    Tensor.manual_seed(0)
+    a, b = Tensor.rand(M, K, dtype=dtypes.bfloat16), Tensor.rand(N, K, dtype=dtypes.bfloat16)
+    with Context(DEBUG=0):
+      Tensor.realize(a, b)
+      ref = dequantize(a).matmul(dequantize(b).T, dtype=dtypes.float32).realize()
+      a_mxfp4 = quantize_mxfp4(a, shuffle_col=True)
+      b_mxfp4 = quantize_mxfp4(b, shuffle_row=True, shuffle_col=True)
+      Tensor.realize(*a_mxfp4, *b_mxfp4)
+    times = []
+    for _ in range(getenv("CNT", 5)):
+      with Context(DEBUG=0): out = Tensor.zeros(M, N, dtype=dtypes.bfloat16).contiguous().realize()
+      st = GlobalCounters.time_sum_s
+      out = asm_gemm(a, b.T, mxfp4=True, out=out, mxfp4_x=a_mxfp4, mxfp4_w=b_mxfp4).realize()
+      times.append(GlobalCounters.time_sum_s-st)
+    with Context(DEBUG=0): self.assertTrue(out.allclose(ref, rtol=0.005, atol=1e-3).item(), "MXFP4 GEMM forward mismatch")
+    tm = statistics.median(times)
+    print(f"short-K MXFP4 {M}x{N}x{K}: {tm*1e6:.2f} us, {2*M*N*K/tm/1e15:.3f} PFLOP/s, {2*M*N*K/tm/9.2e15:.1%} MFU")
+
+  def test_short_k_14336(self): self._test_short_k_shape(14336)
+  def test_short_k_28672(self): self._test_short_k_shape(28672)
 
   def test_tile_variants(self):
     M, N, K = 256, 512, 256
