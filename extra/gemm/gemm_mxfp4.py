@@ -1,6 +1,5 @@
 # ruff: noqa: E501,F403,F405
 from tinygrad.runtime.autogen.amd.cdna.ins import *
-from tinygrad.helpers import getenv
 
 MXFP4_TARGET_SHAPES = {(16384, 28672, 4096), (16384, 14336, 4096), (16384, 4096, 4096), (16384, 6144, 4096)}
 MXFP4_TARGET_GROUPS = {28672:256, 14336:512, 4096:1024, 6144:768}
@@ -2227,11 +2226,10 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, persist_group
     k.emit(s_waitcnt())
     k.emit(s_endpgm())
   elif (tile_m, tile_n) == (256, 256):
-    pipeline_wait = getenv("MXFP4_PIPELINE_WAIT", 122) if target_optimization else 122
     logical_groups_x, logical_groups_y = N // tile_n, M // tile_m
     persist = target_optimization
     if persist:
-      persist_groups = min(logical_groups_x * logical_groups_y, getenv("MXFP4_PERSIST_GROUPS", MXFP4_TARGET_GROUPS[N])
+      persist_groups = min(logical_groups_x * logical_groups_y, MXFP4_TARGET_GROUPS[N]
                            if persist_groups_override is None else persist_groups_override)
       physical_groups_x, physical_groups_y = (32, persist_groups // 32) if persist_groups >= 32 else (persist_groups, 1)
       physical_groups, logical_groups = physical_groups_x * physical_groups_y, logical_groups_x * logical_groups_y
@@ -2526,7 +2524,7 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, persist_group
         k.emit(buffer_store_dwordx4(v[16:19], v[addr], s[4:7], 0, 0, 1))
         k.emit(v_add_i32(v[addr], v[addr], 64))
       k.label(skip_label)
-    k.emit(s_waitcnt(pipeline_wait))
+    k.emit(s_waitcnt(122))
     k.emit(v_mfma_fp4(v[0:3], v[136:139], v[8:11], 0, 0, v[208], v[200]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -2695,7 +2693,7 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, persist_group
     k.emit(v_mfma_fp4(v[248:251], v[164:167], v[128:131], 1, 3, v[209], v[207]))
     k.emit(v_mfma_fp4(v[252:255], v[164:167], v[132:135], 3, 3, v[209], v[207]))
     k.emit(s_cbranch_scc0(2051), target='L2_3B10')
-    k.emit(s_waitcnt(pipeline_wait))
+    k.emit(s_waitcnt(122))
     k.emit(v_mfma_fp4(v[0:3], v[168:171], v[8:11], 0, 0, v[210], v[200]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -2868,7 +2866,7 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, persist_group
     k.label('L2_25B8')
     k.emit(s_nop())
     k.label('L2_25BC')
-    k.emit(s_waitcnt(pipeline_wait))
+    k.emit(s_waitcnt(122))
     k.emit(v_mfma_fp4(v[0:3], v[136:139], v[8:11], 0, 0, v[208], v[200]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -3037,7 +3035,7 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, persist_group
     k.emit(v_mfma_fp4(v[248:251], v[164:167], v[128:131], 1, 3, v[209], v[207]))
     k.emit(v_mfma_fp4(v[252:255], v[164:167], v[132:135], 3, 3, v[209], v[207]))
     k.emit(s_cbranch_scc0(684), target='L2_3B10')
-    k.emit(s_waitcnt(pipeline_wait))
+    k.emit(s_waitcnt(122))
     k.emit(v_mfma_fp4(v[0:3], v[168:171], v[8:11], 0, 0, v[210], v[200]))
     k.emit(s_barrier())
     k.emit(s_nop())

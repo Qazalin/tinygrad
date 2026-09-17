@@ -140,12 +140,12 @@ def custom_mxfp4_gemm(C:UOp, A:UOp, B:UOp, scale_a:UOp, scale_b:UOp, *extra:UOp,
   logical_groups_x, logical_groups_y = ceildiv(N, tile_n), ceildiv(M, tile_m)
   target_optimization = (M, N, K) in MXFP4_TARGET_SHAPES and (tile_m, tile_n) == (256, 256)
   if target_optimization:
-    persist_groups = min(logical_groups_x * logical_groups_y, getenv("MXFP4_PERSIST_GROUPS", MXFP4_TARGET_GROUPS[N]))
+    persist_groups = min(logical_groups_x * logical_groups_y, MXFP4_TARGET_GROUPS[N])
     physical_groups_x, physical_groups_y = (32, persist_groups // 32) if persist_groups >= 32 else (persist_groups, 1)
   else: physical_groups_x, physical_groups_y = logical_groups_x, logical_groups_y
   if sk:
     if sk == 2: from extra.gemm.gemm_mxfp4_pipeline_old import build_kernel as build_sk_kernel, get_launch_config, LDS_BYTES
-    elif sk == 3: from extra.gemm.gemm_mxfp4_sk8 import build_kernel as build_sk_kernel, get_launch_config, LDS_BYTES
+    elif sk == 3: raise ValueError("MXFP4_SK=3 is disabled: the MFMA32 prototype is not correct")
     elif sk == 4: from extra.gemm.gemm_mxfp4_sk32 import build_kernel as build_sk_kernel, get_launch_config, LDS_BYTES
     elif sk == 5: from extra.gemm.gemm_mxfp4_rolling import build_kernel as build_sk_kernel, get_launch_config, LDS_BYTES
     elif sk == 6: from extra.gemm.gemm_mxfp4_direct import build_kernel as build_sk_kernel, get_launch_config, LDS_BYTES
