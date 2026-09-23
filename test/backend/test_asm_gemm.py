@@ -184,6 +184,26 @@ class TestMXFP4(unittest.TestCase):
         ref = Tensor(a_np @ b_np.T, dtype=dtypes.bfloat16).numpy()
         np.testing.assert_array_equal(out, ref)
 
+  def test_persistent_writeback(self):
+    import numpy as np
+    from extra.gemm.cdna_asm_gemm import custom_mxfp4_gemm
+    from extra.llama_kernels.quantize_mxfp4 import quantize_mxfp4
+    rng = np.random.default_rng(43)
+    for M, N, K in ((1024, 768, 512), (1024, 768, 1024), (1024, 768, 4096), (1024, 8192, 512),
+                    (2048, 14336, 512), (2048, 28672, 512), (1024, 14336, 4096)):
+      with self.subTest(M=M, N=N, K=K):
+        a = Tensor(rng.standard_normal((M, K), dtype=np.float32), dtype=dtypes.bfloat16)
+        b = Tensor(rng.standard_normal((N, K), dtype=np.float32), dtype=dtypes.bfloat16)
+        aq, sa, _, _ = quantize_mxfp4(a, shuffle_col=True)
+        bq, sb, _, _ = quantize_mxfp4(b, shuffle_row=True, shuffle_col=True)
+        Tensor.realize(aq, sa, bq, sb)
+        outputs = []
+        for tiles in ((1, 2, 4, 8) if M % 2048 == 0 else (1, 2, 4)):
+          out = Tensor.invalids(1, M, N, dtype=dtypes.bfloat16)
+          fxn = functools.partial(custom_mxfp4_gemm, tile_m=256, tile_n=256, tiles_per_workgroup=tiles)
+          outputs.append(Tensor.custom_kernel(out, aq, bq, sa, sb, fxn=fxn)[0].realize().numpy())
+        for out in outputs[1:]: np.testing.assert_array_equal(out, outputs[0])
+
 # test the Asm GEMM with Llama shapes, only run on the real machine for speed
 
 @unittest.skipUnless(has_hipcc(), "requires hipcc to compile")

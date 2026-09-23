@@ -22,25 +22,102 @@ def v_mfma_fp4(dst, a, b, opsel, opsel_hi, scale_a, scale_b):
   # select fp4 for both inputs and write to acc vgprs
   return v_mfma_scale_f32_16x16x128_f8f6f4(dst, a, b, dst, 0, 0, opsel, opsel_hi, 4, 1, 0, 4, scale_a.offset, scale_b.offset)
 
-def emit_writeback(k: Kernel, chunk: int):
+def emit_writeback(k: Kernel, chunk: int, restart=False):
   # Each vector store combines two four-element accumulator groups, 32 registers apart.
   acc = (chunk // 16) * 128 + (chunk % 2) * 64 + ((chunk % 16) // 2) * 4
-  for i in range(8): k.emit(v_accvgpr_read(v[8 + i], v[acc + (i // 4) * 32 + i % 4]))
-  for i in range(4): k.emit(v_cvt_pk_bf16_f32(v[16 + i], v[8 + i * 2], v[9 + i * 2]))
+  # Keep packed store data separate from the next chunk's reads and from next-tile operands in v8:v211.
+  tmp, packed = (4, 0) if restart else (8, 16)
+  if restart:
+    for group in range(2):
+      for i in range(4): k.emit(v_accvgpr_read(v[tmp + i], v[acc + group * 32 + i]))
+      for i in range(2): k.emit(v_cvt_pk_bf16_f32(v[packed + group * 2 + i], v[tmp + i * 2], v[tmp + i * 2 + 1]))
+  else:
+    for i in range(8): k.emit(v_accvgpr_read(v[tmp + i], v[acc + (i // 4) * 32 + i % 4]))
+    for i in range(4): k.emit(v_cvt_pk_bf16_f32(v[packed + i], v[tmp + i * 2], v[tmp + i * 2 + 1]))
   k.emit(s_nop(1))
-  k.emit(v_permlane16_swap_b32_e32(v[16], v[18]))
+  k.emit(v_permlane16_swap_b32_e32(v[packed], v[packed + 2]))
   k.emit(s_nop(1))
-  k.emit(v_permlane16_swap_b32_e32(v[17], v[19]))
+  k.emit(v_permlane16_swap_b32_e32(v[packed + 1], v[packed + 3]))
   k.emit(s_nop(1))
-  k.emit(buffer_store_dwordx4(v[16:19], v[235 + chunk // 2], s[4:7], 0, offset=64 * (chunk % 2), offen=1))
+  k.emit(buffer_store_dwordx4(v[packed:packed + 3], v[235 + chunk // 2], s[4:7], 0, offset=64 * (chunk % 2), offen=1))
 
-def emit_final_iteration(k: Kernel, insts):
+def emit_interleaved(k: Kernel, left, right):
+  for i, inst in enumerate(left):
+    k.emit(copy(inst))
+    for op in right[i * len(right) // len(left):(i + 1) * len(right) // len(left)]: k.emit(copy(op))
+
+def emit_next_tile(k: Kernel, mfmas, restart, M, N, K, tiles_per_workgroup, prefix):
+  prefetch, lds_reads, first_half, second_half = restart
+  setup = Kernel()
+  for i in range(16): setup.emit(s_mov_b32(s[12 + i], s[68 + i]))
+  for i in range(8): setup.emit(v_add_u32_e32(v[212 + i], LIT, v[212 + i], (M // tiles_per_workgroup) * (K // 2)))
+  for i in range(2): setup.emit(v_add_u32_e32(v[222 + i], LIT, v[222 + i], (M // tiles_per_workgroup) * (K // 32)))
+  for inst in prefetch:
+    if inst.op_name != 'V_ACCVGPR_WRITE': setup.emit(copy(inst))
+  emit_interleaved(k, prefix, setup.instructions)
+  # Drain the input prefetch before issuing output stores.
+  k.waitcnt(vm=0, lgkm=0)
+  k.emit(s_barrier())
+  for inst in lds_reads: k.emit(copy(inst))
+  # Read the next tile into the free first operand bank while finishing the old upper accumulators.
+  k.emit(copy(mfmas[0]))
+  wb = Kernel()
+  for chunk in range(16): emit_writeback(wb, chunk, restart=True)
+  emit_interleaved(k, mfmas[1:], wb.instructions)
+  k.emit(s_mov_b32(s[50], 0))
+  for i in range(2):
+    k.emit(s_cmp_lt_u32(LIT, s[51], 512 - i * 256))
+    k.emit(s_cselect_b32(s[61 + i], s[61 + i], 0))
+    k.emit(s_cselect_b32(s[63 + i], s[63 + i], 0))
+  k.waitcnt(lgkm=0)
+  wb = Kernel()
+  for chunk in range(16, 32): emit_writeback(wb, chunk, restart=True)
+  # Start the next tile with a zero accumulator operand; upper accumulators still belong to the current output.
+  next_half, initialized = [], set()
+  for inst in first_half:
+    inst = copy(inst)
+    if inst.op_name.startswith('V_MFMA_'):
+      if inst.vdst.offset not in initialized: inst.src2 = 0
+      initialized.add(inst.vdst.offset)
+    next_half.append(inst)
+  emit_interleaved(k, next_half, wb.instructions)
+  k.emit(s_sub_u32(s[66], s[66], 1))
+  # All old accumulators have been read. Finish the next tile's first K iteration with stores in flight.
+  initialized = set()
+  for inst in second_half:
+    inst = copy(inst)
+    if inst.op_name.startswith('V_MFMA_'):
+      if inst.vdst.offset not in initialized: inst.src2 = 0
+      initialized.add(inst.vdst.offset)
+    k.emit(inst)
+  stride = (M // tiles_per_workgroup) * N * 2
+  k.emit(s_add_u32(s[4], LIT, s[4], stride))
+  k.emit(s_addc_u32(s[5], 0, s[5]))
+  k.emit(s_sub_u32(s[6], s[6], LIT, stride))
+  k.emit(s_cmp_lt_i32(s[46], 2))
+  k.emit(s_cbranch_scc0(), target='T256_NEXT_LDS1')
+  k.emit(s_branch(), target='T256_NEXT_LDS0')
+
+def emit_final_iteration(k: Kernel, insts, restart=None, M=0, N=0, K=0, tiles_per_workgroup=1):
   # Drain the final K tile without prefetching another tile or updating its pointers.
   upper_start = next(i for i, inst in enumerate(insts) if inst.op_name.startswith('V_MFMA_') and inst.vdst.offset == v[128].offset)
+  mfmas = [inst for inst in insts[upper_start:] if inst.op_name.startswith('V_MFMA_')]
+  if restart is not None:
+    k.emit(s_cmp_eq_u32(s[66], 0))
+    k.emit(s_cbranch_scc1(), target='T256_LAST_TILE')
+    # Finish all old LDS reads before any wave prefetches into that storage.
+    # Both halves of the old final iteration use bank 1, leaving bank 0 free for the next tile.
+    k.emit(s_barrier())
+    for inst in insts[:upper_start]:
+      if inst.op_name.startswith('DS_READ'): k.emit(copy(inst))
+    k.waitcnt(lgkm=0)
+    k.emit(s_barrier())
+    prefix = [inst for inst in insts[:upper_start] if inst.op_name.startswith('V_MFMA_')]
+    emit_next_tile(k, mfmas, restart, M, N, K, tiles_per_workgroup, prefix)
+    k.label('T256_LAST_TILE')
   for inst in insts[:upper_start]:
     if inst.op_name.startswith(('V_MFMA_', 'DS_READ', 'S_BARRIER')): k.emit(copy(inst))
   k.waitcnt(lgkm=0)
-  mfmas = [inst for inst in insts[upper_start:] if inst.op_name.startswith('V_MFMA_')]
   # The lower 128 accumulators are final. No next-iteration LDS reads may overwrite v8:v19.
   writeback = Kernel()
   for chunk in range(16): emit_writeback(writeback, chunk)
@@ -53,7 +130,9 @@ def emit_final_iteration(k: Kernel, insts):
   k.waitcnt(lgkm=0, vm=0, exp=0)
   k.emit(s_endpgm())
 
-def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
+def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, tiles_per_workgroup: int = 1):
+  assert tiles_per_workgroup >= 1
+  assert tiles_per_workgroup == 1 or ((tile_m, tile_n) == (256, 256) and M % (256 * tiles_per_workgroup) == 0 and K % 512 == 0)
   k = Kernel()
   scale_k = K // 32
   k.emit(s_and_b32(s[1], s[1], LIT, 65535))
@@ -2249,26 +2328,27 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.waitcnt(lgkm=0, vm=0, exp=0)
     k.emit(s_endpgm())
   elif (tile_m, tile_n) == (256, 256):
+    strip_shift = 3 if tiles_per_workgroup > 1 and N == 14336 else 5
     k.emit(s_add_u32(s[55], s[44], LIT, 255))
     k.emit(s_lshr_b32(s[54], s[55], 8))
     k.emit(s_mul_i32(s[48], s[54], s[47]))
     k.emit(s_add_i32(s[48], s[48], s[49]))
-    k.emit(s_add_u32(s[55], s[43], LIT, 255))
+    k.emit(s_add_u32(s[55], s[43], LIT, 255) if tiles_per_workgroup == 1 else s_mov_b32(s[55], LIT, M // tiles_per_workgroup + 255))
     k.emit(s_lshr_b32(s[52], s[55], 8))
-    k.emit(s_lshl_b32(s[52], s[52], 5))
+    k.emit(s_lshl_b32(s[52], s[52], strip_shift))
     k.emit(s_mov_b32(s[49], 0))
     k.label('T256_REMAP_STRIP_LOOP')
     k.emit(s_cmp_lt_i32(s[48], s[52]))
     k.emit(s_cbranch_scc1(), target='T256_REMAP_STRIP_DONE')
     k.emit(s_sub_i32(s[48], s[48], s[52]))
-    k.emit(s_add_i32(s[49], s[49], 32))
+    k.emit(s_add_i32(s[49], s[49], 1 << strip_shift))
     k.emit(s_branch(), target='T256_REMAP_STRIP_LOOP')
     k.label('T256_REMAP_STRIP_DONE')
     k.emit(s_sub_i32(s[54], s[54], s[49]))
-    k.emit(s_cmp_lt_i32(s[54], 32))
+    k.emit(s_cmp_lt_i32(s[54], 1 << strip_shift))
     k.emit(s_cbranch_scc1(), target='T256_REMAP_SMALL_STRIP')
-    k.emit(s_lshr_b32(s[47], s[48], 5))
-    k.emit(s_and_b32(s[52], s[48], 31))
+    k.emit(s_lshr_b32(s[47], s[48], strip_shift))
+    k.emit(s_and_b32(s[52], s[48], (1 << strip_shift) - 1))
     k.emit(s_branch(), target='T256_REMAP_DONE')
     k.label('T256_REMAP_SMALL_STRIP')
     k.emit(v_cvt_f32_u32_e32(v[4], s[54]))
@@ -2414,6 +2494,10 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_add_u32_e32(v[233], s[53], v[233]))
     k.emit(s_mul_i32(s[52], 32, s[40]))
     k.emit(v_add_u32_e32(v[234], s[52], v[233]))
+    if tiles_per_workgroup > 1:
+      k.emit(s_mov_b32(s[66], tiles_per_workgroup - 1))
+      for i in range(16): k.emit(s_mov_b32(s[68 + i], s[12 + i]))
+    prefetch_start = len(k.instructions)
     k.emit(s_mov_b32(s[61], LIT, 128))
     k.emit(s_mov_b32(s[62], LIT, 2048))
     k.emit(s_mov_b32(s[63], LIT, 256))
@@ -2482,8 +2566,10 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
       k.emit(s_sub_u32(s[14 + i * 8], s[14 + i * 8], s[61 + i * 2]))
     for i in range(8):
       k.emit(v_accvgpr_write(v[248 + i * 1], 0))
+    prefetch = k.instructions[prefetch_start:]
     k.waitcnt(vm=25)
     k.emit(s_barrier())
+    lds_start = len(k.instructions)
     k.emit(ds_read_b128(v[8:11], v[220]))
     k.emit(ds_read_b128(v[40:43], v[220], v[0], v[0], 0, 64))
     for i in range(2):
@@ -2498,6 +2584,7 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(ds_read_b32(v[201], v[224], v[0], v[0], 0, 0, 1))
     k.emit(ds_read_b32(v[202], v[224], v[0], v[0], 0, 0, 2))
     k.emit(ds_read_b32(v[203], v[224], v[0], v[0], 0, 0, 3))
+    initial_lds = k.instructions[lds_start:]
     k.emit(s_lshl_b32(s[36], s[36], 1))
     k.emit(s_mul_i32(s[52], s[47], LIT, 256))
     k.emit(s_mul_hi_u32(s[53], s[52], s[36]))
@@ -2708,6 +2795,7 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_mfma_fp4(v[252:255], v[164:167], v[132:135], 3, 3, v[209], v[207]))
     final_iters.append(k.instructions[final_start:])
     k.emit(s_cbranch_scc0(), target='T256_EPILOGUE')
+    k.label('T256_NEXT_LDS0')
     k.waitcnt(lgkm=0, vm=10)
     if K % 512 == 0:
       k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
@@ -3056,6 +3144,7 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_mfma_fp4(v[248:251], v[164:167], v[128:131], 1, 3, v[209], v[207]))
     k.emit(v_mfma_fp4(v[252:255], v[164:167], v[132:135], 3, 3, v[209], v[207]))
     k.emit(s_cbranch_scc0(), target='T256_EPILOGUE')
+    k.label('T256_NEXT_LDS1')
     k.waitcnt(lgkm=0, vm=10)
     if K % 512 == 0:
       k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
@@ -3449,7 +3538,9 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     for bank, insts in enumerate(final_iters):
       if bank % 2 != (K // 256 - 1) % 2: continue
       k.label(f'T256_FINAL_{bank}')
-      emit_final_iteration(k, insts)
+      first_half = final_iters[0][:next(i for i, inst in enumerate(final_iters[0]) if inst.op_name.startswith('V_MFMA_') and inst.vdst.offset == v[128].offset)]
+      restart = (prefetch, initial_lds, first_half, final_iters[0][len(first_half):]) if tiles_per_workgroup > 1 else None
+      emit_final_iteration(k, insts, restart, M, N, K, tiles_per_workgroup)
   else:
     raise AssertionError(f'unsupported tile {(tile_m, tile_n)}')
   return k.finalize()

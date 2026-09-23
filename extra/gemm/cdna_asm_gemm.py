@@ -38,6 +38,7 @@ def custom_hk_mxfp8_gemm(C:UOp, A:UOp, B:UOp, scale_A:UOp, scale_B:UOp, *extra:U
 
 MXFP4_TILES = ((256, 256), (192, 256), (128, 512))
 MXFP4_TILE_MAP = {(6144, 4096, 16384):(192, 256), (16384, 4096, 6144):(128, 512), (16384, 6144, 4096):(128, 512)}
+MXFP4_PERSISTENT_MAP = {(16384, 4096, 4096):4, (16384, 14336, 4096):4, (16384, 28672, 4096):8}
 
 def select_mxfp4_tile(a_q:Tensor, b_q:Tensor) -> tuple[int, int]:
   a_shape, b_shape = a_q.uop.shard_shape, b_q.uop.shard_shape
@@ -46,19 +47,22 @@ def select_mxfp4_tile(a_q:Tensor, b_q:Tensor) -> tuple[int, int]:
   return next((tile_m, tile_n) for tile_m, tile_n in MXFP4_TILES if M % tile_m == N % tile_n == 0)
 
 @functools.cache
-def custom_mxfp4_gemm(C:UOp, A:UOp, B:UOp, scale_a:UOp, scale_b:UOp, *extra:UOp, tile_m:int, tile_n:int) -> UOp:
+def custom_mxfp4_gemm(C:UOp, A:UOp, B:UOp, scale_a:UOp, scale_b:UOp, *extra:UOp, tile_m:int, tile_n:int, tiles_per_workgroup:int|None=None) -> UOp:
   from extra.gemm.gemm_mxfp4 import build_kernel
   M, half_k = math.prod(A.shape[:-1]), A.shape[-1]
   N, half_k_b = math.prod(B.shape[:-1]), B.shape[-1]
   K = half_k * 2
   assert half_k == half_k_b and math.prod(C.shape[:-1]) == M and C.shape[-1] == N
+  if tiles_per_workgroup is None:
+    tiles_per_workgroup = getenv("MXFP4_TILES_PER_WG", MXFP4_PERSISTENT_MAP.get((M, N, K), 1) if (tile_m, tile_n) == (256, 256) else 1)
+  assert tiles_per_workgroup >= 1
   threads = UOp.special(256, "lidx0")
-  groups_x, groups_y = UOp.special(ceildiv(N, tile_n), "gidx0"), UOp.special(ceildiv(M, tile_m), "gidx1")
+  groups_x, groups_y = UOp.special(ceildiv(N, tile_n), "gidx0"), UOp.special(ceildiv(M, tile_m * tiles_per_workgroup), "gidx1")
   lds = UOp.placeholder((163840,), dtypes.uint8, 0, AddrSpace.LOCAL)
   sink = UOp.sink(C.base, A.base, B.base, scale_a.base, scale_b.base, *(x.base for x in extra), lds, threads, groups_x, groups_y,
-                  arg=KernelInfo(f"mxfp4_gemm_{M}_{N}_{K}_{tile_m}x{tile_n}",
+                  arg=KernelInfo(f"mxfp4_gemm_{M}_{N}_{K}_{tile_m}x{tile_n}" + (f"_p{tiles_per_workgroup}" if tiles_per_workgroup > 1 else ""),
                                  estimates=Estimates(ops=2*M*N*K, mem=(M*half_k+N*half_k)*A.dtype.itemsize+M*N*C.dtype.itemsize)))
-  insts = build_kernel(M, N, K, tile_m, tile_n)
+  insts = build_kernel(M, N, K, tile_m, tile_n, tiles_per_workgroup)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=(x, dtypes.void)) for x in insts))))
 
 def _mxfp4_gemm_quantized(a_q:Tensor, b_q:Tensor, scale_a:Tensor, scale_b:Tensor) -> Tensor:
