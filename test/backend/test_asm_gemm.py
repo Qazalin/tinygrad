@@ -168,6 +168,22 @@ class TestMXFP4(unittest.TestCase):
     b = Tensor.empty(N, K, dtype=dtypes.bfloat16)
     for _ in range(getenv("CNT", 1)): asm_gemm(a, b.T, mxfp4=True).realize()
 
+  def test_final_iteration(self):
+    import numpy as np
+    rng = np.random.default_rng(42)
+    hadamard = np.ones((1, 1), dtype=np.float32)
+    for _ in range(4): hadamard = np.block([[hadamard, hadamard], [hadamard, -hadamard]])
+    # Arrange for the quantizer's Hadamard transform to produce exactly representable +/-1 values.
+    # Check both operand banks, with and without loop backedges.
+    for K in (256, 512, 768, 1024, 4096):
+      with self.subTest(K=K):
+        a_np = ((rng.integers(0, 2, (512, K//16, 16)) * 2 - 1) @ (hadamard / 4)).reshape(512, K).astype(np.float32)
+        b_np = ((rng.integers(0, 2, (512, K//16, 16)) * 2 - 1) @ (hadamard / 4)).reshape(512, K).astype(np.float32)
+        a, b = Tensor(a_np, dtype=dtypes.bfloat16), Tensor(b_np, dtype=dtypes.bfloat16)
+        out = asm_gemm(a, b.T, mxfp4=True).realize().numpy()
+        ref = Tensor(a_np @ b_np.T, dtype=dtypes.bfloat16).numpy()
+        np.testing.assert_array_equal(out, ref)
+
 # test the Asm GEMM with Llama shapes, only run on the real machine for speed
 
 @unittest.skipUnless(has_hipcc(), "requires hipcc to compile")
