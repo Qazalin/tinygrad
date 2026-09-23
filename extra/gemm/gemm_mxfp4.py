@@ -46,12 +46,42 @@ def emit_interleaved(k: Kernel, left, right):
     k.emit(copy(inst))
     for op in right[i * len(right) // len(left):(i + 1) * len(right) // len(left)]: k.emit(copy(op))
 
-def emit_next_tile(k: Kernel, mfmas, restart, M, N, K, tiles_per_workgroup, prefix):
+def emit_tile_coords(k: Kernel, M, index, row, col, tmp):
+  # Enumerate eight-column strips of the full output grid; M/256 must be a power of two.
+  k.emit(s_lshr_b32(row, index, 3))
+  k.emit(s_and_b32(row, row, LIT, M // 256 - 1))
+  k.emit(s_lshr_b32(col, index, (M // 256).bit_length() + 2))
+  k.emit(s_lshl_b32(col, col, 3))
+  k.emit(s_and_b32(tmp, index, 7))
+  k.emit(s_add_u32(col, col, tmp))
+
+def emit_next_tile(k: Kernel, mfmas, restart, M, N, K, tiles_per_workgroup, prefix, persistent_groups=0):
   prefetch, lds_reads, first_half, second_half = restart
   setup = Kernel()
   for i in range(16): setup.emit(s_mov_b32(s[12 + i], s[68 + i]))
-  for i in range(8): setup.emit(v_add_u32_e32(v[212 + i], LIT, v[212 + i], (M // tiles_per_workgroup) * (K // 2)))
-  for i in range(2): setup.emit(v_add_u32_e32(v[222 + i], LIT, v[222 + i], (M // tiles_per_workgroup) * (K // 32)))
+  if persistent_groups:
+    # Advance one worker stride, including transitions to the next N strip.
+    setup.emit(s_add_u32(s[67], s[67], LIT, persistent_groups))
+    emit_tile_coords(setup, M, s[67], s[84], s[85], s[86])
+    setup.emit(s_sub_i32(s[86], s[84], s[47]))
+    setup.emit(s_sub_i32(s[87], s[85], s[49]))
+    setup.emit(s_mov_b32(s[47], s[84]))
+    setup.emit(s_mov_b32(s[49], s[85]))
+    setup.emit(s_mul_i32(s[88], s[86], LIT, 256 * N * 2))
+    setup.emit(s_lshl_b32(s[90], s[87], 9))
+    setup.emit(s_add_i32(s[88], s[88], s[90]))
+    setup.emit(s_ashr_i32(s[89], s[88], 31))
+    setup.emit(s_mul_i32(s[84], s[86], LIT, 256 * (K // 2)))
+    setup.emit(s_mul_i32(s[85], s[86], LIT, 256 * (K // 32)))
+    setup.emit(s_mul_i32(s[86], s[87], LIT, 256 * (K // 2)))
+    setup.emit(s_mul_i32(s[87], s[87], LIT, 256 * (K // 32)))
+    for i in range(8): setup.emit(v_add_u32_e32(v[212 + i], s[84], v[212 + i]))
+    for i in range(2): setup.emit(v_add_u32_e32(v[222 + i], s[85], v[222 + i]))
+    for i in range(8): setup.emit(v_add_u32_e32(v[225 + i], s[86], v[225 + i]))
+    for i in range(2): setup.emit(v_add_u32_e32(v[233 + i], s[87], v[233 + i]))
+  else:
+    for i in range(8): setup.emit(v_add_u32_e32(v[212 + i], LIT, v[212 + i], (M // tiles_per_workgroup) * (K // 2)))
+    for i in range(2): setup.emit(v_add_u32_e32(v[222 + i], LIT, v[222 + i], (M // tiles_per_workgroup) * (K // 32)))
   for inst in prefetch:
     if inst.op_name != 'V_ACCVGPR_WRITE': setup.emit(copy(inst))
   emit_interleaved(k, prefix, setup.instructions)
@@ -90,15 +120,21 @@ def emit_next_tile(k: Kernel, mfmas, restart, M, N, K, tiles_per_workgroup, pref
       if inst.vdst.offset not in initialized: inst.src2 = 0
       initialized.add(inst.vdst.offset)
     k.emit(inst)
-  stride = (M // tiles_per_workgroup) * N * 2
-  k.emit(s_add_u32(s[4], LIT, s[4], stride))
-  k.emit(s_addc_u32(s[5], 0, s[5]))
-  k.emit(s_sub_u32(s[6], s[6], LIT, stride))
+  if persistent_groups:
+    # Move the C descriptor in both dimensions after the old stores have captured it.
+    k.emit(s_add_u32(s[4], s[4], s[88]))
+    k.emit(s_addc_u32(s[5], s[5], s[89]))
+    k.emit(s_sub_u32(s[6], s[6], s[88]))
+  else:
+    stride = (M // tiles_per_workgroup) * N * 2
+    k.emit(s_add_u32(s[4], LIT, s[4], stride))
+    k.emit(s_addc_u32(s[5], 0, s[5]))
+    k.emit(s_sub_u32(s[6], s[6], LIT, stride))
   k.emit(s_cmp_lt_i32(s[46], 2))
   k.emit(s_cbranch_scc0(), target='T256_NEXT_LDS1')
   k.emit(s_branch(), target='T256_NEXT_LDS0')
 
-def emit_final_iteration(k: Kernel, insts, restart=None, M=0, N=0, K=0, tiles_per_workgroup=1):
+def emit_final_iteration(k: Kernel, insts, restart=None, M=0, N=0, K=0, tiles_per_workgroup=1, persistent_groups=0):
   # Drain the final K tile without prefetching another tile or updating its pointers.
   upper_start = next(i for i, inst in enumerate(insts) if inst.op_name.startswith('V_MFMA_') and inst.vdst.offset == v[128].offset)
   mfmas = [inst for inst in insts[upper_start:] if inst.op_name.startswith('V_MFMA_')]
@@ -113,7 +149,7 @@ def emit_final_iteration(k: Kernel, insts, restart=None, M=0, N=0, K=0, tiles_pe
     k.waitcnt(lgkm=0)
     k.emit(s_barrier())
     prefix = [inst for inst in insts[:upper_start] if inst.op_name.startswith('V_MFMA_')]
-    emit_next_tile(k, mfmas, restart, M, N, K, tiles_per_workgroup, prefix)
+    emit_next_tile(k, mfmas, restart, M, N, K, tiles_per_workgroup, prefix, persistent_groups)
     k.label('T256_LAST_TILE')
   for inst in insts[:upper_start]:
     if inst.op_name.startswith(('V_MFMA_', 'DS_READ', 'S_BARRIER')): k.emit(copy(inst))
@@ -130,9 +166,15 @@ def emit_final_iteration(k: Kernel, insts, restart=None, M=0, N=0, K=0, tiles_pe
   k.waitcnt(lgkm=0, vm=0, exp=0)
   k.emit(s_endpgm())
 
-def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, tiles_per_workgroup: int = 1):
+def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, tiles_per_workgroup: int = 1, persistent_groups: int = 0):
+  assert persistent_groups >= 0
+  if persistent_groups: tiles_per_workgroup = ((M // 256) * (N // 256) + persistent_groups - 1) // persistent_groups
   assert tiles_per_workgroup >= 1
-  assert tiles_per_workgroup == 1 or ((tile_m, tile_n) == (256, 256) and M % (256 * tiles_per_workgroup) == 0 and K % 512 == 0)
+  assert tiles_per_workgroup == 1 or ((tile_m, tile_n) == (256, 256) and K % 512 == 0)
+  if persistent_groups:
+    assert (tile_m, tile_n) == (256, 256) and M >= 256 and M & (M - 1) == 0 and N % 2048 == 0
+    assert 0 < persistent_groups <= (M // 256) * (N // 256)
+  else: assert tiles_per_workgroup == 1 or M % (256 * tiles_per_workgroup) == 0
   k = Kernel()
   scale_k = K // 32
   k.emit(s_and_b32(s[1], s[1], LIT, 65535))
@@ -2328,58 +2370,62 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, tiles_per_wor
     k.waitcnt(lgkm=0, vm=0, exp=0)
     k.emit(s_endpgm())
   elif (tile_m, tile_n) == (256, 256):
-    strip_shift = 3 if tiles_per_workgroup > 1 and N == 14336 else 5
-    k.emit(s_add_u32(s[55], s[44], LIT, 255))
-    k.emit(s_lshr_b32(s[54], s[55], 8))
-    k.emit(s_mul_i32(s[48], s[54], s[47]))
-    k.emit(s_add_i32(s[48], s[48], s[49]))
-    k.emit(s_add_u32(s[55], s[43], LIT, 255) if tiles_per_workgroup == 1 else s_mov_b32(s[55], LIT, M // tiles_per_workgroup + 255))
-    k.emit(s_lshr_b32(s[52], s[55], 8))
-    k.emit(s_lshl_b32(s[52], s[52], strip_shift))
-    k.emit(s_mov_b32(s[49], 0))
-    k.label('T256_REMAP_STRIP_LOOP')
-    k.emit(s_cmp_lt_i32(s[48], s[52]))
-    k.emit(s_cbranch_scc1(), target='T256_REMAP_STRIP_DONE')
-    k.emit(s_sub_i32(s[48], s[48], s[52]))
-    k.emit(s_add_i32(s[49], s[49], 1 << strip_shift))
-    k.emit(s_branch(), target='T256_REMAP_STRIP_LOOP')
-    k.label('T256_REMAP_STRIP_DONE')
-    k.emit(s_sub_i32(s[54], s[54], s[49]))
-    k.emit(s_cmp_lt_i32(s[54], 1 << strip_shift))
-    k.emit(s_cbranch_scc1(), target='T256_REMAP_SMALL_STRIP')
-    k.emit(s_lshr_b32(s[47], s[48], strip_shift))
-    k.emit(s_and_b32(s[52], s[48], (1 << strip_shift) - 1))
-    k.emit(s_branch(), target='T256_REMAP_DONE')
-    k.label('T256_REMAP_SMALL_STRIP')
-    k.emit(v_cvt_f32_u32_e32(v[4], s[54]))
-    k.emit(s_sub_i32(s[47], 0, s[54]))
-    k.emit(v_rcp_iflag_f32_e32(v[4], v[4]))
-    k.emit(s_nop())
-    k.emit(v_mul_f32_e32(v[4], LIT, v[4], 1333788670))
-    k.emit(v_cvt_u32_f32_e32(v[4], v[4]))
-    k.emit(v_mul_lo_u32(v[5], s[47], v[4]))
-    k.emit(v_mul_hi_u32(v[5], v[4], v[5]))
-    k.emit(v_add_u32_e32(v[4], v[4], v[5]))
-    k.emit(v_mul_hi_u32(v[4], s[48], v[4]))
-    k.emit(v_mul_lo_u32(v[5], v[4], s[54]))
-    k.emit(v_sub_u32_e32(v[7], s[48], v[5]))
-    k.emit(v_add_u32_e32(v[6], 1, v[4]))
-    k.emit(v_cmp_le_u32_e32(s[54], v[7]))
-    k.emit(v_subrev_u32_e32(v[5], s[54], v[7]))
-    k.emit(s_nop())
-    k.emit(v_cndmask_b32_e32(v[4], v[4], v[6]))
-    k.emit(v_cndmask_b32_e32(v[7], v[7], v[5]))
-    k.emit(v_add_u32_e32(v[5], 1, v[4]))
-    k.emit(v_cmp_le_u32_e32(s[54], v[7]))
-    k.emit(s_nop(1))
-    k.emit(v_cndmask_b32_e32(v[7], v[4], v[5]))
-    k.emit(s_nop(3))
-    k.emit(v_readfirstlane_b32_e32(v[47], v[7]))
-    k.emit(s_nop(3))
-    k.emit(s_mul_i32(s[52], s[54], s[47]))
-    k.emit(s_sub_i32(s[52], s[48], s[52]))
-    k.label('T256_REMAP_DONE')
-    k.emit(s_add_i32(s[49], s[52], s[49]))
+    if persistent_groups:
+      k.emit(s_mov_b32(s[67], s[49]))
+      emit_tile_coords(k, M, s[67], s[47], s[49], s[52])
+    else:
+      strip_shift = 3 if tiles_per_workgroup > 1 and N == 14336 else 5
+      k.emit(s_add_u32(s[55], s[44], LIT, 255))
+      k.emit(s_lshr_b32(s[54], s[55], 8))
+      k.emit(s_mul_i32(s[48], s[54], s[47]))
+      k.emit(s_add_i32(s[48], s[48], s[49]))
+      k.emit(s_add_u32(s[55], s[43], LIT, 255) if tiles_per_workgroup == 1 else s_mov_b32(s[55], LIT, M // tiles_per_workgroup + 255))
+      k.emit(s_lshr_b32(s[52], s[55], 8))
+      k.emit(s_lshl_b32(s[52], s[52], strip_shift))
+      k.emit(s_mov_b32(s[49], 0))
+      k.label('T256_REMAP_STRIP_LOOP')
+      k.emit(s_cmp_lt_i32(s[48], s[52]))
+      k.emit(s_cbranch_scc1(), target='T256_REMAP_STRIP_DONE')
+      k.emit(s_sub_i32(s[48], s[48], s[52]))
+      k.emit(s_add_i32(s[49], s[49], 1 << strip_shift))
+      k.emit(s_branch(), target='T256_REMAP_STRIP_LOOP')
+      k.label('T256_REMAP_STRIP_DONE')
+      k.emit(s_sub_i32(s[54], s[54], s[49]))
+      k.emit(s_cmp_lt_i32(s[54], 1 << strip_shift))
+      k.emit(s_cbranch_scc1(), target='T256_REMAP_SMALL_STRIP')
+      k.emit(s_lshr_b32(s[47], s[48], strip_shift))
+      k.emit(s_and_b32(s[52], s[48], (1 << strip_shift) - 1))
+      k.emit(s_branch(), target='T256_REMAP_DONE')
+      k.label('T256_REMAP_SMALL_STRIP')
+      k.emit(v_cvt_f32_u32_e32(v[4], s[54]))
+      k.emit(s_sub_i32(s[47], 0, s[54]))
+      k.emit(v_rcp_iflag_f32_e32(v[4], v[4]))
+      k.emit(s_nop())
+      k.emit(v_mul_f32_e32(v[4], LIT, v[4], 1333788670))
+      k.emit(v_cvt_u32_f32_e32(v[4], v[4]))
+      k.emit(v_mul_lo_u32(v[5], s[47], v[4]))
+      k.emit(v_mul_hi_u32(v[5], v[4], v[5]))
+      k.emit(v_add_u32_e32(v[4], v[4], v[5]))
+      k.emit(v_mul_hi_u32(v[4], s[48], v[4]))
+      k.emit(v_mul_lo_u32(v[5], v[4], s[54]))
+      k.emit(v_sub_u32_e32(v[7], s[48], v[5]))
+      k.emit(v_add_u32_e32(v[6], 1, v[4]))
+      k.emit(v_cmp_le_u32_e32(s[54], v[7]))
+      k.emit(v_subrev_u32_e32(v[5], s[54], v[7]))
+      k.emit(s_nop())
+      k.emit(v_cndmask_b32_e32(v[4], v[4], v[6]))
+      k.emit(v_cndmask_b32_e32(v[7], v[7], v[5]))
+      k.emit(v_add_u32_e32(v[5], 1, v[4]))
+      k.emit(v_cmp_le_u32_e32(s[54], v[7]))
+      k.emit(s_nop(1))
+      k.emit(v_cndmask_b32_e32(v[7], v[4], v[5]))
+      k.emit(s_nop(3))
+      k.emit(v_readfirstlane_b32_e32(v[47], v[7]))
+      k.emit(s_nop(3))
+      k.emit(s_mul_i32(s[52], s[54], s[47]))
+      k.emit(s_sub_i32(s[52], s[48], s[52]))
+      k.label('T256_REMAP_DONE')
+      k.emit(s_add_i32(s[49], s[52], s[49]))
     k.emit(s_mov_b32(s[6], -16))
     k.emit(s_mov_b32(s[10], -16))
     k.emit(s_mov_b32(s[18], -16))
@@ -2495,7 +2541,13 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, tiles_per_wor
     k.emit(s_mul_i32(s[52], 32, s[40]))
     k.emit(v_add_u32_e32(v[234], s[52], v[233]))
     if tiles_per_workgroup > 1:
-      k.emit(s_mov_b32(s[66], tiles_per_workgroup - 1))
+      if persistent_groups:
+        count, remainder = divmod((M // 256) * (N // 256), persistent_groups)
+        k.emit(s_mov_b32(s[66], LIT, count - 1))
+        if remainder:
+          k.emit(s_cmp_lt_u32(s[67], LIT, remainder))
+          k.emit(s_cselect_b32(s[66], LIT, s[66], count))
+      else: k.emit(s_mov_b32(s[66], tiles_per_workgroup - 1))
       for i in range(16): k.emit(s_mov_b32(s[68 + i], s[12 + i]))
     prefetch_start = len(k.instructions)
     k.emit(s_mov_b32(s[61], LIT, 128))
@@ -3540,7 +3592,7 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, tiles_per_wor
       k.label(f'T256_FINAL_{bank}')
       first_half = final_iters[0][:next(i for i, inst in enumerate(final_iters[0]) if inst.op_name.startswith('V_MFMA_') and inst.vdst.offset == v[128].offset)]
       restart = (prefetch, initial_lds, first_half, final_iters[0][len(first_half):]) if tiles_per_workgroup > 1 else None
-      emit_final_iteration(k, insts, restart, M, N, K, tiles_per_workgroup)
+      emit_final_iteration(k, insts, restart, M, N, K, tiles_per_workgroup, persistent_groups)
   else:
     raise AssertionError(f'unsupported tile {(tile_m, tile_n)}')
   return k.finalize()

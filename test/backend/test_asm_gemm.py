@@ -204,6 +204,24 @@ class TestMXFP4(unittest.TestCase):
           outputs.append(Tensor.custom_kernel(out, aq, bq, sa, sb, fxn=fxn)[0].realize().numpy())
         for out in outputs[1:]: np.testing.assert_array_equal(out, outputs[0])
 
+  def test_persistent_grid(self):
+    from extra.gemm.cdna_asm_gemm import custom_mxfp4_gemm
+    from extra.llama_kernels.quantize_mxfp4 import quantize_mxfp4
+    Tensor.manual_seed(44)
+    # Cross N strips, including uneven worker lengths and workers with only one output tile.
+    for M, N, K, groups in ((1024, 4096, 512, (3, 8, 12, 40)), (1024, 14336, 4096, (16, 24)), (2048, 28672, 512, (32, 36))):
+      with self.subTest(M=M, N=N, K=K):
+        a, b = (Tensor.randn(d, K).cast(dtypes.bfloat16) for d in (M, N))
+        aq, sa, _, _ = quantize_mxfp4(a, shuffle_col=True)
+        bq, sb, _, _ = quantize_mxfp4(b, shuffle_row=True, shuffle_col=True)
+        Tensor.realize(aq, sa, bq, sb)
+        outputs = []
+        for workers in (0, *groups):
+          out = Tensor.invalids(1, M, N, dtype=dtypes.bfloat16)
+          fxn = functools.partial(custom_mxfp4_gemm, tile_m=256, tile_n=256, tiles_per_workgroup=1, persistent_groups=workers)
+          outputs.append(Tensor.custom_kernel(out, aq, bq, sa, sb, fxn=fxn)[0].realize())
+        for out in outputs[1:]: self.assertEqual((out != outputs[0]).sum().item(), 0)
+
 # test the Asm GEMM with Llama shapes, only run on the real machine for speed
 
 @unittest.skipUnless(has_hipcc(), "requires hipcc to compile")
