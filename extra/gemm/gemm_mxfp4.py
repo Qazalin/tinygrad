@@ -32,12 +32,16 @@ def emit_writeback(k: Kernel, chunk: int):
   k.emit(s_nop(1))
   k.emit(v_permlane16_swap_b32_e32(v[17], v[19]))
   k.emit(s_nop(1))
-  k.emit(buffer_store_dwordx4(v[16:19], v[235 + chunk // 2], s[4:7], 0, 0, 1))
-  k.emit(v_add_i32(v[235 + chunk // 2], v[235 + chunk // 2], 64))
+  k.emit(buffer_store_dwordx4(v[16:19], v[235 + chunk // 2], s[4:7], 0, offset=64 * (chunk % 2), offen=1))
 
-def emit_final_writeback(k: Kernel, mfmas):
+def emit_final_iteration(k: Kernel, insts):
+  # Drain the final K tile without prefetching another tile or updating its pointers.
+  upper_start = next(i for i, inst in enumerate(insts) if inst.op_name.startswith('V_MFMA_') and inst.vdst.offset == v[128].offset)
+  for inst in insts[:upper_start]:
+    if inst.op_name.startswith(('V_MFMA_', 'DS_READ', 'S_BARRIER')): k.emit(copy(inst))
+  k.waitcnt(lgkm=0)
+  mfmas = [inst for inst in insts[upper_start:] if inst.op_name.startswith('V_MFMA_')]
   # The lower 128 accumulators are final. No next-iteration LDS reads may overwrite v8:v19.
-  # Reuse the loop's upper-half MFMAs, but omit its next-iteration prefetches and bookkeeping.
   writeback = Kernel()
   for chunk in range(16): emit_writeback(writeback, chunk)
   for i, inst in enumerate(mfmas):
@@ -2529,9 +2533,13 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
       k.emit(s_cselect_b32(s[63 + i * 1], s[63 + i * 1], 0))
     k.emit(s_cmp_lt_i32(s[46], 2))
     k.emit(s_cbranch_scc0(), target='T256_LOOP_LDS1_INIT')
-    final_mfmas = []
+    final_iters = []
     k.label('T256_LOOP_LDS0')
     k.waitcnt(lgkm=0, vm=10)
+    if K % 512 == 256:
+      k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
+      k.emit(s_cbranch_scc1(), target='T256_FINAL_0')
+    final_start = len(k.instructions)
     k.emit(v_mfma_fp4(v[0:3], v[136:139], v[8:11], 0, 0, v[208], v[200]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -2604,9 +2612,6 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_mfma_fp4(v[120:123], v[164:167], v[64:67], 1, 3, v[209], v[203]))
     k.emit(v_mfma_fp4(v[124:127], v[164:167], v[68:71], 3, 3, v[209], v[203]))
     k.waitcnt(lgkm=0, vm=15)
-    k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
-    k.emit(s_cbranch_scc1(), target='T256_FINAL_0')
-    final_start = len(k.instructions)
     k.emit(v_mfma_fp4(v[128:131], v[136:139], v[72:75], 0, 0, v[208], v[204]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -2701,9 +2706,13 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(s_cmp_lt_i32(s[50], s[51]))
     k.emit(v_mfma_fp4(v[248:251], v[164:167], v[128:131], 1, 3, v[209], v[207]))
     k.emit(v_mfma_fp4(v[252:255], v[164:167], v[132:135], 3, 3, v[209], v[207]))
-    final_mfmas.append([inst for inst in k.instructions[final_start:] if inst.op_name.startswith('V_MFMA_')])
+    final_iters.append(k.instructions[final_start:])
     k.emit(s_cbranch_scc0(), target='T256_EPILOGUE')
     k.waitcnt(lgkm=0, vm=10)
+    if K % 512 == 0:
+      k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
+      k.emit(s_cbranch_scc1(), target='T256_FINAL_1')
+    final_start = len(k.instructions)
     k.emit(v_mfma_fp4(v[0:3], v[168:171], v[8:11], 0, 0, v[210], v[200]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -2776,9 +2785,6 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_mfma_fp4(v[120:123], v[196:199], v[64:67], 1, 3, v[211], v[203]))
     k.emit(v_mfma_fp4(v[124:127], v[196:199], v[68:71], 3, 3, v[211], v[203]))
     k.waitcnt(lgkm=0, vm=15)
-    k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
-    k.emit(s_cbranch_scc1(), target='T256_FINAL_1')
-    final_start = len(k.instructions)
     k.emit(v_mfma_fp4(v[128:131], v[168:171], v[72:75], 0, 0, v[210], v[204]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -2873,13 +2879,16 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(s_cmp_lt_i32(s[50], s[51]))
     k.emit(v_mfma_fp4(v[248:251], v[196:199], v[128:131], 1, 3, v[211], v[207]))
     k.emit(v_mfma_fp4(v[252:255], v[196:199], v[132:135], 3, 3, v[211], v[207]))
-    final_mfmas.append([inst for inst in k.instructions[final_start:] if inst.op_name.startswith('V_MFMA_')])
+    final_iters.append(k.instructions[final_start:])
     k.emit(s_cbranch_scc0(), target='T256_EPILOGUE')
     k.emit(s_branch(), target='T256_LOOP_LDS0')
     k.label('T256_LOOP_LDS1_INIT')
     k.emit(s_nop())
     k.label('T256_LOOP_LDS1')
     k.waitcnt(lgkm=0, vm=10)
+    if K % 512 == 256:
+      k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
+      k.emit(s_cbranch_scc1(), target='T256_FINAL_0')
     k.emit(v_mfma_fp4(v[0:3], v[136:139], v[8:11], 0, 0, v[208], v[200]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -2952,8 +2961,6 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_mfma_fp4(v[120:123], v[164:167], v[64:67], 1, 3, v[209], v[203]))
     k.emit(v_mfma_fp4(v[124:127], v[164:167], v[68:71], 3, 3, v[209], v[203]))
     k.waitcnt(lgkm=0, vm=15)
-    k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
-    k.emit(s_cbranch_scc1(), target='T256_FINAL_0')
     k.emit(v_mfma_fp4(v[128:131], v[136:139], v[72:75], 0, 0, v[208], v[204]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -3050,6 +3057,9 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_mfma_fp4(v[252:255], v[164:167], v[132:135], 3, 3, v[209], v[207]))
     k.emit(s_cbranch_scc0(), target='T256_EPILOGUE')
     k.waitcnt(lgkm=0, vm=10)
+    if K % 512 == 0:
+      k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
+      k.emit(s_cbranch_scc1(), target='T256_FINAL_1')
     k.emit(v_mfma_fp4(v[0:3], v[168:171], v[8:11], 0, 0, v[210], v[200]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -3122,8 +3132,6 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_mfma_fp4(v[120:123], v[196:199], v[64:67], 1, 3, v[211], v[203]))
     k.emit(v_mfma_fp4(v[124:127], v[196:199], v[68:71], 3, 3, v[211], v[203]))
     k.waitcnt(lgkm=0, vm=15)
-    k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
-    k.emit(s_cbranch_scc1(), target='T256_FINAL_1')
     k.emit(v_mfma_fp4(v[128:131], v[168:171], v[72:75], 0, 0, v[210], v[204]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -3437,9 +3445,11 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_add_i32(v[250], v[250], 64))
     k.waitcnt(lgkm=0, vm=0, exp=0)
     k.emit(s_endpgm())
-    for bank, mfmas in enumerate(final_mfmas):
+    # Both LDS schedules use the same operands in their final iteration. Only one bank is reachable for this K.
+    for bank, insts in enumerate(final_iters):
+      if bank % 2 != (K // 256 - 1) % 2: continue
       k.label(f'T256_FINAL_{bank}')
-      emit_final_writeback(k, mfmas)
+      emit_final_iteration(k, insts)
   else:
     raise AssertionError(f'unsupported tile {(tile_m, tile_n)}')
   return k.finalize()
