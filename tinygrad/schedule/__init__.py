@@ -129,7 +129,8 @@ def lower_sink_to_linear(call:UOp) -> UOp|None:
   if not SCACHE or (sc_ret:=schedule_cache.get(cache_key, None)) is None:
     if SPEC: type_verify(function, spec_tensor)
     # support recursive CALLs
-    linear = create_schedule(get_kernel_graph(prepare_rangeify(function)))
+    with rewrite_group(call.arg.name or "caller", sink=function, new_ctx=False):
+      linear = create_schedule(get_kernel_graph(prepare_rangeify(function)))
     if SCACHE: schedule_cache[cache_key] = linear
   else:
     # schedule cache hit
