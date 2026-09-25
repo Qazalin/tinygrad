@@ -49,7 +49,7 @@ def select_mxfp4_tile(a_q:Tensor, b_q:Tensor) -> tuple[int, int]:
 @functools.cache
 def custom_mxfp4_gemm(C:UOp, A:UOp, B:UOp, scale_a:UOp, scale_b:UOp, *extra:UOp, tile_m:int, tile_n:int,
                      tiles_per_workgroup:int|None=None, persistent_groups:int=0) -> UOp:
-  from extra.gemm.gemm_mxfp4 import build_kernel
+  from extra.gemm.gemm_mxfp4 import build_kernel, MXFP4_TARGET_SHAPES
   M, half_k = math.prod(A.shape[:-1]), A.shape[-1]
   N, half_k_b = math.prod(B.shape[:-1]), B.shape[-1]
   K = half_k * 2
@@ -66,7 +66,8 @@ def custom_mxfp4_gemm(C:UOp, A:UOp, B:UOp, scale_a:UOp, scale_b:UOp, *extra:UOp,
   threads = UOp.special(256, "lidx0")
   groups_x, groups_y = UOp.special(ceildiv(N, tile_n), "gidx0"), UOp.special(ceildiv(M, tile_m * tiles_per_workgroup), "gidx1")
   if persistent_groups: groups_x, groups_y = UOp.special(persistent_groups, "gidx0"), UOp.special(1, "gidx1")
-  lds = UOp.placeholder((163840,), dtypes.uint8, 0, AddrSpace.LOCAL)
+  target_optimization = (M, N, K) in MXFP4_TARGET_SHAPES and (tile_m, tile_n) == (256, 256)
+  lds = UOp.placeholder((81920 if target_optimization else 163840,), dtypes.uint8, 0, AddrSpace.LOCAL)
   sink = UOp.sink(C.base, A.base, B.base, scale_a.base, scale_b.base, *(x.base for x in extra), lds, threads, groups_x, groups_y,
                   arg=KernelInfo(f"mxfp4_gemm_{M}_{N}_{K}_{tile_m}x{tile_n}" + (f"_p{tiles_per_workgroup}" if tiles_per_workgroup > 1 else "") + (f"_g{persistent_groups}" if persistent_groups else ""),
                                  estimates=Estimates(ops=2*M*N*K, mem=(M*half_k+N*half_k)*A.dtype.itemsize+M*N*C.dtype.itemsize)))

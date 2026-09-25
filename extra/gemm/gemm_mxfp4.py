@@ -2,10 +2,16 @@
 from tinygrad.runtime.autogen.amd.cdna.ins import *
 from copy import copy
 
+# These fast_fp4_best optimizations improve the wider shapes with persistent prefetch.
+MXFP4_TARGET_SHAPES = {(16384, 28672, 4096), (16384, 14336, 4096)}
+
 class Kernel:
-  def __init__(self): self.instructions, self.labels, self.pos = [], {}, 0
+  def __init__(self, target_optimization=False):
+    self.instructions, self.labels, self.pos = [], {}, 0
+    self.target_optimization = target_optimization
   def label(self, name): self.labels[name] = self.pos
   def emit(self, inst, target=None):
+    if self.target_optimization and inst.op_name == 'BUFFER_STORE_DWORDX4': inst.sc0, inst.sc1, inst.nt = 0, 1, 1
     self.instructions.append(inst)
     inst._target, inst._pos = target, self.pos
     self.pos += inst.size()
@@ -22,7 +28,7 @@ def v_mfma_fp4(dst, a, b, opsel, opsel_hi, scale_a, scale_b):
   # select fp4 for both inputs and write to acc vgprs
   return v_mfma_scale_f32_16x16x128_f8f6f4(dst, a, b, dst, 0, 0, opsel, opsel_hi, 4, 1, 0, 4, scale_a.offset, scale_b.offset)
 
-def emit_writeback(k: Kernel, chunk: int, restart=False):
+def emit_writeback(k: Kernel, chunk: int, restart=False, preloaded=False, prefetch=False):
   # Each vector store combines two four-element accumulator groups, 32 registers apart.
   acc = (chunk // 16) * 128 + (chunk % 2) * 64 + ((chunk % 16) // 2) * 4
   # Keep packed store data separate from the next chunk's reads and from next-tile operands in v8:v211.
@@ -32,14 +38,19 @@ def emit_writeback(k: Kernel, chunk: int, restart=False):
       for i in range(4): k.emit(v_accvgpr_read(v[tmp + i], v[acc + group * 32 + i]))
       for i in range(2): k.emit(v_cvt_pk_bf16_f32(v[packed + group * 2 + i], v[tmp + i * 2], v[tmp + i * 2 + 1]))
   else:
-    for i in range(8): k.emit(v_accvgpr_read(v[tmp + i], v[acc + (i // 4) * 32 + i % 4]))
+    if not preloaded:
+      for i in range(8): k.emit(v_accvgpr_read(v[tmp + i], v[acc + (i // 4) * 32 + i % 4]))
     for i in range(4): k.emit(v_cvt_pk_bf16_f32(v[packed + i], v[tmp + i * 2], v[tmp + i * 2 + 1]))
-  k.emit(s_nop(1))
-  k.emit(v_permlane16_swap_b32_e32(v[packed], v[packed + 2]))
-  k.emit(s_nop(1))
-  k.emit(v_permlane16_swap_b32_e32(v[packed + 1], v[packed + 3]))
-  k.emit(s_nop(1))
+  assert not restart or not (preloaded or prefetch)
+  next_acc = ((chunk + 1) // 16) * 128 + ((chunk + 1) % 2) * 64 + (((chunk + 1) % 16) // 2) * 4
+  for slot in range(3):
+    if prefetch:
+      for i in range(slot * 2, slot * 2 + 2): k.emit(v_accvgpr_read(v[tmp + i], v[next_acc + (i // 4) * 32 + i % 4]))
+    else: k.emit(s_nop(1))
+    if slot < 2: k.emit(v_permlane16_swap_b32_e32(v[packed + slot], v[packed + slot + 2]))
   k.emit(buffer_store_dwordx4(v[packed:packed + 3], v[235 + chunk // 2], s[4:7], 0, offset=64 * (chunk % 2), offen=1))
+  if prefetch:
+    for i in range(6, 8): k.emit(v_accvgpr_read(v[tmp + i], v[next_acc + 32 + i % 4]))
 
 def emit_interleaved(k: Kernel, left, right):
   for i, inst in enumerate(left):
@@ -162,7 +173,8 @@ def emit_final_iteration(k: Kernel, insts, restart=None, M=0, N=0, K=0, tiles_pe
     if i == 0: k.emit(s_barrier())
     for op in writeback.instructions[i * len(writeback.instructions) // len(mfmas):(i + 1) * len(writeback.instructions) // len(mfmas)]:
       k.emit(op)
-  for chunk in range(16, 32): emit_writeback(k, chunk)
+  for chunk in range(16, 32):
+    emit_writeback(k, chunk, preloaded=k.target_optimization and chunk > 16, prefetch=k.target_optimization and chunk < 31)
   k.waitcnt(lgkm=0, vm=0, exp=0)
   k.emit(s_endpgm())
 
@@ -175,7 +187,8 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, tiles_per_wor
     assert (tile_m, tile_n) == (256, 256) and M >= 256 and M & (M - 1) == 0 and N % 2048 == 0
     assert 0 < persistent_groups <= (M // 256) * (N // 256)
   else: assert tiles_per_workgroup == 1 or M % (256 * tiles_per_workgroup) == 0
-  k = Kernel()
+  target_optimization = (M, N, K) in MXFP4_TARGET_SHAPES and (tile_m, tile_n) == (256, 256)
+  k = Kernel(target_optimization)
   scale_k = K // 32
   k.emit(s_and_b32(s[1], s[1], LIT, 65535))
   if (tile_m, tile_n) == (128, 512):
@@ -2549,75 +2562,84 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, tiles_per_wor
           k.emit(s_cselect_b32(s[66], LIT, s[66], count))
       else: k.emit(s_mov_b32(s[66], tiles_per_workgroup - 1))
       for i in range(16): k.emit(s_mov_b32(s[68 + i], s[12 + i]))
-    prefetch_start = len(k.instructions)
-    k.emit(s_mov_b32(s[61], LIT, 128))
-    k.emit(s_mov_b32(s[62], LIT, 2048))
-    k.emit(s_mov_b32(s[63], LIT, 256))
-    k.emit(s_mov_b32(s[64], LIT, 256))
-    k.emit(s_add_u32(NULL, 0, s[59]))
+    startup = Kernel()
+    startup.emit(s_mov_b32(s[61], LIT, 128))
+    startup.emit(s_mov_b32(s[62], LIT, 2048))
+    startup.emit(s_mov_b32(s[63], LIT, 256))
+    startup.emit(s_mov_b32(s[64], LIT, 256))
+    startup.emit(s_add_u32(NULL, 0, s[59]))
     for i in range(3):
-      k.emit(buffer_load_dwordx4(v[0:3], v[212 + i * 1], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
+      startup.emit(buffer_load_dwordx4(v[0:3], v[212 + i * 1], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
       for j67 in range(8):
-        k.emit(v_accvgpr_write(v[0 + j67 * 1 + i * 8], 0))
-      k.emit(s_add_u32(NULL, LIT, s[59], 4224 + i * 4224))
-    k.emit(buffer_load_dwordx4(v[0:3], v[215], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
+        startup.emit(v_accvgpr_write(v[0 + j67 * 1 + i * 8], 0))
+      startup.emit(s_add_u32(NULL, LIT, s[59], 4224 + i * 4224))
+    startup.emit(buffer_load_dwordx4(v[0:3], v[215], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
     for i in range(8):
-      k.emit(v_accvgpr_write(v[24 + i * 1], 0))
-    k.emit(s_add_u32(NULL, 0, s[60]))
-    k.emit(buffer_load_dword(v[0], v[222], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
+      startup.emit(v_accvgpr_write(v[24 + i * 1], 0))
+    startup.emit(s_add_u32(NULL, 0, s[60]))
+    startup.emit(buffer_load_dword(v[0], v[222], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
     for i in range(4):
       for j68 in range(8):
-        k.emit(v_accvgpr_write(v[32 + j68 * 1 + i * 8], 0))
-      k.emit(s_add_u32(NULL, LIT, s[59], 16896 + i * 4224))
-      k.emit(buffer_load_dwordx4(v[0:3], v[216 + i * 1], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
+        startup.emit(v_accvgpr_write(v[32 + j68 * 1 + i * 8], 0))
+      startup.emit(s_add_u32(NULL, LIT, s[59], 16896 + i * 4224))
+      startup.emit(buffer_load_dwordx4(v[0:3], v[216 + i * 1], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
     for i in range(8):
-      k.emit(v_accvgpr_write(v[64 + i * 1], 0))
-    k.emit(s_add_u32(NULL, LIT, s[60], 1024))
-    k.emit(buffer_load_dword(v[0], v[223], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
+      startup.emit(v_accvgpr_write(v[64 + i * 1], 0))
+    startup.emit(s_add_u32(NULL, LIT, s[60], 1024))
+    startup.emit(buffer_load_dword(v[0], v[223], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
     for i in range(8):
-      k.emit(v_accvgpr_write(v[72 + i * 1], 0))
+      startup.emit(v_accvgpr_write(v[72 + i * 1], 0))
     for i in range(2):
-      k.emit(s_add_u32(s[12 + i * 8], s[61 + i * 2], s[12 + i * 8]))
-      k.emit(s_addc_u32(s[13 + i * 8], 0, s[13 + i * 8]))
-      k.emit(s_sub_u32(s[14 + i * 8], s[14 + i * 8], s[61 + i * 2]))
+      startup.emit(s_add_u32(s[12 + i * 8], s[61 + i * 2], s[12 + i * 8]))
+      startup.emit(s_addc_u32(s[13 + i * 8], 0, s[13 + i * 8]))
+      startup.emit(s_sub_u32(s[14 + i * 8], s[14 + i * 8], s[61 + i * 2]))
     for i in range(8):
       for j69 in range(8):
-        k.emit(v_accvgpr_write(v[80 + j69 * 1 + i * 8], 0))
-      k.emit(buffer_load_dwordx4(v[136 + i * 4:139 + i * 4], v[225 + i * 1], s[16:19], 0, 0, 1))
+        startup.emit(v_accvgpr_write(v[80 + j69 * 1 + i * 8], 0))
+      startup.emit(buffer_load_dwordx4(v[136 + i * 4:139 + i * 4], v[225 + i * 1], s[16:19], 0, 0, 1))
     for i in range(8):
-      k.emit(v_accvgpr_write(v[144 + i * 1], 0))
-    k.emit(s_add_u32(s[16], s[62], s[16]))
-    k.emit(s_addc_u32(s[17], 0, s[17]))
-    k.emit(s_sub_u32(s[18], s[18], s[62]))
+      startup.emit(v_accvgpr_write(v[144 + i * 1], 0))
+    startup.emit(s_add_u32(s[16], s[62], s[16]))
+    startup.emit(s_addc_u32(s[17], 0, s[17]))
+    startup.emit(s_sub_u32(s[18], s[18], s[62]))
     for i in range(2):
-      k.emit(buffer_load_dword(v[208 + i * 1], v[233 + i * 1], s[24:27], 0, 0, 1))
+      startup.emit(buffer_load_dword(v[208 + i * 1], v[233 + i * 1], s[24:27], 0, 0, 1))
       for j70 in range(8):
-        k.emit(v_accvgpr_write(v[152 + j70 * 1 + i * 8], 0))
-    k.emit(s_add_u32(s[24], s[64], s[24]))
-    k.emit(s_addc_u32(s[25], 0, s[25]))
-    k.emit(s_sub_u32(s[26], s[26], s[64]))
+        startup.emit(v_accvgpr_write(v[152 + j70 * 1 + i * 8], 0))
+    startup.emit(s_add_u32(s[24], s[64], s[24]))
+    startup.emit(s_addc_u32(s[25], 0, s[25]))
+    startup.emit(s_sub_u32(s[26], s[26], s[64]))
     for i in range(2):
       for j71 in range(4):
-        k.emit(s_add_u32(NULL, LIT, s[59], 33792 + j71 * 4224 + i * 16896))
-        k.emit(buffer_load_dwordx4(v[0:3], v[212 + j71 * 1 + i * 4], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
-        k.emit(v_accvgpr_write(v[168 + j71 * 8 + i * 40], 0))
-        k.emit(v_accvgpr_write(v[169 + j71 * 8 + i * 40], 0))
-        k.emit(v_accvgpr_write(v[170 + j71 * 8 + i * 40], 0))
-        k.emit(v_accvgpr_write(v[171 + j71 * 8 + i * 40], 0))
-        k.emit(v_accvgpr_write(v[172 + j71 * 8 + i * 40], 0))
-        k.emit(v_accvgpr_write(v[173 + j71 * 8 + i * 40], 0))
-        k.emit(v_accvgpr_write(v[174 + j71 * 8 + i * 40], 0))
-        k.emit(v_accvgpr_write(v[175 + j71 * 8 + i * 40], 0))
-      k.emit(s_add_u32(NULL, LIT, s[60], 2048 + i * 1024))
-      k.emit(buffer_load_dword(v[0], v[222 + i * 1], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
+        startup.emit(s_add_u32(NULL, LIT, s[59], 33792 + j71 * 4224 + i * 16896))
+        startup.emit(buffer_load_dwordx4(v[0:3], v[212 + j71 * 1 + i * 4], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
+        startup.emit(v_accvgpr_write(v[168 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[169 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[170 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[171 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[172 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[173 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[174 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[175 + j71 * 8 + i * 40], 0))
+      startup.emit(s_add_u32(NULL, LIT, s[60], 2048 + i * 1024))
+      startup.emit(buffer_load_dword(v[0], v[222 + i * 1], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
       for j72 in range(8):
-        k.emit(v_accvgpr_write(v[200 + j72 * 1 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[200 + j72 * 1 + i * 40], 0))
     for i in range(2):
-      k.emit(s_add_u32(s[12 + i * 8], s[61 + i * 2], s[12 + i * 8]))
-      k.emit(s_addc_u32(s[13 + i * 8], 0, s[13 + i * 8]))
-      k.emit(s_sub_u32(s[14 + i * 8], s[14 + i * 8], s[61 + i * 2]))
+      startup.emit(s_add_u32(s[12 + i * 8], s[61 + i * 2], s[12 + i * 8]))
+      startup.emit(s_addc_u32(s[13 + i * 8], 0, s[13 + i * 8]))
+      startup.emit(s_sub_u32(s[14 + i * 8], s[14 + i * 8], s[61 + i * 2]))
     for i in range(8):
-      k.emit(v_accvgpr_write(v[248 + i * 1], 0))
+      startup.emit(v_accvgpr_write(v[248 + i * 1], 0))
+    prefetch_start = len(k.instructions)
+    if target_optimization:
+      # Issue every startup load before clearing accumulators, covering more of the input latency.
+      for inst in startup.instructions:
+        if inst.op_name != 'V_ACCVGPR_WRITE': k.emit(inst)
+      for inst in startup.instructions:
+        if inst.op_name == 'V_ACCVGPR_WRITE': k.emit(inst)
+    else:
+      for inst in startup.instructions: k.emit(inst)
     prefetch = k.instructions[prefetch_start:]
     k.waitcnt(vm=25)
     k.emit(s_barrier())
