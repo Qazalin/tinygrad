@@ -262,11 +262,65 @@ class TestMXFP4(unittest.TestCase):
   def test_gemm_llama4(self): self.run_empty(4096, 14336, 16384, (256, 256))
   def test_gemm_llama5(self): self.run_empty(16384, 28672, 4096, (256, 256))
   def test_gemm_llama6(self): self.run_empty(4096, 4096, 16384, (256, 256))
-  def test_gemm_llama7(self): self.run_empty(16384, 6144, 4096, (256, 256))
+  def test_gemm_llama7(self): self.run_empty(16384, 6144, 4096, (128, 512))
   def test_gemm_llama8(self): self.run_empty(16384, 4096, 4096, (256, 256))
   def test_gemm_llama9(self): self.run_empty(16384, 14336, 4096, (256, 256))
   def test_gemm_llama10(self): self.run_empty(6144, 4096, 16384, (192, 256))
   def test_gemm_llama11(self): self.run_empty(16384, 4096, 6144, (128, 512))
+
+  def test_final_iteration(self):
+    import numpy as np
+    rng = np.random.default_rng(42)
+    hadamard = np.ones((1, 1), dtype=np.float32)
+    for _ in range(4): hadamard = np.block([[hadamard, hadamard], [hadamard, -hadamard]])
+    # Arrange for the quantizer's Hadamard transform to produce exactly representable +/-1 values.
+    # Check both operand banks, with and without loop backedges.
+    for K in (256, 512, 768, 1024, 4096):
+      with self.subTest(K=K):
+        a_np = ((rng.integers(0, 2, (512, K//16, 16)) * 2 - 1) @ (hadamard / 4)).reshape(512, K).astype(np.float32)
+        b_np = ((rng.integers(0, 2, (512, K//16, 16)) * 2 - 1) @ (hadamard / 4)).reshape(512, K).astype(np.float32)
+        a, b = Tensor(a_np, dtype=dtypes.bfloat16), Tensor(b_np, dtype=dtypes.bfloat16)
+        out = asm_gemm(a, b.T, mxfp4=True).realize().numpy()
+        ref = Tensor(a_np @ b_np.T, dtype=dtypes.bfloat16).numpy()
+        np.testing.assert_array_equal(out, ref)
+
+  def test_persistent_writeback(self):
+    import numpy as np
+    from extra.gemm.cdna_asm_gemm import custom_mxfp4_gemm
+    from extra.llama_kernels.quantize_mxfp4 import quantize_mxfp4
+    rng = np.random.default_rng(43)
+    for M, N, K in ((1024, 768, 512), (1024, 768, 1024), (1024, 768, 4096), (1024, 8192, 512),
+                    (2048, 14336, 512), (2048, 28672, 512), (1024, 14336, 4096)):
+      with self.subTest(M=M, N=N, K=K):
+        a = Tensor(rng.standard_normal((M, K), dtype=np.float32), dtype=dtypes.bfloat16)
+        b = Tensor(rng.standard_normal((N, K), dtype=np.float32), dtype=dtypes.bfloat16)
+        aq, sa, _, _ = quantize_mxfp4(a, shuffle_col=True)
+        bq, sb, _, _ = quantize_mxfp4(b, shuffle_row=True, shuffle_col=True)
+        Tensor.realize(aq, sa, bq, sb)
+        outputs = []
+        for tiles in ((1, 2, 4, 8) if M % 2048 == 0 else (1, 2, 4)):
+          out = Tensor.invalids(1, M, N, dtype=dtypes.bfloat16)
+          fxn = functools.partial(custom_mxfp4_gemm, tile_m=256, tile_n=256, tiles_per_workgroup=tiles)
+          outputs.append(Tensor.custom_kernel(out, aq, bq, sa, sb, fxn=fxn)[0].realize().numpy())
+        for out in outputs[1:]: np.testing.assert_array_equal(out, outputs[0])
+
+  def test_persistent_grid(self):
+    from extra.gemm.cdna_asm_gemm import custom_mxfp4_gemm
+    from extra.llama_kernels.quantize_mxfp4 import quantize_mxfp4
+    Tensor.manual_seed(44)
+    # Cross N strips, including uneven worker lengths and workers with only one output tile.
+    for M, N, K, groups in ((1024, 4096, 512, (3, 8, 12, 40)), (1024, 14336, 4096, (16, 24)), (2048, 28672, 512, (32, 36))):
+      with self.subTest(M=M, N=N, K=K):
+        a, b = (Tensor.randn(d, K).cast(dtypes.bfloat16) for d in (M, N))
+        aq, sa, _, _ = quantize_mxfp4(a, shuffle_col=True)
+        bq, sb, _, _ = quantize_mxfp4(b, shuffle_row=True, shuffle_col=True)
+        Tensor.realize(aq, sa, bq, sb)
+        outputs = []
+        for workers in (0, *groups):
+          out = Tensor.invalids(1, M, N, dtype=dtypes.bfloat16)
+          fxn = functools.partial(custom_mxfp4_gemm, tile_m=256, tile_n=256, tiles_per_workgroup=1, persistent_groups=workers)
+          outputs.append(Tensor.custom_kernel(out, aq, bq, sa, sb, fxn=fxn)[0].realize())
+        for out in outputs[1:]: self.assertEqual((out != outputs[0]).sum().item(), 0)
 
 # test the Asm GEMM with Llama shapes, only run on the real machine for speed
 

@@ -37,13 +37,11 @@ def custom_hk_mxfp8_gemm(C:UOp, A:UOp, B:UOp, scale_A:UOp, scale_B:UOp, *extra:U
 # ** MXFP4 GEMM custom kernel
 
 MXFP4_TILES = ((256, 256), (192, 256), (128, 512))
-MXFP4_TARGET_SHAPES = {(16384, 28672, 4096), (16384, 14336, 4096), (16384, 4096, 4096), (16384, 6144, 4096)}
-MXFP4_TARGET_GROUPS = {28672:256, 14336:512, 4096:1024, 6144:768}
+MXFP4_PERSISTENT_GROUPS = {(16384, 4096, 4096):128, (16384, 14336, 4096):128, (16384, 28672, 4096):128}
 # best tiles from a full sweep over the production shapes (mxfp4_tile_sweep.md); unmatched shapes fall back to 256x256
 MXFP4_TILE_OVERRIDES = {(6144, 4096, 16384):(192, 256), (16384, 4096, 6144):(128, 512), (16384, 6144, 4096):(128, 512)}
 
 def _select_mxfp4_tile(M:int, N:int, K:int) -> tuple[int, int]:
-  if (M, N, K) in MXFP4_TARGET_SHAPES: return 256, 256
   if (tile:=MXFP4_TILE_OVERRIDES.get((M, N, K))) is not None: return tile
   return next((tile_m, tile_n) for tile_m, tile_n in MXFP4_TILES if M % tile_m == N % tile_n == 0)
 
@@ -54,30 +52,37 @@ def _select_mxfp4_tile_quantized(a_q:Tensor, b_q:Tensor) -> tuple[int, int]:
   return _select_mxfp4_tile(math.prod(a_shape[:-1]), math.prod(b_shape[:-1]), a_shape[-1]*2)
 
 @functools.cache
-def custom_mxfp4_gemm(C:UOp, A:UOp, B:UOp, scale_a:UOp, scale_b:UOp, *extra:UOp, tile_m:int, tile_n:int) -> UOp:
-  from extra.gemm.gemm_mxfp4 import build_kernel
+def custom_mxfp4_gemm(C:UOp, A:UOp, B:UOp, scale_a:UOp, scale_b:UOp, *extra:UOp, tile_m:int, tile_n:int,
+                     tiles_per_workgroup:int|None=None, persistent_groups:int=0) -> UOp:
+  from extra.gemm.gemm_mxfp4 import build_kernel, MXFP4_TARGET_SHAPES
   M, half_k = math.prod(A.shape[:-1]), A.shape[-1]
   N, half_k_b = math.prod(B.shape[:-1]), B.shape[-1]
   K = half_k * 2
   assert half_k == half_k_b and math.prod(C.shape[:-1]) == M and C.shape[-1] == N
+  if tiles_per_workgroup is None:
+    tiles_per_workgroup = getenv("MXFP4_TILES_PER_WG", 0)
+    if not persistent_groups:
+      default_groups = MXFP4_PERSISTENT_GROUPS.get((M, N, K), 0) if not tiles_per_workgroup and (tile_m, tile_n) == (256, 256) else 0
+      persistent_groups = getenv("MXFP4_WORKGROUPS", default_groups)
+    tiles_per_workgroup = tiles_per_workgroup or 1
+  assert persistent_groups >= 0
+  if persistent_groups: tiles_per_workgroup = ceildiv(ceildiv(M, tile_m) * ceildiv(N, tile_n), persistent_groups)
+  assert tiles_per_workgroup >= 1
   threads = UOp.special(256, "lidx0")
-  logical_groups_x, logical_groups_y = ceildiv(N, tile_n), ceildiv(M, tile_m)
+  groups_x, groups_y = UOp.special(ceildiv(N, tile_n), "gidx0"), UOp.special(ceildiv(M, tile_m * tiles_per_workgroup), "gidx1")
+  if persistent_groups: groups_x, groups_y = UOp.special(persistent_groups, "gidx0"), UOp.special(1, "gidx1")
   target_optimization = (M, N, K) in MXFP4_TARGET_SHAPES and (tile_m, tile_n) == (256, 256)
-  if target_optimization:
-    persist_groups = min(logical_groups_x * logical_groups_y, MXFP4_TARGET_GROUPS[N])
-    physical_groups_x, physical_groups_y = (32, persist_groups // 32) if persist_groups >= 32 else (persist_groups, 1)
-  else: physical_groups_x, physical_groups_y = logical_groups_x, logical_groups_y
-  groups_x, groups_y = UOp.special(physical_groups_x, "gidx0"), UOp.special(physical_groups_y, "gidx1")
   lds = UOp.placeholder((81920 if target_optimization else 163840,), dtypes.uint8, 0, AddrSpace.LOCAL)
   # TODO: this is saving extra copies, why?
   zero = UOp.const(0)
   sink = UOp.sink(C.flatten().index(zero).store(UOp.const(0, C.dtype)), A.flatten().index(zero).load(), B.flatten().index(zero).load(),
                   scale_a.flatten().index(zero).load(), scale_b.flatten().index(zero).load(),
                   *(x.flatten().index(zero).load() for x in extra), lds, threads, groups_x, groups_y,
-                  arg=KernelInfo(f"mxfp4_gemm_{M}_{N}_{K}_{tile_m}x{tile_n}",
-                                 estimates=Estimates(ops=2*M*N*K,
-                                                     mem=(M*half_k+N*half_k)*A.dtype.itemsize+M*N*C.dtype.itemsize)))
-  insts = build_kernel(M, N, K, tile_m, tile_n)
+                  arg=KernelInfo(f"mxfp4_gemm_{M}_{N}_{K}_{tile_m}x{tile_n}"
+                                 + (f"_p{tiles_per_workgroup}" if tiles_per_workgroup > 1 else "")
+                                 + (f"_g{persistent_groups}" if persistent_groups else ""),
+                                 estimates=Estimates(ops=2*M*N*K, mem=(M*half_k+N*half_k)*A.dtype.itemsize+M*N*C.dtype.itemsize)))
+  insts = build_kernel(M, N, K, tile_m, tile_n, tiles_per_workgroup, persistent_groups)
   return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=(x, dtypes.void)) for x in insts))))
 
 def _mxfp4_gemm_quantized(a_q:Tensor, b_q:Tensor, scale_a:Tensor, scale_b:Tensor) -> Tensor:

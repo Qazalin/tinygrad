@@ -1,19 +1,17 @@
 # ruff: noqa: E501,F403,F405
 from tinygrad.runtime.autogen.amd.cdna.ins import *
+from copy import copy
 
-MXFP4_TARGET_SHAPES = {(16384, 28672, 4096), (16384, 14336, 4096), (16384, 4096, 4096), (16384, 6144, 4096)}
-MXFP4_TARGET_GROUPS = {28672:256, 14336:512, 4096:1024, 6144:768}
+# These fast_fp4_best optimizations improve the wider shapes with persistent prefetch.
+MXFP4_TARGET_SHAPES = {(16384, 28672, 4096), (16384, 14336, 4096)}
 
 class Kernel:
-  def __init__(self, target_optimization=False, store_nt=False, cache_direct=False):
+  def __init__(self, target_optimization=False):
     self.instructions, self.labels, self.pos = [], {}, 0
-    self.target_optimization, self.store_nt, self.cache_direct = target_optimization, store_nt, cache_direct
+    self.target_optimization = target_optimization
   def label(self, name): self.labels[name] = self.pos
   def emit(self, inst, target=None):
-    if self.cache_direct and repr(inst).startswith("buffer_load") and inst.lds:
-      inst.sc1 = 1
-    if self.target_optimization and repr(inst).startswith("buffer_store_dwordx4"):
-      inst.sc0, inst.sc1, inst.nt = 0, 1, self.store_nt
+    if self.target_optimization and inst.op_name == 'BUFFER_STORE_DWORDX4': inst.sc0, inst.sc1, inst.nt = 0, 1, 1
     self.instructions.append(inst)
     inst._target, inst._pos = target, self.pos
     self.pos += inst.size()
@@ -30,11 +28,167 @@ def v_mfma_fp4(dst, a, b, opsel, opsel_hi, scale_a, scale_b):
   # select fp4 for both inputs and write to acc vgprs
   return v_mfma_scale_f32_16x16x128_f8f6f4(dst, a, b, dst, 0, 0, opsel, opsel_hi, 4, 1, 0, 4, scale_a.offset, scale_b.offset)
 
-def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
+def emit_writeback(k: Kernel, chunk: int, restart=False, preloaded=False, prefetch=False):
+  # Each vector store combines two four-element accumulator groups, 32 registers apart.
+  acc = (chunk // 16) * 128 + (chunk % 2) * 64 + ((chunk % 16) // 2) * 4
+  # Keep packed store data separate from the next chunk's reads and from next-tile operands in v8:v211.
+  tmp, packed = (4, 0) if restart else (8, 16)
+  if restart:
+    for group in range(2):
+      for i in range(4): k.emit(v_accvgpr_read(v[tmp + i], v[acc + group * 32 + i]))
+      for i in range(2): k.emit(v_cvt_pk_bf16_f32(v[packed + group * 2 + i], v[tmp + i * 2], v[tmp + i * 2 + 1]))
+  else:
+    if not preloaded:
+      for i in range(8): k.emit(v_accvgpr_read(v[tmp + i], v[acc + (i // 4) * 32 + i % 4]))
+    for i in range(4): k.emit(v_cvt_pk_bf16_f32(v[packed + i], v[tmp + i * 2], v[tmp + i * 2 + 1]))
+  assert not restart or not (preloaded or prefetch)
+  next_acc = ((chunk + 1) // 16) * 128 + ((chunk + 1) % 2) * 64 + (((chunk + 1) % 16) // 2) * 4
+  for slot in range(3):
+    if prefetch:
+      for i in range(slot * 2, slot * 2 + 2): k.emit(v_accvgpr_read(v[tmp + i], v[next_acc + (i // 4) * 32 + i % 4]))
+    else: k.emit(s_nop(1))
+    if slot < 2: k.emit(v_permlane16_swap_b32_e32(v[packed + slot], v[packed + slot + 2]))
+  k.emit(buffer_store_dwordx4(v[packed:packed + 3], v[235 + chunk // 2], s[4:7], 0, offset=64 * (chunk % 2), offen=1))
+  if prefetch:
+    for i in range(6, 8): k.emit(v_accvgpr_read(v[tmp + i], v[next_acc + 32 + i % 4]))
+
+def emit_interleaved(k: Kernel, left, right):
+  for i, inst in enumerate(left):
+    k.emit(copy(inst))
+    for op in right[i * len(right) // len(left):(i + 1) * len(right) // len(left)]: k.emit(copy(op))
+
+def emit_tile_coords(k: Kernel, M, index, row, col, tmp):
+  # Enumerate eight-column strips of the full output grid; M/256 must be a power of two.
+  k.emit(s_lshr_b32(row, index, 3))
+  k.emit(s_and_b32(row, row, LIT, M // 256 - 1))
+  k.emit(s_lshr_b32(col, index, (M // 256).bit_length() + 2))
+  k.emit(s_lshl_b32(col, col, 3))
+  k.emit(s_and_b32(tmp, index, 7))
+  k.emit(s_add_u32(col, col, tmp))
+
+def emit_next_tile(k: Kernel, mfmas, restart, M, N, K, tiles_per_workgroup, prefix, persistent_groups=0):
+  prefetch, lds_reads, first_half, second_half = restart
+  setup = Kernel()
+  for i in range(16): setup.emit(s_mov_b32(s[12 + i], s[68 + i]))
+  if persistent_groups:
+    # Advance one worker stride, including transitions to the next N strip.
+    setup.emit(s_add_u32(s[67], s[67], LIT, persistent_groups))
+    emit_tile_coords(setup, M, s[67], s[84], s[85], s[86])
+    setup.emit(s_sub_i32(s[86], s[84], s[47]))
+    setup.emit(s_sub_i32(s[87], s[85], s[49]))
+    setup.emit(s_mov_b32(s[47], s[84]))
+    setup.emit(s_mov_b32(s[49], s[85]))
+    setup.emit(s_mul_i32(s[88], s[86], LIT, 256 * N * 2))
+    setup.emit(s_lshl_b32(s[90], s[87], 9))
+    setup.emit(s_add_i32(s[88], s[88], s[90]))
+    setup.emit(s_ashr_i32(s[89], s[88], 31))
+    setup.emit(s_mul_i32(s[84], s[86], LIT, 256 * (K // 2)))
+    setup.emit(s_mul_i32(s[85], s[86], LIT, 256 * (K // 32)))
+    setup.emit(s_mul_i32(s[86], s[87], LIT, 256 * (K // 2)))
+    setup.emit(s_mul_i32(s[87], s[87], LIT, 256 * (K // 32)))
+    for i in range(8): setup.emit(v_add_u32_e32(v[212 + i], s[84], v[212 + i]))
+    for i in range(2): setup.emit(v_add_u32_e32(v[222 + i], s[85], v[222 + i]))
+    for i in range(8): setup.emit(v_add_u32_e32(v[225 + i], s[86], v[225 + i]))
+    for i in range(2): setup.emit(v_add_u32_e32(v[233 + i], s[87], v[233 + i]))
+  else:
+    for i in range(8): setup.emit(v_add_u32_e32(v[212 + i], LIT, v[212 + i], (M // tiles_per_workgroup) * (K // 2)))
+    for i in range(2): setup.emit(v_add_u32_e32(v[222 + i], LIT, v[222 + i], (M // tiles_per_workgroup) * (K // 32)))
+  for inst in prefetch:
+    if inst.op_name != 'V_ACCVGPR_WRITE': setup.emit(copy(inst))
+  emit_interleaved(k, prefix, setup.instructions)
+  # Drain the input prefetch before issuing output stores.
+  k.waitcnt(vm=0, lgkm=0)
+  k.emit(s_barrier())
+  for inst in lds_reads: k.emit(copy(inst))
+  # Read the next tile into the free first operand bank while finishing the old upper accumulators.
+  k.emit(copy(mfmas[0]))
+  wb = Kernel()
+  for chunk in range(16): emit_writeback(wb, chunk, restart=True)
+  emit_interleaved(k, mfmas[1:], wb.instructions)
+  k.emit(s_mov_b32(s[50], 0))
+  for i in range(2):
+    k.emit(s_cmp_lt_u32(LIT, s[51], 512 - i * 256))
+    k.emit(s_cselect_b32(s[61 + i], s[61 + i], 0))
+    k.emit(s_cselect_b32(s[63 + i], s[63 + i], 0))
+  k.waitcnt(lgkm=0)
+  wb = Kernel()
+  for chunk in range(16, 32): emit_writeback(wb, chunk, restart=True)
+  # Start the next tile with a zero accumulator operand; upper accumulators still belong to the current output.
+  next_half, initialized = [], set()
+  for inst in first_half:
+    inst = copy(inst)
+    if inst.op_name.startswith('V_MFMA_'):
+      if inst.vdst.offset not in initialized: inst.src2 = 0
+      initialized.add(inst.vdst.offset)
+    next_half.append(inst)
+  emit_interleaved(k, next_half, wb.instructions)
+  k.emit(s_sub_u32(s[66], s[66], 1))
+  # All old accumulators have been read. Finish the next tile's first K iteration with stores in flight.
+  initialized = set()
+  for inst in second_half:
+    inst = copy(inst)
+    if inst.op_name.startswith('V_MFMA_'):
+      if inst.vdst.offset not in initialized: inst.src2 = 0
+      initialized.add(inst.vdst.offset)
+    k.emit(inst)
+  if persistent_groups:
+    # Move the C descriptor in both dimensions after the old stores have captured it.
+    k.emit(s_add_u32(s[4], s[4], s[88]))
+    k.emit(s_addc_u32(s[5], s[5], s[89]))
+    k.emit(s_sub_u32(s[6], s[6], s[88]))
+  else:
+    stride = (M // tiles_per_workgroup) * N * 2
+    k.emit(s_add_u32(s[4], LIT, s[4], stride))
+    k.emit(s_addc_u32(s[5], 0, s[5]))
+    k.emit(s_sub_u32(s[6], s[6], LIT, stride))
+  k.emit(s_cmp_lt_i32(s[46], 2))
+  k.emit(s_cbranch_scc0(), target='T256_NEXT_LDS1')
+  k.emit(s_branch(), target='T256_NEXT_LDS0')
+
+def emit_final_iteration(k: Kernel, insts, restart=None, M=0, N=0, K=0, tiles_per_workgroup=1, persistent_groups=0):
+  # Drain the final K tile without prefetching another tile or updating its pointers.
+  upper_start = next(i for i, inst in enumerate(insts) if inst.op_name.startswith('V_MFMA_') and inst.vdst.offset == v[128].offset)
+  mfmas = [inst for inst in insts[upper_start:] if inst.op_name.startswith('V_MFMA_')]
+  if restart is not None:
+    k.emit(s_cmp_eq_u32(s[66], 0))
+    k.emit(s_cbranch_scc1(), target='T256_LAST_TILE')
+    # Finish all old LDS reads before any wave prefetches into that storage.
+    # Both halves of the old final iteration use bank 1, leaving bank 0 free for the next tile.
+    k.emit(s_barrier())
+    for inst in insts[:upper_start]:
+      if inst.op_name.startswith('DS_READ'): k.emit(copy(inst))
+    k.waitcnt(lgkm=0)
+    k.emit(s_barrier())
+    prefix = [inst for inst in insts[:upper_start] if inst.op_name.startswith('V_MFMA_')]
+    emit_next_tile(k, mfmas, restart, M, N, K, tiles_per_workgroup, prefix, persistent_groups)
+    k.label('T256_LAST_TILE')
+  for inst in insts[:upper_start]:
+    if inst.op_name.startswith(('V_MFMA_', 'DS_READ', 'S_BARRIER')): k.emit(copy(inst))
+  k.waitcnt(lgkm=0)
+  # The lower 128 accumulators are final. No next-iteration LDS reads may overwrite v8:v19.
+  writeback = Kernel()
+  for chunk in range(16): emit_writeback(writeback, chunk)
+  for i, inst in enumerate(mfmas):
+    k.emit(copy(inst))
+    if i == 0: k.emit(s_barrier())
+    for op in writeback.instructions[i * len(writeback.instructions) // len(mfmas):(i + 1) * len(writeback.instructions) // len(mfmas)]:
+      k.emit(op)
+  for chunk in range(16, 32):
+    emit_writeback(k, chunk, preloaded=k.target_optimization and chunk > 16, prefetch=k.target_optimization and chunk < 31)
+  k.waitcnt(lgkm=0, vm=0, exp=0)
+  k.emit(s_endpgm())
+
+def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int, tiles_per_workgroup: int = 1, persistent_groups: int = 0):
+  assert persistent_groups >= 0
+  if persistent_groups: tiles_per_workgroup = ((M // 256) * (N // 256) + persistent_groups - 1) // persistent_groups
+  assert tiles_per_workgroup >= 1
+  assert tiles_per_workgroup == 1 or ((tile_m, tile_n) == (256, 256) and K % 512 == 0)
+  if persistent_groups:
+    assert (tile_m, tile_n) == (256, 256) and M >= 256 and M & (M - 1) == 0 and N % 2048 == 0
+    assert 0 < persistent_groups <= (M // 256) * (N // 256)
+  else: assert tiles_per_workgroup == 1 or M % (256 * tiles_per_workgroup) == 0
   target_optimization = (M, N, K) in MXFP4_TARGET_SHAPES and (tile_m, tile_n) == (256, 256)
-  epilogue_slot_fill = target_optimization and N != 6144
-  k = Kernel(target_optimization, store_nt=target_optimization and (N >= 14336 or N == 4096),
-             cache_direct=target_optimization and N <= 6144)
+  k = Kernel(target_optimization)
   scale_k = K // 32
   k.emit(s_and_b32(s[1], s[1], LIT, 65535))
   if (tile_m, tile_n) == (128, 512):
@@ -2229,74 +2383,62 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.waitcnt(lgkm=0, vm=0, exp=0)
     k.emit(s_endpgm())
   elif (tile_m, tile_n) == (256, 256):
-    logical_groups_x, logical_groups_y = N // tile_n, M // tile_m
-    persist = target_optimization
-    if persist:
-      persist_groups = min(logical_groups_x * logical_groups_y, MXFP4_TARGET_GROUPS[N])
-      physical_groups_x, physical_groups_y = (32, persist_groups // 32) if persist_groups >= 32 else (persist_groups, 1)
-      physical_groups, logical_groups = physical_groups_x * physical_groups_y, logical_groups_x * logical_groups_y
-      for saved, live in ((68, 4), (70, 12), (72, 16), (74, 20), (76, 24)):
-        k.emit(s_mov_b64(s[saved:saved+1], s[live:live+1]))
-      k.emit(v_mov_b32_e32(v[255], v[0]))
-      k.emit(s_mul_i32(s[65], s[3], physical_groups_x))
-      k.emit(s_add_u32(s[65], s[65], s[2]))
-      k.emit(s_mov_b32(s[66], physical_groups))
-      k.emit(s_mov_b32(s[67], logical_groups))
-      k.label('L2_TILE')
-      k.emit(v_mov_b32_e32(v[0], v[255]))
-    k.emit(s_add_u32(s[55], s[44], LIT, 255))
-    k.emit(s_lshr_b32(s[54], s[55], 8))
-    if persist: k.emit(s_mov_b32(s[48], s[65]))
+    if persistent_groups:
+      k.emit(s_mov_b32(s[67], s[49]))
+      emit_tile_coords(k, M, s[67], s[47], s[49], s[52])
     else:
+      strip_shift = 3 if tiles_per_workgroup > 1 and N == 14336 else 5
+      k.emit(s_add_u32(s[55], s[44], LIT, 255))
+      k.emit(s_lshr_b32(s[54], s[55], 8))
       k.emit(s_mul_i32(s[48], s[54], s[47]))
       k.emit(s_add_i32(s[48], s[48], s[49]))
-    k.emit(s_add_u32(s[55], s[43], LIT, 255))
-    k.emit(s_lshr_b32(s[52], s[55], 8))
-    k.emit(s_lshl_b32(s[52], s[52], 5))
-    k.emit(s_mov_b32(s[49], 0))
-    k.label('T256_REMAP_STRIP_LOOP')
-    k.emit(s_cmp_lt_i32(s[48], s[52]))
-    k.emit(s_cbranch_scc1(), target='T256_REMAP_STRIP_DONE')
-    k.emit(s_sub_i32(s[48], s[48], s[52]))
-    k.emit(s_add_i32(s[49], s[49], 32))
-    k.emit(s_branch(), target='T256_REMAP_STRIP_LOOP')
-    k.label('T256_REMAP_STRIP_DONE')
-    k.emit(s_sub_i32(s[54], s[54], s[49]))
-    k.emit(s_cmp_lt_i32(s[54], 32))
-    k.emit(s_cbranch_scc1(), target='T256_REMAP_SMALL_STRIP')
-    k.emit(s_lshr_b32(s[47], s[48], 5))
-    k.emit(s_and_b32(s[52], s[48], 31))
-    k.emit(s_branch(), target='T256_REMAP_DONE')
-    k.label('T256_REMAP_SMALL_STRIP')
-    k.emit(v_cvt_f32_u32_e32(v[4], s[54]))
-    k.emit(s_sub_i32(s[47], 0, s[54]))
-    k.emit(v_rcp_iflag_f32_e32(v[4], v[4]))
-    k.emit(s_nop())
-    k.emit(v_mul_f32_e32(v[4], LIT, v[4], 1333788670))
-    k.emit(v_cvt_u32_f32_e32(v[4], v[4]))
-    k.emit(v_mul_lo_u32(v[5], s[47], v[4]))
-    k.emit(v_mul_hi_u32(v[5], v[4], v[5]))
-    k.emit(v_add_u32_e32(v[4], v[4], v[5]))
-    k.emit(v_mul_hi_u32(v[4], s[48], v[4]))
-    k.emit(v_mul_lo_u32(v[5], v[4], s[54]))
-    k.emit(v_sub_u32_e32(v[7], s[48], v[5]))
-    k.emit(v_add_u32_e32(v[6], 1, v[4]))
-    k.emit(v_cmp_le_u32_e32(s[54], v[7]))
-    k.emit(v_subrev_u32_e32(v[5], s[54], v[7]))
-    k.emit(s_nop())
-    k.emit(v_cndmask_b32_e32(v[4], v[4], v[6]))
-    k.emit(v_cndmask_b32_e32(v[7], v[7], v[5]))
-    k.emit(v_add_u32_e32(v[5], 1, v[4]))
-    k.emit(v_cmp_le_u32_e32(s[54], v[7]))
-    k.emit(s_nop(1))
-    k.emit(v_cndmask_b32_e32(v[7], v[4], v[5]))
-    k.emit(s_nop(3))
-    k.emit(v_readfirstlane_b32_e32(v[47], v[7]))
-    k.emit(s_nop(3))
-    k.emit(s_mul_i32(s[52], s[54], s[47]))
-    k.emit(s_sub_i32(s[52], s[48], s[52]))
-    k.label('T256_REMAP_DONE')
-    k.emit(s_add_i32(s[49], s[52], s[49]))
+      k.emit(s_add_u32(s[55], s[43], LIT, 255) if tiles_per_workgroup == 1 else s_mov_b32(s[55], LIT, M // tiles_per_workgroup + 255))
+      k.emit(s_lshr_b32(s[52], s[55], 8))
+      k.emit(s_lshl_b32(s[52], s[52], strip_shift))
+      k.emit(s_mov_b32(s[49], 0))
+      k.label('T256_REMAP_STRIP_LOOP')
+      k.emit(s_cmp_lt_i32(s[48], s[52]))
+      k.emit(s_cbranch_scc1(), target='T256_REMAP_STRIP_DONE')
+      k.emit(s_sub_i32(s[48], s[48], s[52]))
+      k.emit(s_add_i32(s[49], s[49], 1 << strip_shift))
+      k.emit(s_branch(), target='T256_REMAP_STRIP_LOOP')
+      k.label('T256_REMAP_STRIP_DONE')
+      k.emit(s_sub_i32(s[54], s[54], s[49]))
+      k.emit(s_cmp_lt_i32(s[54], 1 << strip_shift))
+      k.emit(s_cbranch_scc1(), target='T256_REMAP_SMALL_STRIP')
+      k.emit(s_lshr_b32(s[47], s[48], strip_shift))
+      k.emit(s_and_b32(s[52], s[48], (1 << strip_shift) - 1))
+      k.emit(s_branch(), target='T256_REMAP_DONE')
+      k.label('T256_REMAP_SMALL_STRIP')
+      k.emit(v_cvt_f32_u32_e32(v[4], s[54]))
+      k.emit(s_sub_i32(s[47], 0, s[54]))
+      k.emit(v_rcp_iflag_f32_e32(v[4], v[4]))
+      k.emit(s_nop())
+      k.emit(v_mul_f32_e32(v[4], LIT, v[4], 1333788670))
+      k.emit(v_cvt_u32_f32_e32(v[4], v[4]))
+      k.emit(v_mul_lo_u32(v[5], s[47], v[4]))
+      k.emit(v_mul_hi_u32(v[5], v[4], v[5]))
+      k.emit(v_add_u32_e32(v[4], v[4], v[5]))
+      k.emit(v_mul_hi_u32(v[4], s[48], v[4]))
+      k.emit(v_mul_lo_u32(v[5], v[4], s[54]))
+      k.emit(v_sub_u32_e32(v[7], s[48], v[5]))
+      k.emit(v_add_u32_e32(v[6], 1, v[4]))
+      k.emit(v_cmp_le_u32_e32(s[54], v[7]))
+      k.emit(v_subrev_u32_e32(v[5], s[54], v[7]))
+      k.emit(s_nop())
+      k.emit(v_cndmask_b32_e32(v[4], v[4], v[6]))
+      k.emit(v_cndmask_b32_e32(v[7], v[7], v[5]))
+      k.emit(v_add_u32_e32(v[5], 1, v[4]))
+      k.emit(v_cmp_le_u32_e32(s[54], v[7]))
+      k.emit(s_nop(1))
+      k.emit(v_cndmask_b32_e32(v[7], v[4], v[5]))
+      k.emit(s_nop(3))
+      k.emit(v_readfirstlane_b32_e32(v[47], v[7]))
+      k.emit(s_nop(3))
+      k.emit(s_mul_i32(s[52], s[54], s[47]))
+      k.emit(s_sub_i32(s[52], s[48], s[52]))
+      k.label('T256_REMAP_DONE')
+      k.emit(s_add_i32(s[49], s[52], s[49]))
     k.emit(s_mov_b32(s[6], -16))
     k.emit(s_mov_b32(s[10], -16))
     k.emit(s_mov_b32(s[18], -16))
@@ -2411,50 +2553,97 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_add_u32_e32(v[233], s[53], v[233]))
     k.emit(s_mul_i32(s[52], 32, s[40]))
     k.emit(v_add_u32_e32(v[234], s[52], v[233]))
-    k.emit(s_mov_b32(s[61], LIT, 128))
-    k.emit(s_mov_b32(s[62], LIT, 2048))
-    k.emit(s_mov_b32(s[63], LIT, 256))
-    k.emit(s_mov_b32(s[64], LIT, 256))
-    k.emit(s_add_u32(NULL, 0, s[59]))
+    if tiles_per_workgroup > 1:
+      if persistent_groups:
+        count, remainder = divmod((M // 256) * (N // 256), persistent_groups)
+        k.emit(s_mov_b32(s[66], LIT, count - 1))
+        if remainder:
+          k.emit(s_cmp_lt_u32(s[67], LIT, remainder))
+          k.emit(s_cselect_b32(s[66], LIT, s[66], count))
+      else: k.emit(s_mov_b32(s[66], tiles_per_workgroup - 1))
+      for i in range(16): k.emit(s_mov_b32(s[68 + i], s[12 + i]))
+    startup = Kernel()
+    startup.emit(s_mov_b32(s[61], LIT, 128))
+    startup.emit(s_mov_b32(s[62], LIT, 2048))
+    startup.emit(s_mov_b32(s[63], LIT, 256))
+    startup.emit(s_mov_b32(s[64], LIT, 256))
+    startup.emit(s_add_u32(NULL, 0, s[59]))
     for i in range(3):
-      k.emit(buffer_load_dwordx4(v[0:3], v[212 + i * 1], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
-      k.emit(s_add_u32(NULL, LIT, s[59], 4224 + i * 4224))
-    k.emit(buffer_load_dwordx4(v[0:3], v[215], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
-    k.emit(s_add_u32(NULL, 0, s[60]))
-    k.emit(buffer_load_dword(v[0], v[222], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
-    for i in range(4):
-      k.emit(s_add_u32(NULL, LIT, s[59], 16896 + i * 4224))
-      k.emit(buffer_load_dwordx4(v[0:3], v[216 + i * 1], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
-    k.emit(s_add_u32(NULL, LIT, s[60], 1024))
-    k.emit(buffer_load_dword(v[0], v[223], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
-    for i in range(2):
-      k.emit(s_add_u32(s[12 + i * 8], s[61 + i * 2], s[12 + i * 8]))
-      k.emit(s_addc_u32(s[13 + i * 8], 0, s[13 + i * 8]))
-      k.emit(s_sub_u32(s[14 + i * 8], s[14 + i * 8], s[61 + i * 2]))
+      startup.emit(buffer_load_dwordx4(v[0:3], v[212 + i * 1], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
+      for j67 in range(8):
+        startup.emit(v_accvgpr_write(v[0 + j67 * 1 + i * 8], 0))
+      startup.emit(s_add_u32(NULL, LIT, s[59], 4224 + i * 4224))
+    startup.emit(buffer_load_dwordx4(v[0:3], v[215], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
     for i in range(8):
-      k.emit(buffer_load_dwordx4(v[136 + i * 4:139 + i * 4], v[225 + i * 1], s[16:19], 0, 0, 1))
-    k.emit(s_add_u32(s[16], s[62], s[16]))
-    k.emit(s_addc_u32(s[17], 0, s[17]))
-    k.emit(s_sub_u32(s[18], s[18], s[62]))
+      startup.emit(v_accvgpr_write(v[24 + i * 1], 0))
+    startup.emit(s_add_u32(NULL, 0, s[60]))
+    startup.emit(buffer_load_dword(v[0], v[222], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
+    for i in range(4):
+      for j68 in range(8):
+        startup.emit(v_accvgpr_write(v[32 + j68 * 1 + i * 8], 0))
+      startup.emit(s_add_u32(NULL, LIT, s[59], 16896 + i * 4224))
+      startup.emit(buffer_load_dwordx4(v[0:3], v[216 + i * 1], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
+    for i in range(8):
+      startup.emit(v_accvgpr_write(v[64 + i * 1], 0))
+    startup.emit(s_add_u32(NULL, LIT, s[60], 1024))
+    startup.emit(buffer_load_dword(v[0], v[223], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
+    for i in range(8):
+      startup.emit(v_accvgpr_write(v[72 + i * 1], 0))
     for i in range(2):
-      k.emit(buffer_load_dword(v[208 + i * 1], v[233 + i * 1], s[24:27], 0, 0, 1))
-    k.emit(s_add_u32(s[24], s[64], s[24]))
-    k.emit(s_addc_u32(s[25], 0, s[25]))
-    k.emit(s_sub_u32(s[26], s[26], s[64]))
+      startup.emit(s_add_u32(s[12 + i * 8], s[61 + i * 2], s[12 + i * 8]))
+      startup.emit(s_addc_u32(s[13 + i * 8], 0, s[13 + i * 8]))
+      startup.emit(s_sub_u32(s[14 + i * 8], s[14 + i * 8], s[61 + i * 2]))
+    for i in range(8):
+      for j69 in range(8):
+        startup.emit(v_accvgpr_write(v[80 + j69 * 1 + i * 8], 0))
+      startup.emit(buffer_load_dwordx4(v[136 + i * 4:139 + i * 4], v[225 + i * 1], s[16:19], 0, 0, 1))
+    for i in range(8):
+      startup.emit(v_accvgpr_write(v[144 + i * 1], 0))
+    startup.emit(s_add_u32(s[16], s[62], s[16]))
+    startup.emit(s_addc_u32(s[17], 0, s[17]))
+    startup.emit(s_sub_u32(s[18], s[18], s[62]))
+    for i in range(2):
+      startup.emit(buffer_load_dword(v[208 + i * 1], v[233 + i * 1], s[24:27], 0, 0, 1))
+      for j70 in range(8):
+        startup.emit(v_accvgpr_write(v[152 + j70 * 1 + i * 8], 0))
+    startup.emit(s_add_u32(s[24], s[64], s[24]))
+    startup.emit(s_addc_u32(s[25], 0, s[25]))
+    startup.emit(s_sub_u32(s[26], s[26], s[64]))
     for i in range(2):
       for j71 in range(4):
-        k.emit(s_add_u32(NULL, LIT, s[59], 33792 + j71 * 4224 + i * 16896))
-        k.emit(buffer_load_dwordx4(v[0:3], v[212 + j71 * 1 + i * 4], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
-      k.emit(s_add_u32(NULL, LIT, s[60], 2048 + i * 1024))
-      k.emit(buffer_load_dword(v[0], v[222 + i * 1], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
+        startup.emit(s_add_u32(NULL, LIT, s[59], 33792 + j71 * 4224 + i * 16896))
+        startup.emit(buffer_load_dwordx4(v[0:3], v[212 + j71 * 1 + i * 4], s[12:15], 0, 0, 1, 0, 0, 0, 0, 1))
+        startup.emit(v_accvgpr_write(v[168 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[169 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[170 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[171 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[172 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[173 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[174 + j71 * 8 + i * 40], 0))
+        startup.emit(v_accvgpr_write(v[175 + j71 * 8 + i * 40], 0))
+      startup.emit(s_add_u32(NULL, LIT, s[60], 2048 + i * 1024))
+      startup.emit(buffer_load_dword(v[0], v[222 + i * 1], s[20:23], 0, 0, 1, 0, 0, 0, 0, 1))
+      for j72 in range(8):
+        startup.emit(v_accvgpr_write(v[200 + j72 * 1 + i * 40], 0))
     for i in range(2):
-      k.emit(s_add_u32(s[12 + i * 8], s[61 + i * 2], s[12 + i * 8]))
-      k.emit(s_addc_u32(s[13 + i * 8], 0, s[13 + i * 8]))
-      k.emit(s_sub_u32(s[14 + i * 8], s[14 + i * 8], s[61 + i * 2]))
-    for i in range(256):
-      k.emit(v_accvgpr_write(v[i], 0))
+      startup.emit(s_add_u32(s[12 + i * 8], s[61 + i * 2], s[12 + i * 8]))
+      startup.emit(s_addc_u32(s[13 + i * 8], 0, s[13 + i * 8]))
+      startup.emit(s_sub_u32(s[14 + i * 8], s[14 + i * 8], s[61 + i * 2]))
+    for i in range(8):
+      startup.emit(v_accvgpr_write(v[248 + i * 1], 0))
+    prefetch_start = len(k.instructions)
+    if target_optimization:
+      # Issue every startup load before clearing accumulators, covering more of the input latency.
+      for inst in startup.instructions:
+        if inst.op_name != 'V_ACCVGPR_WRITE': k.emit(inst)
+      for inst in startup.instructions:
+        if inst.op_name == 'V_ACCVGPR_WRITE': k.emit(inst)
+    else:
+      for inst in startup.instructions: k.emit(inst)
+    prefetch = k.instructions[prefetch_start:]
     k.waitcnt(vm=25)
     k.emit(s_barrier())
+    lds_start = len(k.instructions)
     k.emit(ds_read_b128(v[8:11], v[220]))
     k.emit(ds_read_b128(v[40:43], v[220], v[0], v[0], 0, 64))
     for i in range(2):
@@ -2469,6 +2658,7 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(ds_read_b32(v[201], v[224], v[0], v[0], 0, 0, 1))
     k.emit(ds_read_b32(v[202], v[224], v[0], v[0], 0, 0, 2))
     k.emit(ds_read_b32(v[203], v[224], v[0], v[0], 0, 0, 3))
+    initial_lds = k.instructions[lds_start:]
     k.emit(s_lshl_b32(s[36], s[36], 1))
     k.emit(s_mul_i32(s[52], s[47], LIT, 256))
     k.emit(s_mul_hi_u32(s[53], s[52], s[36]))
@@ -2503,30 +2693,14 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
       k.emit(s_cselect_b32(s[61 + i * 1], s[61 + i * 1], 0))
       k.emit(s_cselect_b32(s[63 + i * 1], s[63 + i * 1], 0))
     k.emit(s_cmp_lt_i32(s[46], 2))
-    final_k_f4 = target_optimization and N == 4096
-    def emit_final_f4(skip_label):
-      # On the final K phase, drain four completed low-half accumulator chunks while
-      # the independent high-half MFMA tail is still outstanding.
-      k.emit(s_add_u32(s[52], LIT, s[50], 256))
-      k.emit(s_cmp_lt_u32(s[52], s[51]))
-      k.emit(s_cbranch_scc1(1), target=skip_label)
-      for acc_base, addr in ((0, 235), (64, 235), (4, 236), (68, 236)):
-        for i in range(2):
-          for j in range(4):
-            k.emit(v_accvgpr_read(v[8 + j + i * 4], v[acc_base + j + i * 32]))
-        for i in range(4):
-          k.emit(v_cvt_pk_bf16_f32(v[16 + i], v[8 + i * 2], v[9 + i * 2]))
-        k.emit(s_nop(1))
-        k.emit(v_permlane16_swap_b32_e32(v[16], v[18]))
-        k.emit(s_nop(1))
-        k.emit(v_permlane16_swap_b32_e32(v[17], v[19]))
-        k.emit(s_nop(1))
-        k.emit(buffer_store_dwordx4(v[16:19], v[addr], s[4:7], 0, 0, 1))
-        k.emit(v_add_i32(v[addr], v[addr], 64))
-      k.label(skip_label)
     k.emit(s_cbranch_scc0(), target='T256_LOOP_LDS1_INIT')
+    final_iters = []
     k.label('T256_LOOP_LDS0')
     k.waitcnt(lgkm=0, vm=10)
+    if K % 512 == 256:
+      k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
+      k.emit(s_cbranch_scc1(), target='T256_FINAL_0')
+    final_start = len(k.instructions)
     k.emit(v_mfma_fp4(v[0:3], v[136:139], v[8:11], 0, 0, v[208], v[200]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -2599,7 +2773,6 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_mfma_fp4(v[120:123], v[164:167], v[64:67], 1, 3, v[209], v[203]))
     k.emit(v_mfma_fp4(v[124:127], v[164:167], v[68:71], 3, 3, v[209], v[203]))
     k.waitcnt(lgkm=0, vm=15)
-    if final_k_f4: emit_final_f4('L2_F4_PHASE0_SKIP')
     k.emit(v_mfma_fp4(v[128:131], v[136:139], v[72:75], 0, 0, v[208], v[204]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -2694,8 +2867,14 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(s_cmp_lt_i32(s[50], s[51]))
     k.emit(v_mfma_fp4(v[248:251], v[164:167], v[128:131], 1, 3, v[209], v[207]))
     k.emit(v_mfma_fp4(v[252:255], v[164:167], v[132:135], 3, 3, v[209], v[207]))
+    final_iters.append(k.instructions[final_start:])
     k.emit(s_cbranch_scc0(), target='T256_EPILOGUE')
+    k.label('T256_NEXT_LDS0')
     k.waitcnt(lgkm=0, vm=10)
+    if K % 512 == 0:
+      k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
+      k.emit(s_cbranch_scc1(), target='T256_FINAL_1')
+    final_start = len(k.instructions)
     k.emit(v_mfma_fp4(v[0:3], v[168:171], v[8:11], 0, 0, v[210], v[200]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -2768,7 +2947,6 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_mfma_fp4(v[120:123], v[196:199], v[64:67], 1, 3, v[211], v[203]))
     k.emit(v_mfma_fp4(v[124:127], v[196:199], v[68:71], 3, 3, v[211], v[203]))
     k.waitcnt(lgkm=0, vm=15)
-    if final_k_f4: emit_final_f4('L2_F4_PHASE1_SKIP')
     k.emit(v_mfma_fp4(v[128:131], v[168:171], v[72:75], 0, 0, v[210], v[204]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -2863,12 +3041,16 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(s_cmp_lt_i32(s[50], s[51]))
     k.emit(v_mfma_fp4(v[248:251], v[196:199], v[128:131], 1, 3, v[211], v[207]))
     k.emit(v_mfma_fp4(v[252:255], v[196:199], v[132:135], 3, 3, v[211], v[207]))
+    final_iters.append(k.instructions[final_start:])
     k.emit(s_cbranch_scc0(), target='T256_EPILOGUE')
     k.emit(s_branch(), target='T256_LOOP_LDS0')
     k.label('T256_LOOP_LDS1_INIT')
     k.emit(s_nop())
     k.label('T256_LOOP_LDS1')
     k.waitcnt(lgkm=0, vm=10)
+    if K % 512 == 256:
+      k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
+      k.emit(s_cbranch_scc1(), target='T256_FINAL_0')
     k.emit(v_mfma_fp4(v[0:3], v[136:139], v[8:11], 0, 0, v[208], v[200]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -2941,7 +3123,6 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_mfma_fp4(v[120:123], v[164:167], v[64:67], 1, 3, v[209], v[203]))
     k.emit(v_mfma_fp4(v[124:127], v[164:167], v[68:71], 3, 3, v[209], v[203]))
     k.waitcnt(lgkm=0, vm=15)
-    if final_k_f4: emit_final_f4('L2_F4_PHASE2_SKIP')
     k.emit(v_mfma_fp4(v[128:131], v[136:139], v[72:75], 0, 0, v[208], v[204]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -3037,7 +3218,11 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_mfma_fp4(v[248:251], v[164:167], v[128:131], 1, 3, v[209], v[207]))
     k.emit(v_mfma_fp4(v[252:255], v[164:167], v[132:135], 3, 3, v[209], v[207]))
     k.emit(s_cbranch_scc0(), target='T256_EPILOGUE')
+    k.label('T256_NEXT_LDS1')
     k.waitcnt(lgkm=0, vm=10)
+    if K % 512 == 0:
+      k.emit(s_cmp_eq_u32(s[50], LIT, K - 256))
+      k.emit(s_cbranch_scc1(), target='T256_FINAL_1')
     k.emit(v_mfma_fp4(v[0:3], v[168:171], v[8:11], 0, 0, v[210], v[200]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -3110,7 +3295,6 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(v_mfma_fp4(v[120:123], v[196:199], v[64:67], 1, 3, v[211], v[203]))
     k.emit(v_mfma_fp4(v[124:127], v[196:199], v[68:71], 3, 3, v[211], v[203]))
     k.waitcnt(lgkm=0, vm=15)
-    if final_k_f4: emit_final_f4('L2_F4_PHASE3_SKIP')
     k.emit(v_mfma_fp4(v[128:131], v[168:171], v[72:75], 0, 0, v[210], v[204]))
     k.emit(s_barrier())
     k.emit(s_nop())
@@ -3209,20 +3393,54 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.label('T256_EPILOGUE')
     k.waitcnt(lgkm=0, vm=0)
     k.emit(s_barrier())
-    if not final_k_f4:
-      for acc_base, addr in ((0, 235), (64, 235), (4, 236), (68, 236)):
-        for i in range(2):
-          for j in range(4):
-            k.emit(v_accvgpr_read(v[8 + j + i * 4], v[acc_base + j + i * 32]))
-        for i in range(4):
-          k.emit(v_cvt_pk_bf16_f32(v[16 + i], v[8 + i * 2], v[9 + i * 2]))
-        k.emit(s_nop(1))
-        k.emit(v_permlane16_swap_b32_e32(v[16], v[18]))
-        k.emit(s_nop(1))
-        k.emit(v_permlane16_swap_b32_e32(v[17], v[19]))
-        k.emit(s_nop(1))
-        k.emit(buffer_store_dwordx4(v[16:19], v[addr], s[4:7], 0, 0, 1))
-        k.emit(v_add_i32(v[addr], v[addr], 64))
+    for i in range(2):
+      for j94 in range(4):
+        k.emit(v_accvgpr_read(v[8 + j94 * 1 + i * 4], v[0 + j94 * 1 + i * 32]))
+    for i in range(4):
+      k.emit(v_cvt_pk_bf16_f32(v[16 + i * 1], v[8 + i * 2], v[9 + i * 2]))
+    k.emit(s_nop(1))
+    k.emit(v_permlane16_swap_b32_e32(v[16], v[18]))
+    k.emit(s_nop(1))
+    k.emit(v_permlane16_swap_b32_e32(v[17], v[19]))
+    k.emit(s_nop(1))
+    k.emit(buffer_store_dwordx4(v[16:19], v[235], s[4:7], 0, 0, 1))
+    k.emit(v_add_i32(v[235], v[235], 64))
+    for i in range(2):
+      for j95 in range(4):
+        k.emit(v_accvgpr_read(v[8 + j95 * 1 + i * 4], v[64 + j95 * 1 + i * 32]))
+    for i in range(4):
+      k.emit(v_cvt_pk_bf16_f32(v[16 + i * 1], v[8 + i * 2], v[9 + i * 2]))
+    k.emit(s_nop(1))
+    k.emit(v_permlane16_swap_b32_e32(v[16], v[18]))
+    k.emit(s_nop(1))
+    k.emit(v_permlane16_swap_b32_e32(v[17], v[19]))
+    k.emit(s_nop(1))
+    k.emit(buffer_store_dwordx4(v[16:19], v[235], s[4:7], 0, 0, 1))
+    k.emit(v_add_i32(v[235], v[235], 64))
+    for i in range(2):
+      for j96 in range(4):
+        k.emit(v_accvgpr_read(v[8 + j96 * 1 + i * 4], v[4 + j96 * 1 + i * 32]))
+    for i in range(4):
+      k.emit(v_cvt_pk_bf16_f32(v[16 + i * 1], v[8 + i * 2], v[9 + i * 2]))
+    k.emit(s_nop(1))
+    k.emit(v_permlane16_swap_b32_e32(v[16], v[18]))
+    k.emit(s_nop(1))
+    k.emit(v_permlane16_swap_b32_e32(v[17], v[19]))
+    k.emit(s_nop(1))
+    k.emit(buffer_store_dwordx4(v[16:19], v[236], s[4:7], 0, 0, 1))
+    k.emit(v_add_i32(v[236], v[236], 64))
+    for i in range(2):
+      for j97 in range(4):
+        k.emit(v_accvgpr_read(v[8 + j97 * 1 + i * 4], v[68 + j97 * 1 + i * 32]))
+    for i in range(4):
+      k.emit(v_cvt_pk_bf16_f32(v[16 + i * 1], v[8 + i * 2], v[9 + i * 2]))
+    k.emit(s_nop(1))
+    k.emit(v_permlane16_swap_b32_e32(v[16], v[18]))
+    k.emit(s_nop(1))
+    k.emit(v_permlane16_swap_b32_e32(v[17], v[19]))
+    k.emit(s_nop(1))
+    k.emit(buffer_store_dwordx4(v[16:19], v[236], s[4:7], 0, 0, 1))
+    k.emit(v_add_i32(v[236], v[236], 64))
     for i in range(2):
       for j98 in range(4):
         k.emit(v_accvgpr_read(v[8 + j98 * 1 + i * 4], v[8 + j98 * 1 + i * 32]))
@@ -3364,31 +3582,19 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
         k.emit(v_cvt_pk_bf16_f32(v[17], v[10], v[11]))
         k.emit(v_cvt_pk_bf16_f32(v[18], v[12], v[13]))
         k.emit(v_cvt_pk_bf16_f32(v[19], v[14], v[15]))
-        next_acc = (128 + j110 * 64 + i * 4, 160 + j110 * 64 + i * 4)
-        if epilogue_slot_fill:
-          k.emit(v_accvgpr_read(v[8], v[next_acc[0]]))
-          k.emit(v_accvgpr_read(v[9], v[next_acc[0] + 1]))
-          k.emit(v_permlane16_swap_b32_e32(v[16], v[18]))
-          k.emit(v_accvgpr_read(v[10], v[next_acc[0] + 2]))
-          k.emit(v_accvgpr_read(v[11], v[next_acc[0] + 3]))
-          k.emit(v_permlane16_swap_b32_e32(v[17], v[19]))
-          k.emit(v_accvgpr_read(v[12], v[next_acc[1]]))
-          k.emit(v_accvgpr_read(v[13], v[next_acc[1] + 1]))
-        else:
-          k.emit(s_nop(1))
-          k.emit(v_permlane16_swap_b32_e32(v[16], v[18]))
-          k.emit(s_nop(1))
-          k.emit(v_permlane16_swap_b32_e32(v[17], v[19]))
-          k.emit(s_nop(1))
+        k.emit(s_nop(1))
+        k.emit(v_permlane16_swap_b32_e32(v[16], v[18]))
+        k.emit(s_nop(1))
+        k.emit(v_permlane16_swap_b32_e32(v[17], v[19]))
+        k.emit(s_nop(1))
         k.emit(buffer_store_dwordx4(v[16:19], v[242 + j110 * 1 + i * 1], s[4:7], 0, 0, 1))
         k.emit(v_add_i32(v[242 + j110 * 1 + i * 1], v[242 + j110 * 1 + i * 1], 64))
-        if not epilogue_slot_fill:
-          k.emit(v_accvgpr_read(v[8], v[next_acc[0]]))
-          k.emit(v_accvgpr_read(v[9], v[next_acc[0] + 1]))
-          k.emit(v_accvgpr_read(v[10], v[next_acc[0] + 2]))
-          k.emit(v_accvgpr_read(v[11], v[next_acc[0] + 3]))
-          k.emit(v_accvgpr_read(v[12], v[next_acc[1]]))
-          k.emit(v_accvgpr_read(v[13], v[next_acc[1] + 1]))
+        k.emit(v_accvgpr_read(v[8], v[128 + j110 * 64 + i * 4]))
+        k.emit(v_accvgpr_read(v[9], v[129 + j110 * 64 + i * 4]))
+        k.emit(v_accvgpr_read(v[10], v[130 + j110 * 64 + i * 4]))
+        k.emit(v_accvgpr_read(v[11], v[131 + j110 * 64 + i * 4]))
+        k.emit(v_accvgpr_read(v[12], v[160 + j110 * 64 + i * 4]))
+        k.emit(v_accvgpr_read(v[13], v[161 + j110 * 64 + i * 4]))
         k.emit(v_accvgpr_read(v[14], v[162 + j110 * 64 + i * 4]))
         k.emit(v_accvgpr_read(v[15], v[163 + j110 * 64 + i * 4]))
     for i in range(4):
@@ -3400,23 +3606,15 @@ def build_kernel(M: int, N: int, K: int, tile_m: int, tile_n: int):
     k.emit(s_nop(1))
     k.emit(buffer_store_dwordx4(v[16:19], v[250], s[4:7], 0, 0, 1))
     k.emit(v_add_i32(v[250], v[250], 64))
-    if persist:
-      if N != 14336: k.emit(s_barrier())
-      k.emit(s_add_u32(s[65], s[65], s[66]))
-      k.emit(s_cmp_lt_u32(s[65], s[67]))
-      k.emit(s_cbranch_scc0(13), target='L2_DONE')
-      for live, saved in ((4, 68), (12, 70), (16, 72), (20, 74), (24, 76)):
-        k.emit(s_mov_b64(s[live:live+1], s[saved:saved+1]))
-      k.emit(s_mov_b32(s[36], N))
-      k.emit(s_mov_b32(s[37], K))
-      k.emit(s_mov_b32(s[38], K))
-      k.emit(s_mov_b32(s[39], scale_k))
-      k.emit(s_mov_b32(s[40], scale_k))
-      k.emit(s_mov_b32(s[45], K))
-      k.emit(s_branch(0), target='L2_TILE')
-      k.label('L2_DONE')
     k.waitcnt(lgkm=0, vm=0, exp=0)
     k.emit(s_endpgm())
+    # Both LDS schedules use the same operands in their final iteration. Only one bank is reachable for this K.
+    for bank, insts in enumerate(final_iters):
+      if bank % 2 != (K // 256 - 1) % 2: continue
+      k.label(f'T256_FINAL_{bank}')
+      first_half = final_iters[0][:next(i for i, inst in enumerate(final_iters[0]) if inst.op_name.startswith('V_MFMA_') and inst.vdst.offset == v[128].offset)]
+      restart = (prefetch, initial_lds, first_half, final_iters[0][len(first_half):]) if tiles_per_workgroup > 1 else None
+      emit_final_iteration(k, insts, restart, M, N, K, tiles_per_workgroup, persistent_groups)
   else:
     raise AssertionError(f'unsupported tile {(tile_m, tile_n)}')
   return k.finalize()
