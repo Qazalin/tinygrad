@@ -158,7 +158,7 @@ class TestAsmGEMM(unittest.TestCase):
     with self.assertRaisesRegex(AssertionError, "not a multiple"):
       verify_asm_gemm(1, 256, 1000, 256)
 
-class TestMXFP4Emu(unittest.TestCase):
+class TestMXFP4Tiny(unittest.TestCase):
   def setUp(self):
     if not is_cdna4(): self.skipTest("MXFP4 assembly requires CDNA4")
 
