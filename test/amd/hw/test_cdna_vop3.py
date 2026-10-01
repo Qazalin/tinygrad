@@ -24,8 +24,8 @@ def _code(instructions: list, out_reg: int = 2, out_addr: int | None = None) -> 
     cdna.s_mov_b32(cdna.s[80], cdna.s[0]),
     cdna.s_mov_b32(cdna.s[81], cdna.s[1]),
     cdna.v_mov_b32_e32(cdna.v[255], cdna.v[0]),
-    *instructions,
     *load_out_addr,
+    *instructions,
     cdna.v_lshlrev_b32_e32(cdna.v[240], 2, cdna.v[255]),
     cdna.global_store_dword(addr=cdna.v[240], data=cdna.v[out_reg], saddr=cdna.s[92:93], offset=0),
     cdna.s_endpgm(),
@@ -41,7 +41,7 @@ def _run_emu(instructions: list, out_reg: int = 2) -> int:
   assert result == 0, f"run_asm failed with {result}"
   return out_buf[0]
 
-def _run_hw(instructions: list, out_reg: int = 2) -> int:
+def _run_hw(instructions: list, out_reg: int = 2, initial: int | None = None) -> int:
   from tinygrad.device import Device, TinyELF, Buffer
   from tinygrad.dtype import dtypes
   from tinygrad.runtime.support.compiler_amd import HIPCompiler
@@ -49,6 +49,7 @@ def _run_hw(instructions: list, out_reg: int = 2) -> int:
   dev = Device["AMD"]
   if dev.arch != "gfx950": raise unittest.SkipTest("requires gfx950 hardware")
   out_gpu = Buffer(dev.device, LANES * 4, dtypes.uint8, preallocate=True)
+  if initial is not None: out_gpu.allocator._copyin(out_gpu._buf, memoryview(struct.pack("<I", initial)))
   code = _code(instructions, out_reg, out_gpu._buf)
   byte_str = ", ".join(f"0x{b:02x}" for b in code)
   asm_src = f""".text
@@ -99,6 +100,20 @@ def run_cdna(instructions: list, out_reg: int = 2) -> int:
   return hw
 
 class TestCDNAVOP3(unittest.TestCase):
+  @unittest.skipUnless(USE_HW, "requires USE_HW=1")
+  def test_buffer_load_dwordx4_oob(self):
+    sentinel = 0x12345678
+    instructions = [
+      cdna.s_mov_b32(cdna.s[4], cdna.s[92]),
+      cdna.s_mov_b32(cdna.s[5], cdna.s[93]),
+      cdna.s_mov_b32(cdna.s[6], 4),
+      cdna.s_mov_b32(cdna.s[7], 131072),
+      cdna.v_mov_b32_e32(cdna.v[4], 0),
+      cdna.buffer_load_dwordx4(vdata=cdna.v[0:3], vaddr=cdna.v[4], srsrc=cdna.s[4:7], offen=1),
+      cdna.s_waitcnt(0),
+    ]
+    self.assertEqual([_run_hw(instructions, i, sentinel) for i in range(4)], [sentinel, 0, 0, 0])
+
   def test_cvt_pk_fp8_f32_preserves_upper_half(self):
     """V_CVT_PK_FP8_F32 with OPSEL[3]=0 writes only D[15:0]."""
     out = run_cdna([
