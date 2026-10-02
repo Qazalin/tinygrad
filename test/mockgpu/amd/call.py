@@ -1,5 +1,5 @@
 import ctypes, itertools
-from tinygrad.viz.serve import amd_decode, amdgpu_cfg, COND_TAKEN, COND_NOT_TAKEN
+from tinygrad.viz.serve import amd_decode, amdgpu_cfg, COND_NOT_TAKEN
 from tinygrad.uop.ops import UOp, Ops, KernelInfo, PatternMatcher, UPat, graph_rewrite, rewrite_group
 from tinygrad.codegen import to_program
 from tinygrad.device import Device
@@ -17,18 +17,6 @@ pm_asm_call = PatternMatcher([
   (UPat((Ops.LOAD, Ops.STORE), src=(UPat(Ops.PARAM, name="buf").index(UPat.any(pc_index(PC_LO_IDX), pc_index(PC_HI_IDX))),), allow_any_len=True),
    lambda buf: UOp(Ops.NOOP) if buf.arg.name == "sgpr" else None),
 ])
-
-pm_pc_store_value = PatternMatcher([
-  (UPat(Ops.STORE, src=(UPat(Ops.INDEX, src=(UPat(Ops.PARAM, name="buf"), pc_index(PC_LO_IDX))), UPat(name="val")), allow_any_len=True),
-   lambda buf,val: val if buf.arg.name == "sgpr" else None),
-])
-
-def branch_cond(sink:UOp) -> UOp|None:
-  for u in sink.toposort():
-    if (val:=pm_pc_store_value.rewrite(u)) is None: continue
-    while val.op is Ops.CAST: val = val.src[0]
-    if val.op is Ops.WHERE: return val.src[0]
-  return None
 
 @rewrite_group(name=lambda *args,ret,**_: TracingKey(f"Lift {(k:=ret.src[0].arg).name}", (("lift", k.function_name),)))
 def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None) -> UOp:
@@ -50,12 +38,12 @@ def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None) -
       sink = _get_handler(inst)(inst, ctx)
       *_, canonical_name = _canonical_info(inst, ctx, lib_bytes[off:])
       bufs = sorted((u for u in sink.toposort() if u.op is Ops.PARAM), key=lambda u: u.arg.slot)
-      body = sink.substitute(dict(zip(bufs, params:=[b.param_like(i, name=b.arg.name) for i,b in enumerate(bufs)])))
+      body = sink.substitute({b:b.param_like(i, name=b.arg.name) for i,b in enumerate(bufs)})
       args = [afters.get(b, b) for b in bufs]
       if loop is not None:
         args = [x.after(loop) for x in args]
-        if (cond:=branch_cond(body)) is not None:
-          cond = cond.substitute(dict(zip(params, args)), walk=True)
+        if ctx.branch_cond is not None:
+          cond = ctx.branch_cond.substitute(dict(zip(bufs, args)), walk=True)
           loop_cond = cond != True if cfg["data"]["paths"][bpc][bpc] == COND_NOT_TAKEN else cond
       call = body.call(*args, name=canonical_name)
       afters.update((b, arg.after(call)) for b, arg in zip(bufs, args))
