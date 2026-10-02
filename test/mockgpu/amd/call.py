@@ -1,5 +1,5 @@
 import ctypes, itertools
-from tinygrad.viz.serve import amd_decode, amdgpu_cfg, COND_NOT_TAKEN
+from tinygrad.viz.serve import amd_decode, get_cfg, COND_NOT_TAKEN
 from tinygrad.uop.ops import UOp, Ops, KernelInfo, PatternMatcher, UPat, graph_rewrite, rewrite_group
 from tinygrad.codegen import to_program
 from tinygrad.device import Device
@@ -23,7 +23,8 @@ def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None) -
   backend = getenv("ASM_CALL_BACKEND", "CPU") if backend is None else backend
   # decode
   lib_bytes = ctypes.string_at(lib, lib_sz)
-  insts, cfg = amd_decode(lib_bytes, arch), amdgpu_cfg(lib_bytes, arch)
+  insts = amd_decode(lib_bytes, arch)
+  cfg = get_cfg(insts)
   # construct CALL graph
   afters: dict[UOp, UOp] = {}
   loops = {pc:UOp.loop(i) for i,(pc,paths) in enumerate(cfg["data"]["paths"].items()) if pc in paths}
