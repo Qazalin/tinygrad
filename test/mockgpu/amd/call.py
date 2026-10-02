@@ -23,13 +23,12 @@ def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None) -
   backend = getenv("ASM_CALL_BACKEND", "CPU") if backend is None else backend
   # decode
   lib_bytes = ctypes.string_at(lib, lib_sz)
-  cfg = amdgpu_cfg(lib_bytes, arch)
-  print(cfg)
+  insts, cfg = amd_decode(lib_bytes, arch), amdgpu_cfg(lib_bytes, arch)
   # construct CALL graph
   afters: dict[UOp, UOp] = {}
   for block in cfg["data"]["blocks"].values():
     for off in block:
-      inst = next(iter(amd_decode(lib_bytes[off:], arch).values()))
+      inst = insts[off]
       inst_st = str(inst)
       if inst_st.startswith("s_code_end"): continue
       if inst_st.startswith(("s_getpc", "s_setpc")): raise AssertionError("getpc and setpc are not allowed in ASM_CALL")
