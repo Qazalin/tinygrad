@@ -511,7 +511,7 @@ class Compiled:
     from tinygrad.tensor import Tensor
     tdiffs = []
     for _ in range(5):
-      # with Context(DEBUG=0, BEAM=0, TRACK_MATCH_STATS=0): Tensor.ones(1, device=self.device).contiguous().realize()
+      with Context(DEBUG=0, BEAM=0, TRACK_MATCH_STATS=0): Tensor.ones(1, device=self.device).contiguous().realize()
       if not (ents:=list(self.prof_ents.items())): return
       self.prof_ents.clear()
       st = perf_counter_us()

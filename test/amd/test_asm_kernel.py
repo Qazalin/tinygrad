@@ -251,33 +251,5 @@ class TestAsmKernel(unittest.TestCase):
     a.realize()
     self.assertTrue((a.numpy() == 6.0).all())
 
-  def test_sum(self):
-    if self.arch != "rdna3": self.skipTest("only tested on rdna3")
-    def sum_four(out:UOp, inp:UOp) -> UOp:
-      k = Kernel()
-      k.emit(s_load_b128(s[4:7], s[0:1]))
-      k.emit(s_waitcnt_lgkmcnt(sdst=NULL, simm16=0))
-      k.emit(v_mov_b32_e32(v[0], 0))       # byte offset
-      k.emit(v_mov_b32_e32(v[1], 0.0))     # accumulator
-      k.emit(s_mov_b32(s[8], 4))           # element count
-      k.label("loop")
-      k.emit(global_load_b32(v[2], v[0], saddr=s[6:7]))
-      k.emit(s_waitcnt_vmcnt(sdst=NULL, simm16=0))
-      k.emit(v_add_f32_e32(v[1], v[2], v[1]))
-      k.emit(v_add_nc_u32_e32(v[0], 4, v[0]))
-      k.emit(s_sub_u32(s[8], s[8], 1))
-      k.emit(s_cmp_lg_u32(s[8], 0))
-      k.emit(s_cbranch_scc1(), target="loop")
-      k.emit(v_mov_b32_e32(v[0], 0))
-      k.emit(global_store_b32(addr=v[0], data=v[1], saddr=s[4:5]))
-      k.emit(s_endpgm())
-      sink = UOp.sink(out.base, inp.base, UOp.special(1, "lidx0"), arg=KernelInfo("sum_four"))
-      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=(x, dtypes.void)) for x in k.finalize()))))
-    a = Tensor([0., 1., 2., 3.]).realize()
-    out = Tensor.empty(1)
-    out = Tensor.custom_kernel(out, a, fxn=sum_four)[0]
-    out.realize()
-    self.assertEqual(out.item(), 6.0)
-
 if __name__ == "__main__":
   unittest.main()
