@@ -273,9 +273,8 @@ class TestAsmKernel(unittest.TestCase):
       k.emit(s_endpgm())
       sink = UOp.sink(out.base, inp.base, UOp.special(1, "lidx0"), arg=KernelInfo("sum_four"))
       return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=(x, dtypes.void)) for x in k.finalize()))))
-
-    a = Tensor(list(range(4))).float().contiguous().realize()
-    out = Tensor.empty(1).contiguous().realize()
+    a = Tensor([0., 1., 2., 3.]).realize()
+    out = Tensor.empty(1)
     out = Tensor.custom_kernel(out, a, fxn=sum_four)[0]
     out.realize()
     self.assertEqual(out.item(), 6.0)
