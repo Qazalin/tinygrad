@@ -45,7 +45,7 @@ def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None) -
         args = [x.after(loop) for x in args]
         if ctx.branch_cond is not None:
           cond = ctx.branch_cond.substitute(dict(zip(bufs, args)), walk=True)
-          loop_cond = cond != True if cfg["data"]["paths"][bpc][bpc] == COND_NOT_TAKEN else cond
+          loop_cond = cond.logical_not() if cfg["data"]["paths"][bpc][bpc] == COND_NOT_TAKEN else cond
       call = body.call(*args, name=canonical_name)
       afters.update((b, arg.after(call)) for b, arg in zip(bufs, args))
     if loop is not None:
