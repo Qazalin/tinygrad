@@ -243,6 +243,35 @@ class TestAsmKernel(unittest.TestCase):
     ref[127] = -1
     self.assertListEqual(a.tolist(), ref.tolist())
 
+  def test_lds_sync_loop(self):
+    if self.arch != "rdna3": self.skipTest("only rdna3")
+    def kernel(out:UOp):
+      k = Kernel()
+      k.emit(s_load_b64(s[0:1], s[0:1], soffset=NULL))
+      k.emit(s_waitcnt_lgkmcnt(sdst=NULL, simm16=0))
+      k.emit(v_lshlrev_b32_e32(v[1], 2, v[0]))
+      k.emit(v_xor_b32_e32(v[2], 128, v[1]))  # read the corresponding lane in the neighboring wave
+      k.emit(v_mov_b32_e32(v[3], v[0]))
+      k.emit(s_mov_b32(s[2], 3))
+      k.label("loop")
+      k.emit(v_add_nc_u32_e32(v[3], 1, v[3]))
+      k.emit(ds_store_b32(addr=v[1], data0=v[3]))
+      k.emit(s_waitcnt_lgkmcnt(sdst=NULL, simm16=0))
+      k.emit(s_barrier())
+      k.emit(ds_load_b32(vdst=v[3], addr=v[2]))
+      k.emit(s_waitcnt_lgkmcnt(sdst=NULL, simm16=0))
+      k.emit(s_barrier())  # finish every read before the next round overwrites LDS
+      k.emit(s_sub_u32(s[2], s[2], 1))
+      k.emit(s_cmp_gt_i32(s[2], 0))
+      k.emit(s_cbranch_scc1(), target="loop")
+      k.emit(global_store_b32(addr=v[1], data=v[3], saddr=s[0:1]))
+      k.emit(s_endpgm())
+      lds = UOp.placeholder((128,), dtypes.uint32, 0, AddrSpace.LOCAL)
+      sink = UOp.sink(out.base, lds, UOp.special(128, "lidx0"), UOp.special(1, "gidx0"), arg=KernelInfo("lds_sync_loop"))
+      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=(x, dtypes.void)) for x in k.finalize()))))
+    out = Tensor.empty(128, dtype=dtypes.uint32).custom_kernel(fxn=kernel)[0]
+    self.assertListEqual(out.tolist(), [(i ^ 32) + 3 for i in range(128)])
+
   def test_handwritten(self):
     if self.arch != "rdna4": self.skipTest("only tested on rdna4")
     a = Tensor.empty(1024, dtype=dtypes.int32).contiguous().realize()
