@@ -237,8 +237,8 @@ def timeline_layout(data:VizData, dev_events:list[tuple[int, int, float, DevEven
     if (ref:=data.ref_map.get(e.profile_key)) is not None and ref < len(data.ctxs):
       name = data.ctxs[ref]["name"]
       if (ki:=data.ctxs[ref].get("ki")) is not None and ki.estimates is not None and ei is not None:
-        for est_key,est_val in (("FLOPS", ki.estimates.ops), ("B/s mem", ki.estimates.mem), ("B/s lds", ki.estimates.lds)):
-          with soft_err(lambda _: fmt.update({est_key:"ERR"})): fmt[est_key] = int(sym_infer(est_val, ei.arg['var_vals'])/(dur*1e-6))
+        #for est_key,est_val in (("FLOPS", ki.estimates.ops), ("B/s mem", ki.estimates.mem), ("B/s lds", ki.estimates.lds)):
+        #  #with soft_err(lambda _: fmt.update({est_key:"ERR"})): fmt[est_key] = int(sym_infer(est_val, ei.arg['var_vals'])/(dur*1e-6))
         key = ei.key
     elif isinstance(e.name, TracingKey):
       name = e.name.display_name
@@ -581,6 +581,7 @@ def get_cfg(pc_table:dict[int, Inst]) -> dict:
   leaders:set[int] = {next(iter(pc_table))}
   for pc, inst in pc_table.items():
     if (offset:=parse_branch(inst)) is not None: leaders.update((pc+inst.size()+offset, pc+inst.size()))
+    elif getattr(inst, "op_name", "") == "S_ENDPGM": leaders.add(pc+inst.size())
   # build the cfg
   curr:int|None = None
   blocks:dict[int, list[int]] = {}
@@ -596,7 +597,7 @@ def get_cfg(pc_table:dict[int, Inst]) -> dict:
     if (offset:=parse_branch(inst)) is not None:
       if inst.op_name == "S_BRANCH": paths[curr][nx+offset] = UNCOND
       else: paths[curr].update([(nx+offset, COND_TAKEN), (nx, COND_NOT_TAKEN)])
-    elif nx in leaders: paths[curr][nx] = UNCOND
+    elif getattr(inst, "op_name", "") != "S_ENDPGM" and nx in leaders: paths[curr][nx] = UNCOND
   pc_tokens:dict[int, list[dict]] = {}
   for pc, inst in pc_table.items():
     pc_tokens[pc] = tokens = []

@@ -415,9 +415,13 @@ def line_rewrite(lst:list[UOp], pm:PatternMatcher, ctx=None) -> list[UOp]:
     newlst.extend(ret[1])
   return newlst
 
+def lower_call(ctx:tuple[Renderer, dict[UOp, UOp]], call:UOp):
+  renderer, cache = ctx
+  if call.body not in cache: cache[call.body] = full_rewrite_to_sink(call.body, renderer, optimize=False)
+  return call.replace(src=(cache[call.body],)+call.src[1:])
+
 pm_lower_calls = PatternMatcher([
-  (UPat(Ops.CALL, src=(UPat(Ops.SINK),), allow_any_len=True, name="call"),
-   lambda ctx,call: call.replace(src=(full_rewrite_to_sink(call.body, ctx, optimize=False),)+call.src[1:])),
+  (UPat(Ops.CALL, src=(UPat(Ops.SINK),), allow_any_len=True, name="call"), lower_call),
 ])
 
 pm_call_fixup = PatternMatcher([
@@ -488,7 +492,7 @@ def do_to_program(ast:UOp, renderer:Renderer) -> UOp:
   elif ast.op is Ops.SINK:
     assert isinstance(ast.arg, KernelInfo), "requires KernelInfo on arg to to_program"
     if VIZ: graph_rewrite(ast, PatternMatcher([]), name="View Base AST")
-    ast = graph_rewrite(ast, pm_lower_calls, ctx=renderer, name="lower calls", walk=True, enter_calls=True)
+    ast = graph_rewrite(ast, pm_lower_calls, ctx=(renderer, {}), name="lower calls", walk=True, enter_calls=True)
     full_sink = full_rewrite_to_sink(ast, renderer, optimize=ast.tag is None)
     prog_info = ProgramInfo.from_sink(full_sink, renderer.target)
     # instruction selection
