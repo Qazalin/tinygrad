@@ -1857,6 +1857,9 @@ _BARRIER_OPS = {ir3.SOPPOp.S_BARRIER, irc.SOPPOp.S_BARRIER}
 if hasattr(ir4.SOPPOp, 'S_BARRIER_WAIT'): _BARRIER_OPS.add(ir4.SOPPOp.S_BARRIER_WAIT)
 _BARRIER_SOP1_OPS: set = set()
 if hasattr(ir4.SOP1Op, 'S_BARRIER_SIGNAL'): _BARRIER_SOP1_OPS.add(ir4.SOP1Op.S_BARRIER_SIGNAL)
+def _is_barrier(inst: Inst) -> bool:
+  return (isinstance(inst, (ir3.SOPP, ir4.SOPP, irc.SOPP)) and inst.op in _BARRIER_OPS) or \
+         (isinstance(inst, ir4.SOP1) and inst.op in _BARRIER_SOP1_OPS)
 _BRANCH_OPS: set[int] = {op.value for op in (ir3.SOPPOp.S_BRANCH, ir3.SOPPOp.S_CBRANCH_SCC0, ir3.SOPPOp.S_CBRANCH_SCC1,
   ir3.SOPPOp.S_CBRANCH_VCCZ, ir3.SOPPOp.S_CBRANCH_VCCNZ, ir3.SOPPOp.S_CBRANCH_EXECZ, ir3.SOPPOp.S_CBRANCH_EXECNZ)}
 
@@ -1967,11 +1970,11 @@ ASM_CALL, ASM_CALL_BACKEND = ContextVar("ASM_CALL", 0), getenv("ASM_CALL_BACKEND
 def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, lz: int, args_ptr: int, rsrc2: int = 0x19c,
             scratch_size: int = 0, arch: str = "rdna3", user_data: list[int]|None = None) -> int:
   """Execute AMD assembly program. scratch_size is private_segment_fixed_size from kernel descriptor (per-lane)."""
-  lifted = None
+  lifted = {}
   if ASM_CALL:
     from test.mockgpu.amd.call import lift
     prg = lift(lib, lib_sz, arch, ASM_CALL_BACKEND)
-    lifted = (prg, get_runtime(ASM_CALL_BACKEND, prg))
+    lifted[lib] = (prg, get_runtime(ASM_CALL_BACKEND, prg))
 
   program: dict[int, tuple[Callable, list[int], bool, Inst]] = {}  # pc -> (fxn, globals, is_barrier, inst)
   lds_size = ((rsrc2 & hsa.AMD_COMPUTE_PGM_RSRC_TWO_GRANULATED_LDS_SIZE) >> hsa.AMD_COMPUTE_PGM_RSRC_TWO_GRANULATED_LDS_SIZE_SHIFT) * 512
@@ -1993,8 +1996,7 @@ def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, 
     if pc not in program:
       prev_len = len(_canonical_runner_cache)
       (prg, runtime), inst = _decode_at(pc, arch)
-      is_barrier = (isinstance(inst, (ir3.SOPP, ir4.SOPP, irc.SOPP)) and inst.op in _BARRIER_OPS) or \
-                   (isinstance(inst, (ir4.SOP1,)) and inst.op in _BARRIER_SOP1_OPS)
+      is_barrier = _is_barrier(inst)
       program[pc] = (runtime.fxn, prg.arg.globals, is_barrier, inst)
       if DEBUG >= 3:
         msg = f"[emu] PC={pc - lib}: {inst!r}"
@@ -2010,16 +2012,23 @@ def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, 
       scratch_base = scratch_buf._buf + (wave_start // wave_size) * scratch_size * wave_size if scratch_buf else 0
       waves.append((st, [ctypes.c_uint64(st.sgpr_buf._buf), ctypes.c_uint64(st.vgpr_buf._buf),
                          ctypes.c_uint64(vmem_buf._buf), ctypes.c_uint64(lds_buf._buf),
-                         ctypes.c_uint64(scratch_base if scratch_buf else 0), ctypes.c_uint64(st.accvgpr_buf._buf)]))
-    if lifted is not None:
-      prg, runtime = lifted
-      for st, c_bufs in waves: runtime(*[c_bufs[g].value for g in prg.arg.globals])
-      return 0
+                         ctypes.c_uint64(scratch_base if scratch_buf else 0), ctypes.c_uint64(st.accvgpr_buf._buf),
+                         ctypes.c_uint64(st.sgpr_buf._buf + PC_LO_IDX*4)]))
     done = [False] * len(waves)
     for _ in range(10_000_000):
       if all(done): return
       for wi, (st, c_bufs) in enumerate(waves):
         if done[wi]: continue
+        if lifted:
+          if (pc:=st.pc) == ENDPGM_PC:
+            done[wi] = True
+            continue
+          if pc not in lifted:
+            prg = lift(lib, lib_sz, arch, ASM_CALL_BACKEND, entry=pc-lib)
+            lifted[pc] = (prg, get_runtime(ASM_CALL_BACKEND, prg))
+          prg, runtime = lifted[pc]
+          runtime(*[c_bufs[g].value for g in prg.arg.globals])
+          continue
         # Run this wave until barrier or endpgm
         for _ in range(1_000_000):
           pc = st.pc

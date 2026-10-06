@@ -5,7 +5,7 @@ from tinygrad.codegen import to_program
 from tinygrad.device import Device
 from tinygrad.dtype import AddrSpace, Invalid, dtypes
 from tinygrad.helpers import Context, getenv, TracingKey
-from test.mockgpu.amd.emu import _Ctx, _get_handler, _wave_size, _canonical_info, PC_LO_IDX, PC_HI_IDX
+from test.mockgpu.amd.emu import _Ctx, _get_handler, _wave_size, _canonical_info, _is_barrier, PC_LO_IDX, PC_HI_IDX, ENDPGM_PC
 
 asm_call_counter = itertools.count(1)
 
@@ -59,17 +59,27 @@ def cfg_loops(paths:dict[int, dict[int, int]], entry:int) -> dict[int, set[int]]
   return loops
 
 @rewrite_group(name=lambda *args,ret,**_: TracingKey(f"Lift {(k:=ret.src[0].arg).name}", (("lift", k.function_name),)))
-def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None) -> UOp:
+def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None, entry: int = 0) -> UOp:
   backend = getenv("ASM_CALL_BACKEND", "CPU") if backend is None else backend
   # decode
   lib_bytes = ctypes.string_at(lib, lib_sz)
   insts = amd_decode(lib_bytes, arch)
-  cfg = get_cfg(insts)["data"]
-  entry = next(iter(cfg["blocks"]))
+  barriers = {off:off+inst.size() for off,inst in insts.items() if _is_barrier(inst)}
+  cfg = get_cfg(insts, tuple(barriers.values()))["data"]
+  # A lifted region returns at a barrier. The scheduler resumes each wave at the following instruction.
+  resumes = {pc:barriers[pcs[-1]] for pc,pcs in cfg["blocks"].items() if pcs[-1] in barriers}
+  for pc in resumes: cfg["paths"][pc] = {}
+  members:set[int] = set()
+  pending = [entry]
+  while pending:
+    if (pc:=pending.pop()) in members: continue
+    members.add(pc)
+    pending.extend(cfg["paths"][pc])
   loops = cfg_loops(cfg["paths"], entry)
   afters: dict[UOp, UOp] = {}
   axes = itertools.count(lib_sz)
-  inst_addr = UOp.param(6, dtypes.uint64, name="inst_addr", addrspace=AddrSpace.ALU)
+  resume = UOp.param(6, dtypes.uint64, 1, name="resume")
+  inst_addr = UOp.param(7, dtypes.uint64, name="inst_addr", addrspace=AddrSpace.ALU)
 
   def finish(end:UOp):
     afters.update((b, b.after(end)) for b in afters)
@@ -137,8 +147,11 @@ def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None) -
       call = body.call(*args, name=canonical_name)
       # CALL consumes argument ranges; restore the enclosing control-flow scopes.
       afters.update((b, arg.after(call).after(*scopes)) for b, arg in zip(bufs, args) if b is not inst_addr)
+    if not cfg["paths"][block_pc]:
+      ptr = resume.after(*afters.values()).after(*scopes)
+      afters[resume] = ptr.after(ptr[0].store(lib+resumes[block_pc] if block_pc in resumes else ENDPGM_PC))
     return cond.substitute(afters, walk=True)
-  emit_region(entry, set(cfg["blocks"]))
+  emit_region(entry, members)
   sink = UOp.sink(*afters.values(), arg=KernelInfo(name=f"asm_call n{next(asm_call_counter)}", opts_to_apply=()))
   sink = graph_rewrite(sink, pm_asm_call, name="pm_asm_call", bottom_up=True, enter_calls=True)
   with Context(NOOPT=1, CHECK_OOB=0, TUPLE_ORDER=0, EMULATED_DTYPES="", CAPTURE_PROCESS_REPLAY=0):

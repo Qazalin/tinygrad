@@ -576,9 +576,9 @@ def is_acc_operand(inst, name:str) -> bool:
   return bool(inst.acc) and name in ('vdst', 'vdata', 'data')
 
 COND_TAKEN, COND_NOT_TAKEN, UNCOND = range(3)
-def get_cfg(pc_table:dict[int, Inst]) -> dict:
+def get_cfg(pc_table:dict[int, Inst], extra_leaders:tuple[int, ...]=()) -> dict:
   # get leaders
-  leaders:set[int] = {next(iter(pc_table))}
+  leaders:set[int] = {next(iter(pc_table)), *extra_leaders}
   for pc, inst in pc_table.items():
     if (offset:=parse_branch(inst)) is not None: leaders.update((pc+inst.size()+offset, pc+inst.size()))
     elif getattr(inst, "op_name", "") == "S_ENDPGM": leaders.add(pc+inst.size())
