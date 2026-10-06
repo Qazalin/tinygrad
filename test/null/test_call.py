@@ -126,10 +126,12 @@ class TestCallCodegen(unittest.TestCase):
     sink = out.after(second).sink(arg=KernelInfo("shared_body_lowered_once"))
     with patch("tinygrad.codegen.full_rewrite_to_sink", wraps=full_rewrite_to_sink) as rewrite:
       prg = to_program(sink, ClangRenderer(Target("CPU", arch="x86_64,x86-64")))
+      other = to_program(sink.replace(arg=KernelInfo("another_caller")), ClangRenderer(Target("CPU", arch="x86_64,x86-64")))
     self.assertEqual(sum(call.args[0] is body for call in rewrite.call_args_list), 1)
     calls = [u for u in prg.src[1].src if u.op is Ops.CALL]
     self.assertEqual(len(calls), 2)
     self.assertIs(calls[0].body, calls[1].body)
+    self.assertIs(calls[0].body, next(u for u in other.src[1].src if u.op is Ops.CALL).body)
 
   def test_compiled_scalar_slots_are_not_call_slots(self):
     out = UOp.placeholder((1,), dtypes.int)
