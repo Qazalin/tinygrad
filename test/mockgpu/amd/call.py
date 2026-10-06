@@ -65,7 +65,7 @@ def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None, e
   lib_bytes = ctypes.string_at(lib, lib_sz)
   insts = amd_decode(lib_bytes, arch)
   barriers = {off:off+inst.size() for off,inst in insts.items() if _is_barrier(inst)}
-  cfg = get_cfg(insts, tuple(barriers.values()))["data"]
+  cfg = get_cfg(insts)["data"]
   # A lifted region returns at a barrier. The scheduler resumes each wave at the following instruction.
   resumes = {pc:barriers[pcs[-1]] for pc,pcs in cfg["blocks"].items() if pcs[-1] in barriers}
   for pc in resumes: cfg["paths"][pc] = {}

@@ -576,12 +576,12 @@ def is_acc_operand(inst, name:str) -> bool:
   return bool(inst.acc) and name in ('vdst', 'vdata', 'data')
 
 COND_TAKEN, COND_NOT_TAKEN, UNCOND = range(3)
-def get_cfg(pc_table:dict[int, Inst], extra_leaders:tuple[int, ...]=()) -> dict:
+def get_cfg(pc_table:dict[int, Inst]) -> dict:
   # get leaders
-  leaders:set[int] = {next(iter(pc_table)), *extra_leaders}
+  leaders:set[int] = {next(iter(pc_table))}
   for pc, inst in pc_table.items():
     if (offset:=parse_branch(inst)) is not None: leaders.update((pc+inst.size()+offset, pc+inst.size()))
-    elif getattr(inst, "op_name", "") == "S_ENDPGM": leaders.add(pc+inst.size())
+    elif getattr(inst, "op_name", "") in {"S_ENDPGM", "S_BARRIER", "S_BARRIER_SIGNAL", "S_BARRIER_WAIT"}: leaders.add(pc+inst.size())
   # build the cfg
   curr:int|None = None
   blocks:dict[int, list[int]] = {}
