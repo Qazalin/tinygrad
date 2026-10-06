@@ -1,5 +1,5 @@
 import ctypes, itertools, functools
-from tinygrad.viz.serve import amd_decode, get_cfg, COND_NOT_TAKEN
+from tinygrad.viz.serve import amd_decode, get_cfg, COND_NOT_TAKEN, UNCOND
 from tinygrad.uop.ops import UOp, Ops, KernelInfo, PatternMatcher, UPat, graph_rewrite, rewrite_group
 from tinygrad.codegen import to_program
 from tinygrad.device import Device
@@ -17,6 +17,30 @@ pm_asm_call = PatternMatcher([
   (UPat((Ops.LOAD, Ops.STORE), src=(UPat(Ops.PARAM, name="buf").index(UPat.any(pc_index(PC_LO_IDX), pc_index(PC_HI_IDX))),), allow_any_len=True),
    lambda buf: UOp(Ops.NOOP) if buf.arg.name == "sgpr" else None),
 ])
+
+def merge_branches(insts, blocks:dict[int, list[int]], paths:dict[int, dict[int, int]]):
+  # Thread jump-only blocks, then share identical conditional branches with the same destinations.
+  def target(pc:int) -> int:
+    seen:set[int] = set()
+    while pc not in seen and len(blocks[pc]) == 1 and getattr(insts[blocks[pc][0]], "op_name", "") == "S_BRANCH":
+      seen.add(pc)
+      pc = next(iter(paths[pc]))
+    return pc
+  for pc, dsts in list(paths.items()): paths[pc] = {target(dst):kind for dst,kind in dsts.items()}
+  groups:dict[tuple, list[int]] = {}
+  for pc, pcs in blocks.items():
+    if len(paths[pc]) != 2: continue
+    inst = insts[pcs[-1]]
+    key = (type(inst), tuple((n, getattr(inst, n)) for n,_ in inst._fields if n != "simm16"), tuple(sorted(paths[pc].items())))
+    groups.setdefault(key, []).append(pc)
+  for group in groups.values():
+    if len(group) < 2: continue
+    header = blocks[group[0]][-1]
+    dests = paths[group[0]]
+    for pc in group:
+      blocks[pc] = blocks[pc][:-1]
+      paths[pc] = {header:UNCOND}
+    blocks[header], paths[header] = [header], dests
 
 def cfg_loops(paths:dict[int, dict[int, int]], entry:int) -> dict[int, set[int]]:
   # Dominance is independent of the order of blocks in the instruction stream.
@@ -69,13 +93,16 @@ def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None, e
   # A lifted region returns at a barrier. The scheduler resumes each wave at the following instruction.
   resumes = {pc:barriers[pcs[-1]] for pc,pcs in cfg["blocks"].items() if pcs[-1] in barriers}
   for pc in resumes: cfg["paths"][pc] = {}
+  try: loops = cfg_loops(cfg["paths"], entry)
+  except AssertionError:
+    merge_branches(insts, cfg["blocks"], cfg["paths"])
+    loops = cfg_loops(cfg["paths"], entry)
   members:set[int] = set()
   pending = [entry]
   while pending:
     if (pc:=pending.pop()) in members: continue
     members.add(pc)
     pending.extend(cfg["paths"][pc])
-  loops = cfg_loops(cfg["paths"], entry)
   afters: dict[UOp, UOp] = {}
   axes = itertools.count(lib_sz)
   resume = UOp.param(6, dtypes.uint64, 1, name="resume")
