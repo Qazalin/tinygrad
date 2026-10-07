@@ -1,13 +1,14 @@
 import ctypes, itertools, functools
 from tinygrad.viz.serve import amd_decode, get_cfg, COND_NOT_TAKEN, UNCOND
 from tinygrad.uop.ops import UOp, Ops, KernelInfo, PatternMatcher, UPat, graph_rewrite, rewrite_group
-from tinygrad.codegen import to_program
+from tinygrad.codegen import to_program, to_program_config
 from tinygrad.device import Device
 from tinygrad.dtype import AddrSpace, Invalid, dtypes
 from tinygrad.helpers import Context, getenv, TracingKey
 from test.mockgpu.amd.emu import _Ctx, _get_handler, _wave_size, _canonical_info, _is_barrier, PC_LO_IDX, PC_HI_IDX, ENDPGM_PC
 
 asm_call_counter = itertools.count(1)
+lift_cache:dict[tuple, UOp] = {}
 
 def pc_index(idx:int) -> UPat:
   reg, null = UPat.const(idx).cast(), UPat.const(124).cast()
@@ -89,8 +90,16 @@ def cfg_loops(paths:dict[int, dict[int, int]], entry:int) -> dict[int, set[int]]
 @rewrite_group(name=lambda *args,ret,**_: TracingKey(f"Lift {(k:=ret.src[0].arg).name}", (("lift", k.function_name),)))
 def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None, entry: int = 0) -> UOp:
   backend = getenv("ASM_CALL_BACKEND", "CPU") if backend is None else backend
-  # decode
   lib_bytes = ctypes.string_at(lib, lib_sz)
+  renderer = Device[backend].renderer
+  # Include the bytes: code allocations can be freed and their addresses reused.
+  key = (lib, lib_bytes, arch, backend, entry, type(renderer), renderer.target, *(x.value for x in to_program_config))
+  if key not in lift_cache: lift_cache[key] = _lift(lib, lib_bytes, arch, backend, entry)
+  return lift_cache[key]
+
+def _lift(lib:int, lib_bytes:bytes, arch:str, backend:str, entry:int) -> UOp:
+  lib_sz = len(lib_bytes)
+  # decode
   insts = amd_decode(lib_bytes, arch)
   barriers = {off:off+inst.size() for off,inst in insts.items() if _is_barrier(inst)}
   cfg = get_cfg(insts)["data"]

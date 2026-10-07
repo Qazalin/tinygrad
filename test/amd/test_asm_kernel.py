@@ -1,5 +1,7 @@
 import unittest
 import functools
+import ctypes
+from unittest.mock import patch
 from dataclasses import dataclass
 from typing import Callable
 import numpy as np
@@ -212,6 +214,23 @@ class TestAsmKernel(unittest.TestCase):
   def setUp(self):
     self.arch = TARGET_TO_ARCH[Device["AMD"].arch]
     self.enterContext(Context(ASM_CALL=1))
+
+  def test_lift_cache(self):
+    from test.mockgpu.amd import call
+    from test.mockgpu.amd.emu import run_asm
+    out = ctypes.c_uint32()
+    args = ctypes.c_uint64(ctypes.addressof(out))
+    def code(value):
+      return b"".join(inst.to_bytes() for inst in [s_load_b64(s[0:1], s[0:1], soffset=NULL),
+        s_waitcnt_lgkmcnt(sdst=NULL, simm16=0), v_mov_b32_e32(v[0], 0), v_mov_b32_e32(v[1], value),
+        global_store_b32(addr=v[0], data=v[1], saddr=s[0:1]), s_endpgm()])
+    lib = ctypes.create_string_buffer(code(4), len(code(4)))
+    with patch.object(call, "_lift", wraps=call._lift) as build:
+      for value in (4, 4, 5):
+        lib.raw, out.value = code(value), 0
+        run_asm(ctypes.addressof(lib), len(lib), 1, 1, 1, 1, 1, 1, ctypes.addressof(args), arch="rdna3")
+        self.assertEqual(out.value, value)
+      self.assertEqual(build.call_count, 2)
 
   def test_simple(self):
     if self.arch != "rdna3": self.skipTest("only rdna3")
