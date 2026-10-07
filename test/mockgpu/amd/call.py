@@ -4,7 +4,7 @@ from tinygrad.uop.ops import UOp, Ops, KernelInfo, PatternMatcher, UPat, graph_r
 from tinygrad.codegen import to_program, to_program_config
 from tinygrad.device import Device
 from tinygrad.dtype import AddrSpace, Invalid, dtypes
-from tinygrad.helpers import Context, getenv, TracingKey
+from tinygrad.helpers import Context, getenv, TracingKey, dedup
 from test.mockgpu.amd.emu import _Ctx, _get_handler, _wave_size, _canonical_info, _is_barrier, PC_LO_IDX, PC_HI_IDX, ENDPGM_PC
 
 asm_call_counter = itertools.count(1)
@@ -14,9 +14,19 @@ def pc_index(idx:int) -> UPat:
   reg, null = UPat.const(idx).cast(), UPat.const(124).cast()
   return UPat.any(reg, reg.ne(null).where(reg, UPat.const(Invalid)))
 
+def move_const_idxs(call:UOp) -> UOp|None:
+  idxs = dedup(u.src[1] for u in call.body.toposort() if u.op is Ops.INDEX and u.src[0].op is Ops.PARAM and u.src[0].arg.name == "vmem"
+               and u.src[1].op is Ops.CONST)
+  if not idxs: return None
+  rep = {idx:UOp.param(len(call.src)-1+i, idx.commit_dtype(), name=f"inst_{i}", addrspace=AddrSpace.ALU) for i,idx in enumerate(idxs)}
+  return call.replace(src=(call.body.substitute(rep, walk=True), *call.src[1:], *idxs))
+
 pm_asm_call = PatternMatcher([
+  # remove PC from CALL body
   (UPat((Ops.LOAD, Ops.STORE), src=(UPat(Ops.PARAM, name="buf").index(UPat.any(pc_index(PC_LO_IDX), pc_index(PC_HI_IDX))),), allow_any_len=True),
    lambda buf: UOp(Ops.NOOP) if buf.arg.name == "sgpr" else None),
+  # move CONST outside CALL body
+  (UPat(Ops.CALL, src=(UPat(Ops.SINK),), allow_any_len=True, name="call"), move_const_idxs),
 ])
 
 def merge_branches(insts, blocks:dict[int, list[int]], paths:dict[int, dict[int, int]]):
@@ -117,7 +127,6 @@ def _lift(lib:int, lib_bytes:bytes, arch:str, backend:str, entry:int) -> UOp:
   afters: dict[UOp, UOp] = {}
   axes = itertools.count(lib_sz)
   resume = UOp.param(6, dtypes.uint64, 1, name="resume")
-  inst_addr = UOp.param(7, dtypes.uint64, name="inst_addr", addrspace=AddrSpace.ALU)
 
   def finish(end:UOp):
     afters.update((b, b.after(end)) for b in afters)
@@ -175,16 +184,16 @@ def _lift(lib:int, lib_bytes:bytes, arch:str, backend:str, entry:int) -> UOp:
       inst_st = str(inst)
       if inst_st.startswith("s_code_end"): continue
       if inst_st.startswith(("s_getpc", "s_setpc")): raise AssertionError("getpc and setpc are not allowed in ASM_CALL")
-      ctx = _Ctx(inst.size(), _wave_size(arch), inst_addr=inst_addr)
+      ctx = _Ctx(inst.size(), _wave_size(arch), inst_addr=lib+off)
       sink = _get_handler(inst)(inst, ctx)
       if ctx.branch_cond is not None: cond = ctx.branch_cond
       *_, canonical_name = _canonical_info(inst, ctx, lib_bytes[off:])
       bufs = sorted((u for u in sink.toposort() if u.op is Ops.PARAM), key=lambda u: u.arg.slot)
       body = sink.substitute({b:b.param_like(i, name=b.arg.name) for i,b in enumerate(bufs)})
-      args = [UOp.const(lib+off, dtypes.uint64) if b is inst_addr else afters.get(b, b).after(*scopes) for b in bufs]
+      args = [afters.get(b, b).after(*scopes) for b in bufs]
       call = body.call(*args, name=canonical_name)
       # CALL consumes argument ranges; restore the enclosing control-flow scopes.
-      afters.update((b, arg.after(call).after(*scopes)) for b, arg in zip(bufs, args) if b is not inst_addr)
+      afters.update((b, arg.after(call).after(*scopes)) for b, arg in zip(bufs, args))
     if not cfg["paths"][block_pc]:
       ptr = resume.after(*afters.values()).after(*scopes)
       afters[resume] = ptr.after(ptr[0].store(lib+resumes[block_pc] if block_pc in resumes else ENDPGM_PC))

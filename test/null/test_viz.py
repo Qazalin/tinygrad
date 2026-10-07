@@ -50,6 +50,21 @@ def save_viz():
 needs_tracked_pm = unittest.skipUnless(VIZ, "using TrackedPatternMatcher requires global VIZ=1")
 
 class TestViz(unittest.TestCase):
+  def test_deep_graph_roundtrip(self):
+    from tinygrad.viz.serve import _reconstruct
+    from tinygrad.uop.ops import ast_key
+    root = UOp(Ops.NOOP)
+    for _ in range(12000): root = UOp(Ops.SINK, (root,))
+    @rewrite_group(name=lambda x,ret: TracingKey("deep graph", (x,)))
+    def rewrite(x): return graph_rewrite(x, PatternMatcher([]))
+    with save_viz() as viz: rewrite(root)
+    trace, events = pickle.loads(pickle.dumps((viz.data.trace, cpu_events)))
+    data = VizData(trace)
+    load_rewrites(data)
+    self.assertEqual(data.ref_map[ast_key(root)], 0)
+    self.assertIs(_reconstruct(data, trace.rewrites[0][0].sink), root)
+    self.assertEqual(events[-1].name.keys, (ast_key(root),))
+
   def test_simple(self):
     with save_viz() as viz:
       a = UOp.variable("a", 0, 10)
