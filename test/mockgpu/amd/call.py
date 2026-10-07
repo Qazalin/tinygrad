@@ -1,25 +1,29 @@
-import ctypes, itertools, functools
+import ctypes, itertools, functools, hashlib
 from tinygrad.viz.serve import amd_decode, get_cfg, COND_NOT_TAKEN, UNCOND
 from tinygrad.uop.ops import UOp, Ops, KernelInfo, PatternMatcher, UPat, graph_rewrite, rewrite_group
 from tinygrad.codegen import to_program, to_program_config
 from tinygrad.device import Device
 from tinygrad.dtype import AddrSpace, Invalid, dtypes
 from tinygrad.helpers import Context, getenv, TracingKey, dedup
+from tinygrad.renderer.amd.dsl import Inst
 from test.mockgpu.amd.emu import _Ctx, _get_handler, _wave_size, _canonical_info, _is_barrier, PC_LO_IDX, PC_HI_IDX, ENDPGM_PC
 
-asm_call_counter = itertools.count(1)
 lift_cache:dict[tuple, UOp] = {}
+InstructionCall = tuple[UOp, list[UOp], tuple[int, ...], UOp|None]
+instruction_cache:dict[tuple, list[tuple[int, int, InstructionCall]]] = {}
 
 def pc_index(idx:int) -> UPat:
   reg, null = UPat.const(idx).cast(), UPat.const(124).cast()
   return UPat.any(reg, reg.ne(null).where(reg, UPat.const(Invalid)))
 
 def move_const_idxs(call:UOp) -> UOp|None:
-  idxs = dedup(u.src[1] for u in call.body.toposort() if u.op is Ops.INDEX and u.src[0].op is Ops.PARAM and u.src[0].arg.name == "vmem"
-               and u.src[1].op is Ops.CONST)
+  indexes = [u for u in call.body.toposort() if u.op is Ops.INDEX and u.src[0].op is Ops.PARAM and u.src[0].arg.name == "vmem"
+             and u.src[1].op is Ops.CONST]
+  idxs = dedup(u.src[1] for u in indexes)
   if not idxs: return None
-  rep = {idx:UOp.param(len(call.src)-1+i, idx.commit_dtype(), name=f"inst_{i}", addrspace=AddrSpace.ALU) for i,idx in enumerate(idxs)}
-  return call.replace(src=(call.body.substitute(rep, walk=True), *call.src[1:], *idxs))
+  rep = {idx:UOp.param(len(call.src)-1+i, dtypes.uint64, name=f"inst_{i}", addrspace=AddrSpace.ALU) for i,idx in enumerate(idxs)}
+  body = call.body.substitute({u:u.replace(src=(u.src[0], rep[u.src[1]], *u.src[2:])) for u in indexes}, walk=True)
+  return call.replace(src=(body, *call.src[1:], *(idx.cast(dtypes.uint64) for idx in idxs)))
 
 pm_asm_call = PatternMatcher([
   # remove PC from CALL body
@@ -28,6 +32,24 @@ pm_asm_call = PatternMatcher([
   # move CONST outside CALL body
   (UPat(Ops.CALL, src=(UPat(Ops.SINK),), allow_any_len=True, name="call"), move_const_idxs),
 ])
+
+def instruction_call(inst:Inst, arch:str) -> InstructionCall:
+  entries = instruction_cache.setdefault((arch, type(inst), inst.size()), [])
+  inst_bytes = inst.to_bytes()
+  bits = int.from_bytes(inst_bytes, "little")
+  for base, mask, ret in entries:
+    if bits & mask == base: return ret
+  # Dynamic operand fields share one body; construct and rewrite it only on a canonical cache miss.
+  ctx = _Ctx(inst.size(), _wave_size(arch), inst_addr=0)
+  sink = _get_handler(inst)(inst, ctx)
+  base, mask, _, name = _canonical_info(inst, ctx, inst_bytes)
+  bufs = sorted((u for u in sink.toposort() if u.op is Ops.PARAM), key=lambda u: u.arg.slot)
+  body = sink.substitute({b:b.param_like(i, name=b.arg.name) for i,b in enumerate(bufs)})
+  call = graph_rewrite(body.call(*bufs, name=name), pm_asm_call,
+                       name="instruction call", bottom_up=True, enter_calls=True)
+  ret = call, bufs, tuple(int(x) for x in call.src[len(bufs)+1:]), ctx.branch_cond
+  entries.append((base, mask, ret))
+  return ret
 
 def merge_branches(insts, blocks:dict[int, list[int]], paths:dict[int, dict[int, int]]):
   # Thread jump-only blocks, then share identical conditional branches with the same destinations.
@@ -102,12 +124,12 @@ def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None, e
   backend = getenv("ASM_CALL_BACKEND", "CPU") if backend is None else backend
   lib_bytes = ctypes.string_at(lib, lib_sz)
   renderer = Device[backend].renderer
-  # Include the bytes: code allocations can be freed and their addresses reused.
-  key = (lib, lib_bytes, arch, backend, entry, type(renderer), renderer.target, *(x.value for x in to_program_config))
-  if key not in lift_cache: lift_cache[key] = _lift(lib, lib_bytes, arch, backend, entry)
+  # Code addresses are runtime arguments, so identical bytes can share a program across allocations.
+  key = (lib_bytes, arch, backend, entry, type(renderer), renderer.target, *(x.value for x in to_program_config))
+  if key not in lift_cache: lift_cache[key] = _lift(lib_bytes, arch, backend, entry)
   return lift_cache[key]
 
-def _lift(lib:int, lib_bytes:bytes, arch:str, backend:str, entry:int) -> UOp:
+def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int) -> UOp:
   lib_sz = len(lib_bytes)
   # decode
   insts = amd_decode(lib_bytes, arch)
@@ -127,6 +149,7 @@ def _lift(lib:int, lib_bytes:bytes, arch:str, backend:str, entry:int) -> UOp:
   afters: dict[UOp, UOp] = {}
   axes = itertools.count(lib_sz)
   resume = UOp.param(6, dtypes.uint64, 1, name="resume")
+  code_addr = UOp.param(7, dtypes.uint64, name="code_addr", addrspace=AddrSpace.ALU)
 
   def finish(end:UOp):
     afters.update((b, b.after(end)) for b in afters)
@@ -184,22 +207,18 @@ def _lift(lib:int, lib_bytes:bytes, arch:str, backend:str, entry:int) -> UOp:
       inst_st = str(inst)
       if inst_st.startswith("s_code_end"): continue
       if inst_st.startswith(("s_getpc", "s_setpc")): raise AssertionError("getpc and setpc are not allowed in ASM_CALL")
-      ctx = _Ctx(inst.size(), _wave_size(arch), inst_addr=lib+off)
-      sink = _get_handler(inst)(inst, ctx)
-      if ctx.branch_cond is not None: cond = ctx.branch_cond
-      *_, canonical_name = _canonical_info(inst, ctx, lib_bytes[off:])
-      bufs = sorted((u for u in sink.toposort() if u.op is Ops.PARAM), key=lambda u: u.arg.slot)
-      body = sink.substitute({b:b.param_like(i, name=b.arg.name) for i,b in enumerate(bufs)})
+      template, bufs, word_offsets, branch_cond = instruction_call(inst, arch)
+      if branch_cond is not None: cond = branch_cond
       args = [afters.get(b, b).after(*scopes) for b in bufs]
-      call = body.call(*args, name=canonical_name)
+      call = template.replace(src=(template.body, *args, *((code_addr>>2)+(off//4+i) for i in word_offsets)))
       # CALL consumes argument ranges; restore the enclosing control-flow scopes.
       afters.update((b, arg.after(call).after(*scopes)) for b, arg in zip(bufs, args))
     if not cfg["paths"][block_pc]:
       ptr = resume.after(*afters.values()).after(*scopes)
-      afters[resume] = ptr.after(ptr[0].store(lib+resumes[block_pc] if block_pc in resumes else ENDPGM_PC))
+      afters[resume] = ptr.after(ptr[0].store(code_addr+resumes[block_pc] if block_pc in resumes else ENDPGM_PC))
     return cond.substitute(afters, walk=True)
   emit_region(entry, members)
-  sink = UOp.sink(*afters.values(), arg=KernelInfo(name=f"asm_call n{next(asm_call_counter)}", opts_to_apply=()))
-  sink = graph_rewrite(sink, pm_asm_call, name="pm_asm_call", bottom_up=True, enter_calls=True)
+  name = f"asm_call_{arch}_{hashlib.sha256(lib_bytes).hexdigest()[:16]}_{entry}"
+  sink = UOp.sink(*afters.values(), arg=KernelInfo(name=name, opts_to_apply=()))
   with Context(NOOPT=1, CHECK_OOB=0, TUPLE_ORDER=0, EMULATED_DTYPES="", CAPTURE_PROCESS_REPLAY=0):
     return to_program(sink, Device[backend].renderer)

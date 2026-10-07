@@ -2026,7 +2026,7 @@ def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, 
             prg = lift(lib, lib_sz, arch, ASM_CALL_BACKEND, entry=pc-lib)
             lifted[pc] = (prg, get_runtime(ASM_CALL_BACKEND, prg))
           prg, runtime = lifted[pc]
-          runtime(*[c_bufs[g].value for g in prg.arg.globals])
+          runtime(*[c_bufs[g].value for g in prg.arg.globals], vals=(lib,) if prg.arg.vars else ())
           continue
         # Run this wave until barrier or endpgm
         for _ in range(1_000_000):

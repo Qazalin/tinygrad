@@ -24,6 +24,16 @@ class TestLinearizer(unittest.TestCase):
     # The value is also used after the range, which may execute zero times.
     self.assertLess(uops.index(value), uops.index(gate))
 
+  def test_shared_scalar_expression_outside_range(self):
+    out = UOp.placeholder((1,), dtypes.int)
+    predicate = UOp.placeholder((1,), dtypes.bool, slot=1)
+    scalar = UOp.param(2, dtypes.int, addrspace=AddrSpace.ALU)
+    gate = UOp.range(predicate[0].load().cast(dtypes.int), 0)
+    value = scalar * 4 + 1
+    end = out.after(gate).store(value).end(gate)
+    uops = linearize(out.after(end).store(value).sink())
+    self.assertLess(uops.index(value), uops.index(gate))
+
   def test_load_dedup(self):
     # for different leaves in the AST, the same loads may occur.
 

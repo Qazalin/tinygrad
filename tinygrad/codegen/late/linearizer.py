@@ -1,7 +1,7 @@
 import heapq
 from typing import Any
 from collections import defaultdict
-from tinygrad.uop.ops import PatternMatcher, UOp, Ops, UPat, multirange_str
+from tinygrad.uop.ops import PatternMatcher, UOp, Ops, GroupOp, UPat, multirange_str
 from tinygrad.dtype import AddrSpace
 from tinygrad.helpers import prod, getenv, dedup, TUPLE_ORDER
 
@@ -10,6 +10,12 @@ def linearize(sink:UOp) -> list[UOp]:
   lst = list(sink.toposort(enter_calls=False))
   out_degree:defaultdict[UOp, int] = defaultdict(int)
   priorities:dict[UOp, tuple[int, int, Any]] = {}
+
+  # Scalar expressions derived only from constants and parameters can precede every control-flow scope.
+  invariant:set[UOp] = set()
+  for u in lst:
+    if u.op in (Ops.CONST, Ops.PARAM) or (u.op in GroupOp.ALU | {Ops.CAST} and all(s in invariant for s in u.src)):
+      invariant.add(u)
 
   # get consumers and assign priorities
   # NOTE: this requires the lst be locally toposorted
@@ -24,8 +30,7 @@ def linearize(sink:UOp) -> list[UOp]:
     match u.op:
       # the order and placement of these defines is important
       case Ops.PARAM: priority, extra = -20, u.arg.slot
-      case Ops.CONST: priority = -19
-      case Ops.CAST if u.src[0].op is Ops.CONST: priority = -19
+      case _ if u in invariant: priority = -19
       case Ops.BUFFER | Ops.ALLOC: priority = -17 if u.addrspace == AddrSpace.LOCAL else -18
       case Ops.LOAD: priority = -1    # place loads early
       case Ops.STORE: priority = 1    # place stores late

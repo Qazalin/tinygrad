@@ -225,10 +225,11 @@ class TestAsmKernel(unittest.TestCase):
         s_waitcnt_lgkmcnt(sdst=NULL, simm16=0), v_mov_b32_e32(v[0], 0), v_mov_b32_e32(v[1], value),
         global_store_b32(addr=v[0], data=v[1], saddr=s[0:1]), s_endpgm()])
     lib = ctypes.create_string_buffer(code(4), len(code(4)))
-    with patch.object(call, "_lift", wraps=call._lift) as build:
-      for value in (4, 4, 5):
-        lib.raw, out.value = code(value), 0
-        run_asm(ctypes.addressof(lib), len(lib), 1, 1, 1, 1, 1, 1, ctypes.addressof(args), arch="rdna3")
+    other = ctypes.create_string_buffer(code(4), len(code(4)))
+    with patch.object(call, "lift_cache", {}), patch.object(call, "_lift", wraps=call._lift) as build:
+      for buf, value in ((lib, 4), (lib, 4), (other, 4), (lib, 5), (other, 4)):
+        buf.raw, out.value = code(value), 0
+        run_asm(ctypes.addressof(buf), len(buf), 1, 1, 1, 1, 1, 1, ctypes.addressof(args), arch="rdna3")
         self.assertEqual(out.value, value)
       self.assertEqual(build.call_count, 2)
 
