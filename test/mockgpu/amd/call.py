@@ -28,10 +28,14 @@ def merge_branches(insts, blocks:dict[int, list[int]], paths:dict[int, dict[int,
     return pc
   for pc, dsts in list(paths.items()): paths[pc] = {target(dst):kind for dst,kind in dsts.items()}
   groups:dict[tuple, list[int]] = {}
+  opposite = {"S_CBRANCH_SCC1":"S_CBRANCH_SCC0", "S_CBRANCH_VCCNZ":"S_CBRANCH_VCCZ", "S_CBRANCH_EXECNZ":"S_CBRANCH_EXECZ"}
   for pc, pcs in blocks.items():
     if len(paths[pc]) != 2: continue
     inst = insts[pcs[-1]]
-    key = (type(inst), tuple((n, getattr(inst, n)) for n,_ in inst._fields if n != "simm16"), tuple(sorted(paths[pc].items())))
+    # Complementary tests with reversed destinations are the same branch.
+    branch_dests = tuple(sorted((dst, kind ^ (inst.op_name in opposite)) for dst,kind in paths[pc].items()))
+    key = (type(inst), opposite.get(inst.op_name, inst.op_name),
+           tuple((n, getattr(inst, n)) for n,_ in inst._fields if n not in {"op", "simm16"}), branch_dests)
     groups.setdefault(key, []).append(pc)
   for group in groups.values():
     if len(group) < 2: continue
@@ -93,10 +97,8 @@ def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None, e
   # A lifted region returns at a barrier. The scheduler resumes each wave at the following instruction.
   resumes = {pc:barriers[pcs[-1]] for pc,pcs in cfg["blocks"].items() if pcs[-1] in barriers}
   for pc in resumes: cfg["paths"][pc] = {}
-  try: loops = cfg_loops(cfg["paths"], entry)
-  except AssertionError:
-    merge_branches(insts, cfg["blocks"], cfg["paths"])
-    loops = cfg_loops(cfg["paths"], entry)
+  merge_branches(insts, cfg["blocks"], cfg["paths"])
+  loops = cfg_loops(cfg["paths"], entry)
   members:set[int] = set()
   pending = [entry]
   while pending:

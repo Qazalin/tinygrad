@@ -331,7 +331,7 @@ class TestAsmKernel(unittest.TestCase):
 
   def test_cfg_rotated_loop(self):
     if self.arch != "rdna3": self.skipTest("only rdna3")
-    def kernel(out:UOp):
+    def kernel(out:UOp, reverse:bool):
       k = Kernel()
       k.emit(s_load_b64(s[0:1], s[0:1], soffset=NULL))
       k.emit(s_waitcnt_lgkmcnt(sdst=NULL, simm16=0))
@@ -350,8 +350,8 @@ class TestAsmKernel(unittest.TestCase):
       k.emit(s_cmp_lt_i32(s[2], 4))
       k.emit(s_cbranch_scc0(), target="exit")
       k.emit(s_cmp_lt_i32(s[2], 2))
-      k.emit(s_cbranch_scc1(), target="body")
-      k.emit(s_branch(), target="padding")
+      k.emit(s_cbranch_scc0() if reverse else s_cbranch_scc1(), target="padding" if reverse else "body")
+      k.emit(s_branch(), target="body" if reverse else "padding")
       k.label("exit")
       k.emit(v_mov_b32_e32(v[0], 0))
       k.emit(v_mov_b32_e32(v[1], s[3]))
@@ -359,9 +359,10 @@ class TestAsmKernel(unittest.TestCase):
       k.emit(s_endpgm())
       sink = UOp.sink(out.base, arg=KernelInfo("cfg_rotated_loop"))
       return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=(x, dtypes.void)) for x in k.finalize()))))
-    for start, expected in ((0, 22), (2, 2)):
-      out = Tensor([start], dtype=dtypes.uint32).realize().custom_kernel(fxn=kernel)[0]
-      self.assertListEqual(out.tolist(), [expected])
+    for reverse in (False, True):
+      for start, expected in ((0, 22), (2, 2)):
+        out = Tensor([start], dtype=dtypes.uint32).realize().custom_kernel(fxn=functools.partial(kernel, reverse=reverse))[0]
+        self.assertListEqual(out.tolist(), [expected])
 
   def test_cfg_backward(self):
     def cfg_kernel(out:UOp):
