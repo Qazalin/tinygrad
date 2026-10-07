@@ -39,7 +39,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     # pass if client closed connection
     except (BrokenPipeError, ConnectionResetError): source.close()
 
-from tinygrad.uop.ops import TrackedGraphRewrite, RewriteTrace, UOp, Ops, GroupOp, srender, sint, sym_infer, range_str, range_start, multirange_str
+from tinygrad.uop.ops import TrackedGraphRewrite, RewriteTrace, UOp, Ops, GroupOp, srender, sint, range_str, range_start, multirange_str
 from tinygrad.uop.ops import KernelInfo, ast_key
 from tinygrad.uop.render import render_uir, uops_colors, _inline, _render_arg
 from tinygrad.device import ProfileDeviceEvent, ProfileGraphEvent, ProfileGraphEntry, ProfileProgramEvent
