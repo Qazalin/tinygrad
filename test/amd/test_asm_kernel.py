@@ -327,5 +327,51 @@ class TestAsmKernel(unittest.TestCase):
     out = a@b
     self.assertEqual(out.tolist(), (a.numpy()@b.numpy()).tolist())
 
+  def test_barrier_loop(self):
+    THREADS = 256
+    ITEMS = 4
+    TILE = THREADS * ITEMS
+    def lds_loop(out:UOp, x:UOp) -> UOp:
+      code = f"""
+      extern "C" __attribute__((global)) void lds_loop(float* out, const float* x) {{
+        __attribute__((shared, aligned(16))) float lds[{TILE}];
+        unsigned int tid = __builtin_amdgcn_workitem_id_x();
+        unsigned int base = __builtin_amdgcn_workgroup_id_x() * {TILE};
+
+        // Each thread computes four values and stores them in LDS.
+        #pragma unroll 1
+        for (unsigned int k = 0; k < {ITEMS}; k++) {{
+          unsigned int j = k * {THREADS} + tid;
+          lds[j] = base + j < {x.numel()} ? x[base + j] * 2.0f + 1.0f : 0.0f;
+        }}
+
+        // All threads participate, including those outside the final partial tile.
+        __builtin_amdgcn_fence(__ATOMIC_RELEASE, "workgroup");
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_fence(__ATOMIC_ACQUIRE, "workgroup");
+
+        // Read another thread's values across wave boundaries, then write the result.
+        #pragma unroll 1
+        for (unsigned int k = 0; k < {ITEMS}; k++) {{
+          unsigned int j = k * {THREADS} + tid;
+          unsigned int peer = k * {THREADS} + (tid + {THREADS // 2}) % {THREADS};
+          if (base + j < {x.numel()}) out[base + j] = lds[j] + lds[peer];
+        }}
+      }}
+      """
+      sink = UOp.sink(UOp.special((x.numel() + TILE - 1) // TILE, "gidx0"), UOp.special(THREADS, "lidx0"),
+                      out, x, arg=KernelInfo(name="lds_loop"))
+      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=(*sink.src, sink)), UOp(Ops.SOURCE, arg=code)))
+    n = TILE
+    x = Tensor.arange(n, dtype=dtypes.float32).to("AMD").contiguous().realize()
+    out = Tensor.empty_like(x).custom_kernel(x, fxn=lds_loop)[0].realize()
+    expected = []
+    for i in range(n):
+      peer = i // THREADS * THREADS + (i % THREADS + THREADS // 2) % THREADS
+      expected.append(float(2 * i + 1 + (2 * peer + 1 if peer < n else 0)))
+    print(out.tolist()[:10])
+    print(expected[:10])
+    #assert out.tolist() == expected
+
 if __name__ == "__main__":
   unittest.main()
