@@ -1,16 +1,56 @@
 import ctypes, itertools, functools, hashlib
 from tinygrad.viz.serve import amd_decode, get_cfg, COND_NOT_TAKEN, UNCOND
-from tinygrad.uop.ops import UOp, Ops, KernelInfo, PatternMatcher, UPat, graph_rewrite, rewrite_group
+from tinygrad.uop.ops import UOp, sint, Ops, KernelInfo, PatternMatcher, UPat, graph_rewrite, rewrite_group, uopfunc
 from tinygrad.codegen import to_program, to_program_config
 from tinygrad.device import Device
 from tinygrad.dtype import AddrSpace, Invalid, dtypes
-from tinygrad.helpers import Context, getenv, TracingKey, dedup
-from tinygrad.renderer.amd.dsl import Inst
-from test.mockgpu.amd.emu import _Ctx, _get_handler, _wave_size, _canonical_info, _is_barrier, PC_LO_IDX, PC_HI_IDX, ENDPGM_PC
+from tinygrad.helpers import Context, getenv, TracingKey, dedup, unwrap
+from tinygrad.runtime.autogen import hsa
+from tinygrad.renderer.amd.dsl import Inst, EXEC_LO, ttmp
+from test.mockgpu.amd.emu import (_Ctx, _get_handler, _wave_size, _canonical_info, _is_barrier, PC_LO_IDX, PC_HI_IDX, ENDPGM_PC,
+                                  SGPR_COUNT, SCRATCH_STRIDE_IDX, F32_INLINE)
 
 lift_cache:dict[tuple, UOp] = {}
 InstructionCall = tuple[UOp, list[UOp], tuple[int, ...], UOp|None]
 instruction_cache:dict[tuple, list[tuple[int, int, InstructionCall]]] = {}
+
+# this is meant to replace the old emulator
+@uopfunc
+def init_wave(wg:UOp, wave:UOp, sgpr:UOp, vgpr:UOp, lds:UOp, args_ptr:UOp, gx:int, gy:int, lx:int, ly:int, total_threads:int, wave_size:int,
+              lds_size:int, scratch_size:int, rsrc2:int, arch:str="rdna3", user_data:list[int]|None=None, accvgpr:UOp|None=None):
+  # define ranges inside a wave
+  li = UOp.range((wave.eq(0)).where(max(lds_size//4, 1), 0), 2, dtype=dtypes.int)
+  si = UOp.range(SGPR_COUNT, 3, dtype=dtypes.int)
+  vi = UOp.range(256*wave_size, 4, dtype=dtypes.int)
+  # zero ALLOCs
+  zero_lds = lds.index(li).store(0).end(li)
+  zero_sgpr = sgpr.after(zero_lds).index(si).store(0).end(si)
+  zero_vgpr = vgpr.after(zero_sgpr).index(vi).store(0)
+  zero_agpr = unwrap(accvgpr).after(zero_sgpr).index(vi).store(0) if wave_size == 64 else UOp(Ops.NOOP)
+  clear_vgpr = UOp.group(zero_vgpr, zero_agpr).end(vi)
+  # set RANGE registers
+  gidx, gidy, gidz = wg%gx, (wg//gx)%gy, wg//(gx*gy)
+  n_lanes = (total_threads-wave*wave_size).minimum(wave_size)
+  initial:list[tuple[int, sint]] = [*((128+i, i) for i in range(65)), *((193+i, (-i-1)&0xFFFFFFFF) for i in range(16)), *F32_INLINE.items()]
+  initial += [(i,v) for i,v in enumerate(user_data)] if user_data else [(0, args_ptr.cast(dtypes.uint32)), (1, (args_ptr>>32).cast(dtypes.uint32))]
+  if arch == "rdna4": initial += [(ttmp[7].offset, (gidy&0xFFFF)|((gidz&0xFFFF)<<16)), (ttmp[9].offset, gidx)]
+  else:
+    sgpr_id = (rsrc2 & hsa.AMD_COMPUTE_PGM_RSRC_TWO_USER_SGPR_COUNT) >> hsa.AMD_COMPUTE_PGM_RSRC_TWO_USER_SGPR_COUNT_SHIFT
+    for enabled, gid in [(hsa.AMD_COMPUTE_PGM_RSRC_TWO_ENABLE_SGPR_WORKGROUP_ID_X, gidx),
+                         (hsa.AMD_COMPUTE_PGM_RSRC_TWO_ENABLE_SGPR_WORKGROUP_ID_Y, gidy),
+                         (hsa.AMD_COMPUTE_PGM_RSRC_TWO_ENABLE_SGPR_WORKGROUP_ID_Z, gidz)]:
+      if rsrc2 & enabled:
+        initial.append((sgpr_id, gid))
+        sgpr_id += 1
+  initial += [(EXEC_LO.offset, ((UOp.const(1, dtypes.uint64)<<n_lanes.minimum(32).cast(dtypes.uint64))-1).cast(dtypes.uint32)),
+              (SCRATCH_STRIDE_IDX, scratch_size), (SGPR_COUNT-16+4, (wave&15)|((wave&3)<<4))]
+  if wave_size == 64: initial.append((EXEC_LO.offset+1,
+                                     ((UOp.const(1, dtypes.uint64)<<(n_lanes-32).maximum(0).cast(dtypes.uint64))-1).cast(dtypes.uint32)))
+  lane = UOp.range(wave_size, 5, dtype=dtypes.int)
+  tid = wave*wave_size+lane
+  init_vgpr = vgpr.after(clear_vgpr).index(lane.valid(tid<total_threads)).store(
+      (((tid//(lx*ly))<<20)|(((tid//lx)%ly)<<10)|(tid%lx)).cast(dtypes.uint32)).end(lane)
+  return UOp.sink(init_vgpr, *(sgpr.after(clear_vgpr).index(i).store(UOp.const(v, dtypes.uint32)) for i,v in dict(initial).items()))
 
 def pc_index(idx:int) -> UPat:
   reg, null = UPat.const(idx).cast(), UPat.const(124).cast()
@@ -119,6 +159,21 @@ def cfg_loops(paths:dict[int, dict[int, int]], entry:int) -> dict[int, set[int]]
   visit(entry)
   return loops
 
+def lift_dispatch(lib:int, lib_sz:int, gx:int, gy:int, gz:int, lx:int, ly:int, lz:int, rsrc2:int, scratch_size:int, arch:str,
+                  user_data:list[int]|None, backend:str) -> UOp|None:
+  lib_bytes = ctypes.string_at(lib, lib_sz)
+  dispatch = (gx, gy, gz, lx, ly, lz, rsrc2, scratch_size, tuple(user_data) if user_data else None)
+  renderer = Device[backend].renderer
+  key = (lib_bytes, arch, backend, dispatch, type(renderer), renderer.target, *(x.value for x in to_program_config))
+  if key not in dispatch_cache:
+    # The region scheduler is still needed when barriers synchronize multiple waves.
+    if lx*ly*lz > _wave_size(arch) and any(_is_barrier(inst) for inst in amd_decode(lib_bytes, arch).values()):
+      dispatch_cache[key] = None
+    else: dispatch_cache[key] = _lift(lib_bytes, arch, backend, 0, dispatch)
+  return dispatch_cache[key]
+
+dispatch_cache:dict[tuple, UOp|None] = {}
+
 @rewrite_group(name=lambda *args,ret,**_: TracingKey(f"Lift {(k:=ret.src[0].arg).name}", (("lift", k.function_name),)))
 def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None, entry: int = 0) -> UOp:
   backend = getenv("ASM_CALL_BACKEND", "CPU") if backend is None else backend
@@ -129,7 +184,7 @@ def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None, e
   if key not in lift_cache: lift_cache[key] = _lift(lib_bytes, arch, backend, entry)
   return lift_cache[key]
 
-def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int) -> UOp:
+def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None=None) -> UOp:
   lib_sz = len(lib_bytes)
   # decode
   insts = amd_decode(lib_bytes, arch)
@@ -137,7 +192,8 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int) -> UOp:
   cfg = get_cfg(insts)["data"]
   # A lifted region returns at a barrier. The scheduler resumes each wave at the following instruction.
   resumes = {pc:barriers[pcs[-1]] for pc,pcs in cfg["blocks"].items() if pcs[-1] in barriers}
-  for pc in resumes: cfg["paths"][pc] = {}
+  if dispatch is None:
+    for pc in resumes: cfg["paths"][pc] = {}
   merge_branches(insts, cfg["blocks"], cfg["paths"])
   loops = cfg_loops(cfg["paths"], entry)
   members:set[int] = set()
@@ -151,8 +207,31 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int) -> UOp:
   resume = UOp.param(6, dtypes.uint64, 1, name="resume")
   code_addr = UOp.param(7, dtypes.uint64, name="code_addr", addrspace=AddrSpace.ALU)
 
+  if dispatch is not None:
+    gx, gy, gz, lx, ly, lz, rsrc2, scratch_size, user_data = dispatch
+    # construct CALL graph
+    wave_size, total_threads = _wave_size(arch), lx*ly*lz
+    n_waves = (total_threads+wave_size-1)//wave_size
+    wg = UOp.range(gx*gy*gz, 0)
+    wave = UOp.range(n_waves, 1)
+    # alloc register and LDS buffers
+    sgpr = UOp.alloc((SGPR_COUNT,), dtypes.uint32, 0, AddrSpace.REG)
+    vgpr = UOp.alloc((256*wave_size,), dtypes.uint32, 1, AddrSpace.REG)
+    lds_size = ((rsrc2 & hsa.AMD_COMPUTE_PGM_RSRC_TWO_GRANULATED_LDS_SIZE) >> hsa.AMD_COMPUTE_PGM_RSRC_TWO_GRANULATED_LDS_SIZE_SHIFT)*512
+    lds = UOp.alloc((max(lds_size//4, 1),), dtypes.uint32, 3, AddrSpace.REG)
+    scratch = UOp.alloc((max(scratch_size*wave_size*n_waves, 1),), dtypes.uint8, 4, AddrSpace.REG)
+    accvgpr = UOp.alloc((256*wave_size,), dtypes.uint32, 5, AddrSpace.REG) if wave_size == 64 else vgpr
+    args_ptr = UOp.variable("args_ptr", 0, dtypes.uint64.max, dtypes.uint64)
+    code_addr = UOp.variable("lib", 0, dtypes.uint64.max, dtypes.uint64)
+    init = init_wave(wg, wave, sgpr, vgpr, lds, args_ptr, gx, gy, lx, ly, total_threads, wave_size, lds_size, scratch_size, rsrc2, arch,
+                     user_data, *([accvgpr] if wave_size == 64 else []))
+    ctx = _Ctx(4, wave_size)
+    afters = {ctx.sgpr:sgpr.after(init), ctx.vgpr:vgpr.after(init), ctx.vmem:ctx.vmem,
+                              ctx.lds:lds.after(init), ctx.scratch:scratch.index(wave*scratch_size*wave_size).after(init)}
+    if wave_size == 64: afters[ctx.accvgpr] = accvgpr.after(init)
+
   def finish(end:UOp):
-    afters.update((b, b.after(end)) for b in afters)
+    afters.update((b, arg.after(end)) for b, arg in afters.items())
 
   def emit_region(start:int, members:set[int], scopes:tuple[UOp, ...]=(), route:UOp|None=None):
     nested = {h:body for h,body in loops.items() if body <= members and (route is None or h != start)}
@@ -213,12 +292,14 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int) -> UOp:
       call = template.replace(src=(template.body, *args, *((code_addr>>2)+(off//4+i) for i in word_offsets)))
       # CALL consumes argument ranges; restore the enclosing control-flow scopes.
       afters.update((b, arg.after(call).after(*scopes)) for b, arg in zip(bufs, args))
-    if not cfg["paths"][block_pc]:
+    if dispatch is None and not cfg["paths"][block_pc]:
       ptr = resume.after(*afters.values()).after(*scopes)
       afters[resume] = ptr.after(ptr[0].store(code_addr+resumes[block_pc] if block_pc in resumes else ENDPGM_PC))
     return cond.substitute(afters, walk=True)
-  emit_region(entry, members)
+  emit_region(entry, members, (wg, wave) if dispatch is not None else ())
   name = f"asm_call_{arch}_{hashlib.sha256(lib_bytes).hexdigest()[:16]}_{entry}"
-  sink = UOp.sink(*afters.values(), arg=KernelInfo(name=name, opts_to_apply=()))
+  body = UOp.group(*afters.values())
+  if dispatch is not None: body = body.end(wave).end(wg)
+  sink = UOp.sink(body, arg=KernelInfo(name=name, opts_to_apply=()))
   with Context(NOOPT=1, CHECK_OOB=0, TUPLE_ORDER=0, EMULATED_DTYPES="", CAPTURE_PROCESS_REPLAY=0):
     return to_program(sink, Device[backend].renderer)
