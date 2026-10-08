@@ -231,7 +231,7 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
     if wave_size == 64: afters[ctx.accvgpr] = accvgpr.after(init)
 
   def finish(end:UOp):
-    afters.update((b, arg.after(end)) for b, arg in afters.items())
+    afters.update((b, arg.without_after.after(end)) for b, arg in afters.items())
 
   def emit_region(start:int, members:set[int], scopes:tuple[UOp, ...]=(), route:UOp|None=None):
     nested = {h:body for h,body in loops.items() if body <= members and (route is None or h != start)}
