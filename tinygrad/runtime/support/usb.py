@@ -4,7 +4,7 @@ from tinygrad.helpers import DEBUG, DEV, to_mv, round_up, ceildiv, flatten
 from tinygrad.dtype import dtypes, DType, AddrSpace
 from tinygrad.uop.ops import UOp, UPat, Ops, PatternMatcher, uopfunc
 from tinygrad.device import Buffer, BufferSpec, Compiled
-from tinygrad.runtime.support.hcq2 import HCQ_RUNTIME_DEV, HCQ_DEVS, CDTYPE, ccall, patch, unwrap_view, all_devices_in, to_name
+from tinygrad.runtime.support.hcq2 import HCQ_RUNTIME_DEV, HCQ_DEVS, CDTYPE, ccall, patch, unwrap_view, all_devices_in, to_name, get_time_ms
 from tinygrad.runtime.support.memory import MMIOInterface
 from tinygrad.runtime.support import c
 
@@ -317,10 +317,11 @@ def usb_reap(link:UOp, xfer:UOp) -> UOp: # poll while pending (0xff), any other 
 
 @uopfunc
 def usb_drain(link:UOp, fence:UOp, need:UOp) -> UOp: # fence == need - 1 or need, mod 256
-  loop, slot = UOp.range(UOp(Ops.NOOP).after(link), next(UOp.unique_num), dtype=dtypes.void), usb_stack(dtypes.uint32, 0)
+  loop, slot = UOp.range(UOp(Ops.NOOP).after(link, start:=get_time_ms(link)), next(UOp.unique_num), dtype=dtypes.void), usb_stack(dtypes.uint32, 0)
   read = usb_ctrl(link.after(loop), 0xC0, 0xE4, fence, 0, slot.index(0), 1)
-  lag = (need - slot.after(read).index(0).load().cast(dtypes.uint64)) & 0xff
-  return read.backedge(loop, link.after(read).index(5).load().eq(0) & (lag > 1)).sink()
+  def behind(dep:UOp) -> UOp: return ((need - slot.after(dep).index(0).load().cast(dtypes.uint64)) & 0xff) > 1
+  done = read.backedge(loop, link.after(read).index(5).load().eq(0) & behind(read) & (get_time_ms(read) - start < 1000))
+  return usb_fail(link.after(done), behind(done).cast(dtypes.int) * libusb.LIBUSB_ERROR_TIMEOUT).sink()
 
 @uopfunc
 def usb_begin(link:UOp, fence:UOp, prev:UOp) -> UOp: # previous batch drained, count restarts
@@ -443,11 +444,11 @@ def _host_block(dev) -> Buffer:
   xfers = [libusb.libusb_alloc_transfer(0).contents for _ in range(2)]
   for t in xfers: t.dev_handle, t.endpoint, t.type, t.timeout = dev.iface.pci_dev.usb.usb.handle, 0x02, libusb.LIBUSB_TRANSFER_TYPE_BULK, 10000
   words = [ctypes.addressof(x.contents) for x in (dev.iface.pci_dev.usb.usb.handle, USB3.ctx())] + [0] + [ctypes.addressof(t) for t in xfers]
-  return Buffer("CPU", HOST_SIZE, dtypes.uint8, options=BufferSpec(nolru=True), initial_value=struct.pack('5Q', *words).ljust(HOST_SIZE, b'\0'))
+  return Buffer("CPU", HOST_SIZE, options=BufferSpec(nolru=True), initial_value=struct.pack('5Q', *words).ljust(HOST_SIZE, b'\0'))
 
 @functools.cache
 def _go(dev) -> Buffer:
-  return Buffer(dev.device, 1, dtypes.uint32, options=BufferSpec(uncached=True, cpu_access=True, nolru=True), initial_value=bytes(4))
+  return Buffer(dev.device, 4, options=BufferSpec(uncached=True, cpu_access=True, nolru=True), initial_value=bytes(4))
 
 def usb_reset(dev):
   for buf, off, n in ((dev.iface.ctrl, 0x800, 4), (dev.iface.ctrl, 0x5000, 0x80000), (_host_block(dev), 16, 8)): buf.host.view(off, n)[:] = bytes(n)
@@ -458,6 +459,6 @@ def setup_usb_rules(dev):
   Compiled.pm_bufferize += PatternMatcher([(UPat(Ops.ALLOC, tag=dev.tag("usb_host")), lambda d=dev: _host_block(d)), # placeholders the gpu owns
                                            (UPat(Ops.ALLOC, tag=dev.tag("usb_go")), lambda d=dev: _go(d)),
                                            (UPat(Ops.ALLOC, tag=dev.tag("usb_asm24")), lambda d=dev: d.iface.ctrl)])
-  dev.error_state = _host_block(dev).view(1, dtypes.int64, 40) # the link's error word
+  dev.error_state = _host_block(dev).view(8, 40) # the link's error word
 
 if DEV.interface.startswith("MOCK"): from test.mockgpu.usb import MockUSB3 as USB3  # type: ignore  # noqa: F811
