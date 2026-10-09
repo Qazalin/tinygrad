@@ -438,6 +438,15 @@ class TestUOpGraph(unittest.TestCase):
     call = fn.call(UOp.const(0, dtypes.uint64), r + 1)
     self.assertEqual(set(call.ranges), {r})
 
+  def test_after_call_restores_explicit_scope(self):
+    r = UOp.range(4, 0, dtype=dtypes.int)
+    buf = UOp.param(0, dtypes.int, 4)
+    p = UOp.param(0, dtypes.int, addrspace=AddrSpace.ALU)
+    call = UOp.sink(p).call(r, name="consume_range")
+    self.assertNotIn(r, call.ranges)
+    self.assertNotIn(r, buf.after(call).ranges)
+    self.assertIn(r, buf.after(call, r).index(0).load().ranges)
+
   def test_backedge_preserves_outer_range(self):
     outer, inner = UOp.range(4, 0), UOp.loop(1)
     end = UOp.const(1).backedge(inner, outer < 2)

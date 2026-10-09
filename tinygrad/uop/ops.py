@@ -474,6 +474,9 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
         # if it's not a RANGE, we include all ranges in srcs.
         # technically we shouldn't flow through these ranges either, but this is pre pm_add_control_flow so it's the same.
         for s in er.ranges: ret.pop(s, None)
+    # Dependencies have already closed their own ranges. Explicit scopes following a CALL must remain live.
+    if self.op is Ops.AFTER:
+      for s in self.src[1:]: ret.update(s.ranges)
     return ret
 
   @property

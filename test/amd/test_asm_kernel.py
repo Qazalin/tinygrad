@@ -252,9 +252,19 @@ class TestAsmKernel(unittest.TestCase):
       out = Tensor.full((17*19*2,), -1, dtype=dtypes.int32).contiguous().realize()
       self.assertEqual(out.custom_kernel(fxn=kernel)[0].tolist(), list(range(17*19*2)))
 
-  def test_external_call_reuse(self):
+  def test_jit_call_reuse(self):
     if self.arch != "rdna3": self.skipTest("only rdna3")
     from test.mockgpu.amd import call
+    from tinygrad.runtime.autogen import llvm
+    if getenv("ASM_CALL_BACKEND", "LLVM") != "LLVM": self.skipTest("LLVM JIT only")
+    compiler = call.backend_renderer("LLVM", fast_compile=True).compiler
+    add_module = compiler.add_module
+    reused = []
+    def check_module(mod, entry):
+      prior = {name:fn for name in compiler.functions if (fn:=llvm.LLVMGetNamedFunction(mod, name.encode()))}
+      self.assertFalse(any(llvm.LLVMGetFirstBasicBlock(fn) for fn in prior.values()))
+      reused.append(set(prior))
+      return add_module(mod, entry)
     def kernel_a(out:UOp):
       insts = [
         s_load_b64(s[0:1], s[0:1], soffset=NULL),
@@ -281,13 +291,15 @@ class TestAsmKernel(unittest.TestCase):
       ]
       sink = UOp.sink(out.base, UOp.special(32, "lidx0"), UOp.special(1, "gidx0"), arg=KernelInfo("external_call_reuse_b"))
       return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=(inst, dtypes.void)) for inst in insts))))
-    a = Tensor.empty(32, dtype=dtypes.uint32).custom_kernel(fxn=kernel_a)[0]
-    self.assertEqual(a.tolist(), [15]*32)
-    add_body = call.instruction_call(v_add_nc_u32_e32(v[2], 3, v[1]), self.arch)[0].body
-    with patch.object(call, "call_program", wraps=call.call_program) as compile_program:
+    with patch.object(call, "to_program", wraps=call.to_program) as compile_program, \
+         patch.object(compiler, "add_module", side_effect=check_module) as jit_module:
+      a = Tensor.empty(32, dtype=dtypes.uint32).custom_kernel(fxn=kernel_a)[0]
+      self.assertEqual(a.tolist(), [15]*32)
       b = Tensor.empty(32, dtype=dtypes.uint32).custom_kernel(fxn=kernel_b)[0]
       self.assertEqual(b.tolist(), [23]*32)
-    self.assertNotIn("asm_inst_"+add_body.key.hex()[:24], [c.args[0].arg.name for c in compile_program.call_args_list])
+    self.assertEqual(compile_program.call_count, 2)
+    self.assertEqual(jit_module.call_count, 2)
+    self.assertTrue(reused[1])
 
   def test_variable(self):
     if self.arch != "rdna3": self.skipTest("only rdna3")

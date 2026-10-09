@@ -272,7 +272,7 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
   if SPEC: type_verify(ast, spec_tensor)
 
   # resolve UNSHARDs (multi-device UNSHARDs are already resolved by the scheduler; this handles in-kernel shards, e.g. fragments)
-  sink = graph_rewrite(ast, multi_pm, name="multi_pm")
+  sink = graph_rewrite(ast, multi_pm, ctx={}, name="multi_pm")
 
   # preprocess
   sink = graph_rewrite(sink, pm_mops, name="early movement ops", bottom_up=True)
@@ -424,15 +424,21 @@ pm_lower_calls = PatternMatcher([
   (UPat(Ops.CALL, src=(UPat(Ops.SINK),), allow_any_len=True, name="call"), lower_call),
 ])
 
+def linearize_call(ctx:dict[tuple[UOp, str], UOp], call:UOp, sink:UOp) -> UOp:
+  key = (sink, call.arg.name)
+  if key not in ctx:
+    ctx[key] = UOp(Ops.LINEAR, src=tuple(line_rewrite(linearize(sink), pm_linearize_cleanups+pm_alloc_to_buf)),
+                   arg=to_function_name(call.arg.name))
+  return call.replace(src=(ctx[key],)+call.src[1:])
+
 pm_call_fixup = PatternMatcher([
   (UPat(Ops.CALL, src=(UPat(Ops.SINK, name="sink"),), allow_any_len=True, name="call"),
-   lambda call,sink: call.replace(src=(UOp(Ops.LINEAR, src=tuple(line_rewrite(linearize(sink), pm_linearize_cleanups+pm_alloc_to_buf)),
-                                           arg=to_function_name(call.arg.name)),)+call.src[1:])),
+   linearize_call),
 ])
 
 def do_linearize(ctx:Renderer, prg:UOp, sink:UOp) -> UOp:
   if DEBUG >= 3 and sink.arg.applied_opts: print(f"{sink.arg.function_name:<25} opts: {sink.arg.applied_opts}")
-  sink = graph_rewrite(sink, pm_call_fixup, name="call fixup", enter_calls=True)
+  sink = graph_rewrite(sink, pm_call_fixup, ctx={}, name="call fixup", enter_calls=True)
   lst = line_rewrite(linearize(sink), pm_linearize_cleanups+pm_alloc_to_buf)
   prg = prg.replace(src=(lst[-1],))
   # isa renderers need to allocate registers
