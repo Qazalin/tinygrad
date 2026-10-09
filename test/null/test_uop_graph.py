@@ -12,6 +12,15 @@ simple_pm = PatternMatcher([
   ((UPat.var('x') + UPat.cvar('c1')) + UPat.cvar('c2'), lambda x,c1,c2: x + (c1.val+c2.val)),
 ])
 
+class TestCallToposort(unittest.TestCase):
+  def test_implicit_barrier_sees_local_store_in_call_body(self):
+    from tinygrad.codegen import add_raw_barrier
+    local = UOp.placeholder((1,), dtypes.float, addrspace=AddrSpace.LOCAL)
+    call = UOp.sink(local.index(0).store(UOp.const(1.0))).call(name="writes_local")
+    rewritten = add_raw_barrier(local.after(call))
+    self.assertIsNotNone(rewritten)
+    self.assertEqual(rewritten.src[1].op, Ops.BARRIER)
+
 class TestTuplize(unittest.TestCase):
   def test_equality_is_identity(self):
     # the invariant that makes identity equality correct: tuples are equal iff the UOps are the same object
