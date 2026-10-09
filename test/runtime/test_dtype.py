@@ -288,6 +288,10 @@ class TestDoubleDType(TestDType):
     _test_op(lambda: Tensor([3.4e40, 3.4e38, 1, 0], dtype=dtypes.float64).cast(dtypes.float32),
              dtypes.float32, [float('inf'), 3.4e38, 1, 0])
 
+  def test_sqrt_inf(self):
+    values = Tensor([-math.inf, math.inf, 4.0], dtype=dtypes.double).sqrt().tolist()
+    self.assertTrue(math.isnan(values[0]))
+    self.assertEqual(values[1:], [math.inf, 2.0])
 
 class TestIntegerCast(unittest.TestCase):
   def test_narrow_then_widen(self):
