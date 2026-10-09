@@ -418,23 +418,7 @@ call_cache: dict[tuple, UOp] = {}
 def lower_call(ctx:Renderer, call:UOp):
   if (body:=call_cache.get(key:=(to_program_key(call.body, ctx), call.arg.name, TUPLE_ORDER.value))) is None:
     body = graph_rewrite(call.body, pm_lower_calls, ctx=ctx, name="lower calls", walk=True)
-    nodes = body.toposort()
-    native_ints = set(dtypes.ints) & ctx.supported_dtypes() - set(EMULATED_DTYPES.tolist(dtypes))
-    # Straight-line calls with scalar address arithmetic have no tensor operations to lower.
-    # Their callees have already been lowered and linearized. Keep their dependency
-    # chain intact instead of repeatedly simplifying and rebuilding it in the tensor passes.
-    if any(u.op is Ops.CALL for u in nodes) and all(
-      u.op in {Ops.SINK, Ops.CALL, Ops.AFTER, Ops.PARAM} or
-      (u.op is Ops.CONST and isinstance(u.arg, int)) or
-      (u.op is Ops.STACK and not u.src) or
-      (u.op is Ops.CAST and u.src[0].op is Ops.CONST and u.dtype in native_ints) or
-      (u.op is Ops.ADD and Ops.ADD in ctx.code_for_op and u.shape == () and u.dtype in native_ints) for u in nodes):
-      body = graph_rewrite(body, pm_cast_const, name="call block constants")
-      num_params = max([u.arg.slot+1 for u in nodes if u.op is Ops.PARAM and not u.is_variable], default=0)
-      body = graph_rewrite(body, pm_number_params, ctx=(num_params, {}), walk=True, name="call block variables")
-      if SPEC: type_verify(body, spec_program, enter_calls=False)
-    else:
-      body = full_rewrite_to_sink(body, ctx, optimize=False)
+    body = full_rewrite_to_sink(body, ctx, optimize=False)
     body = UOp(Ops.LINEAR, src=tuple(line_rewrite(linearize(body), pm_linearize_cleanups+pm_alloc_to_buf)),
                arg=to_function_name(call.arg.name))
     call_cache[key] = body

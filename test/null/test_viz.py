@@ -1218,8 +1218,8 @@ class TestCLI(unittest.TestCase):
       with Context(NO_COLOR=1):
         uops = run_cli(*files, "-s", "TINY", "do_to_program for nested_calls", "View UOp List", json_fmt=False)[0]["out"]
     codegen_count = [s for s in rewrites if "View Output AST" in s]
-    # The inner body is cached; the outer call-only body bypasses full lowering.
-    self.assertEqual(len(codegen_count), 2)
+    # The inner body is cached; inner, outer, and caller each undergo lowering once.
+    self.assertEqual(len(codegen_count), 3)
     self.assertIn(" = linear ", uops)
     self.assertIn(" = call ", uops)
 
