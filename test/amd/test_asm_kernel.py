@@ -244,6 +244,14 @@ class TestAsmKernel(unittest.TestCase):
     run_linear(linear)
     self.assertTrue((a.numpy() == 2.).all())
 
+  def test_workgroup_coordinates_low_precision_default(self):
+    def kernel(out:UOp):
+      idx = UOp.special(17, "gidx0") + 17*UOp.special(19, "gidx1") + 17*19*UOp.special(2, "gidx2")
+      return out.index(idx).store(idx).sink(arg=KernelInfo(opts_to_apply=()))
+    with Context(DEFAULT_FLOAT="bfloat16"):
+      out = Tensor.full((17*19*2,), -1, dtype=dtypes.int32).contiguous().realize()
+      self.assertEqual(out.custom_kernel(fxn=kernel)[0].tolist(), list(range(17*19*2)))
+
   def test_variable(self):
     if self.arch != "rdna3": self.skipTest("only rdna3")
     b = Tensor.full((16, 16), 1, dtype=dtypes.uint32).contiguous().realize()

@@ -6,22 +6,37 @@ from tinygrad.codegen import to_program, to_program_config
 import tinygrad.codegen as codegen
 from tinygrad.device import Device
 from tinygrad.renderer import Renderer
+from tinygrad.renderer.llvmir import CPULLVMRenderer
 from tinygrad.engine.realize import get_runtime
 from tinygrad.runtime.support.c import DLL
+from tinygrad.runtime.support.compiler_llvm import CPULLVMCompiler
 from tinygrad.dtype import AddrSpace, Invalid, dtypes
 from tinygrad.helpers import Context, getenv, TracingKey, dedup, unwrap, Target
-from tinygrad.runtime.autogen import hsa
+from tinygrad.runtime.autogen import hsa, llvm
 from tinygrad.renderer.amd.dsl import Inst, EXEC_LO, ttmp
 from test.mockgpu.amd.emu import (_Ctx, _get_handler, _wave_size, _canonical_info, _is_barrier, PC_LO_IDX, PC_HI_IDX, ENDPGM_PC,
                                   SGPR_COUNT, SCRATCH_STRIDE_IDX, F32_INLINE)
 
-@functools.cache
-def llvm_renderer(arch:str):
-  from tinygrad.renderer.llvmir import CPULLVMRenderer
-  return CPULLVMRenderer(Target("CPU", "LLVM", arch))
+class CallLLVMRenderer(CPULLVMRenderer):
+  def __init__(self, target:Target):
+    super().__init__(target)
+    assert isinstance(self.compiler, CPULLVMCompiler)
+    # Call wrappers handle control flow and offsets; instruction bodies are optimized separately.
+    self.compiler.passes = b'default<O0>'
+    tm = self.compiler.target_machine
+    triple, cpu, features = llvm.LLVMGetTargetMachineTriple(tm), llvm.LLVMGetTargetMachineCPU(tm), llvm.LLVMGetTargetMachineFeatureString(tm)
+    self.compiler.target_machine = llvm.LLVMCreateTargetMachine(llvm.LLVMGetTargetMachineTarget(tm), triple, cpu, features,
+      llvm.LLVMCodeGenLevelNone, llvm.LLVMRelocPIC, llvm.LLVMCodeModelDefault)
+    llvm.LLVMDisposeTargetMachine(tm)
+    for message in (triple, cpu, features): llvm.LLVMDisposeMessage(message)
+    if self.compiler.cachekey is not None: self.compiler.cachekey += "_asm_call_control"
 
-def backend_renderer(backend:str):
-  return llvm_renderer(Device["CPU"].renderer.target.arch) if backend == "LLVM" else Device[backend].renderer
+@functools.cache
+def llvm_renderer(arch:str, fast_compile:bool=False):
+  return (CallLLVMRenderer if fast_compile else CPULLVMRenderer)(Target("CPU", "LLVM", arch))
+
+def backend_renderer(backend:str, fast_compile:bool=False):
+  return llvm_renderer(Device["CPU"].renderer.target.arch, fast_compile) if backend == "LLVM" else Device[backend].renderer
 
 lift_cache:dict[tuple, UOp] = {}
 InstructionCall = tuple[UOp, list[UOp], tuple[int, ...], UOp|None]
@@ -110,10 +125,9 @@ external_calls:dict[tuple, tuple[UOp, tuple[int, ...], object]] = {}
 def call_program(sink:UOp, renderer:Renderer, flat:bool=False) -> UOp:
   # These graphs contain scalar control flow and already-compiled calls, with no tensor reductions or dtype emulation.
   extra = renderer.extra_matcher or PatternMatcher([])
-  sink = graph_rewrite(sink, codegen.pm_mops+codegen.symbolic_simple, name="call movements", bottom_up=not flat)
-  if flat:
-    sink = graph_rewrite(sink, codegen.pm_lower_weak+codegen.indexing_simplify+extra, ctx=renderer, name="call indexes")
-  else:
+  # Straight-line instruction blocks already contain typed pointers, offsets, and external calls.
+  if not flat:
+    sink = graph_rewrite(sink, codegen.pm_mops+codegen.symbolic_simple, name="call movements", bottom_up=True)
     sink = graph_rewrite(sink, codegen.sym+codegen.pm_add_loads, name="call simplify")
     sink = graph_rewrite(sink, codegen.symbolic_simple+codegen.pm_expand_broadcast+codegen.pm_add_loads+
                         codegen.devectorizer2+codegen.indexing_simplify, name="call scalarize")
@@ -125,17 +139,26 @@ def call_program(sink:UOp, renderer:Renderer, flat:bool=False) -> UOp:
     sink = graph_rewrite(sink, codegen.pm_move_gates_from_index, name="call gates")
     sink = graph_rewrite(sink, codegen.pm_commit_weak+decomp+extra+codegen.pm_split_ends+codegen.pm_remove_invalid,
                         ctx=renderer, name="call final")
-  sink = graph_rewrite(sink, codegen.pm_cast_const, name="call constants")
-  if not flat:
+    sink = graph_rewrite(sink, codegen.pm_cast_const, name="call constants")
     sink = graph_rewrite(sink, codegen.pm_add_control_flow, ctx=codegen.CFGContext(sink), bottom_up=True, name="call control flow")
+  else:
+    # Calls already form a dependency chain; no loop scheduling or tensor linearization is needed.
+    nodes = sink.toposort(enter_calls=False)
+    params = sorted((u for u in nodes if u.op is Ops.PARAM), key=lambda u:u.arg.slot)
+    header = UOp.sink(*params)
+    prefix = header.toposort()
+    del prefix[header]
+    linear = UOp(Ops.LINEAR, src=tuple(prefix)+tuple(u for u in nodes if u not in prefix))
+    if codegen.SPEC: codegen.type_verify(sink, codegen.spec_program)
+    return to_program(UOp(Ops.PROGRAM, src=(sink, linear), arg=ProgramInfo.from_sink(sink, renderer.target)), renderer)
   slots = max((u.arg.slot+1 for u in sink.toposort() if u.op is Ops.PARAM and not u.is_variable), default=0)
   sink = graph_rewrite(sink, codegen.pm_number_params, ctx=(slots, {}), walk=True, name="call variables")
   if codegen.SPEC: codegen.type_verify(sink, codegen.spec_program)
   return to_program(UOp(Ops.PROGRAM, src=(sink,), arg=ProgramInfo.from_sink(sink, renderer.target)), renderer)
 
-def external_call(call:UOp, backend:str, flat:bool=False) -> UOp:
+def external_call(call:UOp, backend:str, flat:bool=False, after:UOp|None=None) -> UOp:
   if backend not in {"CPU", "LLVM"} or not getenv("ASM_CALL_EXTERN", 1): return call
-  renderer = backend_renderer(backend)
+  renderer = backend_renderer(backend, flat)
   key = (call.body, type(renderer), renderer.target, *(x.value for x in to_program_config))
   if key not in external_calls:
     name = "asm_inst_"+call.body.key.hex()[:24]
@@ -144,7 +167,9 @@ def external_call(call:UOp, backend:str, flat:bool=False) -> UOp:
                                  for i,u in enumerate(params)})
     with Context(NOOPT=1, CHECK_OOB=0, TUPLE_ORDER=0, EMULATED_DTYPES="", CAPTURE_PROCESS_REPLAY=0):
       sink = body.replace(arg=KernelInfo(name=name)).rtag(1)
-      prg = call_program(sink, renderer, flat=True) if flat else to_program(sink, renderer)
+      # Wave reductions and transcendental instructions still need the tensor/decomposition pipeline.
+      full = not flat and any(u.op in {Ops.REDUCE, Ops.SIN, Ops.EXP2, Ops.LOG2} for u in sink.toposort())
+      prg = to_program(sink, renderer) if full else call_program(sink, renderer, flat=flat)
     runtime = get_runtime("CPU" if backend == "LLVM" else backend, prg)
     setattr(DLL._loaded_.setdefault("asm_call", ctypes.CDLL(None)), name, runtime.fxn)
     # Lowering renumbers scalar parameters by first use, so recover their original slots by name.
@@ -152,9 +177,11 @@ def external_call(call:UOp, backend:str, flat:bool=False) -> UOp:
     slots = tuple(params[i].arg.slot for i in prg.arg.globals) + tuple(scalar_slots[v.arg.name] for v in prg.arg.vars)
     external_calls[key] = UOp.custom_function(name), slots, runtime
   body, slots, _ = external_calls[key]
-  invoke = body.call(*(arg.index(0) if arg.addrspace is not AddrSpace.ALU and arg.shape else arg for i in slots for arg in [call.src[i+1]]))
+  args = [call.src[i+1] for i in slots]
+  if after is not None and args: args[-1] = args[-1].after(after)
+  invoke = body.call(*(arg.index(UOp.const(0, dtypes.int)) if arg.addrspace is not AddrSpace.ALU and arg.shape else arg for arg in args))
   # Compiling a body can remove unused parameters; retain their incoming effects even then.
-  return UOp.group(invoke, *(arg for i,arg in enumerate(call.src[1:]) if i not in slots))
+  return UOp.group(invoke, *(arg for i,arg in enumerate(call.src[1:]) if i not in slots), *([after] if after is not None and not args else []))
 
 block_cache:dict[tuple, tuple[UOp, list[UOp]]] = {}
 
@@ -178,12 +205,13 @@ def instruction_block(instructions:list[tuple[int, InstructionCall]], backend:st
   if key not in block_cache:
     bufs = sorted({b for _,(_,bs,_,_) in instructions for b in bs}, key=lambda b:b.arg.slot)
     base = UOp.param(len(bufs), dtypes.uint64, name="code_base", addrspace=AddrSpace.ALU)
-    afters = {b:b.param_like(i, name=b.arg.name) for i,b in enumerate(bufs)}
+    params = {b:b.param_like(i, name=b.arg.name) for i,b in enumerate(bufs)}
+    inst = None
     for off,(template,bs,offsets,_) in instructions:
-      args = [afters[b] for b in bs]
-      inst = external_call(template.replace(src=(template.body, *args, *(base+off+i for i in offsets))), backend)
-      afters.update((b, arg.without_after.after(inst)) for b,arg in zip(bs,args))
-    body = UOp.sink(*afters.values())
+      args = [params[b] for b in bs]
+      inst = external_call(template.replace(src=(template.body, *args,
+                           *(base+UOp.const(off+i, dtypes.uint64) if off+i else base for i in offsets))), backend, after=inst)
+    body = UOp.sink(inst)
     block_cache[key] = body, bufs
   return block_cache[key]
 
@@ -375,7 +403,9 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
     accvgpr = UOp.alloc((256*wave_size,), dtypes.uint32, 5, AddrSpace.REG) if wave_size == 64 else vgpr
     args_ptr = UOp.variable("args_ptr", 0, dtypes.uint64.max, dtypes.uint64)
     code_addr = UOp.variable("lib", 0, dtypes.uint64.max, dtypes.uint64)
-    dims = [UOp.const(x, dtypes.int) for x in (gx, gy, lx, ly, total_threads)] if getenv("ASM_CALL_EXTERN", 1) else [gx, gy, lx, ly, total_threads]
+    # Keep grid dimensions unsigned: mixing the uint64 workgroup index with int32 promotes division/modulo to floats.
+    dims = [gx, gy, lx, ly, total_threads]
+    if getenv("ASM_CALL_EXTERN", 1): dims = [gx, gy, *(UOp.const(x, dtypes.int) for x in dims[2:])]
     init = init_wave(wg, wave, sgpr, vgpr, lds, args_ptr, *dims, wave_size, lds_size, scratch_size, rsrc2, arch,
                      user_data, *([accvgpr] if wave_size == 64 else []))
     init = external_call(init, backend)
@@ -482,7 +512,7 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
       instructions.append((off, (template, bufs, word_offsets, branch_cond)))
     return instructions, cond
 
-  chunk_size = getenv("ASM_CALL_BLOCK", 32) if getenv("ASM_CALL_EXTERN", 1) and backend in {"CPU", "LLVM"} else 1
+  chunk_size = getenv("ASM_CALL_BLOCK", 128) if getenv("ASM_CALL_EXTERN", 1) and backend in {"CPU", "LLVM"} else 1
 
   def emit_block(block_pc:int, scopes:tuple[UOp, ...]) -> UOp:
     instructions, cond = block_instructions(block_pc)
@@ -507,5 +537,5 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
   name = f"asm_call_{arch}_{body.key.hex()[:16]}_{entry}"
   sink = UOp.sink(body, arg=KernelInfo(name=name, opts_to_apply=())).rtag(1)
   with Context(NOOPT=1, CHECK_OOB=0, TUPLE_ORDER=0, EMULATED_DTYPES="", CAPTURE_PROCESS_REPLAY=0):
-    renderer = backend_renderer(backend)
+    renderer = backend_renderer(backend, fast_compile=True)
     return call_program(sink, renderer) if getenv("ASM_CALL_EXTERN", 1) and backend in {"CPU", "LLVM"} else to_program(sink, renderer)
