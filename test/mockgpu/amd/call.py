@@ -91,7 +91,7 @@ class CallLLVMRenderer(CPULLVMRenderer):
 
   def render(self, uops:list[UOp]) -> str:
     fns = {b:('asm_block_' if b.arg == 'asm_block' else 'asm_fn_')+b.key.hex()
-           for b in UOp.sink(*uops).toposort() if b.op is Ops.LINEAR}
+           for b in UOp.sink(*uops).toposort(enter_calls=True) if b.op is Ops.LINEAR}
     defs = [self._render_kernel(b.src, name=n, fns=fns, internal=True)[1] for b,n in fns.items()]
     k = self._render_kernel(uops, fns=fns)
     return '\n'.join(k[0]+(k[1], *defs, self._render_footer(uops)))

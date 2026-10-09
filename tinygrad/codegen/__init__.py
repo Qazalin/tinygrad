@@ -39,7 +39,7 @@ pm_number_params = PatternMatcher([
 
 def build_range_map(sink:UOp) -> dict[tuple, int]:
   ctx: dict[tuple, int] = {}
-  for x in sink.toposort(enter_calls=False):
+  for x in sink.toposort():
     if x.op is Ops.RANGE and x.axis_type is AxisType.UPCAST:
       ctx[x.arg] = len(ctx)
   return ctx
@@ -268,7 +268,7 @@ pm_implicit_barriers = PatternMatcher([
 ])
 
 def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
-  if DEBUG >= 5: print(render_uir(list(ast.toposort())))
+  if DEBUG >= 5: print(render_uir(ast))
   if SPEC: type_verify(ast, spec_tensor, enter_calls=False)
 
   # resolve UNSHARDs (multi-device UNSHARDs are already resolved by the scheduler; this handles in-kernel shards, e.g. fragments)
@@ -301,7 +301,7 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
   # expand
   sink = graph_rewrite(sink, expander, ctx=build_range_map(sink), name="expander")
 
-  slots = itertools.count(max([u.arg.slot+1 for u in sink.toposort(enter_calls=False) if u.op in {Ops.BUFFER, Ops.ALLOC}], default=0))
+  slots = itertools.count(max([u.arg.slot+1 for u in sink.toposort() if u.op in {Ops.BUFFER, Ops.ALLOC}], default=0))
 
   # remove reduce
   sink = graph_rewrite(sink, mop_cleanup+pm_reduce_local, ctx=slots, name="remove reduces")
@@ -376,7 +376,7 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
   sink = graph_rewrite(sink, pm_add_control_flow, ctx=CFGContext(sink), name="add control flow", bottom_up=True)
 
   # put the variables in slots
-  num_params = max([x.arg.slot + 1 for x in sink.toposort(enter_calls=False) if x.op is Ops.PARAM and not x.is_variable], default=0)
+  num_params = max([x.arg.slot + 1 for x in sink.toposort() if x.op is Ops.PARAM and not x.is_variable], default=0)
   sink = graph_rewrite(sink, pm_number_params, ctx=(num_params, {}), name="number variables", walk=True)
 
   if VIZ: graph_rewrite(sink, PatternMatcher([]), name="View Output AST")
@@ -385,7 +385,7 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
     if os.environ.get("DBGTV"):
       try: type_verify(sink, spec_program, enter_calls=False)
       except RuntimeError:
-        print(render_uir(list(sink.toposort())))
+        print(render_uir(sink))
         raise
     else: type_verify(sink, spec_program, enter_calls=False)
 
@@ -418,7 +418,7 @@ call_cache: dict[tuple, UOp] = {}
 def lower_call(ctx:Renderer, call:UOp):
   if (body:=call_cache.get(key:=(to_program_key(call.body, ctx), call.arg.name, TUPLE_ORDER.value))) is None:
     body = graph_rewrite(call.body, pm_lower_calls, ctx=ctx, name="lower calls", walk=True)
-    nodes = body.toposort(enter_calls=False)
+    nodes = body.toposort()
     native_ints = set(dtypes.ints) & ctx.supported_dtypes() - set(EMULATED_DTYPES.tolist(dtypes))
     # Straight-line calls with scalar address arithmetic have no tensor operations to lower.
     # Their callees have already been lowered and linearized. Keep their dependency

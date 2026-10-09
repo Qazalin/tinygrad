@@ -70,7 +70,7 @@ class CFGContext:
     controls: list[UOp] = []
     ends = assigned = 0
     nesting: dict[UOp, UOp] = {}
-    for u in sink.toposort(enter_calls=False):
+    for u in sink.toposort():
       deps[u] = 0
       for s in u.src_without_body: deps[u] |= deps[s]
 
