@@ -255,16 +255,16 @@ class TestAsmKernel(unittest.TestCase):
   def test_jit_call_reuse(self):
     if self.arch != "rdna3": self.skipTest("only rdna3")
     from test.mockgpu.amd import call
-    from tinygrad.runtime.autogen import llvm
-    if getenv("ASM_CALL_BACKEND", "LLVM") != "LLVM": self.skipTest("LLVM JIT only")
-    compiler = call.backend_renderer("LLVM", fast_compile=True).compiler
+    if getenv("ASM_CALL_BACKEND", "CPU") != "CPU": self.skipTest("Clang JIT only")
+    compiler = call.backend_renderer("CPU", fast_compile=True).compiler
     add_module = compiler.add_module
     reused = []
-    def check_module(mod, entry):
-      prior = {name:fn for name in compiler.functions if (fn:=llvm.LLVMGetNamedFunction(mod, name.encode()))}
-      self.assertFalse(any(llvm.LLVMGetFirstBasicBlock(fn) for fn in prior.values()))
-      reused.append(set(prior))
-      return add_module(mod, entry)
+    def check_module(src, names):
+      prior = {name for name in compiler.functions if name in src}
+      self.assertTrue(prior.isdisjoint(names))
+      self.assertTrue(all(f"static void (*{name})" in src for name in prior))
+      reused.append(prior)
+      return add_module(src, names)
     def kernel_a(out:UOp):
       insts = [
         s_load_b64(s[0:1], s[0:1], soffset=NULL),

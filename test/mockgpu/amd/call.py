@@ -1,107 +1,78 @@
-import ctypes, itertools, functools, struct
+import ctypes, itertools, functools, struct, re, subprocess, tempfile
+from pathlib import Path
 from collections.abc import Iterator
 from tinygrad.viz.serve import amd_decode, get_cfg, COND_NOT_TAKEN, UNCOND
 from tinygrad.uop.ops import UOp, sint, Ops, KernelInfo, PatternMatcher, UPat, graph_rewrite, rewrite_group, uopfunc
 from tinygrad.codegen import to_program, to_program_config
 from tinygrad.device import Device
-from tinygrad.renderer.llvmir import CPULLVMRenderer
-from tinygrad.runtime.support.compiler_llvm import CPULLVMCompiler, expect, cerr
-from tinygrad.runtime.ops_cpu import CPUProgram
+from tinygrad.renderer.cstyle import ClangRenderer
+from tinygrad.runtime.support.compiler_cpu import ClangCompiler
 from tinygrad.dtype import AddrSpace, Invalid, dtypes
 from tinygrad.helpers import Context, getenv, TracingKey, dedup, unwrap, Target, cpu_profile
-from tinygrad.runtime.autogen import hsa, llvm
+from tinygrad.runtime.autogen import hsa
 from tinygrad.renderer.amd.dsl import Inst, EXEC_LO, ttmp
 from test.mockgpu.amd.emu import (_Ctx, _get_handler, _wave_size, _canonical_info, _is_barrier, PC_LO_IDX, PC_HI_IDX, ENDPGM_PC,
                                   SGPR_COUNT, SCRATCH_STRIDE_IDX, F32_INLINE)
 
-class CallLLVMJIT(CPULLVMCompiler):
+class CallClangJIT(ClangCompiler):
   def __init__(self, arch:list[str]):
     super().__init__(arch)
-    llvm.LLVMPassBuilderOptionsSetVerifyEach(self.pbo, False)
-    llvm.LLVMLinkInMCJIT()
-    # MCJIT must resolve the same compiler-runtime and math helpers as CPUProgram's ELF loader.
-    for lib in (CPUProgram.rt_lib, CPUProgram.libm):
-      expect(llvm.LLVMLoadLibraryPermanently(lib._name.encode()), f"failed to load {lib._name} for LLVM JIT")
-    self.engine = llvm.LLVMExecutionEngineRef()
-    self.functions:set[str] = set()
+    self.functions:dict[str, int] = {}
+    self.modules:list[ctypes.CDLL] = []
 
-  # JIT entry addresses belong to this process, so they must never enter the disk cache.
+  # Function addresses belong to this process and must never enter the disk cache.
   def compile_cached(self, src:str) -> bytes: return self.compile(src)
 
   def compile(self, src:str) -> bytes:
-    buf = llvm.LLVMCreateMemoryBufferWithMemoryRangeCopy(encoded:=src.encode(), len(encoded), b'asm_call')
-    mod = expect(llvm.LLVMParseIRInContext(self.context, buf, ctypes.pointer(m:=llvm.LLVMModuleRef()), err:=cerr()), err, m)
-    fn = llvm.LLVMGetFirstFunction(mod)
-    entry = ctypes.string_at(llvm.LLVMGetValueName2(fn, ctypes.pointer(llvm.size_t()))).decode()
-    new_functions = set()
-    while fn:
-      next_fn = llvm.LLVMGetNextFunction(fn)
-      name = ctypes.string_at(llvm.LLVMGetValueName2(fn, ctypes.pointer(llvm.size_t()))).decode()
-      if llvm.LLVMGetFirstBasicBlock(fn):
-        if name in self.functions:
-          decl = llvm.LLVMAddFunction(mod, (name+'_ref').encode(), llvm.LLVMGlobalGetValueType(fn))
-          llvm.LLVMReplaceAllUsesWith(fn, decl)
-          llvm.LLVMDeleteFunction(fn)
-          llvm.LLVMSetValueName2(decl, name.encode(), len(name))
-        else:
-          llvm.LLVMSetLinkage(fn, llvm.LLVMExternalLinkage)
-          cpu, features = llvm.LLVMGetTargetMachineCPU(self.target_machine), llvm.LLVMGetTargetMachineFeatureString(self.target_machine)
-          llvm.LLVMAddTargetDependentFunctionAttr(fn, b'target-cpu', cpu)
-          llvm.LLVMAddTargetDependentFunctionAttr(fn, b'target-features', features)
-          llvm.LLVMDisposeMessage(cpu)
-          llvm.LLVMDisposeMessage(features)
-          llvm.LLVMRemoveEnumAttributeAtIndex(fn, llvm.LLVMAttributeFunctionIndex, llvm.LLVMGetEnumAttributeKindForName(b'alwaysinline', 12))
-          llvm.LLVMAddAttributeAtIndex(fn, llvm.LLVMAttributeFunctionIndex,
-            llvm.LLVMCreateEnumAttribute(self.context, llvm.LLVMGetEnumAttributeKindForName(b'noinline', 8), 0))
-          if name.startswith(('asm_call_', 'asm_block_')):
-            llvm.LLVMAddAttributeAtIndex(fn, llvm.LLVMAttributeFunctionIndex,
-              llvm.LLVMCreateEnumAttribute(self.context, llvm.LLVMGetEnumAttributeKindForName(b'optnone', 7), 0))
-          new_functions.add(name)
-      fn = next_fn
-    addr = self.add_module(mod, entry)
-    self.functions.update(new_functions)
+    definitions = list(re.finditer(r"^__attribute__\(\([^\n]*\)\) void (\w+)\(([^\n]*)\) \{\n.*?^\}", src, re.M|re.S))
+    entry = definitions[-1][1]
+    new_functions = [m[1] for m in definitions if m[1] not in self.functions]
+    for m in reversed(definitions):
+      if m[1] in self.functions:
+        declaration = f"static void (*{m[1]})({m[2]}) = (void (*)({m[2]})){self.functions[m[1]]}ul;"
+        src = src[:m.start()]+declaration+src[m.end():]
+    self.add_module(src, new_functions)
+    addr = self.functions[entry]
     if self.arch == 'x86_64': return b'\x48\xb8'+struct.pack('<Q', addr)+b'\xff\xe0'
     if self.arch == 'arm64': return struct.pack('<IIQ', 0x58000050, 0xd61f0200, addr)
     raise RuntimeError(f'unsupported JIT trampoline architecture {self.arch}')
 
-  def add_module(self, mod:llvm.LLVMModuleRef, entry:str) -> int:
-    expect(llvm.LLVMVerifyModule(mod, llvm.LLVMReturnStatusAction, err:=cerr()), err)
-    with cpu_profile('LLVM JIT optimize'):
-      expect(llvm.LLVMRunPasses(mod, self.passes, self.target_machine, self.pbo), 'failed to optimize JIT module')
-    if not self.engine:
-      opts = llvm.struct_LLVMMCJITCompilerOptions()
-      llvm.LLVMInitializeMCJITCompilerOptions(ctypes.byref(opts), ctypes.sizeof(opts))
-      # Match LLVMCompiler: level 0 skips FMA contraction needed by the emulated division refinement.
-      opts.OptLevel = llvm.LLVMCodeGenLevelDefault
-      expect(llvm.LLVMCreateMCJITCompilerForModule(ctypes.byref(self.engine), mod, ctypes.byref(opts), ctypes.sizeof(opts), err:=cerr()), err)
-    else: llvm.LLVMAddModule(self.engine, mod)
-    with cpu_profile('LLVM JIT materialize'):
-      addr = llvm.LLVMGetFunctionAddress(self.engine, entry.encode())
-    assert addr, f'JIT did not produce {entry}'
-    return addr
+  def add_module(self, src:str, names:list[str]):
+    with tempfile.TemporaryDirectory() as directory, cpu_profile('Clang JIT compile'):
+      path = str(Path(directory)/'module.so')
+      subprocess.run([getenv('CC', 'clang'), '-shared', '-x', 'c', '-O2', '-fPIC', '-ffreestanding', '-fno-math-errno',
+                      '-fno-strict-aliasing', *self.args, '-', '-o', path, '-lm'], input=src.encode(), check=True, capture_output=True)
+      module = ctypes.CDLL(path)
+    self.modules.append(module)
+    self.functions.update((name, unwrap(ctypes.cast(getattr(module, name), ctypes.c_void_p).value)) for name in names)
 
-  def __del__(self):
-    if getattr(self, 'engine', None): llvm.LLVMDisposeExecutionEngine(self.engine)
-    super().__del__()
-
-class CallLLVMRenderer(CPULLVMRenderer):
+class CallClangRenderer(ClangRenderer):
   def __init__(self, target:Target):
     super().__init__(target)
-    self.compiler = CallLLVMJIT(target.arch.split(','))
+    self.compiler = CallClangJIT(target.arch.split(','))
 
   def render(self, uops:list[UOp]) -> str:
-    fns = {b:('asm_block_' if b.arg == 'asm_block' else 'asm_fn_')+b.key.hex()
-           for b in UOp.sink(*uops).toposort(enter_calls=True) if b.op is Ops.LINEAR}
-    defs = [self._render_kernel(b.src, name=n, fns=fns, internal=True)[1] for b,n in fns.items()]
-    k = self._render_kernel(uops, fns=fns)
-    return '\n'.join(k[0]+(k[1], *defs, self._render_footer(uops)))
+    topo = UOp.sink(*uops).toposort(enter_calls=True)
+    self.fn_names = {b:('asm_block_' if b.arg == 'asm_block' else 'asm_fn_')+b.key.hex() for b in topo if b.op is Ops.LINEAR}
+    definitions = []
+    all_uops = list(uops)
+    for body, name in self.fn_names.items():
+      _, lines, bufs = self._render(body.src)
+      params = ', '.join(f"{self.param_type(p)} {n}" for n,(p,_) in bufs)
+      attrs = 'noinline, optnone' if body.arg == 'asm_block' else 'noinline'
+      definitions.append(f"__attribute__(({attrs})) void {name}({params}) {{\n"+'\n'.join(lines)+"\n}")
+      all_uops.extend(body.src)
+    name, lines, bufs = self._render(uops)
+    entry = super().render_kernel(name, lines, bufs, [], None)
+    entry = entry.replace('void '+name, '__attribute__((noinline, optnone)) void '+name, 1)
+    return '\n'.join(self._render_defines(all_uops)+definitions+[entry])
 
 @functools.cache
-def llvm_renderer(arch:str, fast_compile:bool=False):
-  return (CallLLVMRenderer if fast_compile else CPULLVMRenderer)(Target("CPU", "LLVM", arch))
+def clang_renderer(arch:str, fast_compile:bool=False):
+  return (CallClangRenderer if fast_compile else ClangRenderer)(Target("CPU", "CLANG", arch))
 
 def backend_renderer(backend:str, fast_compile:bool=False):
-  return llvm_renderer(Device["CPU"].renderer.target.arch, fast_compile) if backend == "LLVM" else Device[backend].renderer
+  return clang_renderer(Device["CPU"].renderer.target.arch, fast_compile) if backend == "CPU" else Device[backend].renderer
 
 lift_cache:dict[tuple, UOp] = {}
 InstructionCall = tuple[UOp, list[UOp], tuple[int, ...], UOp|None]
@@ -357,7 +328,7 @@ dispatch_cache:dict[tuple, UOp|None] = {}
 
 @rewrite_group(name=lambda *args,ret,**_: TracingKey(f"Lift {(k:=ret.src[0].arg).name}", (("lift", k.function_name),)))
 def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None, entry: int = 0) -> UOp:
-  backend = getenv("ASM_CALL_BACKEND", "LLVM") if backend is None else backend
+  backend = getenv("ASM_CALL_BACKEND", "CPU") if backend is None else backend
   lib_bytes = ctypes.string_at(lib, lib_sz)
   renderer = backend_renderer(backend)
   # Code addresses are runtime arguments, so identical bytes can share a program across allocations.
