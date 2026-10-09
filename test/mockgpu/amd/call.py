@@ -57,7 +57,7 @@ class CallClangRenderer(ClangRenderer):
     definitions = []
     all_uops = list(uops)
     for body, name in self.fn_names.items():
-      _, lines, bufs = self._render(body.src)
+      _, lines, bufs = self._render(list(body.src))
       params = ', '.join(f"{self.param_type(p)} {n}" for n,(p,_) in bufs)
       attrs = 'noinline, optnone' if body.arg == 'asm_block' else 'noinline'
       definitions.append(f"__attribute__(({attrs})) void {name}({params}) {{\n"+'\n'.join(lines)+"\n}")

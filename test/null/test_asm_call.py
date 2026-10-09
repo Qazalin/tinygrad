@@ -1,5 +1,4 @@
 import unittest
-from unittest.mock import patch
 from test.mockgpu.amd import call
 from test.mockgpu.amd.call import dominators, cfg_loops
 
@@ -36,10 +35,9 @@ class TestAsmCFG(unittest.TestCase):
     from tinygrad.renderer.amd.dsl import s
     code = b"".join((s_mov_b32(s[2], 0).to_bytes(), s_add_u32(s[2], s[2], 1).to_bytes(), s_cmp_lt_i32(s[2], 4).to_bytes(),
                      s_cbranch_scc1(simm16=-3).to_bytes(), s_endpgm().to_bytes()))
-    with patch.object(call, "to_program", side_effect=lambda sink, renderer: sink):
-      first = call._lift(code, "rdna3", "PYTHON", 0)
-      second = call._lift(code, "rdna3", "PYTHON", 0)
-    self.assertEqual(first.key, second.key)
+    first = call._lift(code, "rdna3", "PYTHON", 0)
+    second = call._lift(code, "rdna3", "PYTHON", 0)
+    self.assertEqual(first.src[0].key, second.src[0].key)
 
 
 if __name__ == "__main__": unittest.main()

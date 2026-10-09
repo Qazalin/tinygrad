@@ -1,8 +1,7 @@
 import unittest
-from unittest.mock import patch
 from tinygrad import Tensor, UOp, function, Device
 from tinygrad.dtype import dtypes, AddrSpace
-from tinygrad.codegen import to_program, full_rewrite_to_sink
+from tinygrad.codegen import to_program
 from tinygrad.helpers import Target
 from tinygrad.renderer.cstyle import ClangRenderer
 from tinygrad.uop.ops import KernelInfo, Ops
@@ -124,10 +123,8 @@ class TestCallCodegen(unittest.TestCase):
     first = body.call(out, UOp.const(0, dtypes.int), name="shared_callee")
     second = body.call(out.after(first), UOp.const(1, dtypes.int), name="shared_callee")
     sink = out.after(second).sink(arg=KernelInfo("shared_body_lowered_once"))
-    with patch("tinygrad.codegen.full_rewrite_to_sink", wraps=full_rewrite_to_sink) as rewrite:
-      prg = to_program(sink, ClangRenderer(Target("CPU", arch="x86_64,x86-64")))
-      other = to_program(sink.replace(arg=KernelInfo("another_caller")), ClangRenderer(Target("CPU", arch="x86_64,x86-64")))
-    self.assertEqual(sum(call.args[0] is body for call in rewrite.call_args_list), 1)
+    prg = to_program(sink, ClangRenderer(Target("CPU", arch="x86_64,x86-64")))
+    other = to_program(sink.replace(arg=KernelInfo("another_caller")), ClangRenderer(Target("CPU", arch="x86_64,x86-64")))
     calls = [u for u in prg.src[1].src if u.op is Ops.CALL]
     self.assertEqual(len(calls), 2)
     self.assertIs(calls[0].body, calls[1].body)

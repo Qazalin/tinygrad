@@ -1,7 +1,6 @@
 import unittest
 import functools
 import ctypes
-from unittest.mock import patch
 from dataclasses import dataclass
 from typing import Callable
 import numpy as np
@@ -226,12 +225,15 @@ class TestAsmKernel(unittest.TestCase):
         global_store_b32(addr=v[0], data=v[1], saddr=s[0:1]), s_endpgm()])
     lib = ctypes.create_string_buffer(code(4), len(code(4)))
     other = ctypes.create_string_buffer(code(4), len(code(4)))
-    with patch.object(call, "lift_cache", {}), patch.object(call, "_lift", wraps=call._lift) as build:
-      for buf, value in ((lib, 4), (lib, 4), (other, 4), (lib, 5), (other, 4)):
-        buf.raw, out.value = code(value), 0
-        run_asm(ctypes.addressof(buf), len(buf), 1, 1, 1, 1, 1, 1, ctypes.addressof(args), arch="rdna3")
-        self.assertEqual(out.value, value)
-      self.assertEqual(build.call_count, 2)
+    programs = {}
+    for buf, value in ((lib, 4), (lib, 4), (other, 4), (lib, 5), (other, 4)):
+      buf.raw, out.value = code(value), 0
+      run_asm(ctypes.addressof(buf), len(buf), 1, 1, 1, 1, 1, 1, ctypes.addressof(args), arch="rdna3")
+      self.assertEqual(out.value, value)
+      prg = call.lift_dispatch(ctypes.addressof(buf), len(buf), 1, 1, 1, 1, 1, 1, 0x19c, 0, "rdna3", None, getenv("ASM_CALL_BACKEND", "CPU"))
+      self.assertIsNotNone(prg)
+      self.assertIs(prg, programs.setdefault(value, prg))
+    self.assertIsNot(programs[4], programs[5])
 
   def test_simple(self):
     if self.arch != "rdna3": self.skipTest("only rdna3")
@@ -257,14 +259,6 @@ class TestAsmKernel(unittest.TestCase):
     from test.mockgpu.amd import call
     if getenv("ASM_CALL_BACKEND", "CPU") != "CPU": self.skipTest("Clang JIT only")
     compiler = call.backend_renderer("CPU", fast_compile=True).compiler
-    add_module = compiler.add_module
-    reused = []
-    def check_module(src, names):
-      prior = {name for name in compiler.functions if name in src}
-      self.assertTrue(prior.isdisjoint(names))
-      self.assertTrue(all(f"static void (*{name})" in src for name in prior))
-      reused.append(prior)
-      return add_module(src, names)
     def kernel_a(out:UOp):
       insts = [
         s_load_b64(s[0:1], s[0:1], soffset=NULL),
@@ -291,15 +285,18 @@ class TestAsmKernel(unittest.TestCase):
       ]
       sink = UOp.sink(out.base, UOp.special(32, "lidx0"), UOp.special(1, "gidx0"), arg=KernelInfo("external_call_reuse_b"))
       return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=(inst, dtypes.void)) for inst in insts))))
-    with patch.object(call, "to_program", wraps=call.to_program) as compile_program, \
-         patch.object(compiler, "add_module", side_effect=check_module) as jit_module:
-      a = Tensor.empty(32, dtype=dtypes.uint32).custom_kernel(fxn=kernel_a)[0]
-      self.assertEqual(a.tolist(), [15]*32)
-      b = Tensor.empty(32, dtype=dtypes.uint32).custom_kernel(fxn=kernel_b)[0]
-      self.assertEqual(b.tolist(), [23]*32)
-    self.assertEqual(compile_program.call_count, 2)
-    self.assertEqual(jit_module.call_count, 2)
-    self.assertTrue(reused[1])
+    modules = len(compiler.modules)
+    a = Tensor.empty(32, dtype=dtypes.uint32).custom_kernel(fxn=kernel_a)[0]
+    self.assertEqual(a.tolist(), [15]*32)
+    self.assertEqual(len(compiler.modules), modules+1)
+    functions = dict(compiler.functions)
+    b = Tensor.empty(32, dtype=dtypes.uint32).custom_kernel(fxn=kernel_b)[0]
+    self.assertEqual(b.tolist(), [23]*32)
+    self.assertEqual(len(compiler.modules), modules+2)
+    self.assertTrue(functions.keys() < compiler.functions.keys())
+    for name, address in functions.items():
+      self.assertEqual(compiler.functions[name], address)
+      self.assertIsNone(getattr(compiler.modules[-1], name, None))
 
   def test_variable(self):
     if self.arch != "rdna3": self.skipTest("only rdna3")
