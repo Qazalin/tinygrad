@@ -233,7 +233,8 @@ class TestAsmKernel(unittest.TestCase):
       prg = call.lift_dispatch(ctypes.addressof(buf), len(buf), 1, 1, 1, 1, 1, 1, 0x19c, 0, "rdna3", None, getenv("ASM_CALL_BACKEND", "CPU"))
       self.assertIsNotNone(prg)
       self.assertIs(prg, programs.setdefault(value, prg))
-    self.assertIsNot(programs[4], programs[5])
+    # Operands are read from the current code allocation, so these share the compiled graph too.
+    self.assertIs(programs[4], programs[5])
 
   def test_simple(self):
     if self.arch != "rdna3": self.skipTest("only rdna3")
@@ -318,6 +319,15 @@ class TestAsmKernel(unittest.TestCase):
     self.assertListEqual(a.tolist(), ref.tolist())
 
   def test_lds_sync_loop(self):
+    self._test_lds_sync_loop()
+
+  def test_lds_sync_nested_loop(self):
+    self._test_lds_sync_loop(outer_iterations=2)
+
+  def test_lds_sync_divergent_loop(self):
+    self._test_lds_sync_loop(divergent=True)
+
+  def _test_lds_sync_loop(self, outer_iterations=1, divergent=False):
     if self.arch != "rdna3": self.skipTest("only rdna3")
     def kernel(out:UOp):
       k = Kernel()
@@ -326,8 +336,21 @@ class TestAsmKernel(unittest.TestCase):
       k.emit(v_lshlrev_b32_e32(v[1], 2, v[0]))
       k.emit(v_xor_b32_e32(v[2], 128, v[1]))  # read the corresponding lane in the neighboring wave
       k.emit(v_mov_b32_e32(v[3], v[0]))
+      k.emit(s_mov_b32(s[3], outer_iterations))
+      k.label("outer")
       k.emit(s_mov_b32(s[2], 3))
       k.label("loop")
+      if divergent:
+        k.emit(v_readfirstlane_b32_e32(s[4], v[0]))
+        k.emit(s_lshr_b32(s[4], s[4], 5))
+        k.emit(s_sub_u32(s[4], 4, s[4]))  # wave zero runs longest, wave three finishes first
+        k.emit(s_mov_b32(s[5], 0))
+        k.label("local_loop")
+        k.emit(s_add_u32(s[5], s[5], 1))
+        k.emit(s_sub_u32(s[4], s[4], 1))
+        k.emit(s_cmp_gt_i32(s[4], 0))
+        k.emit(s_cbranch_scc1(), target="local_loop")
+        k.emit(v_add_nc_u32_e32(v[3], s[5], v[3]))
       k.emit(v_add_nc_u32_e32(v[3], 1, v[3]))
       k.emit(ds_store_b32(addr=v[1], data0=v[3]))
       k.emit(s_waitcnt_lgkmcnt(sdst=NULL, simm16=0))
@@ -338,13 +361,19 @@ class TestAsmKernel(unittest.TestCase):
       k.emit(s_sub_u32(s[2], s[2], 1))
       k.emit(s_cmp_gt_i32(s[2], 0))
       k.emit(s_cbranch_scc1(), target="loop")
+      k.emit(s_sub_u32(s[3], s[3], 1))
+      k.emit(s_cmp_gt_i32(s[3], 0))
+      k.emit(s_cbranch_scc1(), target="outer")
       k.emit(global_store_b32(addr=v[1], data=v[3], saddr=s[0:1]))
       k.emit(s_endpgm())
       lds = UOp.placeholder((128,), dtypes.uint32, 0, AddrSpace.LOCAL)
       sink = UOp.sink(out.base, lds, UOp.special(128, "lidx0"), UOp.special(1, "gidx0"), arg=KernelInfo("lds_sync_loop"))
       return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple(UOp(Ops.INS, arg=(x, dtypes.void)) for x in k.finalize()))))
     out = Tensor.empty(128, dtype=dtypes.uint32).custom_kernel(fxn=kernel)[0]
-    self.assertListEqual(out.tolist(), [(i ^ 32) + 3 for i in range(128)])
+    expected = list(range(128))
+    for _ in range(3*outer_iterations):
+      expected = [expected[i ^ 32] + 1 + (4-((i ^ 32)//32) if divergent else 0) for i in range(128)]
+    self.assertListEqual(out.tolist(), expected)
 
   def test_handwritten(self):
     if self.arch != "rdna4": self.skipTest("only tested on rdna4")

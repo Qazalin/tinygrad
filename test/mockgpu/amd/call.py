@@ -11,7 +11,7 @@ from tinygrad.dtype import AddrSpace, Invalid, dtypes
 from tinygrad.helpers import Context, getenv, TracingKey, dedup, unwrap, Target, cpu_profile
 from tinygrad.runtime.autogen import hsa
 from tinygrad.renderer.amd.dsl import Inst, EXEC_LO, ttmp
-from test.mockgpu.amd.emu import (_Ctx, _get_handler, _wave_size, _canonical_info, _is_barrier, PC_LO_IDX, PC_HI_IDX, ENDPGM_PC,
+from test.mockgpu.amd.emu import (_Ctx, _get_handler, _wave_size, _canonical_info, PC_LO_IDX, PC_HI_IDX,
                                   SGPR_COUNT, SCRATCH_STRIDE_IDX, F32_INLINE)
 
 class CallClangJIT(ClangCompiler):
@@ -74,7 +74,6 @@ def clang_renderer(arch:str, fast_compile:bool=False):
 def backend_renderer(backend:str, fast_compile:bool=False):
   return clang_renderer(Device["CPU"].renderer.target.arch, fast_compile) if backend == "CPU" else Device[backend].renderer
 
-lift_cache:dict[tuple, UOp] = {}
 InstructionCall = tuple[UOp, list[UOp], tuple[int, ...], UOp|None]
 instruction_cache:dict[tuple, list[tuple[int, int, InstructionCall]]] = {}
 
@@ -311,42 +310,24 @@ def decode_cfg(lib_bytes:bytes, arch:str):
   insts = amd_decode(lib_bytes, arch)
   return insts, get_cfg(insts, render=False)["data"]
 
+@rewrite_group(name=lambda *args,ret,**_: TracingKey(f"Lift {(k:=ret.src[0].arg).name}", (("lift", k.function_name),)))
 def lift_dispatch(lib:int, lib_sz:int, gx:int, gy:int, gz:int, lx:int, ly:int, lz:int, rsrc2:int, scratch_size:int, arch:str,
-                  user_data:list[int]|None, backend:str) -> UOp|None:
+                  user_data:list[int]|None, backend:str) -> UOp:
   lib_bytes = ctypes.string_at(lib, lib_sz)
   dispatch = (gx, gy, gz, lx, ly, lz, rsrc2, scratch_size, tuple(0 if i < 2 else v for i,v in enumerate(user_data)) if user_data else None)
   renderer = backend_renderer(backend)
   key = (lib_bytes, arch, backend, dispatch[3:], type(renderer), renderer.target, *(x.value for x in to_program_config))
   if key not in dispatch_cache:
-    # The region scheduler is still needed when barriers synchronize multiple waves.
-    if lx*ly*lz > _wave_size(arch) and any(_is_barrier(inst) for inst in decode_cfg(lib_bytes, arch)[0].values()):
-      dispatch_cache[key] = None
-    else: dispatch_cache[key] = _lift(lib_bytes, arch, backend, 0, dispatch)
+    dispatch_cache[key] = _lift(lib_bytes, arch, backend, dispatch)
   return dispatch_cache[key]
 
-dispatch_cache:dict[tuple, UOp|None] = {}
+dispatch_cache:dict[tuple, UOp] = {}
 
-@rewrite_group(name=lambda *args,ret,**_: TracingKey(f"Lift {(k:=ret.src[0].arg).name}", (("lift", k.function_name),)))
-def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None, entry: int = 0) -> UOp:
-  backend = getenv("ASM_CALL_BACKEND", "CPU") if backend is None else backend
-  lib_bytes = ctypes.string_at(lib, lib_sz)
-  renderer = backend_renderer(backend)
-  # Code addresses are runtime arguments, so identical bytes can share a program across allocations.
-  key = (lib_bytes, arch, backend, entry, type(renderer), renderer.target, *(x.value for x in to_program_config))
-  if key not in lift_cache: lift_cache[key] = _lift(lib_bytes, arch, backend, entry)
-  return lift_cache[key]
-
-def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None=None) -> UOp:
-  lib_sz = len(lib_bytes)
-  # decode
+def _lift(lib_bytes:bytes, arch:str, backend:str, dispatch:tuple) -> UOp:
+  lib_sz, entry = len(lib_bytes), 0
   insts, cached_cfg = decode_cfg(lib_bytes, arch)
-  barriers = {off:off+inst.size() for off,inst in insts.items() if _is_barrier(inst)}
   cfg:dict[str, dict] = {"blocks":{pc:list(block) for pc,block in cached_cfg["blocks"].items()},
          "paths":{pc:dict(paths) for pc,paths in cached_cfg["paths"].items()}}
-  # A lifted region returns at a barrier. The scheduler resumes each wave at the following instruction.
-  resumes = {pc:barriers[pcs[-1]] for pc,pcs in cfg["blocks"].items() if pcs[-1] in barriers}
-  if dispatch is None:
-    for pc in resumes: cfg["paths"][pc] = {}
   merge_branches(insts, cfg["blocks"], cfg["paths"])
   loops = cfg_loops(cfg["paths"], entry)
   members:set[int] = set()
@@ -358,39 +339,37 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
   afters: dict[UOp, UOp] = {}
   axes = itertools.count(lib_sz)
   temporaries = itertools.count(6)  # reserve 0..5 for the register, LDS, and scratch allocations
-  resume = UOp.param(6, dtypes.uint64, 1, name="resume")
-  code_addr = UOp.param(7, dtypes.uint64, name="code_addr", addrspace=AddrSpace.ALU)
-
-  if dispatch is not None:
-    gx, gy, gz, lx, ly, lz, rsrc2, scratch_size, user_data = dispatch
-    # construct CALL graph
-    wave_size, total_threads = _wave_size(arch), lx*ly*lz
-    n_waves = (total_threads+wave_size-1)//wave_size
-    gx = UOp.variable("groups_x", 1, dtypes.uint32.max, dtypes.uint32)
-    gy = UOp.variable("groups_y", 1, dtypes.uint32.max, dtypes.uint32)
-    wg = UOp.range(UOp.variable("groups", 0, dtypes.uint64.max, dtypes.uint64), 0)
-    wave = UOp.range(n_waves, 1)
-    # alloc register and LDS buffers
-    sgpr = UOp.alloc((SGPR_COUNT,), dtypes.uint32, 0, AddrSpace.REG)
-    vgpr = UOp.alloc((256*wave_size,), dtypes.uint32, 1, AddrSpace.REG)
-    lds_size = ((rsrc2 & hsa.AMD_COMPUTE_PGM_RSRC_TWO_GRANULATED_LDS_SIZE) >> hsa.AMD_COMPUTE_PGM_RSRC_TWO_GRANULATED_LDS_SIZE_SHIFT)*512
-    lds = UOp.alloc((max(lds_size//4, 1),), dtypes.uint32, 3, AddrSpace.REG)
-    scratch = UOp.alloc((max(scratch_size*wave_size*n_waves, 1),), dtypes.uint8, 4, AddrSpace.REG)
-    accvgpr = UOp.alloc((256*wave_size,), dtypes.uint32, 5, AddrSpace.REG) if wave_size == 64 else vgpr
-    args_ptr = UOp.variable("args_ptr", 0, dtypes.uint64.max, dtypes.uint64)
-    code_addr = UOp.variable("lib", 0, dtypes.uint64.max, dtypes.uint64)
-    # Keep grid dimensions unsigned: mixing the uint64 workgroup index with int32 promotes division/modulo to floats.
-    dims = [gx, gy, lx, ly, total_threads]
-    dims = [gx, gy, *(UOp.const(x, dtypes.int) for x in dims[2:])]
-    init = init_wave(wg, wave, sgpr, vgpr, lds, args_ptr, *dims, wave_size, lds_size, scratch_size, rsrc2, arch,
-                     user_data, *([accvgpr] if wave_size == 64 else []))
-    ctx = _Ctx(4, wave_size)
-    afters = {ctx.sgpr:sgpr.after(init), ctx.vgpr:vgpr.after(init), ctx.vmem:ctx.vmem,
-                              ctx.lds:lds.after(init), ctx.scratch:scratch.index(wave*scratch_size*wave_size).after(init)}
-    if wave_size == 64: afters[ctx.accvgpr] = accvgpr.after(init)
-
-  def finish(end:UOp):
-    afters.update((b, arg.without_after.after(end)) for b, arg in afters.items())
+  gx, gy, gz, lx, ly, lz, rsrc2, scratch_size, user_data = dispatch
+  # construct CALL graph
+  wave_size, total_threads = _wave_size(arch), lx*ly*lz
+  n_waves = (total_threads+wave_size-1)//wave_size
+  gx = UOp.variable("groups_x", 1, dtypes.uint32.max, dtypes.uint32)
+  gy = UOp.variable("groups_y", 1, dtypes.uint32.max, dtypes.uint32)
+  wg = UOp.range(UOp.variable("groups", 0, dtypes.uint64.max, dtypes.uint64), 0)
+  wave = UOp.range(n_waves, 1)
+  # alloc register and LDS buffers
+  sgpr = UOp.alloc((SGPR_COUNT*n_waves,), dtypes.uint32, 0, AddrSpace.REG)
+  vgpr = UOp.alloc((256*wave_size*n_waves,), dtypes.uint32, 1, AddrSpace.REG)
+  lds_size = ((rsrc2 & hsa.AMD_COMPUTE_PGM_RSRC_TWO_GRANULATED_LDS_SIZE) >> hsa.AMD_COMPUTE_PGM_RSRC_TWO_GRANULATED_LDS_SIZE_SHIFT)*512
+  lds = UOp.alloc((max(lds_size//4, 1),), dtypes.uint32, 3, AddrSpace.REG)
+  scratch = UOp.alloc((max(scratch_size*wave_size*n_waves, 1),), dtypes.uint8, 4, AddrSpace.REG)
+  accvgpr = UOp.alloc((256*wave_size*n_waves,), dtypes.uint32, 5, AddrSpace.REG) if wave_size == 64 else vgpr
+  args_ptr = UOp.variable("args_ptr", 0, dtypes.uint64.max, dtypes.uint64)
+  code_addr = UOp.variable("lib", 0, dtypes.uint64.max, dtypes.uint64)
+  # Keep grid dimensions unsigned: mixing the uint64 workgroup index with int32 promotes division/modulo to floats.
+  dims = [gx, gy, lx, ly, total_threads]
+  dims = [gx, gy, *(UOp.const(x, dtypes.int) for x in dims[2:])]
+  ctx = _Ctx(4, wave_size)
+  buffers = {ctx.sgpr:(sgpr, SGPR_COUNT), ctx.vgpr:(vgpr, 256*wave_size), ctx.vmem:(ctx.vmem, 0),
+             ctx.lds:(lds, 0), ctx.scratch:(scratch, scratch_size*wave_size)}
+  if wave_size == 64: buffers[ctx.accvgpr] = (accvgpr, 256*wave_size)
+  routes = UOp.alloc((n_waves,), dtypes.int, next(temporaries), AddrSpace.REG)
+  buffers[routes] = (routes, 0)
+  init = init_wave(wg, wave, sgpr.index(wave*SGPR_COUNT), vgpr.index(wave*256*wave_size), lds, args_ptr, *dims,
+                   wave_size, lds_size, scratch_size, rsrc2, arch, user_data,
+                   *([accvgpr.index(wave*256*wave_size)] if wave_size == 64 else []))
+  initialized = routes.after(init).index(wave).store(entry).end(wave)
+  afters = {b:buf.after(initialized) for b,(buf,_) in buffers.items()}
 
   loop_parents:dict[int, int|None] = dict.fromkeys(loops)
   for outer, body in sorted(loops.items(), key=lambda kv:len(kv[1])):
@@ -398,79 +377,6 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
       if inner != outer and inner in loops and loop_parents[inner] is None: loop_parents[inner] = outer
   loop_children:dict[int|None, dict[int, set[int]]] = {}
   for header, parent in loop_parents.items(): loop_children.setdefault(parent, {})[header] = loops[header]
-
-  def emit_region(start:int, members:set[int], scopes:tuple[UOp, ...]=(), route:UOp|None=None):
-    children = loop_children.get(start if route is not None else None, {})
-    exits = {h:sorted({dst for pc in body for dst in cfg["paths"][pc] if dst not in body}) for h,body in children.items()}
-    def target(pc:int): return -pc-3 if pc not in members or (route is not None and pc == start) else pc
-    enclosed = {pc for h,body in children.items() for pc in body if pc != h}
-    edges = {pc:[target(dst) for dst in (exits[pc] if pc in children else cfg["paths"][pc])] or [-2]
-             for pc in members if pc not in enclosed}
-    # -pc-3 represents an edge leaving this region for pc; -2 ends the program, -1 joins all exits.
-    reverse:dict[int, dict[int, int]] = {-1:{}}
-    for pc, dsts in edges.items():
-      reverse.setdefault(pc, {})
-      for dst in dsts: reverse.setdefault(dst, {})[pc] = UNCOND
-    for pc in list(reverse):
-      if pc < -1: reverse[-1][pc] = UNCOND
-    parents = dominators(reverse, -1)
-    tree:dict[int, list[int]] = {}
-    for pc, par in parents.items():
-      if pc != -1: tree.setdefault(par, []).append(pc)
-    depth = {-1:0}
-    ancestors:dict[int, tuple[int, ...]] = {-1:(-1,)}
-    pending = [-1]
-    while pending:
-      par = pending.pop()
-      for pc in tree.get(par, []):
-        depth[pc] = depth[par]+1
-        row = [par]
-        while 1 << len(row) <= depth[pc]: row.append(ancestors[row[-1]][len(row)-1])
-        ancestors[pc] = tuple(row)
-        pending.append(pc)
-    def join(a:int, b:int) -> int:
-      if depth[a] < depth[b]: a, b = b, a
-      diff = depth[a]-depth[b]
-      while diff:
-        bit = diff.bit_length()-1
-        a, diff = ancestors[a][bit], diff-(1<<bit)
-      if a == b: return a
-      for bit in reversed(range(len(ancestors[a]))):
-        if bit < len(ancestors[a]) and ancestors[a][bit] != ancestors[b][bit]: a, b = ancestors[a][bit], ancestors[b][bit]
-      return ancestors[a][0]
-
-    def emit(block_pc:int, stop:int=-1, scopes:tuple[UOp, ...]=scopes):
-      while block_pc != stop:
-        if block_pc < 0:
-          if route is not None:
-            buf = afters.get(route, route).after(*scopes)
-            afters[route] = buf.after(buf.store(-block_pc-3))
-          return
-        if block_pc in children:
-          loop = UOp.loop(next(axes)).replace(src=(UOp(Ops.NOOP).after(UOp.group(*afters.values())),))
-          # Record the header to repeat, or the selected exit to leave this loop.
-          selector = UOp.alloc((1,), dtypes.int, slot=next(temporaries), addrspace=AddrSpace.REG)
-          emit_region(block_pc, children[block_pc], scopes+(loop,), selector)
-          choice = afters[selector][0].load()
-          finish(UOp.group(*afters.values()).backedge(loop, choice.eq(block_pc)))
-          choice = afters[selector][0].load()
-          predicates = [choice.eq(dst) for dst in exits[block_pc]]
-        else:
-          cond = emit_block(block_pc, scopes)
-          predicates = [cond.logical_not() if kind == COND_NOT_TAKEN else cond for kind in cfg["paths"][block_pc].values()]
-        targets = edges[block_pc]
-        if len(targets) == 1:
-          block_pc = targets[0]
-          continue
-        merge = functools.reduce(join, targets)
-        for dst, pred in zip(targets, predicates):
-          if dst == merge: continue
-          deps = UOp.group(*afters.values())
-          gate = UOp.range(pred.cast(dtypes.int).after(deps).after(*scopes), next(axes))
-          emit(dst, merge, scopes+(gate,))
-          finish(UOp.group(*afters.values()).end(gate))
-        block_pc = merge
-    emit(start)
 
   @functools.cache
   def block_instructions(block_pc:int):
@@ -489,7 +395,7 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
 
   chunk_size = 128
 
-  def emit_block(block_pc:int, scopes:tuple[UOp, ...]) -> UOp:
+  def emit_block(block_pc:int, wave:UOp, scopes:tuple[UOp, ...]) -> UOp:
     instructions, cond = block_instructions(block_pc)
     for chunk in instruction_chunks(instructions, chunk_size):
       off, (template, bufs, word_offsets, _) = chunk[0]
@@ -500,13 +406,51 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
       call = template.replace(src=(template.body, *args, *((code_addr>>2)+(off//4+i) for i in word_offsets)))
       # CALL consumes argument ranges; restore the enclosing control-flow scopes.
       afters.update((b, arg.without_after.after(call, *scopes)) for b, arg in zip(bufs, args))
-    if dispatch is None and not cfg["paths"][block_pc]:
-      ptr = resume.after(*afters.values()).after(*scopes)
-      afters[resume] = ptr.after(ptr[0].store(code_addr+resumes[block_pc] if block_pc in resumes else ENDPGM_PC))
-    return cond.substitute(afters, walk=True)
-  emit_region(entry, members, (wg, wave) if dispatch is not None else ())
-  body = UOp.group(*afters.values())
-  if dispatch is not None: body = body.end(wave).end(wg)
+    return cond.substitute({u:buffers[u.src[0]][0].after(afters[u.src[0]]).index(wave*buffers[u.src[0]][1]+u.src[1])
+                            for u in cond.toposort() if u.op is Ops.INDEX and u.src[0] in buffers}, walk=True)
+  def emit_dispatch(start:int, members:set[int], scopes:tuple[UOp, ...], parent:int|None=None):
+    # Topologically order this region with nested natural loops treated as single nodes.
+    children = loop_children.get(parent, {})
+    enclosed = {pc for h,body in children.items() for pc in body if pc != h}
+    edges = {pc:{dst for src in (children[pc] if pc in children else {pc}) for dst in cfg["paths"][src]
+                 if dst in members and dst != start and dst not in children.get(pc, set())}
+             for pc in members if pc not in enclosed}
+    order, seen, pending = [], set(), [(start, False)]
+    while pending:
+      pc, visited = pending.pop()
+      if visited: order.append(pc)
+      elif pc not in seen:
+        seen.add(pc)
+        pending.append((pc, True))
+        pending.extend((dst, False) for dst in sorted(edges[pc], reverse=True))
+    for pc in reversed(order):
+      if pc in children:
+        loop = UOp.loop(next(axes)).replace(src=(UOp(Ops.NOOP).after(UOp.group(*afters.values())),))
+        emit_dispatch(pc, children[pc], scopes+(loop,), pc)
+        # Waves that exited keep their route while the remaining waves repeat the loop.
+        active = UOp.alloc((1,), dtypes.int, next(temporaries), AddrSpace.REG)
+        zero = active.after(*afters.values()).after(*scopes, loop)[0].store(0)
+        w = UOp.range(n_waves, next(axes))
+        ptr = active.after(zero, w)
+        check = ptr[0].store(ptr[0].load() | afters[routes][w].load().eq(pc).cast(dtypes.int)).end(w)
+        end = check.backedge(loop, active.after(check)[0].load().ne(0))
+      else:
+        # Complete the block for every participating wave before entering its successors, including barrier successors.
+        w = UOp.range(n_waves, next(axes))
+        gate = UOp.range(afters[routes][w].load().eq(pc).cast(dtypes.int).after(*scopes), next(axes))
+        deps = UOp.group(*afters.values())
+        afters.update((b, (buf.index(w*stride) if stride else buf).after(deps))
+                      for b,(buf,stride) in buffers.items())
+        cond = emit_block(pc, w, scopes+(w, gate))
+        dsts = cfg["paths"][pc]
+        target = UOp.const(-1, dtypes.int)
+        for dst, kind in dsts.items():
+          target = UOp.const(dst, dtypes.int) if len(dsts) == 1 else (cond.logical_not() if kind == COND_NOT_TAKEN else cond).where(dst, target)
+        end = routes.after(*afters.values()).after(*scopes, w, gate)[w].store(target).end(gate).end(w)
+      afters.update((b, buf.after(end)) for b,(buf,_) in buffers.items())
+
+  emit_dispatch(entry, members, (wg,))
+  body = UOp.group(*afters.values()).end(wg)
   # Operand bits are read from the runtime code pointer; identical call graphs can share machine code.
   name = f"asm_call_{arch}_{body.key.hex()[:16]}_{entry}"
   sink = UOp.sink(body, arg=KernelInfo(name=name, opts_to_apply=())).rtag(1)

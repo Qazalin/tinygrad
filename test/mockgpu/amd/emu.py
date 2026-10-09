@@ -1975,23 +1975,20 @@ def _init_wave(lib: int, wave_start: int, total_threads: int, lx: int, ly: int, 
   return st
 
 # lift assembly to a CALL graph and execute
-ASM_CALL, ASM_CALL_BACKEND = ContextVar("ASM_CALL", 0), getenv("ASM_CALL_BACKEND", "CPU")
+ASM_CALL, ASM_CALL_BACKEND = ContextVar("ASM_CALL", 1), getenv("ASM_CALL_BACKEND", "CPU")
 
 def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, lz: int, args_ptr: int, rsrc2: int = 0x19c,
             scratch_size: int = 0, arch: str = "rdna3", user_data: list[int]|None = None) -> int:
   """Execute AMD assembly program. scratch_size is private_segment_fixed_size from kernel descriptor (per-lane)."""
-  lifted = {}
   if ASM_CALL:
-    from test.mockgpu.amd.call import lift, lift_dispatch
-    if (prg:=lift_dispatch(lib, lib_sz, gx, gy, gz, lx, ly, lz, rsrc2, scratch_size, arch, user_data, ASM_CALL_BACKEND)) is not None:
-      if user_data: args_ptr = user_data[0] | ((user_data[1] if len(user_data) > 1 else 0) << 32)
-      with _MXCSRContext():
-        get_runtime(ASM_CALL_BACKEND, prg)(*[0]*len(prg.arg.globals),
-          vals=tuple({"lib":lib, "args_ptr":args_ptr, "groups_x":gx, "groups_y":gy, "groups":gx*gy*gz}[v.arg.name]
-                     for v in prg.arg.vars))
-      return 0
-    prg = lift(lib, lib_sz, arch, ASM_CALL_BACKEND)
-    lifted[lib] = (prg, get_runtime(ASM_CALL_BACKEND, prg))
+    from test.mockgpu.amd.call import lift_dispatch
+    prg = lift_dispatch(lib, lib_sz, gx, gy, gz, lx, ly, lz, rsrc2, scratch_size, arch, user_data, ASM_CALL_BACKEND)
+    if user_data: args_ptr = user_data[0] | ((user_data[1] if len(user_data) > 1 else 0) << 32)
+    with _MXCSRContext():
+      get_runtime(ASM_CALL_BACKEND, prg)(*[0]*len(prg.arg.globals),
+        vals=tuple({"lib":lib, "args_ptr":args_ptr, "groups_x":gx, "groups_y":gy, "groups":gx*gy*gz}[v.arg.name]
+                   for v in prg.arg.vars))
+    return 0
 
   program: dict[int, tuple[Callable, list[int], bool, Inst]] = {}  # pc -> (fxn, globals, is_barrier, inst)
   lds_size = ((rsrc2 & hsa.AMD_COMPUTE_PGM_RSRC_TWO_GRANULATED_LDS_SIZE) >> hsa.AMD_COMPUTE_PGM_RSRC_TWO_GRANULATED_LDS_SIZE_SHIFT) * 512
@@ -2036,16 +2033,6 @@ def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, 
       if all(done): return
       for wi, (st, c_bufs) in enumerate(waves):
         if done[wi]: continue
-        if lifted:
-          if (pc:=st.pc) == ENDPGM_PC:
-            done[wi] = True
-            continue
-          if pc not in lifted:
-            prg = lift(lib, lib_sz, arch, ASM_CALL_BACKEND, entry=pc-lib)
-            lifted[pc] = (prg, get_runtime(ASM_CALL_BACKEND, prg))
-          prg, runtime = lifted[pc]
-          runtime(*[c_bufs[g].value for g in prg.arg.globals], vals=(lib,) if prg.arg.vars else ())
-          continue
         # Run this wave until barrier or endpgm
         for _ in range(1_000_000):
           pc = st.pc
