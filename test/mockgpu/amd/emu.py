@@ -1322,8 +1322,7 @@ def _compile_mfma(inst: irc.VOP3P|irc.VOP3PX2, ctx: _Ctx) -> UOp:
   return UOp.sink(read_phase, compute_phase, *ctx.inc_pc())
 
 def _compile_wmma(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P, ctx: _Ctx) -> UOp:
-  """RDNA3/4 WMMA: D = A@B + C on 16x16 tiles. A/B are unpacked to flat f32/i32 arrays, then all 256 outputs are
-  computed directly with scalar ops (no lane loop - the wave32 lane structure is baked into the index maps)."""
+  """RDNA3/4 WMMA: snapshot the inputs before writing overlapping VGPRs, then loop over the 256 outputs."""
   op_name, exec_mask = _op_name(inst), ctx.rexec()
   vdst_reg = ctx.inst_field(type(inst).vdst)
   src0_r, src1_r = ctx.inst_field(type(inst).src0) - _c(256), ctx.inst_field(type(inst).src1) - _c(256)
@@ -1338,7 +1337,7 @@ def _compile_wmma(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P, ctx: _Ctx) -> UOp:
   # read a source element from VGPRs: (src, lane, vgpr, element-in-vgpr) -> f32/i32
   def gval(src, lane, vgpr, ridx, *, fmt):
     v = ctx.rvgpr_dyn(src + _c(vgpr), UOp.const(lane, dtypes.int))
-    pkd = v >> UOp.const(ridx * sz, dtypes.uint32) if ridx > 0 else v
+    pkd = v >> UOp.const(ridx * sz, dtypes.uint32)
     pkd = pkd & UOp.const((1 << sz) - 1, dtypes.uint32)
     if not fmt.startswith('IU'): return _FUNCS[f'{fmt.lower()}_to_f32'](pkd)
     return (pkd << _c(24, dtypes.uint)).bitcast(dtypes.int32) >> _c(24, dtypes.int32)  # sign extend
@@ -1346,47 +1345,57 @@ def _compile_wmma(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P, ctx: _Ctx) -> UOp:
   # RDNA3 f16/bf16: 16 lanes x 8 VGPRs x 2 halves,    k maps linearly
   # RDNA3 iu8:      16 lanes x 4 VGPRs x 4 quarters,  k maps linearly
   # RDNA4:          32 lanes x 4 VGPRs x 2 halves, k bits are scrambled (k[2] goes to lane bit 4)
-  def read_mat(src, fmt):
+  def read_mat(src, fmt, row, k):
     n = 32 // sz  # values per vgpr
     def ab_map(i, k):  # (row, k) -> (lane, vgpr, element-in-vgpr)
       elem, lane = ((k & 3) | ((k >> 1) & 4), i + ((k >> 2) & 1) * 16) if is_rdna4 else (k, i)
       return lane, elem // n, elem % n
-    return [gval(src, *ab_map(row, k), fmt=fmt) for row in range(16) for k in range(16)]
+    return gval(src, *ab_map(row, k), fmt=fmt)
 
-  mat_a, mat_b = read_mat(src0_r, a_fmt), read_mat(src1_r, b_fmt)
   def d_map(m, n):  # output (row, col) -> (lane, vgpr)
     lane_bit, vgpr = (m >> 3, m & 7) if is_rdna4 else (m & 1, m >> 1)
     return n + lane_bit * 16, vgpr
 
   # Accumulator C. RDNA4 f16/bf16 packs two f32 accumulator VGPRs into one f16 VGPR; RDNA3 uses the lo half of each.
   # src2 may be a VGPR or an inline/scalar constant (128 = int 0, the usual ", 0" C form); the runner must handle both dynamically
-  out_dt = dtypes.float32 if output_type == "F32" else dtypes.int32
+  out_dt = dtypes.int32 if output_type == "I32" else dtypes.float32
   cbits = ctx.rsrc_dyn(src2_r, None, 32)
   cval_const = _FUNCS[f'{output_type.lower()}_to_f32'](cbits & UOp.const(0xFFFF, dtypes.uint32)) \
     if output_type in ("F16", "BF16") else cbits.bitcast(out_dt)
-  if output_type in ("F16", "BF16"):
-    mat_c = [is_c_vgpr.where(gval(src2_r, *((lane, vgpr // 2, vgpr % 2) if is_rdna4 else (lane, vgpr, 0)), fmt=output_type), cval_const)
-             for m in range(16) for n in range(16) for lane, vgpr in [d_map(m, n)]]
-  else:
-    mat_c = [is_c_vgpr.where(ctx.rvgpr_dyn(src2_r + _c(vgpr), UOp.const(lane, dtypes.int)).bitcast(out_dt), cval_const)
-             for m in range(16) for n in range(16) for lane, vgpr in [d_map(m, n)]]
-  mat_d = [sum(mat_a[r*16+k] * mat_b[c*16+k] for k in range(16)) + mat_c[r*16+c] for r in range(16) for c in range(16)]
+  def read_c(m, n):
+    lane, vgpr = d_map(m, n)
+    val = gval(src2_r, *((lane, vgpr // 2, vgpr % 2) if is_rdna4 else (lane, vgpr, 0)), fmt=output_type) \
+      if output_type in ("F16", "BF16") else ctx.rvgpr_dyn(src2_r + _c(vgpr), UOp.const(lane, dtypes.int)).bitcast(out_dt)
+    return is_c_vgpr.where(val, cval_const)
 
-  def w_store(m: int, n: int, val: UOp, vgpr_off: int) -> UOp:  # store one output element to its (lane, vgpr) slot
+  tmp = UOp.placeholder((768,), dtypes.uint32, slot=0, addrspace=AddrSpace.LOCAL)
+  i = ctx.range(256)
+  read_phase = UOp.group(tmp[i].store(read_mat(src0_r, a_fmt, i//16, i%16).bitcast(dtypes.uint32)),
+                         tmp[256+i].store(read_mat(src1_r, b_fmt, i//16, i%16).bitcast(dtypes.uint32)),
+                         tmp[512+i].store(read_c(i//16, i%16).bitcast(dtypes.uint32))).end(i)
+  vals = tmp.after(read_phase)
+  def dot(m, n):
+    # Keep the original summation order; only the output coordinates become a runtime loop.
+    return sum(vals[m*16+k].load().bitcast(out_dt) * vals[256+n*16+k].load().bitcast(out_dt) for k in range(16)) \
+      + vals[512+m*16+n].load().bitcast(out_dt)
+
+  def w_store(m, n, val:UOp, vgpr_off) -> UOp:  # store one output element to its (lane, vgpr) slot
     lane_i, _ = d_map(m, n)
-    return ctx.wvgpr_dyn(vdst_reg + _c(vgpr_off), UOp.const(lane_i, dtypes.int), val, exec_mask)
+    return ctx.wvgpr_dyn(vdst_reg + _c(vgpr_off), UOp.const(lane_i, dtypes.int), val, exec_mask, after=read_phase)
+  packed = is_rdna4 and output_type in ("F16", "BF16")
+  out = ctx.range(128 if packed else 256)
+  m, n = (out//16)*(2 if packed else 1), out%16
   if output_type in ("F16", "BF16"):
     def to_bits(v: UOp) -> UOp:  # f32 result -> 16 output bits
       return ((v.bitcast(dtypes.uint32) >> UOp.const(16, dtypes.uint32)) & UOp.const(0xFFFF, dtypes.uint32)) if output_type == "BF16" \
         else v.cast(dtypes.half).bitcast(dtypes.uint16).cast(dtypes.uint32)
     if is_rdna4:  # pack 2 outputs per VGPR (adjacent m values share a VGPR)
-      stores = [w_store(m, n, to_bits(mat_d[m*16+n]) | (to_bits(mat_d[(m+1)*16+n]) << UOp.const(16, dtypes.uint32)), d_map(m, n)[1] // 2)
-                for n in range(16) for m in range(0, 16, 2)]
+      store = w_store(m, n, to_bits(dot(m, n)) | (to_bits(dot(m+1, n)) << UOp.const(16, dtypes.uint32)), d_map(m, n)[1] // 2)
     else:  # one output per VGPR (lo half)
-      stores = [w_store(m, n, to_bits(mat_d[m*16+n]), d_map(m, n)[1]) for m in range(16) for n in range(16)]
+      store = w_store(m, n, to_bits(dot(m, n)), d_map(m, n)[1])
   else:  # f32/i32
-    stores = [w_store(m, n, mat_d[m*16+n].bitcast(dtypes.uint32), d_map(m, n)[1]) for m in range(16) for n in range(16)]
-  return UOp.sink(*stores, *ctx.inc_pc())
+    store = w_store(m, n, dot(m, n).bitcast(dtypes.uint32), d_map(m, n)[1])
+  return UOp.sink(store.end(out), *ctx.inc_pc())
 
 def _compile_vop3p(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P | irc.VOP3PX2, ctx: _Ctx) -> UOp:
   op_name = _op_name(inst)
@@ -1964,7 +1973,7 @@ def _init_wave(lib: int, wave_start: int, total_threads: int, lx: int, ly: int, 
   return st
 
 # lift assembly to a CALL graph and execute
-ASM_CALL, ASM_CALL_BACKEND = ContextVar("ASM_CALL", 0), getenv("ASM_CALL_BACKEND", "CPU")
+ASM_CALL, ASM_CALL_BACKEND = ContextVar("ASM_CALL", 0), getenv("ASM_CALL_BACKEND", "LLVM")
 
 def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, lz: int, args_ptr: int, rsrc2: int = 0x19c,
             scratch_size: int = 0, arch: str = "rdna3", user_data: list[int]|None = None) -> int:
@@ -1973,12 +1982,14 @@ def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, 
   if ASM_CALL:
     from test.mockgpu.amd.call import lift, lift_dispatch
     if (prg:=lift_dispatch(lib, lib_sz, gx, gy, gz, lx, ly, lz, rsrc2, scratch_size, arch, user_data, ASM_CALL_BACKEND)) is not None:
+      if user_data: args_ptr = user_data[0] | ((user_data[1] if len(user_data) > 1 else 0) << 32)
       with _MXCSRContext():
-        get_runtime(ASM_CALL_BACKEND, prg)(*[0]*len(prg.arg.globals),
-          vals=tuple({"lib":lib, "args_ptr":args_ptr}[v.arg.name] for v in prg.arg.vars))
+        get_runtime("CPU" if ASM_CALL_BACKEND == "LLVM" else ASM_CALL_BACKEND, prg)(*[0]*len(prg.arg.globals),
+          vals=tuple({"lib":lib, "args_ptr":args_ptr, "groups_x":gx, "groups_y":gy, "groups":gx*gy*gz}[v.arg.name]
+                     for v in prg.arg.vars))
       return 0
     prg = lift(lib, lib_sz, arch, ASM_CALL_BACKEND)
-    lifted[lib] = (prg, get_runtime(ASM_CALL_BACKEND, prg))
+    lifted[lib] = (prg, get_runtime("CPU" if ASM_CALL_BACKEND == "LLVM" else ASM_CALL_BACKEND, prg))
 
   program: dict[int, tuple[Callable, list[int], bool, Inst]] = {}  # pc -> (fxn, globals, is_barrier, inst)
   lds_size = ((rsrc2 & hsa.AMD_COMPUTE_PGM_RSRC_TWO_GRANULATED_LDS_SIZE) >> hsa.AMD_COMPUTE_PGM_RSRC_TWO_GRANULATED_LDS_SIZE_SHIFT) * 512
@@ -2029,7 +2040,7 @@ def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, 
             continue
           if pc not in lifted:
             prg = lift(lib, lib_sz, arch, ASM_CALL_BACKEND, entry=pc-lib)
-            lifted[pc] = (prg, get_runtime(ASM_CALL_BACKEND, prg))
+            lifted[pc] = (prg, get_runtime("CPU" if ASM_CALL_BACKEND == "LLVM" else ASM_CALL_BACKEND, prg))
           prg, runtime = lifted[pc]
           runtime(*[c_bufs[g].value for g in prg.arg.globals], vals=(lib,) if prg.arg.vars else ())
           continue

@@ -205,6 +205,19 @@ class TestViz(unittest.TestCase):
     a2 = uop_to_json(VizData(), a)[id(a)]
     self.assertEqual(ansistrip(a2["label"]), f"PYLITERAL\n{TestStruct.__qualname__}(colored_field='xyz12345')")
 
+  def test_index_label_does_not_render_base(self):
+    base = UOp.param(0, dtypes.float, 256).reshape((16,16))
+    # Rendering this base recursively would exceed the recursion limit.
+    for _ in range(200): base = UOp(Ops.NOOP, src=(base,))
+    idx = UOp.variable("idx", 0, 15)
+    recursion_limit = sys.getrecursionlimit()
+    try:
+      sys.setrecursionlimit(200)
+      for op in (Ops.INDEX, Ops.STAGE):
+        u = UOp(op, src=(base, idx+1, UOp.const(2)))
+        self.assertIn("\n[idx+1][2]", uop_to_json(VizData(), u)[id(u)]["label"])
+    finally: sys.setrecursionlimit(recursion_limit)
+
   def test_colored_label_multiline(self):
     with save_viz() as viz:
       arg = colored("x", "green")+"\n"+colored("y", "red")+colored("z", "yellow")+colored("ww\nw", "magenta")

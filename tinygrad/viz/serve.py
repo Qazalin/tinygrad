@@ -41,7 +41,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
 
 from tinygrad.uop.ops import TrackedGraphRewrite, RewriteTrace, UOp, Ops, GroupOp, srender, sint, range_str, range_start, multirange_str
 from tinygrad.uop.ops import KernelInfo, ast_key, ParamArg
-from tinygrad.uop.render import render_uir, uops_colors, _inline, _render_arg
+from tinygrad.uop.render import render_uir, uops_colors, _inline, _render_arg, strip_parens
 from tinygrad.device import ProfileDeviceEvent, ProfileGraphEvent, ProfileGraphEntry, ProfileProgramEvent
 from tinygrad.dtype import dtypes, AddrSpace
 
@@ -145,10 +145,14 @@ def uop_to_json(data:VizData, x:UOp) -> dict[int, dict]:
       if u.op is Ops.CALL:
         label += f"\n{u.src[0].key.hex()[:8]}\n{u.src[0].op}"
       if u.op in {Ops.INDEX, Ops.STAGE}:
-        if len(u.src) > 1: label += f"\n{u.render()}" if sum(len(s.toposort()) for s in u.src[1:]) < 50 else "\nINDEX TOO LARGE"
-        ranges: list[UOp] = []
-        for us in u.src[1:]: ranges += [s for s in us.toposort() if s.op in {Ops.RANGE, Ops.SPECIAL}]
-        if ranges: label += "\n"+' '.join([f"{s.render()}={s.vmax+1}" for s in ranges])
+        if not getenv("VIZ_SKIP_RENDER"):
+          # Only render the index operands: rendering u also traverses its potentially large base computation.
+          if len(u.src) > 1:
+            label += "\n"+(''.join(f"[{strip_parens(s.render())}]" for s in u.src[1:])
+                           if sum(len(s.toposort()) for s in u.src[1:]) < 50 else "INDEX TOO LARGE")
+          ranges: list[UOp] = []
+          for us in u.src[1:]: ranges += [s for s in us.toposort() if s.op in {Ops.RANGE, Ops.SPECIAL}]
+          if ranges: label += "\n"+' '.join([f"{s.render()}={s.vmax+1}" for s in ranges])
       if u.op in {Ops.END, Ops.REDUCE, Ops.BACKEDGE} and len(trngs:=list(u.ended_ranges if u.op is Ops.BACKEDGE else
                                                                  UOp.sink(*u.src[range_start[u.op]:]).ranges)):
         label += "\n"+' '.join([f"{range_str(s, color=True)}({s.vmax+1})" for s in trngs])
@@ -558,10 +562,10 @@ def amd_decode(buf:bytes, arch:str, off:int=0) -> dict[int, Inst]:
   from tinygrad.runtime.autogen.amd.rdna3.ins import s_code_end
   code_end = s_code_end().to_bytes()*5 if arch.startswith("rdna") else None
   addr_table:dict[int, Inst] = {}
-  offset = 0
+  offset, view = 0, memoryview(buf)
   while offset < len(buf):
-    remaining = buf[offset:]
-    if code_end is not None and remaining.startswith(code_end): break
+    if code_end is not None and buf.startswith(code_end, offset): break
+    remaining = view[offset:]
     fmt = detect_format(remaining, arch)
     decoded = fmt.from_bytes(remaining)
     addr_table[off+offset] = decoded
@@ -584,7 +588,7 @@ def is_acc_operand(inst, name:str) -> bool:
   return bool(inst.acc) and name in ('vdst', 'vdata', 'data')
 
 COND_TAKEN, COND_NOT_TAKEN, UNCOND = range(3)
-def get_cfg(pc_table:dict[int, Inst]) -> dict:
+def get_cfg(pc_table:dict[int, Inst], render:bool=True) -> dict:
   # get leaders
   leaders:set[int] = {next(iter(pc_table))}
   for pc, inst in pc_table.items():
@@ -606,6 +610,7 @@ def get_cfg(pc_table:dict[int, Inst]) -> dict:
       if inst.op_name == "S_BRANCH": paths[curr][nx+offset] = UNCOND
       else: paths[curr].update([(nx+offset, COND_TAKEN), (nx, COND_NOT_TAKEN)])
     elif getattr(inst, "op_name", "") != "S_ENDPGM" and nx in leaders: paths[curr][nx] = UNCOND
+  if not render: return {"data":{"blocks":blocks, "paths":paths}}
   pc_tokens:dict[int, list[dict]] = {}
   for pc, inst in pc_table.items():
     pc_tokens[pc] = tokens = []

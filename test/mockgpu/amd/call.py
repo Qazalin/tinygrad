@@ -1,14 +1,27 @@
-import ctypes, itertools, functools, hashlib
+import ctypes, itertools, functools
+from collections.abc import Iterator
 from tinygrad.viz.serve import amd_decode, get_cfg, COND_NOT_TAKEN, UNCOND
-from tinygrad.uop.ops import UOp, sint, Ops, KernelInfo, PatternMatcher, UPat, graph_rewrite, rewrite_group, uopfunc
+from tinygrad.uop.ops import UOp, sint, Ops, KernelInfo, ProgramInfo, PatternMatcher, UPat, graph_rewrite, rewrite_group, uopfunc
 from tinygrad.codegen import to_program, to_program_config
+import tinygrad.codegen as codegen
 from tinygrad.device import Device
+from tinygrad.renderer import Renderer
+from tinygrad.engine.realize import get_runtime
+from tinygrad.runtime.support.c import DLL
 from tinygrad.dtype import AddrSpace, Invalid, dtypes
-from tinygrad.helpers import Context, getenv, TracingKey, dedup, unwrap
+from tinygrad.helpers import Context, getenv, TracingKey, dedup, unwrap, Target
 from tinygrad.runtime.autogen import hsa
 from tinygrad.renderer.amd.dsl import Inst, EXEC_LO, ttmp
 from test.mockgpu.amd.emu import (_Ctx, _get_handler, _wave_size, _canonical_info, _is_barrier, PC_LO_IDX, PC_HI_IDX, ENDPGM_PC,
                                   SGPR_COUNT, SCRATCH_STRIDE_IDX, F32_INLINE)
+
+@functools.cache
+def llvm_renderer(arch:str):
+  from tinygrad.renderer.llvmir import CPULLVMRenderer
+  return CPULLVMRenderer(Target("CPU", "LLVM", arch))
+
+def backend_renderer(backend:str):
+  return llvm_renderer(Device["CPU"].renderer.target.arch) if backend == "LLVM" else Device[backend].renderer
 
 lift_cache:dict[tuple, UOp] = {}
 InstructionCall = tuple[UOp, list[UOp], tuple[int, ...], UOp|None]
@@ -16,7 +29,7 @@ instruction_cache:dict[tuple, list[tuple[int, int, InstructionCall]]] = {}
 
 # this is meant to replace the old emulator
 @uopfunc
-def init_wave(wg:UOp, wave:UOp, sgpr:UOp, vgpr:UOp, lds:UOp, args_ptr:UOp, gx:int, gy:int, lx:int, ly:int, total_threads:int, wave_size:int,
+def init_wave(wg:UOp, wave:UOp, sgpr:UOp, vgpr:UOp, lds:UOp, args_ptr:UOp, gx:sint, gy:sint, lx:sint, ly:sint, total_threads:sint, wave_size:int,
               lds_size:int, scratch_size:int, rsrc2:int, arch:str="rdna3", user_data:list[int]|None=None, accvgpr:UOp|None=None):
   # define ranges inside a wave
   li = UOp.range((wave.eq(0)).where(max(lds_size//4, 1), 0), 2, dtype=dtypes.int)
@@ -32,7 +45,8 @@ def init_wave(wg:UOp, wave:UOp, sgpr:UOp, vgpr:UOp, lds:UOp, args_ptr:UOp, gx:in
   gidx, gidy, gidz = wg%gx, (wg//gx)%gy, wg//(gx*gy)
   n_lanes = (total_threads-wave*wave_size).minimum(wave_size)
   initial:list[tuple[int, sint]] = [*((128+i, i) for i in range(65)), *((193+i, (-i-1)&0xFFFFFFFF) for i in range(16)), *F32_INLINE.items()]
-  initial += [(i,v) for i,v in enumerate(user_data)] if user_data else [(0, args_ptr.cast(dtypes.uint32)), (1, (args_ptr>>32).cast(dtypes.uint32))]
+  initial += [(0, args_ptr.cast(dtypes.uint32)), (1, (args_ptr>>32).cast(dtypes.uint32))][:min(len(user_data), 2) if user_data else 2]
+  if user_data: initial += [(i+2,v) for i,v in enumerate(user_data[2:])]
   if arch == "rdna4": initial += [(ttmp[7].offset, (gidy&0xFFFF)|((gidz&0xFFFF)<<16)), (ttmp[9].offset, gidx)]
   else:
     sgpr_id = (rsrc2 & hsa.AMD_COMPUTE_PGM_RSRC_TWO_USER_SGPR_COUNT) >> hsa.AMD_COMPUTE_PGM_RSRC_TWO_USER_SGPR_COUNT_SHIFT
@@ -91,13 +105,98 @@ def instruction_call(inst:Inst, arch:str) -> InstructionCall:
   entries.append((base, mask, ret))
   return ret
 
+external_calls:dict[tuple, tuple[UOp, tuple[int, ...], object]] = {}
+
+def call_program(sink:UOp, renderer:Renderer, flat:bool=False) -> UOp:
+  # These graphs contain scalar control flow and already-compiled calls, with no tensor reductions or dtype emulation.
+  extra = renderer.extra_matcher or PatternMatcher([])
+  sink = graph_rewrite(sink, codegen.pm_mops+codegen.symbolic_simple, name="call movements", bottom_up=not flat)
+  if flat:
+    sink = graph_rewrite(sink, codegen.pm_lower_weak+codegen.indexing_simplify+extra, ctx=renderer, name="call indexes")
+  else:
+    sink = graph_rewrite(sink, codegen.sym+codegen.pm_add_loads, name="call simplify")
+    sink = graph_rewrite(sink, codegen.symbolic_simple+codegen.pm_expand_broadcast+codegen.pm_add_loads+
+                        codegen.devectorizer2+codegen.indexing_simplify, name="call scalarize")
+    sink = graph_rewrite(sink, codegen.pm_lower_weak+codegen.indexing_simplify, name="call indexes")
+    supported = tuple(renderer.code_for_op)
+    decomp = codegen.symbolic_simple+codegen.get_simplifying_rewrite_patterns(supported)+\
+             codegen.get_late_rewrite_patterns(supported, bool(codegen.DISABLE_FAST_IDIV))
+    sink = graph_rewrite(sink, decomp, ctx=renderer, name="call decompositions")
+    sink = graph_rewrite(sink, codegen.pm_move_gates_from_index, name="call gates")
+    sink = graph_rewrite(sink, codegen.pm_commit_weak+decomp+extra+codegen.pm_split_ends+codegen.pm_remove_invalid,
+                        ctx=renderer, name="call final")
+  sink = graph_rewrite(sink, codegen.pm_cast_const, name="call constants")
+  if not flat:
+    sink = graph_rewrite(sink, codegen.pm_add_control_flow, ctx=codegen.CFGContext(sink), bottom_up=True, name="call control flow")
+  slots = max((u.arg.slot+1 for u in sink.toposort() if u.op is Ops.PARAM and not u.is_variable), default=0)
+  sink = graph_rewrite(sink, codegen.pm_number_params, ctx=(slots, {}), walk=True, name="call variables")
+  if codegen.SPEC: codegen.type_verify(sink, codegen.spec_program)
+  return to_program(UOp(Ops.PROGRAM, src=(sink,), arg=ProgramInfo.from_sink(sink, renderer.target)), renderer)
+
+def external_call(call:UOp, backend:str, flat:bool=False) -> UOp:
+  if backend not in {"CPU", "LLVM"} or not getenv("ASM_CALL_EXTERN", 1): return call
+  renderer = backend_renderer(backend)
+  key = (call.body, type(renderer), renderer.target, *(x.value for x in to_program_config))
+  if key not in external_calls:
+    name = "asm_inst_"+call.body.key.hex()[:24]
+    params = sorted((u for u in call.body.toposort() if u.op is Ops.PARAM), key=lambda u:(u.addrspace is AddrSpace.ALU, u.arg.slot))
+    body = call.body.substitute({u:u.param_like(i, name=u.arg.name)
+                                 for i,u in enumerate(params)})
+    with Context(NOOPT=1, CHECK_OOB=0, TUPLE_ORDER=0, EMULATED_DTYPES="", CAPTURE_PROCESS_REPLAY=0):
+      sink = body.replace(arg=KernelInfo(name=name)).rtag(1)
+      prg = call_program(sink, renderer, flat=True) if flat else to_program(sink, renderer)
+    runtime = get_runtime("CPU" if backend == "LLVM" else backend, prg)
+    setattr(DLL._loaded_.setdefault("asm_call", ctypes.CDLL(None)), name, runtime.fxn)
+    # Lowering renumbers scalar parameters by first use, so recover their original slots by name.
+    scalar_slots = {p.arg.name:p.arg.slot for p in params if p.addrspace is AddrSpace.ALU}
+    slots = tuple(params[i].arg.slot for i in prg.arg.globals) + tuple(scalar_slots[v.arg.name] for v in prg.arg.vars)
+    external_calls[key] = UOp.custom_function(name), slots, runtime
+  body, slots, _ = external_calls[key]
+  invoke = body.call(*(arg.index(0) if arg.addrspace is not AddrSpace.ALU and arg.shape else arg for i in slots for arg in [call.src[i+1]]))
+  # Compiling a body can remove unused parameters; retain their incoming effects even then.
+  return UOp.group(invoke, *(arg for i,arg in enumerate(call.src[1:]) if i not in slots))
+
+block_cache:dict[tuple, tuple[UOp, list[UOp]]] = {}
+
+def instruction_chunks(instructions:list[tuple[int, InstructionCall]], size:int) -> Iterator[list[tuple[int, InstructionCall]]]:
+  # Choose boundaries from instruction bodies, so an insertion needn't invalidate every following block.
+  start = code_hash = 0
+  for i,(_,info) in enumerate(instructions):
+    code_hash = ((code_hash << 1) + int.from_bytes(info[0].body.key[:4], "little")) & (size-1)
+    length = i-start+1
+    if length >= max(size//4, 1) and (code_hash == 0 or length >= size*2):
+      yield instructions[start:i+1]
+      start = i+1
+  if start < len(instructions): yield instructions[start:]
+
+@functools.cache
+def has_effects(body:UOp) -> bool:
+  return any(u.op in (Ops.STORE, Ops.CALL) for u in body.toposort())
+
+def instruction_block(instructions:list[tuple[int, InstructionCall]], backend:str) -> tuple[UOp, list[UOp]]:
+  key = (backend, tuple((off, template, tuple(bufs), offsets) for off,(template,bufs,offsets,_) in instructions))
+  if key not in block_cache:
+    bufs = sorted({b for _,(_,bs,_,_) in instructions for b in bs}, key=lambda b:b.arg.slot)
+    base = UOp.param(len(bufs), dtypes.uint64, name="code_base", addrspace=AddrSpace.ALU)
+    afters = {b:b.param_like(i, name=b.arg.name) for i,b in enumerate(bufs)}
+    for off,(template,bs,offsets,_) in instructions:
+      args = [afters[b] for b in bs]
+      inst = external_call(template.replace(src=(template.body, *args, *(base+off+i for i in offsets))), backend)
+      afters.update((b, arg.without_after.after(inst)) for b,arg in zip(bs,args))
+    body = UOp.sink(*afters.values())
+    block_cache[key] = body, bufs
+  return block_cache[key]
+
 def merge_branches(insts, blocks:dict[int, list[int]], paths:dict[int, dict[int, int]]):
   # Thread jump-only blocks, then share identical conditional branches with the same destinations.
+  targets:dict[int, int] = {}
   def target(pc:int) -> int:
     seen:set[int] = set()
-    while pc not in seen and len(blocks[pc]) == 1 and getattr(insts[blocks[pc][0]], "op_name", "") == "S_BRANCH":
+    while pc not in targets and pc not in seen and len(blocks[pc]) == 1 and getattr(insts[blocks[pc][0]], "op_name", "") == "S_BRANCH":
       seen.add(pc)
       pc = next(iter(paths[pc]))
+    pc = targets.get(pc, pc)
+    targets.update((src, pc) for src in seen)
     return pc
   for pc, dsts in list(paths.items()): paths[pc] = {target(dst):kind for dst,kind in dsts.items()}
   groups:dict[tuple, list[int]] = {}
@@ -119,55 +218,104 @@ def merge_branches(insts, blocks:dict[int, list[int]], paths:dict[int, dict[int,
       paths[pc] = {header:UNCOND}
     blocks[header], paths[header] = [header], dests
 
+def dominators(paths:dict[int, dict[int, int]], entry:int) -> dict[int, int]:
+  # Lengauer-Tarjan: predecessor lists and a compressed forest avoid all-pairs dominance sets.
+  order, parent = [entry], {entry:entry}
+  preds:dict[int, list[int]] = {entry:[]}
+  stack = [(entry, iter(paths[entry]))]
+  while stack:
+    pc, edges = stack[-1]
+    if (dst:=next(edges, None)) is None:
+      stack.pop()
+      continue
+    preds.setdefault(dst, []).append(pc)
+    if dst not in parent:
+      parent[dst] = pc
+      order.append(dst)
+      stack.append((dst, iter(paths[dst])))
+  semi = {pc:i for i,pc in enumerate(order)}
+  label = {pc:pc for pc in order}
+  ancestor:dict[int, int] = {}
+  buckets:dict[int, list[int]] = {pc:[] for pc in order}
+  idom = {entry:entry}
+  def evaluate(pc:int) -> int:
+    trail = []
+    at = pc
+    while at in ancestor and ancestor[at] in ancestor:
+      trail.append(at)
+      at = ancestor[at]
+    for at in reversed(trail):
+      par = ancestor[at]
+      if semi[label[par]] < semi[label[at]]: label[at] = label[par]
+      ancestor[at] = ancestor[par]
+    return label[pc]
+  for pc in reversed(order[1:]):
+    semi[pc] = min(semi[evaluate(src)] for src in preds[pc])
+    buckets[order[semi[pc]]].append(pc)
+    ancestor[pc] = par = parent[pc]
+    for node in buckets[par]:
+      other = evaluate(node)
+      idom[node] = other if semi[other] < semi[node] else par
+    buckets[par].clear()
+  for pc in order[1:]:
+    if idom[pc] != order[semi[pc]]: idom[pc] = idom[idom[pc]]
+  return idom
+
 def cfg_loops(paths:dict[int, dict[int, int]], entry:int) -> dict[int, set[int]]:
-  # Dominance is independent of the order of blocks in the instruction stream.
-  nodes:set[int] = set()
-  pending = [entry]
-  while pending:
-    if (pc:=pending.pop()) in nodes: continue
-    nodes.add(pc)
-    pending.extend(paths[pc])
-  preds = {pc:{src for src in nodes if pc in paths[src]} for pc in nodes}
-  dom = {pc:({entry} if pc == entry else set(nodes)) for pc in nodes}
-  changed = True
-  while changed:
-    changed = False
-    for pc in nodes - {entry}:
-      new = {pc} | set.intersection(*(dom[src] for src in preds[pc]))
-      if new != dom[pc]: dom[pc], changed = new, True
+  idom = dominators(paths, entry)
+  children:dict[int, list[int]] = {pc:[] for pc in idom}
+  preds:dict[int, list[int]] = {pc:[] for pc in idom}
+  for pc, par in idom.items():
+    if pc != entry: children[par].append(pc)
+    for dst in paths[pc]: preds[dst].append(pc)
+  # Euler intervals answer dominance queries in constant time.
+  starts:dict[int, int] = {}
+  ends:dict[int, int] = {}
+  stack = [(entry, False)]
+  while stack:
+    pc, finish = stack.pop()
+    if finish: ends[pc] = len(starts)
+    else:
+      starts[pc] = len(starts)
+      stack.append((pc, True))
+      stack.extend((child, False) for child in children[pc])
+  backedges = {(src, dst) for src in idom for dst in paths[src] if starts[dst] <= starts[src] < ends[dst]}
   loops:dict[int, set[int]] = {}
-  for src in nodes:
-    for header in paths[src]:
-      if header not in dom[src]: continue
-      body = loops.setdefault(header, {header})
-      pending = [src]
-      while pending:
-        if (pc:=pending.pop()) in body: continue
-        body.add(pc)
-        pending.extend(preds[pc])
-  # Removing natural backedges must leave a DAG. Otherwise the CFG is irreducible.
-  visited:set[int] = set()
-  active:set[int] = set()
-  def visit(pc:int):
-    assert pc not in active, "irreducible control flow is not supported in ASM_CALL"
-    if pc in visited: return
-    active.add(pc)
+  for src, header in backedges:
+    body = loops.setdefault(header, {header})
+    pending = [src]
+    while pending:
+      if (pc:=pending.pop()) in body: continue
+      body.add(pc)
+      pending.extend(preds[pc])
+  # A topological traversal after removing backedges also detects irreducible control flow.
+  incoming = {pc:sum((src, pc) not in backedges for src in preds[pc]) for pc in idom}
+  pending = [pc for pc,n in incoming.items() if n == 0]
+  seen = 0
+  while pending:
+    pc = pending.pop()
+    seen += 1
     for dst in paths[pc]:
-      if dst not in dom[pc]: visit(dst)
-    active.remove(pc)
-    visited.add(pc)
-  visit(entry)
+      if (pc, dst) in backedges: continue
+      incoming[dst] -= 1
+      if incoming[dst] == 0: pending.append(dst)
+  assert seen == len(idom), "irreducible control flow is not supported in ASM_CALL"
   return loops
+
+@functools.cache
+def decode_cfg(lib_bytes:bytes, arch:str):
+  insts = amd_decode(lib_bytes, arch)
+  return insts, get_cfg(insts, render=False)["data"]
 
 def lift_dispatch(lib:int, lib_sz:int, gx:int, gy:int, gz:int, lx:int, ly:int, lz:int, rsrc2:int, scratch_size:int, arch:str,
                   user_data:list[int]|None, backend:str) -> UOp|None:
   lib_bytes = ctypes.string_at(lib, lib_sz)
-  dispatch = (gx, gy, gz, lx, ly, lz, rsrc2, scratch_size, tuple(user_data) if user_data else None)
-  renderer = Device[backend].renderer
-  key = (lib_bytes, arch, backend, dispatch, type(renderer), renderer.target, *(x.value for x in to_program_config))
+  dispatch = (gx, gy, gz, lx, ly, lz, rsrc2, scratch_size, tuple(0 if i < 2 else v for i,v in enumerate(user_data)) if user_data else None)
+  renderer = backend_renderer(backend)
+  key = (lib_bytes, arch, backend, dispatch[3:], type(renderer), renderer.target, *(x.value for x in to_program_config))
   if key not in dispatch_cache:
     # The region scheduler is still needed when barriers synchronize multiple waves.
-    if lx*ly*lz > _wave_size(arch) and any(_is_barrier(inst) for inst in amd_decode(lib_bytes, arch).values()):
+    if lx*ly*lz > _wave_size(arch) and any(_is_barrier(inst) for inst in decode_cfg(lib_bytes, arch)[0].values()):
       dispatch_cache[key] = None
     else: dispatch_cache[key] = _lift(lib_bytes, arch, backend, 0, dispatch)
   return dispatch_cache[key]
@@ -176,9 +324,9 @@ dispatch_cache:dict[tuple, UOp|None] = {}
 
 @rewrite_group(name=lambda *args,ret,**_: TracingKey(f"Lift {(k:=ret.src[0].arg).name}", (("lift", k.function_name),)))
 def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None, entry: int = 0) -> UOp:
-  backend = getenv("ASM_CALL_BACKEND", "CPU") if backend is None else backend
+  backend = getenv("ASM_CALL_BACKEND", "LLVM") if backend is None else backend
   lib_bytes = ctypes.string_at(lib, lib_sz)
-  renderer = Device[backend].renderer
+  renderer = backend_renderer(backend)
   # Code addresses are runtime arguments, so identical bytes can share a program across allocations.
   key = (lib_bytes, arch, backend, entry, type(renderer), renderer.target, *(x.value for x in to_program_config))
   if key not in lift_cache: lift_cache[key] = _lift(lib_bytes, arch, backend, entry)
@@ -187,9 +335,10 @@ def lift(lib: int, lib_sz: int, arch: str = "rdna3", backend: str|None = None, e
 def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None=None) -> UOp:
   lib_sz = len(lib_bytes)
   # decode
-  insts = amd_decode(lib_bytes, arch)
+  insts, cached_cfg = decode_cfg(lib_bytes, arch)
   barriers = {off:off+inst.size() for off,inst in insts.items() if _is_barrier(inst)}
-  cfg = get_cfg(insts)["data"]
+  cfg:dict[str, dict] = {"blocks":{pc:list(block) for pc,block in cached_cfg["blocks"].items()},
+         "paths":{pc:dict(paths) for pc,paths in cached_cfg["paths"].items()}}
   # A lifted region returns at a barrier. The scheduler resumes each wave at the following instruction.
   resumes = {pc:barriers[pcs[-1]] for pc,pcs in cfg["blocks"].items() if pcs[-1] in barriers}
   if dispatch is None:
@@ -204,6 +353,7 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
     pending.extend(cfg["paths"][pc])
   afters: dict[UOp, UOp] = {}
   axes = itertools.count(lib_sz)
+  temporaries = itertools.count(6)  # reserve 0..5 for the register, LDS, and scratch allocations
   resume = UOp.param(6, dtypes.uint64, 1, name="resume")
   code_addr = UOp.param(7, dtypes.uint64, name="code_addr", addrspace=AddrSpace.ALU)
 
@@ -212,7 +362,9 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
     # construct CALL graph
     wave_size, total_threads = _wave_size(arch), lx*ly*lz
     n_waves = (total_threads+wave_size-1)//wave_size
-    wg = UOp.range(gx*gy*gz, 0)
+    gx = UOp.variable("groups_x", 1, dtypes.uint32.max, dtypes.uint32)
+    gy = UOp.variable("groups_y", 1, dtypes.uint32.max, dtypes.uint32)
+    wg = UOp.range(UOp.variable("groups", 0, dtypes.uint64.max, dtypes.uint64), 0)
     wave = UOp.range(n_waves, 1)
     # alloc register and LDS buffers
     sgpr = UOp.alloc((SGPR_COUNT,), dtypes.uint32, 0, AddrSpace.REG)
@@ -223,8 +375,10 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
     accvgpr = UOp.alloc((256*wave_size,), dtypes.uint32, 5, AddrSpace.REG) if wave_size == 64 else vgpr
     args_ptr = UOp.variable("args_ptr", 0, dtypes.uint64.max, dtypes.uint64)
     code_addr = UOp.variable("lib", 0, dtypes.uint64.max, dtypes.uint64)
-    init = init_wave(wg, wave, sgpr, vgpr, lds, args_ptr, gx, gy, lx, ly, total_threads, wave_size, lds_size, scratch_size, rsrc2, arch,
+    dims = [UOp.const(x, dtypes.int) for x in (gx, gy, lx, ly, total_threads)] if getenv("ASM_CALL_EXTERN", 1) else [gx, gy, lx, ly, total_threads]
+    init = init_wave(wg, wave, sgpr, vgpr, lds, args_ptr, *dims, wave_size, lds_size, scratch_size, rsrc2, arch,
                      user_data, *([accvgpr] if wave_size == 64 else []))
+    init = external_call(init, backend)
     ctx = _Ctx(4, wave_size)
     afters = {ctx.sgpr:sgpr.after(init), ctx.vgpr:vgpr.after(init), ctx.vmem:ctx.vmem,
                               ctx.lds:lds.after(init), ctx.scratch:scratch.index(wave*scratch_size*wave_size).after(init)}
@@ -233,18 +387,52 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
   def finish(end:UOp):
     afters.update((b, arg.without_after.after(end)) for b, arg in afters.items())
 
+  loop_parents:dict[int, int|None] = dict.fromkeys(loops)
+  for outer, body in sorted(loops.items(), key=lambda kv:len(kv[1])):
+    for inner in body:
+      if inner != outer and inner in loops and loop_parents[inner] is None: loop_parents[inner] = outer
+  loop_children:dict[int|None, dict[int, set[int]]] = {}
+  for header, parent in loop_parents.items(): loop_children.setdefault(parent, {})[header] = loops[header]
+
   def emit_region(start:int, members:set[int], scopes:tuple[UOp, ...]=(), route:UOp|None=None):
-    nested = {h:body for h,body in loops.items() if body <= members and (route is None or h != start)}
-    children = {h:body for h,body in nested.items() if not any(body < outer for outer in nested.values())}
+    children = loop_children.get(start if route is not None else None, {})
     exits = {h:sorted({dst for pc in body for dst in cfg["paths"][pc] if dst not in body}) for h,body in children.items()}
     def target(pc:int): return -pc-3 if pc not in members or (route is not None and pc == start) else pc
+    enclosed = {pc for h,body in children.items() for pc in body if pc != h}
     edges = {pc:[target(dst) for dst in (exits[pc] if pc in children else cfg["paths"][pc])] or [-2]
-             for pc in members if not any(pc in body and pc != h for h,body in children.items())}
+             for pc in members if pc not in enclosed}
     # -pc-3 represents an edge leaving this region for pc; -2 ends the program, -1 joins all exits.
-    @functools.cache
-    def postdom(pc:int) -> set[int]:
-      if pc == -1: return {-1}
-      return {pc} | set.intersection(*(postdom(dst) for dst in (edges[pc] if pc >= 0 else [-1])))
+    reverse:dict[int, dict[int, int]] = {-1:{}}
+    for pc, dsts in edges.items():
+      reverse.setdefault(pc, {})
+      for dst in dsts: reverse.setdefault(dst, {})[pc] = UNCOND
+    for pc in list(reverse):
+      if pc < -1: reverse[-1][pc] = UNCOND
+    parents = dominators(reverse, -1)
+    tree:dict[int, list[int]] = {}
+    for pc, par in parents.items():
+      if pc != -1: tree.setdefault(par, []).append(pc)
+    depth = {-1:0}
+    ancestors:dict[int, tuple[int, ...]] = {-1:(-1,)}
+    pending = [-1]
+    while pending:
+      par = pending.pop()
+      for pc in tree.get(par, []):
+        depth[pc] = depth[par]+1
+        row = [par]
+        while 1 << len(row) <= depth[pc]: row.append(ancestors[row[-1]][len(row)-1])
+        ancestors[pc] = tuple(row)
+        pending.append(pc)
+    def join(a:int, b:int) -> int:
+      if depth[a] < depth[b]: a, b = b, a
+      diff = depth[a]-depth[b]
+      while diff:
+        bit = diff.bit_length()-1
+        a, diff = ancestors[a][bit], diff-(1<<bit)
+      if a == b: return a
+      for bit in reversed(range(len(ancestors[a]))):
+        if bit < len(ancestors[a]) and ancestors[a][bit] != ancestors[b][bit]: a, b = ancestors[a][bit], ancestors[b][bit]
+      return ancestors[a][0]
 
     def emit(block_pc:int, stop:int=-1, scopes:tuple[UOp, ...]=scopes):
       while block_pc != stop:
@@ -254,12 +442,12 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
             afters[route] = buf.after(buf.store(-block_pc-3))
           return
         if block_pc in children:
-          loop = UOp.loop(next(axes)).replace(src=(UOp(Ops.NOOP).after(UOp.sink(*afters.values())),))
+          loop = UOp.loop(next(axes)).replace(src=(UOp(Ops.NOOP).after(UOp.group(*afters.values())),))
           # Record the header to repeat, or the selected exit to leave this loop.
-          selector = UOp.alloc((1,), dtypes.int, addrspace=AddrSpace.REG)
+          selector = UOp.alloc((1,), dtypes.int, slot=next(temporaries), addrspace=AddrSpace.REG)
           emit_region(block_pc, children[block_pc], scopes+(loop,), selector)
           choice = afters[selector][0].load()
-          finish(UOp.sink(*afters.values()).backedge(loop, choice.eq(block_pc)))
+          finish(UOp.group(*afters.values()).backedge(loop, choice.eq(block_pc)))
           choice = afters[selector][0].load()
           predicates = [choice.eq(dst) for dst in exits[block_pc]]
         else:
@@ -269,18 +457,20 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
         if len(targets) == 1:
           block_pc = targets[0]
           continue
-        join = max(set.intersection(*(postdom(dst) for dst in targets)), key=lambda pc:len(postdom(pc)))
+        merge = functools.reduce(join, targets)
         for dst, pred in zip(targets, predicates):
-          if dst == join: continue
-          deps = UOp.sink(*afters.values())
+          if dst == merge: continue
+          deps = UOp.group(*afters.values())
           gate = UOp.range(pred.cast(dtypes.int).after(deps).after(*scopes), next(axes))
-          emit(dst, join, scopes+(gate,))
-          finish(UOp.sink(*afters.values()).end(gate))
-        block_pc = join
+          emit(dst, merge, scopes+(gate,))
+          finish(UOp.group(*afters.values()).end(gate))
+        block_pc = merge
     emit(start)
 
-  def emit_block(block_pc:int, scopes:tuple[UOp, ...]) -> UOp:
+  @functools.cache
+  def block_instructions(block_pc:int):
     cond = UOp.const(True)
+    instructions = []
     for off in cfg["blocks"][block_pc]:
       inst = insts[off]
       inst_st = str(inst)
@@ -288,18 +478,34 @@ def _lift(lib_bytes:bytes, arch:str, backend:str, entry:int, dispatch:tuple|None
       if inst_st.startswith(("s_getpc", "s_setpc")): raise AssertionError("getpc and setpc are not allowed in ASM_CALL")
       template, bufs, word_offsets, branch_cond = instruction_call(inst, arch)
       if branch_cond is not None: cond = branch_cond
+      if branch_cond is None and not has_effects(template.body): continue
+      instructions.append((off, (template, bufs, word_offsets, branch_cond)))
+    return instructions, cond
+
+  chunk_size = getenv("ASM_CALL_BLOCK", 32) if getenv("ASM_CALL_EXTERN", 1) and backend in {"CPU", "LLVM"} else 1
+
+  def emit_block(block_pc:int, scopes:tuple[UOp, ...]) -> UOp:
+    instructions, cond = block_instructions(block_pc)
+    for chunk in instruction_chunks(instructions, chunk_size):
+      off, (template, bufs, word_offsets, _) = chunk[0]
+      if chunk_size > 1:
+        body, bufs = instruction_block([((pc-off)//4, info) for pc,info in chunk], backend)
+        template, word_offsets = body.call(*bufs, UOp.const(0, dtypes.uint64)), (0,)
       args = [afters.get(b, b).after(*scopes) for b in bufs]
       call = template.replace(src=(template.body, *args, *((code_addr>>2)+(off//4+i) for i in word_offsets)))
+      call = external_call(call, backend, flat=chunk_size > 1)
       # CALL consumes argument ranges; restore the enclosing control-flow scopes.
-      afters.update((b, arg.after(call).after(*scopes)) for b, arg in zip(bufs, args))
+      afters.update((b, arg.without_after.after(call, *scopes)) for b, arg in zip(bufs, args))
     if dispatch is None and not cfg["paths"][block_pc]:
       ptr = resume.after(*afters.values()).after(*scopes)
       afters[resume] = ptr.after(ptr[0].store(code_addr+resumes[block_pc] if block_pc in resumes else ENDPGM_PC))
     return cond.substitute(afters, walk=True)
   emit_region(entry, members, (wg, wave) if dispatch is not None else ())
-  name = f"asm_call_{arch}_{hashlib.sha256(lib_bytes).hexdigest()[:16]}_{entry}"
   body = UOp.group(*afters.values())
   if dispatch is not None: body = body.end(wave).end(wg)
-  sink = UOp.sink(body, arg=KernelInfo(name=name, opts_to_apply=()))
+  # Operand bits are read from the runtime code pointer; identical call graphs can share machine code.
+  name = f"asm_call_{arch}_{body.key.hex()[:16]}_{entry}"
+  sink = UOp.sink(body, arg=KernelInfo(name=name, opts_to_apply=())).rtag(1)
   with Context(NOOPT=1, CHECK_OOB=0, TUPLE_ORDER=0, EMULATED_DTYPES="", CAPTURE_PROCESS_REPLAY=0):
-    return to_program(sink, Device[backend].renderer)
+    renderer = backend_renderer(backend)
+    return call_program(sink, renderer) if getenv("ASM_CALL_EXTERN", 1) and backend in {"CPU", "LLVM"} else to_program(sink, renderer)

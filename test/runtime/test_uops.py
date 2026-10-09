@@ -9,6 +9,7 @@ from tinygrad.uop.ops import Ops, UOp, KernelInfo, AxisType
 from tinygrad.renderer.cstyle import CStyleLanguage
 from tinygrad.engine.realize import run_linear
 from tinygrad.renderer.ptx import PTXRenderer
+from tinygrad.renderer.llvmir import CPULLVMRenderer
 from tinygrad.runtime.ops_python import PythonRenderer
 from test.helpers import buffer_uops
 
@@ -55,9 +56,23 @@ def _test_uops_result(output_dtype, uops, res):
   run_uops([out], [buf])
   return np.frombuffer(buf.as_memoryview(), _to_np_dtype(output_dtype))[0]
 
-@unittest.skipUnless(isinstance(Device[Device.DEFAULT].renderer, (CStyleLanguage, PythonRenderer)) and
+@unittest.skipUnless(isinstance(Device[Device.DEFAULT].renderer, (CStyleLanguage, PythonRenderer, CPULLVMRenderer)) and
                      dtypes.uint64 in Device[Device.DEFAULT].renderer.supported_dtypes(), "requires buffer bitcast and 64-bit ints")
 class TestBitcastBufferView(unittest.TestCase):
+  @unittest.skipUnless(isinstance(Device[Device.DEFAULT].renderer, CPULLVMRenderer), "LLVM vector memory alignment")
+  def test_vector_unaligned_buffers(self):
+    from tinygrad.codegen import to_program
+    from tinygrad.engine.realize import get_runtime
+    src, dst = UOp.param(0, dtypes.uint32, 4), UOp.param(1, dtypes.uint32, 4)
+    ibuf = Buffer(Device.DEFAULT, 32, initial_value=bytes(4)+bytes(range(16))+bytes(12))
+    obuf = Buffer(Device.DEFAULT, 32, initial_value=b'\xa5'*32)
+    span = (UOp.const(0, dtypes.int), UOp.const(4, dtypes.int))
+    load = UOp(Ops.SHRINK, src=(src, *span)).load()
+    sink = UOp(Ops.SHRINK, src=(dst, *span)).store(load).sink(arg=KernelInfo())
+    prg = to_program(UOp(Ops.PROGRAM, src=(sink,)), Device[Device.DEFAULT].renderer)
+    get_runtime(Device.DEFAULT, prg)(ibuf._buf+4, obuf._buf+4)
+    self.assertEqual(bytes(obuf.as_memoryview()), b'\xa5'*4+bytes(range(16))+b'\xa5'*12)
+
   @Context(SPEC=2)
   def test_load(self):
     val = 0x1122334455667788
@@ -85,6 +100,23 @@ class TestBitcastBufferView(unittest.TestCase):
                 for i, dt in enumerate((src_dt, dst_dt))]
         run_uops([dst.store(src.load())], bufs)
         self.assertEqual(bytes(bufs[1].as_memoryview()), bytes(range(16)))
+
+@unittest.skipUnless(isinstance(Device[Device.DEFAULT].renderer, CPULLVMRenderer), "LLVM lowering")
+class TestLLVMLowering(unittest.TestCase):
+  def test_half_subnormal_with_flush_to_zero(self):
+    if dtypes.half not in Device[Device.DEFAULT].renderer.supported_dtypes(): self.skipTest("native half conversion required")
+    from test.mockgpu.amd.emu import _MXCSRContext
+    bits = Tensor([1], dtype=dtypes.uint16)
+    with _MXCSRContext(): result = bits.bitcast(dtypes.half).cast(dtypes.float32).realize()
+    self.assertEqual(result.item(), 2**-24)
+
+  def test_double_subnormal_literal(self):
+    self.assertEqual(Tensor.full((1,), 5e-324, dtype=dtypes.double).contiguous().item(), 5e-324)
+
+  def test_sqrt_special_values(self):
+    values = Tensor([-math.inf, math.inf, 4.0], dtype=dtypes.double).sqrt().tolist()
+    self.assertTrue(math.isnan(values[0]))
+    self.assertEqual(values[1:], [math.inf, 2.0])
 
 class TestUOps(unittest.TestCase):
   def _equal(self, v1, v2):

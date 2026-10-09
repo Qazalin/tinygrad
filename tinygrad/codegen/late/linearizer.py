@@ -64,27 +64,46 @@ class CFGContext:
     # dependent, meaning endrange y is a dependency of endrange x and range x is not a dependency of endrange y
     # independent, endrange y is not a dependency of endrange x
     # everything is nested inside the sink
-    deps: dict[UOp, dict[UOp, None]] = {}
+    # Only control-flow nodes matter here. Bitsets avoid copying growing dependency dictionaries at every UOp.
+    deps: dict[UOp, int] = {}
+    indices: dict[UOp, int] = {}
+    controls: list[UOp] = []
+    ends = assigned = 0
     nesting: dict[UOp, UOp] = {}
     for u in sink.toposort():
-      # get the deps from the src
-      deps[u] = {}
+      deps[u] = 0
       for s in u.src: deps[u] |= deps[s]
 
       if u.op in (Ops.END, Ops.BACKEDGE, Ops.SINK):
-        nesting |= {x:u for x in deps[u] if x.op in (Ops.END, Ops.BACKEDGE) and (u.op is Ops.SINK or u.src[1] in deps[x]) and x not in nesting}
-      if u.op in (Ops.RANGE, Ops.END, Ops.BACKEDGE): deps[u][u] = None
+        pending = deps[u] & ends & ~assigned
+        parent = 1 << indices[u.src[1]] if u.op is not Ops.SINK else 0
+        # An end preceding the parent range in topological order cannot be nested inside it.
+        if parent: pending &= -parent
+        while pending:
+          bit = pending & -pending
+          pending -= bit
+          x = controls[bit.bit_length()-1]
+          if not parent or deps[x] & parent:
+            nesting[x] = u
+            assigned |= bit
+      if u.op in (Ops.RANGE, Ops.END, Ops.BACKEDGE):
+        indices[u] = len(controls)
+        controls.append(u)
+        bit = 1 << indices[u]
+        deps[u] |= bit
+        if u.op is not Ops.RANGE: ends |= bit
 
     self.edges: dict[UOp, UOp] = {}
     siblings: dict[UOp, list[UOp]] = {}
     for k,vv in nesting.items(): siblings.setdefault(vv, []).append(k)
     for k,v in siblings.items():
       # ranges that have dependencies on other siblings need to be scheduled after them
-      order = sorted(v, key=lambda x: len([u for u in v if u in deps[x]]))
+      siblings_mask = sum(1 << indices[u] for u in v)
+      order = sorted(v, key=lambda x: (deps[x] & siblings_mask).bit_count())
       zipped = zip(order, order[1:]) if k.op is Ops.SINK else zip([k.src[1]] + order, order)
       for x,y in zipped:
         # TODO: this can happen! it causes infinite loop in shufflenet
-        assert y.src[1] not in x.backward_slice_with_self
+        assert not deps[x] & (1 << indices[y.src[1]])
         self.edges[y.src[1]] = x
 
 pm_add_control_flow = PatternMatcher([
