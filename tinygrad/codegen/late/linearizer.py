@@ -9,7 +9,7 @@ def linearize(sink:UOp) -> list[UOp]:
   # this is a toposort with priority
   lst = list(sink.toposort(enter_calls=False))
   out_degree:defaultdict[UOp, int] = defaultdict(int)
-  priorities:dict[UOp, tuple[int, int, Any]] = {}
+  priorities:dict[UOp, tuple[int, int, int, Any]] = {}
 
   # Scalar expressions derived only from constants and parameters can precede every control-flow scope.
   invariant:set[UOp] = set()
@@ -37,7 +37,7 @@ def linearize(sink:UOp) -> list[UOp]:
       case Ops.RANGE: priority = 5    # placing RANGE is good
       case Ops.END | Ops.BACKEDGE: priority = -5     # placing loop exits is bad
       case _: priority = 0            # everything else has priority 0
-    priorities[u] = (run_count, priority, extra)
+    priorities[u] = (run_count, len(u.ranges), priority, extra)
 
   # number the uops in "ideal" order
   nkey = {u:i for i,u in enumerate(sorted(lst, key=lambda x: priorities[x]+(x.tuplize if TUPLE_ORDER else ())))}
