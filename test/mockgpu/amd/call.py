@@ -6,6 +6,7 @@ from tinygrad.codegen import to_program, to_program_config
 from tinygrad.device import Device
 from tinygrad.renderer.llvmir import CPULLVMRenderer
 from tinygrad.runtime.support.compiler_llvm import CPULLVMCompiler, expect, cerr
+from tinygrad.runtime.ops_cpu import CPUProgram
 from tinygrad.dtype import AddrSpace, Invalid, dtypes
 from tinygrad.helpers import Context, getenv, TracingKey, dedup, unwrap, Target, cpu_profile
 from tinygrad.runtime.autogen import hsa, llvm
@@ -18,6 +19,9 @@ class CallLLVMJIT(CPULLVMCompiler):
     super().__init__(arch)
     llvm.LLVMPassBuilderOptionsSetVerifyEach(self.pbo, False)
     llvm.LLVMLinkInMCJIT()
+    # MCJIT must resolve the same compiler-runtime and math helpers as CPUProgram's ELF loader.
+    for lib in (CPUProgram.rt_lib, CPUProgram.libm):
+      expect(llvm.LLVMLoadLibraryPermanently(lib._name.encode()), f"failed to load {lib._name} for LLVM JIT")
     self.engine = llvm.LLVMExecutionEngineRef()
     self.functions:set[str] = set()
 
@@ -67,7 +71,8 @@ class CallLLVMJIT(CPULLVMCompiler):
     if not self.engine:
       opts = llvm.struct_LLVMMCJITCompilerOptions()
       llvm.LLVMInitializeMCJITCompilerOptions(ctypes.byref(opts), ctypes.sizeof(opts))
-      opts.OptLevel = 0
+      # Match LLVMCompiler: level 0 skips FMA contraction needed by the emulated division refinement.
+      opts.OptLevel = llvm.LLVMCodeGenLevelDefault
       expect(llvm.LLVMCreateMCJITCompilerForModule(ctypes.byref(self.engine), mod, ctypes.byref(opts), ctypes.sizeof(opts), err:=cerr()), err)
     else: llvm.LLVMAddModule(self.engine, mod)
     with cpu_profile('LLVM JIT materialize'):

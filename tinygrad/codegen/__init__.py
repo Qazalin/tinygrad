@@ -1,7 +1,7 @@
 from dataclasses import replace
 import itertools, functools
 from tinygrad.helpers import DISABLE_FAST_IDIV, TRANSCENDENTAL, SPEC, DEBUG, VIZ, IMAGE, NOOPT, EMULATED_DTYPES, USE_TC
-from tinygrad.helpers import ALLOW_TF32, DEFAULT_FLOAT, DEFAULT_INT, TC_SELECT, TC_OPT, TC_MIN_GLOBALS, TracingKey, Context, panic
+from tinygrad.helpers import ALLOW_TF32, DEFAULT_FLOAT, DEFAULT_INT, TC_SELECT, TC_OPT, TC_MIN_GLOBALS, TUPLE_ORDER, TracingKey, Context, panic
 from tinygrad.uop.ops import PatternMatcher, graph_rewrite, UOp, Ops, UPat, rewrite_group, KernelInfo, ProgramInfo, GroupOp, AxisType
 from tinygrad.uop.weak import pm_lower_weak, pm_commit_weak, pm_cast_const
 from tinygrad.uop.render import render_uir
@@ -39,7 +39,7 @@ pm_number_params = PatternMatcher([
 
 def build_range_map(sink:UOp) -> dict[tuple, int]:
   ctx: dict[tuple, int] = {}
-  for x in sink.toposort():
+  for x in sink.toposort(enter_calls=False):
     if x.op is Ops.RANGE and x.axis_type is AxisType.UPCAST:
       ctx[x.arg] = len(ctx)
   return ctx
@@ -269,7 +269,7 @@ pm_implicit_barriers = PatternMatcher([
 
 def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
   if DEBUG >= 5: print(render_uir(list(ast.toposort())))
-  if SPEC: type_verify(ast, spec_tensor)
+  if SPEC: type_verify(ast, spec_tensor, enter_calls=False)
 
   # resolve UNSHARDs (multi-device UNSHARDs are already resolved by the scheduler; this handles in-kernel shards, e.g. fragments)
   sink = graph_rewrite(ast, multi_pm, ctx={}, name="multi_pm")
@@ -301,7 +301,7 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
   # expand
   sink = graph_rewrite(sink, expander, ctx=build_range_map(sink), name="expander")
 
-  slots = itertools.count(max([u.arg.slot+1 for u in sink.toposort() if u.op in {Ops.BUFFER, Ops.ALLOC}], default=0))
+  slots = itertools.count(max([u.arg.slot+1 for u in sink.toposort(enter_calls=False) if u.op in {Ops.BUFFER, Ops.ALLOC}], default=0))
 
   # remove reduce
   sink = graph_rewrite(sink, mop_cleanup+pm_reduce_local, ctx=slots, name="remove reduces")
@@ -376,18 +376,18 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
   sink = graph_rewrite(sink, pm_add_control_flow, ctx=CFGContext(sink), name="add control flow", bottom_up=True)
 
   # put the variables in slots
-  num_params = max([x.arg.slot + 1 for x in sink.toposort() if x.op is Ops.PARAM and not x.is_variable], default=0)
+  num_params = max([x.arg.slot + 1 for x in sink.toposort(enter_calls=False) if x.op is Ops.PARAM and not x.is_variable], default=0)
   sink = graph_rewrite(sink, pm_number_params, ctx=(num_params, {}), name="number variables", walk=True)
 
   if VIZ: graph_rewrite(sink, PatternMatcher([]), name="View Output AST")
   if SPEC:
     import os
     if os.environ.get("DBGTV"):
-      try: type_verify(sink, spec_program)
+      try: type_verify(sink, spec_program, enter_calls=False)
       except RuntimeError:
         print(render_uir(list(sink.toposort())))
         raise
-    else: type_verify(sink, spec_program)
+    else: type_verify(sink, spec_program, enter_calls=False)
 
   # return the rewritten sink
   return sink
@@ -416,29 +416,36 @@ def line_rewrite(lst:list[UOp], pm:PatternMatcher, ctx=None) -> list[UOp]:
 
 call_cache: dict[tuple, UOp] = {}
 def lower_call(ctx:Renderer, call:UOp):
-  if (body:=call_cache.get(key:=to_program_key(call.body, ctx))) is None:
-    call_cache[key] = body = full_rewrite_to_sink(call.body, ctx, optimize=False)
+  if (body:=call_cache.get(key:=(to_program_key(call.body, ctx), call.arg.name, TUPLE_ORDER.value))) is None:
+    body = graph_rewrite(call.body, pm_lower_calls, ctx=ctx, name="lower calls", walk=True)
+    nodes = body.toposort(enter_calls=False)
+    native_ints = set(dtypes.ints) & ctx.supported_dtypes() - set(EMULATED_DTYPES.tolist(dtypes))
+    # Straight-line calls with scalar address arithmetic have no tensor operations to lower.
+    # Their callees have already been lowered and linearized. Keep their dependency
+    # chain intact instead of repeatedly simplifying and rebuilding it in the tensor passes.
+    if any(u.op is Ops.CALL for u in nodes) and all(
+      u.op in {Ops.SINK, Ops.CALL, Ops.AFTER, Ops.PARAM} or
+      (u.op is Ops.CONST and isinstance(u.arg, int)) or
+      (u.op is Ops.STACK and not u.src) or
+      (u.op is Ops.CAST and u.src[0].op is Ops.CONST and u.dtype in native_ints) or
+      (u.op is Ops.ADD and Ops.ADD in ctx.code_for_op and u.shape == () and u.dtype in native_ints) for u in nodes):
+      body = graph_rewrite(body, pm_cast_const, name="call block constants")
+      num_params = max([u.arg.slot+1 for u in nodes if u.op is Ops.PARAM and not u.is_variable], default=0)
+      body = graph_rewrite(body, pm_number_params, ctx=(num_params, {}), walk=True, name="call block variables")
+      if SPEC: type_verify(body, spec_program, enter_calls=False)
+    else:
+      body = full_rewrite_to_sink(body, ctx, optimize=False)
+    body = UOp(Ops.LINEAR, src=tuple(line_rewrite(linearize(body), pm_linearize_cleanups+pm_alloc_to_buf)),
+               arg=to_function_name(call.arg.name))
+    call_cache[key] = body
   return call.replace(src=(body,)+call.src[1:])
 
 pm_lower_calls = PatternMatcher([
   (UPat(Ops.CALL, src=(UPat(Ops.SINK),), allow_any_len=True, name="call"), lower_call),
 ])
 
-def linearize_call(ctx:dict[tuple[UOp, str], UOp], call:UOp, sink:UOp) -> UOp:
-  key = (sink, call.arg.name)
-  if key not in ctx:
-    ctx[key] = UOp(Ops.LINEAR, src=tuple(line_rewrite(linearize(sink), pm_linearize_cleanups+pm_alloc_to_buf)),
-                   arg=to_function_name(call.arg.name))
-  return call.replace(src=(ctx[key],)+call.src[1:])
-
-pm_call_fixup = PatternMatcher([
-  (UPat(Ops.CALL, src=(UPat(Ops.SINK, name="sink"),), allow_any_len=True, name="call"),
-   linearize_call),
-])
-
 def do_linearize(ctx:Renderer, prg:UOp, sink:UOp) -> UOp:
   if DEBUG >= 3 and sink.arg.applied_opts: print(f"{sink.arg.function_name:<25} opts: {sink.arg.applied_opts}")
-  sink = graph_rewrite(sink, pm_call_fixup, ctx={}, name="call fixup", enter_calls=True)
   lst = line_rewrite(linearize(sink), pm_linearize_cleanups+pm_alloc_to_buf)
   prg = prg.replace(src=(lst[-1],))
   # isa renderers need to allocate registers
@@ -494,11 +501,14 @@ def do_to_program(ast:UOp, renderer:Renderer) -> UOp:
   Returns:
     The Ops.PROGRAM with SINK/LINEAR/SOURCE/BINARY.
   """
-  if ast.op is Ops.PROGRAM: prg = ast
+  if ast.op is Ops.PROGRAM:
+    prg = ast
+    if len(prg.src) == 1:
+      prg = prg.replace(src=(graph_rewrite(prg.src[0], pm_lower_calls, ctx=renderer, name="lower calls", walk=True),))
   elif ast.op is Ops.SINK:
     assert isinstance(ast.arg, KernelInfo), "requires KernelInfo on arg to to_program"
     if VIZ: graph_rewrite(ast, PatternMatcher([]), name="View Base AST")
-    ast = graph_rewrite(ast, pm_lower_calls, ctx=renderer, name="lower calls", walk=True, enter_calls=True)
+    ast = graph_rewrite(ast, pm_lower_calls, ctx=renderer, name="lower calls", walk=True)
     full_sink = full_rewrite_to_sink(ast, renderer, optimize=ast.tag is None)
     prog_info = ProgramInfo.from_sink(full_sink, renderer.target)
     # instruction selection

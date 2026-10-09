@@ -70,9 +70,9 @@ class CFGContext:
     controls: list[UOp] = []
     ends = assigned = 0
     nesting: dict[UOp, UOp] = {}
-    for u in sink.toposort():
+    for u in sink.toposort(enter_calls=False):
       deps[u] = 0
-      for s in u.src: deps[u] |= deps[s]
+      for s in u.src_without_body: deps[u] |= deps[s]
 
       if u.op in (Ops.END, Ops.BACKEDGE, Ops.SINK):
         pending = deps[u] & ends & ~assigned
