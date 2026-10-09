@@ -51,21 +51,6 @@ def save_viz():
 needs_tracked_pm = unittest.skipUnless(VIZ, "using TrackedPatternMatcher requires global VIZ=1")
 
 class TestViz(unittest.TestCase):
-  def test_deep_graph_roundtrip(self):
-    from tinygrad.viz.serve import _reconstruct
-    from tinygrad.uop.ops import ast_key
-    root = UOp(Ops.NOOP)
-    for _ in range(12000): root = UOp(Ops.SINK, (root,))
-    @rewrite_group(name=lambda x,ret: TracingKey("deep graph", (x,)))
-    def rewrite(x): return graph_rewrite(x, PatternMatcher([]))
-    with save_viz() as viz: rewrite(root)
-    trace, events = pickle.loads(pickle.dumps((viz.data.trace, cpu_events)))
-    data = VizData(trace)
-    load_rewrites(data)
-    self.assertEqual(data.ref_map[ast_key(root)], 0)
-    self.assertIs(_reconstruct(data, trace.rewrites[0][0].sink), root)
-    self.assertEqual(events[-1].name.keys, (ast_key(root),))
-
   def test_simple(self):
     with save_viz() as viz:
       a = UOp.variable("a", 0, 10)
@@ -205,18 +190,12 @@ class TestViz(unittest.TestCase):
     a2 = uop_to_json(VizData(), a)[id(a)]
     self.assertEqual(ansistrip(a2["label"]), f"PYLITERAL\n{TestStruct.__qualname__}(colored_field='xyz12345')")
 
-  def test_index_label_does_not_render_base(self):
-    base = UOp.param(0, dtypes.float, 256).reshape((16,16))
-    # Rendering this base recursively would exceed the recursion limit.
-    for _ in range(200): base = UOp(Ops.NOOP, src=(base,))
-    idx = UOp.variable("idx", 0, 15)
-    recursion_limit = sys.getrecursionlimit()
-    try:
-      sys.setrecursionlimit(200)
-      for op in (Ops.INDEX, Ops.STAGE):
-        u = UOp(op, src=(base, idx+1, UOp.const(2)))
-        self.assertIn("\n[idx+1][2]", uop_to_json(VizData(), u)[id(u)]["label"])
-    finally: sys.setrecursionlimit(recursion_limit)
+  def test_index_label_large_src(self):
+    x = UOp.param(0, dtypes.float, (16, 16))
+    for _ in range(2_000): x = x * x
+    i = UOp.variable("i", 0, 14)
+    u = x[i+1, 2]
+    self.assertIn("\n[i+1][2]", uop_to_json(VizData(), u)[id(u)]["label"])
 
   def test_colored_label_multiline(self):
     with save_viz() as viz:
@@ -1146,7 +1125,6 @@ class TestCLI(unittest.TestCase):
     self.assertEqual(gemm_summary["count"], CNT)
     self.assertEqual(copy_summary["count"], CNT)
 
-  @unittest.skip("VIZ FLOPS metrics are currently disabled")
   def test_flops(self):
     test_n = [(8, 16), (16, 32), (32, 64)]
     with save_viz() as viz:
@@ -1224,7 +1202,6 @@ class TestCLI(unittest.TestCase):
     assert all(s["name"].startswith("post_") for s in final), f"post_* kernels must be present in final, got {final}"
 
   @needs_tracked_pm
-  @unittest.skip("global CALL cache changes the expected codegen trace count")
   def test_nested_calls_codegen_ls(self):
     @uopfunc
     def inner(out:UOp): return out[0].store(1).sink()
@@ -1241,7 +1218,8 @@ class TestCLI(unittest.TestCase):
       with Context(NO_COLOR=1):
         uops = run_cli(*files, "-s", "TINY", "do_to_program for nested_calls", "View UOp List", json_fmt=False)[0]["out"]
     codegen_count = [s for s in rewrites if "View Output AST" in s]
-    self.assertEqual(len(codegen_count), 4)
+    # The inner body is cached; the outer call-only body bypasses full lowering.
+    self.assertEqual(len(codegen_count), 2)
     self.assertIn(" = linear ", uops)
     self.assertIn(" = call ", uops)
 
@@ -1262,6 +1240,17 @@ class TestCLI(unittest.TestCase):
       rewrites = run_cli(*files, "-s", "TINY", schedule, "--ls", json_fmt=False)[0]["out"].split("\n")
     sched_count = [s for s in rewrites if "View Kernel Graph" in s]
     self.assertEqual(len(sched_count), 3)
+
+  @needs_tracked_pm
+  def test_deep_input_ast(self):
+    with save_viz() as viz:
+      x = Tensor.empty(1, device="NULL")
+      for _ in range(4_000): x = x.sin()
+      x.realize()
+    with write_files(viz) as files, Context(DEBUG=5, NO_COLOR=1):
+      out = run_cli(*files, "-s", "TINY")
+    i = next(i for i,s in enumerate(out) if s.get("value", "").lstrip() == "View Kernel Graph")
+    self.assertIn(" # E", next(line for line in out[i+1]["value"].splitlines() if " = call " in line))
 
 if __name__ == "__main__":
   unittest.main()

@@ -1652,9 +1652,6 @@ def add_trace_group(kt:TracingKey) -> None:
 
 active_group:list[int] = []
 active_rewrites:list[TrackedGraphRewrite] = []
-def ast_key(u:UOp) -> bytes:
-  return (u.replace(arg=KernelInfo()) if u.op is Ops.SINK and isinstance(u.arg, KernelInfo) else u).key
-
 def rewrite_group(name:Callable[..., str|TracingKey]|bool=True, replay:bool=False, new_ctx:bool=True):
   if not new_ctx: assert not callable(name) and not replay, "name fxn and replay are only supported for new_ctx groups"
   def _decorator(func):
@@ -1686,9 +1683,6 @@ def rewrite_group(name:Callable[..., str|TracingKey]|bool=True, replay:bool=Fals
         if callable(name):
           name_ret = name(*args, **kwargs, ret=ret)
           assert isinstance(name_ret, (TracingKey, str)), f"name function returned {type(name_ret)}"
-          # Keys identify graphs; retaining the graph itself makes pickle recursively serialize its entire dependency chain.
-          if isinstance(name_ret, TracingKey):
-            name_ret = replace(name_ret, keys=tuple(ast_key(k) if isinstance(k, UOp) else k for k in name_ret.keys))
           tracked_keys[idx] = k = TracingKey(n:=tracked_keys[idx].display_name.replace(fn, name_ret), (n,)) if isinstance(name_ret, str) else name_ret
           e.name = TracingKey(k.display_name if isinstance(name_ret, str) else f"{fn} for {k.display_name}", k.keys)
       if CAPTURE_PROCESS_REPLAY and replay:

@@ -39,9 +39,9 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     # pass if client closed connection
     except (BrokenPipeError, ConnectionResetError): source.close()
 
-from tinygrad.uop.ops import TrackedGraphRewrite, RewriteTrace, UOp, Ops, GroupOp, srender, sint, range_str, range_start, multirange_str
-from tinygrad.uop.ops import KernelInfo, ast_key, ParamArg
-from tinygrad.uop.render import render_uir, uops_colors, _inline, _render_arg, strip_parens
+from tinygrad.uop.ops import TrackedGraphRewrite, RewriteTrace, UOp, Ops, GroupOp, srender, sint, sym_infer, range_str, range_start, multirange_str
+from tinygrad.uop.ops import KernelInfo, ParamArg
+from tinygrad.uop.render import render_uir, render_index, uops_colors, _inline, _render_arg
 from tinygrad.device import ProfileDeviceEvent, ProfileGraphEvent, ProfileGraphEntry, ProfileProgramEvent
 from tinygrad.dtype import dtypes, AddrSpace
 
@@ -74,6 +74,7 @@ def load_rewrites(data:VizData) -> None:
     for j,s in enumerate(rewrites:=data.trace.rewrites[i]):
       steps.append(create_step(s.name, ("/graph-rewrites", i, j), loc=s.loc, match_count=len(s.matches), code_line=printable(s.loc),
                                trace=k.tb if j==0 else None, depth=s.depth))
+      if s.name == "View Base AST": data.ref_map[canonicalize_ast(_reconstruct(data, s.sink))] = i
       # get source and binary from Ops.PROGRAM
       if s.name == "linearize/render": lin_idx = j
       if lin_idx is not None and (j+1 == len(rewrites) or rewrites[j+1].depth <= rewrites[lin_idx].depth):
@@ -82,7 +83,7 @@ def load_rewrites(data:VizData) -> None:
         steps.append(create_step("View Disassembly", ("/asm", i, len(steps)), (k.ret, lin_idx), depth=0))
         lin_idx = None
       if s.name == "View Program": ki = _reconstruct(data, s.sink, depth=1).src[0].arg
-    for key in k.keys: data.ref_map[ast_key(key) if isinstance(key, UOp) else key] = i
+    for key in k.keys: data.ref_map[key] = i
     data.ctxs.append({"name":k.display_name, "steps":steps, "ki":ki})
 
 # ** get the complete UOp graphs for one rewrite
@@ -99,12 +100,14 @@ def shape_to_str(s:tuple[sint, ...]): return "(" + ','.join(srender(x) for x in 
 def mask_to_str(s:tuple[tuple[sint, sint], ...]): return "(" + ','.join(shape_to_str(x) for x in s) + ")"
 def fmt_colored(s:str) -> str: return ansistrip(s) if NO_COLOR else s
 
+def canonicalize_ast(u:UOp) -> UOp: return u.replace(arg=KernelInfo()) if u.op is Ops.SINK and isinstance(u.arg, KernelInfo) else u
+
 def tokenize_uir(data:VizData, root:UOp) -> list[dict]:
   nodes = [u for u in root.toposort() if not _inline(u)]
   refs = {f"%{i}":{"id":str(id(u))} for i,u in enumerate(nodes)}
   lines = [[{"st":s, **refs.get(s, {})} for s in re.split(r"( : [^\n]*|%\d+\b)", line) if s] for line in render_uir(root).split("\n")]
   for u,line in zip(nodes, lines):
-    if u.op is Ops.CALL and (ref:=data.ref_map.get(ast_key(u.body))) is not None:
+    if u.op is Ops.CALL and (ref:=data.ref_map.get(canonicalize_ast(u.body))) is not None:
       line.append({"st":f" # {fmt_colored(data.ctxs[ref]['name'])}"})
   return [t for i,line in enumerate(lines) for t in ([{"st":"\n"}] if i else [])+line]
 
@@ -145,20 +148,17 @@ def uop_to_json(data:VizData, x:UOp) -> dict[int, dict]:
       if u.op is Ops.CALL:
         label += f"\n{u.src[0].key.hex()[:8]}\n{u.src[0].op}"
       if u.op in {Ops.INDEX, Ops.STAGE}:
-        if not getenv("VIZ_SKIP_RENDER"):
-          # Only render the index operands: rendering u also traverses its potentially large base computation.
-          if len(u.src) > 1:
-            label += "\n"+(''.join(f"[{strip_parens(s.render())}]" for s in u.src[1:])
-                           if sum(len(s.toposort()) for s in u.src[1:]) < 50 else "INDEX TOO LARGE")
-          ranges: list[UOp] = []
-          for us in u.src[1:]: ranges += [s for s in us.toposort() if s.op in {Ops.RANGE, Ops.SPECIAL}]
-          if ranges: label += "\n"+' '.join([f"{s.render()}={s.vmax+1}" for s in ranges])
+        if len(u.src) > 1:
+          label += "\n"+(render_index(s.render() for s in u.src[1:]) if sum(len(s.toposort()) for s in u.src[1:]) < 50 else "INDEX TOO LARGE")
+        ranges: list[UOp] = []
+        for us in u.src[1:]: ranges += [s for s in us.toposort() if s.op in {Ops.RANGE, Ops.SPECIAL}]
+        if ranges: label += "\n"+' '.join([f"{s.render()}={s.vmax+1}" for s in ranges])
       if u.op in {Ops.END, Ops.REDUCE, Ops.BACKEDGE} and len(trngs:=list(u.ended_ranges if u.op is Ops.BACKEDGE else
                                                                  UOp.sink(*u.src[range_start[u.op]:]).ranges)):
         label += "\n"+' '.join([f"{range_str(s, color=True)}({s.vmax+1})" for s in trngs])
     except Exception:
       label += "\n<ISSUE GETTING LABEL>"
-    ref = data.ref_map.get(ast_key(u.body)) if u.op is Ops.CALL else None
+    ref = data.ref_map.get(canonicalize_ast(u.body)) if u.op is Ops.CALL else None
     if ref is not None: label += f"\ncodegen@{fmt_colored(data.ctxs[ref]['name'])}"
     if TRACEMETA >= 2 and u.metadata is not None: label += "\n"+str(u.metadata)
     addrspace_color:str|None = None
@@ -169,23 +169,12 @@ def uop_to_json(data:VizData, x:UOp) -> dict[int, dict]:
   return graph
 
 def _reconstruct(data:VizData, a:int, depth:int|None=None) -> UOp:
-  cache:dict[tuple[int, int|None], UOp] = {}
-  stack = [(a, depth, False)]
-  while stack:
-    num, d, visited = stack.pop()
-    if (num, d) in cache: continue
-    if d is None and num in data.all_uops:
-      cache[num, d] = data.all_uops[num]
-      continue
-    op, src, arg, *rest = data.trace.uop_fields[num]
-    children = [(s, None if d is None else d-1) for s in src] if d is None or d > 0 else []
-    if children and not visited:
-      stack.append((num, d, True))
-      stack.extend((s, sd, False) for s, sd in reversed(children))
-      continue
-    cache[num, d] = ret = UOp(op, tuple(cache[s] for s in children), arg, *rest)
-    if d is None: data.all_uops[num] = ret
-  return cache[a, depth]
+  if depth is None and a in data.all_uops: return data.all_uops[a]
+  op, src, arg, *rest = data.trace.uop_fields[a]
+  if depth is not None and depth <= 0: return UOp(op, (), arg, *rest)
+  ret = UOp(op, tuple(_reconstruct(data, s, None if depth is None else depth-1) for s in src), arg, *rest)
+  if depth is None: data.all_uops[a] = ret
+  return ret
 
 def get_full_rewrite(data:VizData, ctx:TrackedGraphRewrite, depth:int|None=None, update_sink=True) -> Generator[GraphRewriteDetails, None, None]:
   next_sink, err = _reconstruct(data, ctx.sink, depth=depth), False
@@ -251,12 +240,12 @@ def timeline_layout(data:VizData, dev_events:list[tuple[int, int, float, DevEven
     if (ref:=data.ref_map.get(e.profile_key)) is not None and ref < len(data.ctxs):
       name = data.ctxs[ref]["name"]
       if (ki:=data.ctxs[ref].get("ki")) is not None and ki.estimates is not None and ei is not None:
-        #for est_key,est_val in (("FLOPS", ki.estimates.ops), ("B/s mem", ki.estimates.mem), ("B/s lds", ki.estimates.lds)):
-        #  #with soft_err(lambda _: fmt.update({est_key:"ERR"})): fmt[est_key] = int(sym_infer(est_val, ei.arg['var_vals'])/(dur*1e-6))
+        for est_key,est_val in (("FLOPS", ki.estimates.ops), ("B/s mem", ki.estimates.mem), ("B/s lds", ki.estimates.lds)):
+          with soft_err(lambda _: fmt.update({est_key:"ERR"})): fmt[est_key] = int(sym_infer(est_val, ei.arg['var_vals'])/(dur*1e-6))
         key = ei.key
     elif isinstance(e.name, TracingKey):
       name = e.name.display_name
-      ref = next((v for k in e.name.keys if (v:=data.ref_map.get(ast_key(k) if isinstance(k, UOp) else k)) is not None), None)
+      ref = next((v for k in e.name.keys if (v:=data.ref_map.get(k)) is not None), None)
       if isinstance(e.name.ret, str): fmt.update(json.loads(e.name.ret[4:]) if e.name.ret.startswith("JSON") else {"metadata":e.name.ret})
       elif isinstance(e.name.ret, int): fmt["B/s"], fmt["B"] = int(e.name.ret/(dur*1e-6)), e.name.ret
       elif e.name.tb: fmt["tb"] = e.name.tb
