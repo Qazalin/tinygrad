@@ -3,7 +3,7 @@ from dataclasses import dataclass, replace, field
 from collections import defaultdict
 from typing import Any, Callable, Generic, TypeVar, Iterator, Generator, Self, TYPE_CHECKING
 import importlib, inspect, functools, itertools, pathlib, os, contextlib, re, atexit, pickle, decimal, subprocess, struct, mmap, time, statistics
-from tinygrad.helpers import mv_address, LRU, getenv, diskcache_get, diskcache_put, DEBUG, GlobalCounters, PROFILE, temp, colored
+from tinygrad.helpers import mv_address, LRU, getenv, diskcache_get, diskcache_put, DEBUG, GlobalCounters, PROFILE, temp, colored, ASSERT_COMPILE
 from tinygrad.helpers import Context, CCACHE, ALLOW_DEVICE_USAGE, MAX_BUFFER_SIZE, cpu_events, ProfileEvent, ProfilePointEvent, suppress_finalizing
 from tinygrad.helpers import select_by_name, select_first_inited, DEV, TracingKey, size_to_str, pluralize, Target, unwrap, round_up, is_numpy_ndarray
 from tinygrad.helpers import cpu_profile, perf_counter_us, HCQ_RUNTIME_DEV, to_tuple
@@ -327,7 +327,7 @@ class Compiler:
   def compile(self, src:str) -> bytes: return src.encode()   # NOTE: empty compiler is the default
   def compile_cached(self, src:str) -> bytes:
     if self.cachekey is None or (lib := diskcache_get(self.cachekey, src)) is None:
-      assert not getenv("ASSERT_COMPILE"), f"tried to compile with ASSERT_COMPILE set\n{src}"
+      assert not ASSERT_COMPILE, f"tried to compile with ASSERT_COMPILE set\n{src}"
       lib = self.compile(src)
       if self.cachekey is not None: diskcache_put(self.cachekey, src, lib)
     return lib

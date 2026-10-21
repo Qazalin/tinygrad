@@ -281,7 +281,7 @@ DEBUG_RANGEIFY = ContextVar("DEBUG_RANGEIFY", 0)
 # set to 1, this uses tuplize in the linearizer sort order
 TUPLE_ORDER = ContextVar("TUPLE_ORDER", 1)
 # set to 0 to disable the compiler cache
-CCACHE = ContextVar("CCACHE", 1)
+CCACHE, ASSERT_COMPILE = ContextVar("CCACHE", 1), ContextVar("ASSERT_COMPILE", 0)
 # allow tf32 to be used on NVIDIA GPUs
 ALLOW_TF32 = ContextVar("ALLOW_TF32", 0)
 # set to 0 to disable the scheduler cache, 2 to also persist it to disk
