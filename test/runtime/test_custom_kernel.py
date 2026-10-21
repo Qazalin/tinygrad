@@ -745,6 +745,24 @@ class TestCallInKernel(unittest.TestCase):
     out = dst.custom_kernel(src, fxn=kernel)[0]
     self.assertEqual(out.tolist(), [-1., 1., 2., 3., 4., -1.])
 
+  def test_compile_cache(self):
+    @uopfunc
+    def plus2(out:UOp, A:UOp): return out[0].store(A[0]+2).sink()
+
+    def kernel(A:UOp):
+      A = A.flatten()
+      i = UOp.range(A.shape[0], 0)
+      tmp = UOp.alloc_like(A, addrspace=AddrSpace.REG)
+      return A[i].store(tmp[i].after(plus2(tmp[i], A[i]))).end(i).sink(arg=KernelInfo(name="test_kernel", opts_to_apply=()))
+
+    # plus2 gets recompiled
+
+    x = Tensor.custom_kernel(Tensor.arange(4).clone(), fxn=kernel)[0]
+    self.assertListEqual(x.tolist(), Tensor.arange(4).add(2).tolist())
+
+    x = Tensor.custom_kernel(Tensor.arange(5).clone(), fxn=kernel)[0]
+    self.assertListEqual(x.tolist(), Tensor.arange(5).add(2).tolist())
+
 class TestCustomKernelInput(unittest.TestCase):
   def _test_mop(self, mop_fxn, max_kernels):
     # default: input is BUFFER
