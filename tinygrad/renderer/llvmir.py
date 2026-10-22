@@ -1,6 +1,6 @@
 import struct
 from tinygrad.renderer import tc
-from tinygrad.renderer import Renderer
+from tinygrad.renderer import Renderer, call_bodies
 from tinygrad.renderer.cstyle import HIPRenderer, create_non_native_float_pats, pm_manual_bf16_cast, fp8_index, amd_fp8s
 from tinygrad.codegen.decomp.transcendental import xexp2, xlog2
 from tinygrad.uop.ops import UOp, PatternMatcher, UPat, Ops, GroupOp, range_str
@@ -228,18 +228,30 @@ class CPULLVMRenderer(LLVMRenderer):
   has_local = False
   global_max = (1, 0, 0)
   abi = None
-  string_rewrite = base_rewrite
-  def render(self, uops: list[UOp]) -> str: # the kernel is first, it is the entry. its functions follow, a name traced with other args gets a suffix
-    topo = UOp.sink(*uops).toposort(enter_calls=True)
-    fns = {b: f"{b.arg}_{i}" for i, b in enumerate(b for b in topo if b.op is Ops.LINEAR)}
-    defs = [self._render_kernel(b.src, name=n, fns=fns)[1] for b, n in fns.items()]
-    return "\n".join((k:=self._render_kernel(uops, fns=fns, args_struct=True))[0] + (k[1], *defs, self._render_footer(topo)))
+  string_rewrite = PatternMatcher([
+    (UPat(Ops.CALL, src=(UPat(Ops.LINEAR, name="body"),), allow_any_len=True, name="x"), lambda ctx,x,body:
+      f"  call void {ctx[body]}(" + ', '.join(f"{ldt(p.dtype, ptr=p.addrspace != AddrSpace.ALU)} {ctx[x.src[p.arg.slot+1]]}"
+        for p in body.src if p.op is Ops.PARAM) + f") ; {body.arg}"),
+  ]) + base_rewrite
+  def render(self, uops: list[UOp]) -> str:
+    return self._render_module(uops, args_struct=True)
+
+  def render_function(self, body:UOp) -> str:
+    return self._render_module(list(body.src), name="__tinygrad_entry")
+
+  def _render_module(self, uops:list[UOp], name="test", args_struct=False) -> str:
+    self.fn_names = {b:f"@__tinygrad_call_{i}" for i,b in enumerate(call_bodies(uops))}
+    k = self._render_kernel(uops, name=name, fns=self.fn_names, args_struct=args_struct)
+    return "\n".join((*k[0], k[1], self._render_footer(uops)))
+
   def _render_footer(self, uops: list[UOp]) -> str:
     decls = {x.src[0].arg.name: f"declare {ldt(x.dtype)} @{x.src[0].arg.name}({', '.join(map(lparam, x.src[1:]))})"
              for x in uops if x.op is Ops.CALL and x.src[0].op is Ops.CUSTOM_FUNCTION}
+    decls.update({name:f"declare void {name}({', '.join(ldt(p.dtype, ptr=p.addrspace != AddrSpace.ALU) for p in b.src if p.op is Ops.PARAM)})"
+                  for b,name in self.fn_names.items()})
     blobs = {x.key: f"@bin_{x.key.hex()} = private constant [{len(x.arg)} x i8] c\"" + "".join("\\%02X" % b for b in x.arg) + '", align 16'
              for x in uops if x.op is Ops.BINARY}
-    return "\n".join([*decls.values(), *blobs.values(), 'attributes #0 = { alwaysinline nounwind "no-builtins" "no-trapping-math"="true" }'])
+    return "\n".join([*decls.values(), *blobs.values(), 'attributes #0 = { nounwind "no-builtins" "no-trapping-math"="true" }'])
   def __init__(self, target:Target):
     super().__init__(target)
     from tinygrad.runtime.support.compiler_llvm import CPULLVMCompiler

@@ -6,7 +6,7 @@ from tinygrad.uop.ops import PatternMatcher, graph_rewrite, MapCtx, UOp, Ops, UP
 from tinygrad.uop.weak import pm_lower_weak, pm_commit_weak, pm_cast_const
 from tinygrad.uop.render import render_uir
 from tinygrad.uop.spec import type_verify, spec_tensor, spec_program
-from tinygrad.renderer import Renderer, Estimates
+from tinygrad.renderer import Renderer, Estimates, call_bodies
 from tinygrad.renderer.isa import ISARenderer, IselContext
 from tinygrad.dtype import dtypes, AddrSpace
 
@@ -458,7 +458,23 @@ def do_compile(ctx:Renderer, prg:UOp, source:UOp) -> UOp|None:
   if DEBUG >= 4: print(source.arg)
   lib = ctx.compiler.compile_cached(source.arg)
   if DEBUG >= 7: ctx.compiler.disassemble(lib)
-  return prg.replace(src=prg.src + (UOp(Ops.BINARY, arg=lib),))
+  return prg.replace(src=prg.src + (UOp(Ops.BINARY, arg=lib, src=compile_calls(ctx, prg.src[1])),))
+
+def compile_calls(ctx:Renderer, linear:UOp) -> tuple[UOp, ...]:
+  deps = []
+  for body in call_bodies(linear.src):
+    key = ("function", *to_program_key(body, ctx))
+    if (obj:=to_program_cache.get(key)) is None:
+      to_program_cache[key] = obj = do_compile_function(ctx, body)
+    deps.append(obj)
+  return tuple(deps)
+
+@rewrite_group(name=lambda ctx,body,ret: TracingKey(body.arg, (ret.key, body.arg), ret=ctx))
+def do_compile_function(ctx:Renderer, body:UOp) -> UOp:
+  prg = UOp(Ops.PROGRAM, src=(UOp.sink(arg=KernelInfo(body.arg)), body, UOp(Ops.SOURCE, arg=ctx.render_function(body))))
+  prg = graph_rewrite(prg, pm_to_program, ctx=ctx, name="linearize/render")
+  if VIZ: graph_rewrite(prg, PatternMatcher([]), name="View Program")
+  return prg.src[3]
 
 pm_to_program = PatternMatcher([
   (UPat(Ops.PROGRAM, src=(UPat(Ops.SINK, name="sink"),), name="prg"), do_linearize),
