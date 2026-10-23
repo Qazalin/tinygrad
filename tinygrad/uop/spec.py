@@ -32,7 +32,8 @@ def valid_device_range(device:str|tuple[str, ...]|None, src:tuple[UOp, ...]) -> 
   return rng.op is Ops.RANGE and rng.axis_type is AxisType.DEVICE and int(rng.vmax)+1 == len(device)
 
 def valid_call(call:UOp) -> bool:
-  return isinstance(call.arg, CallInfo) and (call.dtype != dtypes.void or any(u.op is Ops.STORE for u in call.body.toposort(enter_calls=True)))
+  return isinstance(call.arg, CallInfo) and (call.dtype != dtypes.void or
+    any(u.op is Ops.STORE and u.src[0].addrspace is AddrSpace.GLOBAL for u in call.body.toposort(enter_calls=True)))
 
 def type_verify(ast:UOp|list[UOp], check_spec:PatternMatcher, enter_calls=False):
   lst = list(ast.toposort(enter_calls=enter_calls)) if isinstance(ast, UOp) else ast
