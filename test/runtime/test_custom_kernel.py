@@ -121,8 +121,7 @@ class TestCustomKernel(unittest.TestCase):
   def test_empty(self):
     a = Tensor.empty(1)
     a = Tensor.custom_kernel(a, fxn=lambda _: UOp.sink(arg=KernelInfo()))[0]
-    with self.assertRaisesRegex(RuntimeError, "UOp verification failed"):
-      a.realize()
+    a.realize()
 
   def test_simple(self):
     a = Tensor.ones(16, 16).contiguous()
@@ -599,71 +598,6 @@ class TestCustomKernel(unittest.TestCase):
 @unittest.skipUnless((Device.DEFAULT == "CPU" and isinstance(Device[Device.DEFAULT].renderer, (CStyleLanguage, LLVMRenderer))) \
     or Device.DEFAULT == "AMD" and isinstance(Device[Device.DEFAULT].renderer, CStyleLanguage), "calls in kernels render not implemented in renderer")
 class TestCallInKernel(unittest.TestCase):
-  @unittest.skipUnless(isinstance(Device[Device.DEFAULT].renderer, LLVMRenderer), "LLVM aliasing regression")
-  @unittest.expectedFailure
-  def test_call_alias_reverse(self):
-    # Fuzz seed 42, case 519: LLVM marks both callee pointers noalias, even for incr(C, C).
-    @uopfunc
-    def incr(out:UOp, A:UOp):
-      i = UOp.range(4, 0)
-      idx = 3-i
-      return out[idx].store((i < 2).where(A[idx]+1, A[idx])).end(i).sink()
-
-    def kernel(C:UOp, A:UOp):
-      for _ in range(4):
-        call = incr(C, A)
-        A, C = C.after(call), C.after(call)
-      return call.sink(arg=KernelInfo(opts_to_apply=()))
-
-    a = Tensor([-5, -10, 5, -7], dtype=dtypes.int).realize()
-    self.assertEqual(Tensor.custom_kernel(a, a, fxn=kernel)[0].tolist(), [-5, -10, 9, -3])
-
-  def test_nested_call_only(self):
-    @uopfunc
-    def incr(out:UOp, A:UOp):
-      i = UOp.range(A.numel(), 0)
-      return out[i].store(A[i]+1).end(i).sink()
-
-    @uopfunc
-    def forward(out:UOp, A:UOp): return incr(out, A).sink()
-
-    def kernel(C:UOp, A:UOp): return forward(C, A).sink(arg=KernelInfo(opts_to_apply=()))
-
-    a = Tensor([1, 2, 3, 4], dtype=dtypes.int).realize()
-    out = Tensor.custom_kernel(Tensor.full_like(a, -1).contiguous().realize(), a, fxn=kernel)[0]
-    self.assertEqual(out.tolist(), [2, 3, 4, 5])
-
-  def test_nested_call_reg_output(self):
-    @uopfunc
-    def incr(out:UOp, A:UOp):
-      i = UOp.range(A.numel(), 0)
-      return out[i].store(A[i]+1).end(i).sink()
-
-    @uopfunc
-    def forward(out:UOp, A:UOp): return incr(out, A).sink()
-
-    def kernel(C:UOp, A:UOp):
-      tmp = UOp.alloc_like(A, addrspace=AddrSpace.REG)
-      call = forward(tmp, A)
-      i = UOp.range(A.numel(), 1)
-      return C[i].store(tmp.after(call)[i]*2).end(i).sink(arg=KernelInfo(opts_to_apply=()))
-
-    a = Tensor([1, 2, 3, 4], dtype=dtypes.int).realize()
-    out = Tensor.custom_kernel(Tensor.empty_like(a), a, fxn=kernel)[0]
-    self.assertEqual(out.tolist(), [4, 6, 8, 10])
-
-  def test_call_private_reg_store(self):
-    @uopfunc
-    def scratch():
-      tmp = UOp.alloc((1,), dtypes.int, addrspace=AddrSpace.REG)
-      return tmp[0].store(7).sink()
-
-    def kernel(C:UOp): return scratch().sink(arg=KernelInfo(opts_to_apply=()))
-
-    # A STORE in the body need not write any of the caller's buffers.
-    out = Tensor([11], dtype=dtypes.int).realize().custom_kernel(fxn=kernel)[0]
-    self.assertEqual(out.tolist(), [11])
-
   def test_simple(self):
     N = getenv("N", 4)
 

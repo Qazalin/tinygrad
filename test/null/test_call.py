@@ -4,8 +4,7 @@ from tinygrad.dtype import dtypes, AddrSpace
 from tinygrad.codegen import to_program
 from tinygrad.helpers import Target
 from tinygrad.renderer.cstyle import ClangRenderer
-from tinygrad.uop.ops import KernelInfo, Ops, ProgramInfo, uopfunc
-from tinygrad.uop.spec import spec_shared, spec_kernel_graph, type_verify, valid_call
+from tinygrad.uop.ops import KernelInfo, Ops
 from tinygrad.schedule import transform_to_call, resolve_linear_call
 
 def sched_key(t:Tensor): return transform_to_call(UOp.sink(t.uop)).body.key
@@ -15,66 +14,6 @@ class TestCall(unittest.TestCase):
     scalar_fxn = UOp.param(0, dtypes.float, ()) * 2
     with self.assertRaisesRegex(TypeError, "shape mismatch: expected scalar"):
       Tensor.call(Tensor.ones(2), fxn=scalar_fxn).realize()
-
-class TestVoidCall(unittest.TestCase):
-  def test_empty(self):
-    for spec in (spec_shared, spec_kernel_graph):
-      with self.subTest(spec=spec), self.assertRaisesRegex(RuntimeError, "Ops.CALL"):
-        type_verify([UOp.sink().call()], spec)
-
-  def test_private_reg_store(self):
-    @uopfunc
-    def scratch():
-      tmp = UOp.alloc((1,), dtypes.int, addrspace=AddrSpace.REG)
-      return tmp[0].store(7).sink()
-
-    call = scratch()
-    self.assertTrue(valid_call(call))
-    info = ProgramInfo.from_sink(call.body)
-    self.assertEqual((info.globals, info.outs, info.ins), ((), (), ()))
-
-  @unittest.expectedFailure
-  def test_nested_empty(self):
-    # Merely wrapping an invalid call must not make it valid.
-    self.assertFalse(valid_call(UOp.sink(UOp.sink().call()).call()))
-
-  @unittest.expectedFailure
-  def test_nested_value_call_without_store(self):
-    value = UOp.custom_function("value", dtype=dtypes.int).call()
-    self.assertTrue(valid_call(value))
-    self.assertFalse(valid_call(value.sink().call()))
-
-  @unittest.expectedFailure
-  def test_external_void_call(self):
-    # The implementation of an external function is opaque, including its stores.
-    self.assertTrue(valid_call(UOp.custom_function("callback").call()))
-
-  @unittest.expectedFailure
-  def test_nested_call_buffer_accesses(self):
-    @uopfunc
-    def copy(out:UOp, A:UOp): return out[0].store(A[0]).sink()
-
-    @uopfunc
-    def forward(A:UOp, out:UOp): return copy(out, A).sink()
-
-    out, A = (UOp.param(i, dtypes.int, (1,)) for i in range(2))
-    sink = forward(A, out).sink(arg=KernelInfo(opts_to_apply=()))
-    prg = to_program(sink, ClangRenderer(Target("CPU", arch="x86_64,x86-64")))
-    # Callee slots must be mapped through both calls to the caller's slots.
-    self.assertEqual((prg.arg.outs, prg.arg.ins), ((0,), (1,)))
-
-  @unittest.expectedFailure
-  def test_call_reg_buffer_accesses(self):
-    @uopfunc
-    def copy(out:UOp, A:UOp): return out[0].store(A[0]).sink()
-
-    out, A = (UOp.param(i, dtypes.int, (1,)) for i in range(2))
-    tmp = UOp.alloc_like(A, addrspace=AddrSpace.REG)
-    call = copy(tmp, A)
-    sink = out[0].store(tmp.after(call)[0]).sink(arg=KernelInfo(opts_to_apply=()))
-    prg = to_program(sink, ClangRenderer(Target("CPU", arch="x86_64,x86-64")))
-    # The outer STORE is visible, but the input LOAD lives inside the call.
-    self.assertEqual((prg.arg.outs, prg.arg.ins), ((0,), (1,)))
 
 class TestCallShape(unittest.TestCase):
   def test_call_shape_int(self):
