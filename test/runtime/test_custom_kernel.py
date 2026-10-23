@@ -121,7 +121,8 @@ class TestCustomKernel(unittest.TestCase):
   def test_empty(self):
     a = Tensor.empty(1)
     a = Tensor.custom_kernel(a, fxn=lambda _: UOp.sink(arg=KernelInfo()))[0]
-    a.realize()
+    with self.assertRaisesRegex(RuntimeError, "UOp verification failed"):
+      a.realize()
 
   def test_simple(self):
     a = Tensor.ones(16, 16).contiguous()
