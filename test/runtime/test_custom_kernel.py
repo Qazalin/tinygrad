@@ -549,8 +549,7 @@ class TestCustomKernel(unittest.TestCase):
   def test_call_to_program(self):
     t = Tensor([-1]).realize()
     # render a source string
-    from tinygrad.codegen import do_to_program
-    source:str = do_to_program(custom_add_one_kernel(t.uop.param_like(0), t.uop.param_like(1)), Device[t.device].renderer).src[2].arg
+    source:str = to_program(custom_add_one_kernel(t.uop.param_like(0), t.uop.param_like(1)), Device[t.device].renderer).src[2].arg
     assert isinstance(source, str)
     # call to PROGRAM
     def custom_source(out:UOp, inp:UOp) -> UOp:
@@ -768,6 +767,32 @@ class TestCallInKernel(unittest.TestCase):
     with self.assertRaises(AssertionError):
       self.assertEqual(y.tolist(), z.tolist())
     self.assertEqual(x.tolist(), z.tolist())
+
+  def test_compile_cache(self):
+    @uopfunc
+    def plus2(out:UOp, A:UOp): return out[0].store(A[0]+2).sink()
+
+    def kernel(A:UOp):
+      A = A.flatten()
+      i = UOp.range(A.shape[0], 0)
+      tmp = UOp.alloc_like(A, addrspace=AddrSpace.REG)
+      return A[i].store(tmp[i].after(plus2(tmp[i], A[i]))).end(i).sink(arg=KernelInfo(name="test_kernel", opts_to_apply=()))
+
+    x = Tensor.custom_kernel(Tensor.arange(4).clone().realize(), fxn=kernel)[0]
+    lin = x.schedule_linear()
+    prg = to_program(lin.src[0].body, Device[Device.DEFAULT].renderer)
+    elf = prg.to_elf()
+    run_linear(lin)
+    print(prg, elf)
+    self.assertListEqual(x.tolist(), Tensor.arange(4).add(2).tolist())
+
+    x = Tensor.custom_kernel(Tensor.arange(5).clone().realize(), fxn=kernel)[0]
+    lin = x.schedule_linear()
+    prg = to_program(lin.src[0].body, Device[Device.DEFAULT].renderer)
+    elf = prg.to_elf()
+    run_linear(lin)
+    print(prg, elf)
+    self.assertListEqual(x.tolist(), Tensor.arange(5).add(2).tolist())
 
 class TestCustomKernelInput(unittest.TestCase):
   def _test_mop(self, mop_fxn, max_kernels):
