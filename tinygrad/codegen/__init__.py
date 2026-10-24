@@ -454,18 +454,21 @@ def do_render(ctx:Renderer, prg:UOp, lin:UOp) -> UOp:
   src = ctx.render(list(lin.src))
   return prg.replace(src=prg.src + (UOp(Ops.SOURCE, arg=src),))
 
-def do_compile(ctx:Renderer, prg:UOp, source:UOp) -> UOp|None:
+def do_compile(ctx:Renderer, prg:UOp, lin:UOp, source:UOp) -> UOp|None:
   if DEBUG >= 4: print(source.arg)
   lib = ctx.compiler.compile_cached(source.arg)
   if DEBUG >= 7: ctx.compiler.disassemble(lib)
-  return prg.replace(src=prg.src + (UOp(Ops.BINARY, arg=lib),))
+  call_binaries:list[UOp] = []
+  for c in lin.src:
+    if c.op is Ops.CALL and c.body.op is Ops.LINEAR: raise Exception(c.body)
+  return prg.replace(src=prg.src + (UOp(Ops.BINARY, src=tuple(call_binaries), arg=lib),))
 
 pm_to_program = PatternMatcher([
   (UPat(Ops.PROGRAM, src=(UPat(Ops.SINK, name="sink"),), name="prg"), do_linearize),
   (UPat(Ops.PROGRAM, src=(UPat(Ops.SINK, name="sink"), UPat(Ops.LINEAR, name="lin")), name="prg"), do_estimates),
   (UPat(Ops.PROGRAM, src=(UPat(), UPat(Ops.LINEAR, src=UPat(Ops.INS), name="lin")), name="prg"), do_assemble),
   (UPat(Ops.PROGRAM, src=(UPat(), UPat(Ops.LINEAR, name="lin")), name="prg"), do_render),
-  (UPat(Ops.PROGRAM, src=(UPat(), UPat(Ops.LINEAR), UPat(Ops.SOURCE, name="source")), name="prg"), do_compile),
+  (UPat(Ops.PROGRAM, src=(UPat(), UPat(Ops.LINEAR, name="lin"), UPat(Ops.SOURCE, name="source")), name="prg"), do_compile),
 ])
 
 @rewrite_group(name=lambda ast,renderer,ret,**_: TracingKey((k:=ret.src[0].arg).name,(ret.key, k.function_name),ret=renderer), replay=True)
