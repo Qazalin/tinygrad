@@ -781,9 +781,9 @@ class TestCallInKernel(unittest.TestCase):
     x = Tensor.custom_kernel(Tensor.arange(4).clone().realize(), fxn=kernel)[0]
     lin = x.schedule_linear()
     prg = to_program(lin.src[0].body, Device[Device.DEFAULT].renderer)
+    self.assertEqual(sum("plus2" in s for s in prg.src[2].arg.splitlines()), 1)
     elf = prg.to_elf()
     run_linear(lin)
-    print(prg, elf)
     self.assertListEqual(x.tolist(), Tensor.arange(4).add(2).tolist())
 
     x = Tensor.custom_kernel(Tensor.arange(5).clone().realize(), fxn=kernel)[0]
@@ -791,7 +791,6 @@ class TestCallInKernel(unittest.TestCase):
     prg = to_program(lin.src[0].body, Device[Device.DEFAULT].renderer)
     elf = prg.to_elf()
     run_linear(lin)
-    print(prg, elf)
     self.assertListEqual(x.tolist(), Tensor.arange(5).add(2).tolist())
 
 class TestCustomKernelInput(unittest.TestCase):
