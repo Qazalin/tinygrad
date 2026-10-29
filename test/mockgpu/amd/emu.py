@@ -1272,7 +1272,7 @@ def _compile_wmma(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P, ctx: _Ctx) -> UOp:
     return n + lane_bit * 16, vgpr
 
   # Accumulator C. RDNA4 f16/bf16 packs two f32 accumulator VGPRs into one f16 VGPR; RDNA3 uses the lo half of each.
-  # src2 may be a VGPR or an inline/scalar constant (128 = int 0, the usual ", 0" C form); the runner must handle both dynamically
+  # src2 may be a VGPR or an inline/scalar constant (128 = int 0, the usual ", 0" C form).
   out_dt = dtypes.int32 if output_type == "I32" else dtypes.float32
   elem = ctx.range(256)
   row, col = elem // 16, elem % 16
