@@ -56,7 +56,7 @@ from tinygrad.device import Buffer, BufferSpec, Device
 from tinygrad.engine.realize import run_linear
 from tinygrad.codegen import to_program, to_program_config
 from tinygrad.renderer import Renderer
-from tinygrad.helpers import Context, DEV, to_mv, ContextVar
+from tinygrad.helpers import Context, DEV, to_mv, ContextVar, CAPTURE_PROCESS_REPLY
 from tinygrad.runtime.autogen import hsa
 from tinygrad.viz.serve import amd_decode, get_cfg, COND_TAKEN, COND_NOT_TAKEN, UNCOND, get_elf_section
 
@@ -2033,7 +2033,6 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
 dispatch_cache:dict[tuple, UOp] = {}
 
 RELIFT = ContextVar("RELIFT", 0) # lift and recompile to assembly N times
-REPLAY_EMU = ContextVar("REPLAY_EMU", 0)
 
 def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, lz: int, args_ptr: int, rsrc2: int = 0x19c,
             scratch_size: int = 0, arch: str = "rdna3", user_data: list[int]|None = None, name: str = "asm") -> int:
@@ -2044,7 +2043,10 @@ def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, 
     dispatch = (gx, gy, gz, lx, ly, lz, rsrc2, scratch_size, len(user_data or []))
     renderer = Device['CPU'].renderer
     if (key:=(code, arch, dispatch, name, type(renderer), renderer.target, *(x.value for x in to_program_config))) not in dispatch_cache:
-      dispatch_cache[key] = to_program(lift(code, arch, renderer, dispatch, f"emu {name}"), renderer)
+      with Context(CAPTURE_PROCESS_REPLAY=CAPTURE_PROCESS_REPLAY.value):
+        lifted_ast = lift(code, arch, renderer, dispatch, f"emu {name}")
+      with Context(CAPTURE_PROCESS_REPLAY=0):
+        dispatch_cache[key] = to_program(lifted_ast, renderer)
       relift_lib = code
       for relift_count in range(1, RELIFT.value+1):
         try:
