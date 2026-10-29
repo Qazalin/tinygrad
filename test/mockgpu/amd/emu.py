@@ -1192,15 +1192,12 @@ def _compile_mfma(inst: irc.VOP3P|irc.VOP3PX2, ctx: _Ctx) -> UOp:
   for kl in range(k_per_grp):
     reg_idx, sub_idx = kl // vpg, kl % vpg
     # src_off >= 256 means VGPR operand, otherwise inline constant/SGPR
-    for off, is_vgpr, fmt, base, dim in ((src0_off, src0_off >= _c(256), a_fmt, 0, M), (src1_off, src1_off >= _c(256), b_fmt, n_a_elems, N)):
-      raw = is_vgpr.where(ctx.rvgpr_dyn(off - _c(256 - reg_idx), read_lane), ctx.rsrc_dyn(off, _c(0, dtypes.int), 32))
+    for off, fmt, base, dim in ((src0_off, a_fmt, 0, M), (src1_off, b_fmt, n_a_elems, N)):
+      raw = ctx.rvgpr_dyn(off - _c(256 - reg_idx), read_lane) if off.vmin >= 256 else ctx.rsrc_dyn(off, None)
       read_stores.append(tmp.index(mat_idx(base, dim, kl)).store(cvt_elem(raw, sub_idx, fmt)))
   read_phase = UOp.group(*read_stores).end(read_lane)
 
   # Phase 2: dot products and accumulate. acc reads src2 (VGPR, or scalar inline constant/SGPR broadcast).
-  src2_is_vgpr = src2_off >= _c(256)
-  acc_scalar = ctx.rsgpr_dyn(src2_off, src2_is_vgpr.ne(True))
-  acc_scalar = acc_scalar.cast(dtypes.int32) if is_int_out else acc_scalar.bitcast(dtypes.float32)
   acc_reader, acc_writer = (ctx.raccvgpr_dyn, ctx.waccvgpr_dyn) if use_acc else (ctx.rvgpr_dyn, ctx.wvgpr_dyn)
   tmp2 = tmp.after(read_phase)
 
@@ -1230,10 +1227,10 @@ def _compile_mfma(inst: irc.VOP3P|irc.VOP3PX2, ctx: _Ctx) -> UOp:
 
   compute_stores = []
   for out_reg in range(out_per_lane):
-    acc_v = acc_reader(src2_off - _c(256 - out_reg), compute_lane, src2_is_vgpr)
+    acc_v = acc_reader(src2_off - _c(256 - out_reg), compute_lane) if src2_off.vmin >= 256 else ctx.rsgpr_dyn(src2_off)
     acc_v = acc_v.cast(dtypes.int32) if is_int_out else acc_v.bitcast(dtypes.float32)
     a_base, b_base = out_ab(out_reg)
-    acc = _dot_accum(src2_is_vgpr.where(acc_v, acc_scalar), a_base, b_base, compute_lane)
+    acc = _dot_accum(acc_v, a_base, b_base, compute_lane)
     out_bits = acc.cast(dtypes.uint32) if is_int_out else acc.bitcast(dtypes.uint32)
     compute_stores.append(acc_writer(vdst_reg + _c(out_reg), compute_lane, out_bits, exec_mask))
   compute_phase = UOp.group(*compute_stores).end(compute_lane)
@@ -1245,8 +1242,8 @@ def _compile_wmma(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P, ctx: _Ctx) -> UOp:
   vdst_reg = ctx.inst_field(type(inst).vdst)
   src0_r, src1_r = ctx.inst_field(type(inst).src0) - _c(256), ctx.inst_field(type(inst).src1) - _c(256)
   src2_r = ctx.inst_field(type(inst).src2)
-  is_c_vgpr = src2_r >= _c(256)
-  src2_r = is_c_vgpr.where(src2_r - _c(256), src2_r)  # also keeps the unused VGPR-side index in bounds when src2 is a constant
+  is_c_vgpr = src2_r.vmin >= 256
+  if is_c_vgpr: src2_r = src2_r - _c(256)
   output_type, _, *input_types = op_name.split("WMMA_", 1)[1].split("_")
   a_fmt, b_fmt = input_types if len(input_types) == 2 else input_types * 2
   is_rdna4 = isinstance(inst, ir4.VOP3P)
@@ -1277,16 +1274,18 @@ def _compile_wmma(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P, ctx: _Ctx) -> UOp:
   # Accumulator C. RDNA4 f16/bf16 packs two f32 accumulator VGPRs into one f16 VGPR; RDNA3 uses the lo half of each.
   # src2 may be a VGPR or an inline/scalar constant (128 = int 0, the usual ", 0" C form); the runner must handle both dynamically
   out_dt = dtypes.int32 if output_type == "I32" else dtypes.float32
-  cbits = ctx.rsrc_dyn(src2_r, None, 32)
-  cval_const = _FUNCS[f'{output_type.lower()}_to_f32'](cbits & UOp.const(0xFFFF, dtypes.uint32)) \
-    if output_type in ("F16", "BF16") else cbits.bitcast(out_dt)
   elem = ctx.range(256)
   row, col = elem // 16, elem % 16
   lane, vgpr = d_map(row, col)
-  cval = gval(src2_r, *((lane, vgpr // 2, vgpr % 2) if is_rdna4 else (lane, vgpr, 0)), fmt=output_type) \
-    if output_type in ("F16", "BF16") else ctx.rvgpr_dyn(src2_r + _c(vgpr), lane).bitcast(out_dt)
+  if is_c_vgpr:
+    cval = gval(src2_r, *((lane, vgpr // 2, vgpr % 2) if is_rdna4 else (lane, vgpr, 0)), fmt=output_type) \
+      if output_type in ("F16", "BF16") else ctx.rvgpr_dyn(src2_r + _c(vgpr), lane).bitcast(out_dt)
+  else:
+    cbits = ctx.rsrc_dyn(src2_r, None, 32)
+    cval = _FUNCS[f'{output_type.lower()}_to_f32'](cbits & UOp.const(0xFFFF, dtypes.uint32)) \
+      if output_type in ("F16", "BF16") else cbits.bitcast(out_dt)
   tmp = UOp.alloc((768,), dtypes.uint32, 0, AddrSpace.REG)
-  values = [read_mat(src0_r, a_fmt, row, col), read_mat(src1_r, b_fmt, row, col), is_c_vgpr.where(cval, cval_const)]
+  values = [read_mat(src0_r, a_fmt, row, col), read_mat(src1_r, b_fmt, row, col), cval]
   read_phase = UOp.group(*(tmp.index(elem + i*256).store(v.bitcast(dtypes.uint32)) for i,v in enumerate(values))).end(elem)
   data = tmp.after(read_phase)
   n = ctx.range(16)
@@ -1357,10 +1356,10 @@ def _compile_vop3p(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P | irc.VOP3PX2, ctx: _
   def _pk_sel(src_lo: UOp, src_off: UOp, sel: int) -> UOp:
     """Lo (sel=0) / hi (sel!=0) half of a packed source: VGPR/SGPR pairs select from the two registers of the pair
     (off>=256 is a VGPR pair, off<128 an SGPR pair), inline constants (128<=off<256) broadcast to both halves."""
-    if not sel: return (src_off >= _c(256)).where(ctx.rvgpr_dyn(src_off - _c(256), lane), src_lo)
+    if src_off.vmin >= 256: return ctx.rvgpr_dyn(src_off - _c(256) + _c(int(bool(sel))), lane)
+    if not sel: return src_lo
     is_sgpr_pair = src_off < _c(128)
-    return (src_off >= _c(256)).where(ctx.rvgpr_dyn(src_off - _c(256) + _c(1), lane),
-                                      is_sgpr_pair.where(ctx.rsgpr_dyn(src_off + _c(1), is_sgpr_pair), src_lo))
+    return is_sgpr_pair.where(ctx.rsgpr_dyn(src_off + _c(1), is_sgpr_pair), src_lo)
 
   if is_pk_mov_b32:
     # v_pk_mov_b32: D[lo] = src0[opsel_bit0 ? hi : lo], D[hi] = src1[opsel_bit1 ? hi : lo]
