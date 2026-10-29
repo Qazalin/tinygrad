@@ -340,7 +340,6 @@ class TestConcatWidthParsing(unittest.TestCase):
       'VDST': UOp.const(1, dtypes.uint32),
       'EXEC_LO': UOp.const(0xFFFFFFFF, dtypes.uint32),
       'EXEC': UOp.const(0xFFFFFFFFFFFFFFFF, dtypes.uint64),
-      '_vgpr': vgpr,
       '_wave_size': 64,
       'S0': UOp.const(0, dtypes.uint32),
       'S1': UOp.const(0, dtypes.uint32),
@@ -353,10 +352,10 @@ class TestConcatWidthParsing(unittest.TestCase):
       self.assertEqual(simp.src[0].op, Ops.INDEX)
       self.assertIs(simp.src[0].src[1].simplify(), UOp.const(expected, dtypes.uint32))
 
-    _, assigns = parse_pcode(PCODE[VOP1Op.V_PERMLANE64_B32_E32], srcs)
+    _, assigns = parse_pcode(PCODE[VOP1Op.V_PERMLANE64_B32_E32], srcs, {'vgpr': lambda reg,lane: vgpr.index(reg*64+lane)})
     self.assertEqual(len(assigns), 64)
     for lane, (dst_idx, src_idx) in {0: (64, 32), 31: (95, 63), 32: (96, 0), 63: (127, 31)}.items():
-      self.assertIs(assigns[lane][1][0].simplify(), UOp.const(dst_idx, dtypes.uint32))  # type: ignore[index]
+      self.assertIs(assigns[lane][1][0].src[1].simplify(), UOp.const(dst_idx, dtypes.uint32))  # type: ignore[index]
       check_load_idx(assigns[lane][1][1], src_idx)  # type: ignore[index]
 
 class TestAllPcode(unittest.TestCase):
@@ -384,7 +383,7 @@ class TestAllPcode(unittest.TestCase):
     passed, skipped, errors = 0, 0, defaultdict(list)
     for op, pcode in pcode_dict.items():
       try:
-        parse_pcode(pcode, srcs)
+        parse_pcode(pcode, srcs, {'vgpr': lambda reg,lane: UOp.param(0, dtypes.uint32, 16384).index(reg*64+lane)})
         passed += 1
       except RuntimeError as e:
         skipped += 1
