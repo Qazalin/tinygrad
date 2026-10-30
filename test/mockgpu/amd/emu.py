@@ -1,7 +1,7 @@
 # RDNA3 emulator v2 - compiles pcode to UOps executed via tinygrad CPU backend
-# Symbolic banks used to decode operands; each referenced register gets its own allocation:
+# Each instruction is compiled to a kernel that operates on buffers:
 #   arg=0: sgpr - sgpr[0-127], inline constants[128-255], PC_LO=256, PC_HI=257, SCC=258, SCRATCH_STRIDE=259
-#   arg=1: vgpr - vgpr[reg * wave_size + lane]
+#   arg=1: vgpr - vgpr[reg * 32 + lane]
 #   arg=2: vmem - base address 0, INDEX offsets directly to host memory
 #   arg=3: lds - local data share
 #   arg=4: scratch - per-lane scratch memory
@@ -326,7 +326,6 @@ class _Ctx:
   def inst_field(self, field) -> UOp:
     """Extract field bits from instruction encoding. Tracks field for canonical key computation."""
     lo, hi = field.lo, field.hi
-    # Scalar and vector sources use different instruction templates; register numbers remain dynamic.
     vector = (self.inst_bits >> hi) & 1 if type(field) is SrcField else 0
     if type(field) is SrcField: hi -= 1
     self.dyn_fields.append((lo, hi))
@@ -378,7 +377,8 @@ class _Ctx:
     return parse_pcode(pcode, srcs, {'vgpr': lambda reg,lane: self.reg_view(self.vgpr, reg, self.wave_size).index(lane), **(funcs or {})})
 
   def reg_view(self, buf:UOp, reg:UOp, size:int) -> UOp:
-    view = UOp(Ops.SHRINK, src=(buf, reg.cast(dtypes.int)*size, _c(size, dtypes.int)))
+    offset = reg.cast(dtypes.int)*size
+    view = buf.shrink(((offset, offset+size),))
     if view not in self.views: self.views[view] = UOp.param(8+len(self.views), dtypes.uint32, (size,))
     return self.views[view]
 
@@ -1990,7 +1990,7 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
   init = lower_body(init_wave(init_wg, init_wave_id, regs, init_args, gx, gy, lx, ly, total_threads, wave_size,
                              scratch_size, rsrc2, arch, user_data_count), "init_wave")
   init_args_map = {init_wg:wg, init_wave_id:wave, init_args:args_ptr}
-  init_args_map.update((b, UOp(Ops.SHRINK, src=(buffers[b][0], wave*b.src[2], b.src[2])) if n_waves > 1 else buffers[b][0]) for b in regs)
+  init_args_map.update((b, buffers[b][0].shrink(((wave*b.src[2], wave*b.src[2]+b.src[2]),)) if n_waves > 1 else buffers[b][0]) for b in regs)
   init = init.replace(src=(init.body, *(init_args_map.get(b, b) for b in init.src[1:])))
   initialized = (routes.after(init).index(wave).store(0) if routed else UOp.group(init, wave)).end(wave)
   def emit_block(block_pc:int, end:UOp, scopes:tuple[UOp, ...]) -> UOp:
@@ -2004,7 +2004,7 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
     w = UOp.range(n_waves, 0, AxisType.LOOP, dtype=dtypes.int)
     gates = () if block_pc in unconditional else (UOp.range(params[bufs.index(route)][w].load().eq(params[-1]).cast(dtypes.int),
                                                             1, AxisType.LOOP, dtype=dtypes.int),)
-    call_args = [p if b.addrspace is AddrSpace.ALU else UOp(Ops.SHRINK, src=(p.after(*gates, w), w*s, _c(s, dtypes.int)))
+    call_args = [p if b.addrspace is AddrSpace.ALU else p.after(*gates, w).shrink(((w*s, w*s+s),))
                  if (s:=buffers[b][1]) and n_waves > 1 else p.after(*gates, w) for b,p in zip(bufs, params)]
     block = UOp.group(body.call(*call_args, name="asm_block"), *gates, w).end(*gates).end(w).sink()
     return block.call(*args, name="asm_waves")
