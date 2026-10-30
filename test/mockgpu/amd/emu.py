@@ -1756,8 +1756,8 @@ instruction_cache:dict[tuple, list[tuple[int, int, tuple[UOp|None, UOp|None]]]] 
 @uopfunc
 def init_wave(wg:UOp, wave:UOp, sgpr:UOp, vgpr:UOp, args_ptr:UOp, gx:int, gy:int, lx:int, ly:int, total_threads:int, wave_size:int,
               scratch_size:int, rsrc2:int, arch:str="rdna3", user_data_count:int=0):
-  ci = UOp.range(81, 2, AxisType.LOOP, dtype=dtypes.int)
-  init_ints = sgpr.index(ci+128).store((ci<65).where(ci, 64-ci).cast(dtypes.uint32)).end(ci)
+  ints = UOp.const(tuple(i if i < 65 else 64-i for i in range(81)), dtypes.int).cast(dtypes.uint32)
+  init_ints = sgpr.shrink(((128, 128 + ints.shape[0]),)).store(ints)
   floats_buf = UOp(Ops.BINARY, arg=struct.pack(f"<{len(F32_INLINE)}I", *F32_INLINE.values())).bitcast(dtypes.uint32)
   init_floats = sgpr.shrink(((240, 240+floats_buf.shape[0]),)).store(floats_buf)
   # set RANGE registers
