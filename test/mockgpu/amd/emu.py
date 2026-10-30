@@ -1758,9 +1758,8 @@ def init_wave(wg:UOp, wave:UOp, sgpr:UOp, vgpr:UOp, args_ptr:UOp, gx:int, gy:int
               scratch_size:int, rsrc2:int, arch:str="rdna3", user_data_count:int=0):
   ci = UOp.range(81, 2, AxisType.LOOP, dtype=dtypes.int)
   init_ints = sgpr.index(ci+128).store((ci<65).where(ci, 64-ci).cast(dtypes.uint32)).end(ci)
-  fi = UOp.range(len(F32_INLINE), 3, AxisType.LOOP, dtype=dtypes.int)
   floats_buf = UOp(Ops.BINARY, arg=struct.pack(f"<{len(F32_INLINE)}I", *F32_INLINE.values())).bitcast(dtypes.uint32)
-  init_floats = sgpr.index(fi+240).store(floats_buf[fi]).end(fi)
+  init_floats = sgpr.shrink(((240, 240+floats_buf.shape[0]),)).store(floats_buf)
   # set RANGE registers
   gidx, gidy, gidz = wg%gx, (wg//gx)%gy, wg//(gx*gy)
   n_lanes = (total_threads-wave*wave_size).minimum(wave_size)
