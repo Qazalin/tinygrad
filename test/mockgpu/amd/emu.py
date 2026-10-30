@@ -1276,19 +1276,22 @@ def _compile_wmma(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P, ctx: _Ctx) -> UOp:
   # Accumulator C. RDNA4 f16/bf16 packs two f32 accumulator VGPRs into one f16 VGPR; RDNA3 uses the lo half of each.
   # src2 may be a VGPR or an inline/scalar constant (128 = int 0, the usual ", 0" C form).
   out_dt = dtypes.int32 if output_type == "I32" else dtypes.float32
-  elem = ctx.range(256)
-  row, col = elem // 16, elem % 16
-  lane, vgpr = d_map(row, col)
-  if is_c_vgpr:
-    cval = gval(src2_r, *((lane, vgpr // 2, vgpr % 2) if is_rdna4 else (lane, vgpr, 0)), fmt=output_type) \
-      if output_type in ("F16", "BF16") else ctx.rvgpr_dyn(src2_r + _c(vgpr), lane).bitcast(out_dt)
-  else:
-    cbits = ctx.rsrc_dyn(src2_r, None, 32)
-    cval = _FUNCS[f'{output_type.lower()}_to_f32'](cbits & UOp.const(0xFFFF, dtypes.uint32)) \
-      if output_type in ("F16", "BF16") else cbits.bitcast(out_dt)
+  # Unroll register selection; only lane indices vary at runtime.
+  elem = ctx.range(16)
   tmp = UOp.alloc((768,), dtypes.uint32, 0, AddrSpace.REG)
-  values = [read_mat(src0_r, a_fmt, row, col), read_mat(src1_r, b_fmt, row, col), cval]
-  read_phase = UOp.group(*(tmp.index(elem + i*256).store(v.bitcast(dtypes.uint32)) for i,v in enumerate(values))).end(elem)
+  reads = [tmp.index(elem*16+k+i*256).store(read_mat(src, fmt, elem, k).bitcast(dtypes.uint32))
+           for i,(src,fmt) in enumerate(((src0_r, a_fmt), (src1_r, b_fmt))) for k in range(16)]
+  for row in range(16):
+    lane, vgpr = d_map(row, elem)
+    if is_c_vgpr:
+      cval = gval(src2_r, *((lane, vgpr // 2, vgpr % 2) if is_rdna4 else (lane, vgpr, 0)), fmt=output_type) \
+        if output_type in ("F16", "BF16") else ctx.rvgpr_dyn(src2_r + _c(vgpr), lane).bitcast(out_dt)
+    else:
+      cbits = ctx.rsrc_dyn(src2_r, None, 32)
+      cval = _FUNCS[f'{output_type.lower()}_to_f32'](cbits & UOp.const(0xFFFF, dtypes.uint32)) \
+        if output_type in ("F16", "BF16") else cbits.bitcast(out_dt)
+    reads.append(tmp.index(512+row*16+elem).store(cval.bitcast(dtypes.uint32)))
+  read_phase = UOp.group(*reads).end(elem)
   data = tmp.after(read_phase)
   n = ctx.range(16)
   mat_d = [sum(data.index(r*16+k).bitcast(out_dt) * data.index(256+n*16+k).bitcast(out_dt) for k in range(16))
@@ -1798,7 +1801,7 @@ def loop_active(routes:UOp, active:UOp, header:UOp, waves:UOp):
 
 def lower_body(sink:UOp, name:str) -> UOp:
   bufs = sorted({s for u in sink.toposort(lambda u: u.op not in (Ops.PARAM, Ops.SHRINK)) for s in u.src if s.op in (Ops.PARAM, Ops.SHRINK)},
-                key=lambda u: (u.src[0].arg.slot, u.src[1].sym_infer({})) if u.op is Ops.SHRINK else (u.arg.slot, 0))
+                key=lambda u: (u.src[0].arg.slot, u.src[1].sym_infer({}), "") if u.op is Ops.SHRINK else (u.arg.slot, 0, u.arg.name or ""))
   body = sink.substitute({b:b.param_like(i, name=b.arg.name if b.op is Ops.PARAM else None) for i,b in enumerate(bufs)}, walk=True)
   return body.call(*(b.replace(src=(b.src[0], _c(b.src[1].sym_infer({}), dtypes.int), b.src[2])) if b.op is Ops.SHRINK else b
                      for b in bufs), name=name)
@@ -1987,7 +1990,7 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
   init = lower_body(init_wave(init_wg, init_wave_id, regs, init_args, gx, gy, lx, ly, total_threads, wave_size,
                              scratch_size, rsrc2, arch, user_data_count), "init_wave")
   init_args_map = {init_wg:wg, init_wave_id:wave, init_args:args_ptr}
-  init_args_map.update((b, buffers[b][0].shrink(((wave*b.shape[0], (wave+1)*b.shape[0]),))) for b in regs)
+  init_args_map.update((b, UOp(Ops.SHRINK, src=(buffers[b][0], wave*b.src[2], b.src[2])) if n_waves > 1 else buffers[b][0]) for b in regs)
   init = init.replace(src=(init.body, *(init_args_map.get(b, b) for b in init.src[1:])))
   initialized = (routes.after(init).index(wave).store(0) if routed else UOp.group(init, wave)).end(wave)
   def emit_block(block_pc:int, end:UOp, scopes:tuple[UOp, ...]) -> UOp:
@@ -2001,8 +2004,8 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
     w = UOp.range(n_waves, 0, AxisType.LOOP, dtype=dtypes.int)
     gates = () if block_pc in unconditional else (UOp.range(params[bufs.index(route)][w].load().eq(params[-1]).cast(dtypes.int),
                                                             1, AxisType.LOOP, dtype=dtypes.int),)
-    call_args = [p if b.addrspace is AddrSpace.ALU else p.after(*gates, w).shrink(((w*s, (w+1)*s),))
-                 if (s:=buffers[b][1]) else p.after(*gates, w) for b,p in zip(bufs, params)]
+    call_args = [p if b.addrspace is AddrSpace.ALU else UOp(Ops.SHRINK, src=(p.after(*gates, w), w*s, _c(s, dtypes.int)))
+                 if (s:=buffers[b][1]) and n_waves > 1 else p.after(*gates, w) for b,p in zip(bufs, params)]
     block = UOp.group(body.call(*call_args, name="asm_block"), *gates, w).end(*gates).end(w).sink()
     return block.call(*args, name="asm_waves")
   def emit_dispatch(regions:list[CFGRegion], scopes:tuple[UOp, ...], end:UOp) -> UOp:
