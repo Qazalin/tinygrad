@@ -443,8 +443,7 @@ def do_linearize(ctx:Renderer, prg:UOp, sink:UOp) -> UOp:
     if DEBUG >= 4: print(ctx.asm_str(lst, sink.arg.function_name))
   return prg.replace(src=prg.src + (UOp(Ops.LINEAR, src=tuple(lst)),))
 
-def do_assemble(ctx:Renderer, prg:UOp, lin:UOp) -> UOp|None:
-  if getattr(type(ctx), "asm") is Renderer.asm: return None
+def do_assemble(ctx:Renderer, prg:UOp, lin:UOp) -> UOp:
   src = "\n".join(str(u.arg[0]) for u in lin.src)
   if DEBUG >= 4: print(src)
   binary = ctx.asm(prg, lin)
