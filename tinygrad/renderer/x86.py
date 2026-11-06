@@ -254,7 +254,7 @@ def pin(ctx:IselContext, x:UOp, cons:Register|tuple[Register, ...]) -> UOp:
 def base(x:UOp, i:int) -> UOp: return s.src[0] if (s:=x.src[i]).op is Ops.INDEX else s
 def lane(x:UOp, i:int) -> int: return s.src[1].src[0].val if (s:=x.src[i]).op is Ops.INDEX else 0
 def to_int(dt:DType): return {dtypes.float16: dtypes.int16, dtypes.float32: dtypes.int32, dtypes.float64: dtypes.int64}[dt]
-def imm(dt:DType, v:int) -> UOp: return UOp.ins(X86Ops.IMM, dt, src=(UOp.cconst(truncate[dt](v), dt),))
+def imm(dt:DType, v:int) -> UOp: return UOp.ins(X86Ops.IMM, dt, src=(UOp.const(truncate[dt](v)),))
 def is_imm(x:UOp) -> bool: return is_instr(x) and x.arg.aux[0] is X86Ops.IMM
 def to_imm(c:UOp) -> UOp|None:
   if not (c.op is Ops.CAST and (v:=c.src[0]).op is Ops.CONST): return None
@@ -554,7 +554,8 @@ post_regalloc_matcher = PatternMatcher([
   (UPat(Ops.END, name="x"), lambda x: (x, [UOp.ins(X86Ops.JMP, dtypes.void, src=(x.src[1],)), label(label(x.src[1]))])),
   # rewrite two address instructions to two address form, if reused src wasn't coalesced insert a move
   (UPat(Ops.CALL, name="x"), lambda ctx,x: (nx:=x.replace(src=(x.body, *x.src_without_body[1:])),
-   [ctx.ren.copy(x.src[1], rdef(x)), nx] if rdef(x) != rdef(x.src[1]) else [nx]) if is_instr(x) and x.arg.aux[0] in X86GroupOp.TwoAddress else None),
+   [ctx.ren.copy(x.src_without_body[0], rdef(x)), nx] if rdef(x) != rdef(x.src_without_body[0]) else [nx])
+   if is_instr(x) and x.arg.aux[0] in X86GroupOp.TwoAddress else None),
 ])
 
 # ***** X86 instruction encoding *****
