@@ -97,6 +97,10 @@ class TestEncodingsX86(unittest.TestCase):
       mov = ins(X86Ops.MOV, dtypes.float32, (reg_placeholder(reg(RDX, size)),), reg(RAX, size))
       self.assertEqual(bytes.fromhex(self.encode(mov)), bytes.fromhex(expected))
 
+  def test_movabs_immediate(self):
+    mov = ins(X86Ops.MOVABS, dtypes.int64, (imm(dtypes.int64, 0x12345678),), RAX)
+    self.assertEqual(bytes.fromhex(self.encode(mov)), bytes.fromhex("48 B8 78 56 34 12 00 00 00 00"))
+
   # test compact vex encoding
   def test_compact_vex_encoding(self):
     xmm0, xmm1 = reg_placeholder(XMM[0]), reg_placeholder(XMM[1])
