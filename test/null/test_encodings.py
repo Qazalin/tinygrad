@@ -7,8 +7,8 @@ from tinygrad.renderer.x86 import Register, X86Ops, X86Renderer, RBP, RDI, RSP, 
 
 # the operand width is carried by the register, not by the dtype
 def reg(r:Register, size:int) -> Register: return replace(r, size=size)
-def ins(op, dt, src, r:Register|None=None): return UOp(Ops.INS, arg=(op, dt) + ((r,) if r is not None else ()), src=src)
-def reg_placeholder(r:Register): return UOp(Ops.INS, arg=(X86Ops.REG, dtypes.uint64, r))
+def ins(op, dt, src, r:Register|None=None): return UOp.ins(op, dt, *((r,) if r is not None else ()), src=src)
+def reg_placeholder(r:Register): return UOp.ins(X86Ops.REG, dtypes.uint64, r)
 def alloc(dt:DType, r:Register): return reg_placeholder(r)
 
 class TestEncodingsX86(unittest.TestCase):
@@ -147,7 +147,7 @@ class TestEncodingsX86(unittest.TestCase):
 
   # cmoves have the cmp as the last src even though it is not explicitly used, the cmp doesn't define a reg and is ignored in the encoding
   def test_cmove_ignore_cmp(self):
-    cmove = ins(X86Ops.CMOVE, dtypes.int32, (reg_placeholder(reg(RAX, 4)), UOp(Ops.INS, arg=(X86Ops.CMP, dtypes.void))), reg(RDX, 4))
+    cmove = ins(X86Ops.CMOVE, dtypes.int32, (reg_placeholder(reg(RAX, 4)), UOp.ins(X86Ops.CMP, dtypes.void)), reg(RDX, 4))
     # cmove edx, eax
     self.assertEqual(bytes.fromhex(self.encode(cmove)), bytes.fromhex("0F 44 D0"))
 

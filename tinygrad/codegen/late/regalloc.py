@@ -22,7 +22,7 @@ class LinearScanRegallocContext:
     for idx,u in reversed(list(enumerate(uops))):
       if u.op in PSEUDO_OPS: continue
       defs = regs(u)
-      for v in defs + tuple(rdef(s) for s in dedup(u.src)):
+      for v in defs + tuple(rdef(s) for s in dedup(u.src_without_body if u.op is Ops.CALL else u.src)):
         if isinstance(v, Register): lr.setdefault(v, []).insert(0, idx)
       for v in defs:
         if (n:=max((e for s,e in loops.items() if s <= lr[v][-1] < e), default=None)): lr[v].append(n)
@@ -54,7 +54,7 @@ class LinearScanRegallocContext:
     for i,u in enumerate(uops):
       if u.op in PSEUDO_OPS: continue
       # allocate uses
-      for s in u.src:
+      for s in u.src_without_body if u.op is Ops.CALL else u.src:
         if not isinstance(v:=rdef(s), Register): continue
         if v not in live: live[v] = fill(v, i)
         self.reals.setdefault(i, {})[v] = live[v]
@@ -67,7 +67,7 @@ class LinearScanRegallocContext:
             # two address instructions (src is reused by def) can only coalesce reused src.
             # reused src goes first to get priority in case of a tiebreak
             if ren.is_two_address(u) and j == 0:
-              uses = tuple(live.get(rdef(s)) for s in u.src)
+              uses = tuple(live.get(rdef(s)) for s in (u.src_without_body if u.op is Ops.CALL else u.src))
               cons = ((uses[0],) if uses[0] in cons else ()) + tuple(r for r in cons if r not in uses)
             live[v] = alloc(cons, i+1)
           self.reals.setdefault(i, {})[v] = live[v]
@@ -102,9 +102,9 @@ def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
   nsrc = []
   def retag(x:UOp, r:Register) -> UOp:
     return x.replace(src=(retag(x.src[0],r),*x.src[1:])) if x.op in {Ops.AFTER, Ops.BITCAST} else with_regs(x, (r,))
-  for j,s in enumerate(x.src):
+  for j,s in enumerate(x.src[1:] if x.op is Ops.CALL else x.src):
     # v here is the virtual defined by the original s as s is the rewritten version
-    if (v:=rdef(ctx.uops[i].src[j])) in ctx.reals.get(i, {}):
+    if (v:=rdef(ctx.uops[i].src_without_body[j] if x.op is Ops.CALL else ctx.uops[i].src[j])) in ctx.reals.get(i, {}):
       reg = replace(ctx.reals[i][v], size=v.size)
       if v in ctx.spills:
         fill = ctx.ren.fill(ctx.spills[v], ctx.vdef(v), reg)
@@ -112,7 +112,8 @@ def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
         nsrc.append(s.replace(src=(fill,)+s.src[1:]) if s.op is Ops.AFTER else fill)
       else: nsrc.append(retag(s, reg))
     else: nsrc.append(s)
-  nx = with_regs(x.replace(src=tuple(nsrc)), tuple(replace(ctx.reals[i][v], size=v.size) for v in regs(x))) if regs(x) else x.replace(src=tuple(nsrc))
+  src = (x.body, *nsrc) if x.op is Ops.CALL else tuple(nsrc)
+  nx = with_regs(x.replace(src=src), tuple(replace(ctx.reals[i][v], size=v.size) for v in regs(x))) if regs(x) else x.replace(src=src)
 
   before = [ctx.ren.fill(ctx.spills[v], ctx.vdef(v), replace(r, size=v.size)) for v,r in ctx.insert_before.get(i, [])]
   after = [ctx.ren.spill(ctx.spills[v], nx) for v in regs(x) if v in ctx.spills]
@@ -120,5 +121,6 @@ def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
   return nx, before + [nx] + after
 
 pm_regalloc_rewrite = PatternMatcher([
-  (UPat({Ops.INS, Ops.RANGE, Ops.END} | PSEUDO_OPS, name="x"), regalloc_rewrite),
+  (UPat(Ops.CALL, name="x"), regalloc_rewrite),
+  (UPat({Ops.RANGE, Ops.END} | PSEUDO_OPS, name="x"), regalloc_rewrite),
 ])
