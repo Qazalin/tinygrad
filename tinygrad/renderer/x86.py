@@ -62,7 +62,7 @@ class ISARenderer(Renderer):
 class X86Ops(FastEnum):
   # NOTE: X86Ops with i suffix are variants that take an immediate, m suffix are variants that can write to memory instead of read from
   # these aren't real instructions
-  LABEL = auto(); IMM = auto(); REG = auto()
+  IMM = auto(); REG = auto()
   # index
   LEA = auto()
   # register / memory / immediate moves
@@ -128,7 +128,7 @@ class X86GroupOp:
                 X86Ops.SHL, X86Ops.SHLi, X86Ops.SHR, X86Ops.SHRi, X86Ops.SAR, X86Ops.SARi, X86Ops.AND, X86Ops.ANDi, X86Ops.XOR, X86Ops.XORi,
                 X86Ops.OR, X86Ops.ORi}
 
-  # X86Ops that jump, their first src is what the LABEL they jump to marks
+  # X86Ops that jump, their first src is the RANGE they jump to (JGE jumps to its end)
   Jump = {X86Ops.JL, X86Ops.JB, X86Ops.JE, X86Ops.JNE, X86Ops.JGE, X86Ops.JMP}
 
   # X86Ops whose first src is the rm field. a TwoAddress op drops its first src post regalloc, so its Rm2nd src ends up first
@@ -504,18 +504,14 @@ def alloc_buffer(ctx:X86LinearContext, x:UOp):
   ctx.stack_size += x.max_numel() * x.dtype.itemsize
   return nx, [stack_pointer(), nx]
 
-# TODO: control flow should be overhauled so that this isn't necessary
-# a LABEL marks its src: the start of a loop its RANGE, the exit of a loop the start LABEL. a jump's first src is what its LABEL marks
-def label(x:UOp) -> UOp: return UOp(Ops.INS, arg=(X86Ops.LABEL, dtypes.void), src=(x,))
-
-# a loop's LABEL follows its RANGE. a bounded RANGE's index is a register named by the RANGE, 0 before the loop, compared to the bound
-# after the LABEL and incremented before the END, the body reads it as AFTER(index, RANGE)
+# a bounded RANGE's index is a register named by the RANGE, 0 before the loop, compared to the bound
+# after the RANGE and incremented before the END, the body reads it as AFTER(index, RANGE)
 def lower_range(x:UOp) -> tuple[UOp, list[UOp]]:
-  if x.dtype is dtypes.void: return x, [x, label(x)]
+  if x.dtype is dtypes.void: return x, [x]
   bound, deps = (x.src[0].src[0], x.src[0].src[1:]) if x.src[0].op is Ops.AFTER else (x.src[0], ())
   idx = UOp(Ops.INS, arg=(X86Ops.MOVi, x.dtype, regbuf_reg(x)), src=(imm(x.dtype, 0),) + deps)
   cmp = UOp(Ops.INS, arg=(X86Ops.CMPi if is_imm(bound) else X86Ops.CMP, dtypes.void), src=(idx, bound))
-  return idx.after(x), [idx, x, start:=label(x), cmp, UOp(Ops.INS, arg=(X86Ops.JGE, dtypes.void), src=(start, cmp))]
+  return idx.after(x), [idx, x, cmp, UOp(Ops.INS, arg=(X86Ops.JGE, dtypes.void), src=(x, cmp))]
 
 def lower_end(x:UOp, c:UOp) -> tuple[UOp, list[UOp]]:
   return (end:=x.replace(src=(x.src[0], c.src[1]))), [c.ins(X86Ops.ADDi, *regs(c.src[0]), src=(c, imm(c.dtype, 1))), end]
@@ -531,8 +527,8 @@ pre_regalloc_matcher = PatternMatcher([
 # final rewrite to match the isa spec
 post_regalloc_matcher = PatternMatcher([
   (UPat(Ops.SINK, name="x"), lambda x: (x, [x.ins(X86Ops.RET)])),
-  # an END jumps back to its loop's LABEL and labels the loop's exit
-  (UPat(Ops.END, name="x"), lambda x: (x, [UOp(Ops.INS, arg=(X86Ops.JMP, dtypes.void), src=(x.src[1],)), label(label(x.src[1]))])),
+  # an END jumps back to its loop's RANGE
+  (UPat(Ops.END, name="x"), lambda x: (x, [UOp(Ops.INS, arg=(X86Ops.JMP, dtypes.void), src=(x.src[1],))])),
   # rewrite two address instructions to two address form, if reused src wasn't coalesced insert a move
   (UPat(Ops.INS, name="x"), lambda ctx,x: (nx:=x.replace(src=x.src[1:]),
    [ctx.ren.copy(x.src[0], rdef(x)), nx] if rdef(x) != rdef(x.src[0]) else [nx]) if x.arg[0] in X86GroupOp.TwoAddress else None),
@@ -772,29 +768,31 @@ class X86Renderer(ISARenderer):
 
     asm = [f".{function_name}:"]
     for u in uops:
+      if u.op is Ops.RANGE: asm.append(f".L{uops.index(u)}:")
       if u.op is not Ops.INS or u.arg[0] in {X86Ops.IMM, X86Ops.REG}: continue
-      if u.arg[0] is X86Ops.LABEL: asm.append(f".L{uops.index(u)}:")
-      elif u.arg[0] is X86Ops.RET: asm.append(_format_op(u))
-      elif u.arg[0] in X86GroupOp.Jump: asm.append(_format_op(u) + f" .L{uops.index(label(u.src[0]))}")
+      if u.arg[0] is X86Ops.RET: asm.append(_format_op(u))
+      elif u.arg[0] in X86GroupOp.Jump:
+        asm.append(_format_op(u) + f" .L{uops.index(u.src[0])}" + ("_end" if u.arg[0] is X86Ops.JGE else ""))
+        if u.arg[0] is X86Ops.JMP: asm.append(f".L{uops.index(u.src[0])}_end:")
       else: asm.append(_format_op(u) + " " + _format_operands(u))
     return "\n".join(asm)
 
   def render(self, uops:list[UOp]) -> str:
-    targets: dict[UOp, int] = {}
+    starts: dict[UOp, int] = {}
+    ends: dict[UOp, int] = {}
     jumps: dict[UOp, int] = {}
     binary = bytearray()
     for u in uops:
+      if u.op is Ops.RANGE: starts[u] = len(binary)
       if u.op is not Ops.INS or u.arg[0] in {X86Ops.IMM, X86Ops.REG}: continue
-      if u.arg[0] is X86Ops.LABEL:
-        targets[u.src[0]] = len(binary)
-        continue
       if u.arg[0] not in encodings or (l:=encodings[u.arg[0]](u)) is None:
         raise RuntimeError(f"failed to encode {u.arg[0]} with {u.dtype} srcs {[x.dtype for x in u.src]}")
       binary.extend(l)
       if u.arg[0] in X86GroupOp.Jump: jumps[u] = len(binary)
+      if u.arg[0] is X86Ops.JMP: ends[u.src[0]] = len(binary)
     # fixup jump targets now that encoding size is known
     for u in uops:
-      if (t:=jumps.get(u)) is not None: binary[t-4:t] = (targets[u.src[0]] - t).to_bytes(4, 'little', signed=True)
+      if (t:=jumps.get(u)) is not None: binary[t-4:t] = ((ends if u.arg[0] is X86Ops.JGE else starts)[u.src[0]]-t).to_bytes(4, 'little', signed=True)
     return binary.hex()
 
   def supported_dtypes(self): return {d for d in super().supported_dtypes() if d not in dtypes.fp8s+(dtypes.bfloat16,)}
