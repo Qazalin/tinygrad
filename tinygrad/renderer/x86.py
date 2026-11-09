@@ -8,7 +8,7 @@ from tinygrad.uop import FastEnum, auto, Ops, GroupOp
 from tinygrad.uop.ops import UOp, UPat, PatternMatcher, promo_dtype
 from tinygrad.renderer import Renderer
 from tinygrad.device import TinyELF
-from tinygrad.helpers import unwrap, Target
+from tinygrad.helpers import unwrap, Target, dedup
 from dataclasses import dataclass, field, replace
 
 @dataclass(frozen=True)
@@ -39,11 +39,90 @@ def rdef(u:UOp):
   if u.op in {Ops.AFTER, Ops.BITCAST}: return rdef(u.src[0])
   return r[0] if (r:=regs(u)) else None
 
+def reg_storage(x:UOp) -> UOp|None:
+  if x.op is Ops.AFTER and (a:=reg_storage(x.src[0])) is not None: return a.after(*x.src[1:])
+  if x.op in {Ops.LOAD, Ops.INDEX, Ops.SHRINK} and x.max_numel() == 1:
+    if (a:=reg_storage(x.src[0])) is not None and a.max_numel() == 1: return a
+  return x if x.op in {Ops.BUFFER, Ops.ALLOC, Ops.PARAM} and x.addrspace is AddrSpace.REG and x.max_numel() == 1 else None
+
+def storage_base(x:UOp) -> UOp: return x.without_after.buf_uop
+
+def alloc_reg(ctx:IselContext, dt:DType, cons:tuple[Register,...]|Register, size:int=0) -> UOp:
+  ret = UOp.alloc((1,), dt, slot=next(UOp.unique_num), addrspace=AddrSpace.REG)
+  allocation = replace(cons, size=size or cons.size) if isinstance(cons, Register) else ctx.vreg(cons, size)
+  return ret.replace(arg=replace(ret.arg, allocation=allocation))
+
+def instruction_call(ctx:IselContext, x:UOp) -> UOp:
+  """Turn the selection notation into an instruction over explicit register storage."""
+  op, dt = x.arg[:2]
+  dsts = [alloc_reg(ctx, dt, r, dt.itemsize) for r in regs(x)] if regs(x) else \
+    [alloc_reg(ctx, dt, XMM if dt in dtypes.floats or op in XMM_OPS else WGPR, dt.itemsize)] if dt is not dtypes.void else []
+  return bind_instruction(x, dsts)
+
+def bind_instruction(x:UOp, dsts:list[UOp]) -> UOp:
+  op, dt = x.arg[:2]
+  dst_params = [UOp.param(i, d.dtype, 1, name=f"dst{i}", addrspace=AddrSpace.REG) for i,d in enumerate(dsts)]
+  src_params:list[UOp] = []
+  src_args:list[UOp] = []
+  src_values:list[UOp] = []
+  for s in x.src:
+    p = UOp.param(len(dst_params)+len(src_params), s.dtype, 1, addrspace=AddrSpace.REG if (a:=reg_storage(s)) is not None else AddrSpace.ALU)
+    src_params.append(p)
+    src_args.append(s if a is None else a)
+    src_values.append(p.load() if a is not None else p)
+  value = UOp(Ops.INS, src=tuple(src_values), arg=(op, dt))
+  # A multi-result instruction has explicit writes for every result. The last argument is lowered away before encoding.
+  stores = [p.store(value.replace(arg=(op, dt, i)) if len(dst_params) > 1 else value) for i,p in enumerate(dst_params)]
+  body = UOp(Ops.INS, src=tuple(stores) if stores else (value,), arg=(op, dt))
+  call = body.call(*dsts, *src_args, name=f"x86_{op.name.lower()}")
+  return dsts[0].after(call) if dsts else call
+
+def call_stores(x:UOp) -> list[UOp]:
+  assert x.op is Ops.CALL and x.body.op is Ops.INS
+  return sorted((u for u in x.body.toposort() if u.op is Ops.STORE and u.src[0].op is Ops.PARAM), key=lambda u:u.src[0].arg.slot)
+
+def call_loads(x:UOp) -> list[UOp]:
+  assert x.op is Ops.CALL and x.body.op is Ops.INS
+  return [u for u in x.body.toposort() if u.op is Ops.LOAD and u.src[0].op is Ops.PARAM and u.src[0].addrspace is AddrSpace.REG]
+
+def call_defs(x:UOp) -> tuple[UOp,...]: return tuple(storage_base(x.src[1+s.src[0].arg.slot]) for s in call_stores(x)) if x.op is Ops.CALL else ()
+def call_uses(x:UOp) -> tuple[UOp|Register,...]:
+  if x.op is not Ops.CALL: return ()
+  loads = tuple(storage_base(x.src[1+s.src[0].arg.slot]) for s in call_loads(x))
+  # Selection can make an opaque call argument register-backed after creating its body. Keep compatibility with legacy values too.
+  args = x.src[1+len(call_stores(x)):]
+  inferred = []
+  for s in args:
+    if (v:=storage_base(a) if (a:=reg_storage(s)) is not None else rdef(s)) is not None: inferred.append(v)
+  return tuple(dedup(loads + tuple(inferred)))
+
+def reg_cons(v:Register|UOp) -> tuple[Register,...]: return v.cons if isinstance(v, Register) else \
+  (v.arg.allocation.cons if v.arg.allocation is not None else regbuf_reg(v).cons)
+
+def store_register(buf:UOp, val:UOp) -> UOp:
+  value = val.ins(copy_op(val.dtype), dtype=val.dtype, src=(val.after(buf),))
+  return UOp(Ops.STACK).after(bind_instruction(value, [buf]))
+
+def lower_instruction_call(x:UOp) -> UOp:
+  """Bind physical storage and immediates, leaving only the target encoding INS."""
+  params = {u:u for u in x.body.toposort() if u.op is Ops.PARAM}
+  bindings:dict[UOp,UOp] = {}
+  # Bind an existing load exactly. Replacing its PARAM first would construct a different LOAD and miss the substitution key.
+  reads = {u.src[0]:u for u in x.body.toposort() if u.op is Ops.LOAD and u.src[0].op is Ops.PARAM}
+  for p in params:
+    arg = x.src[1+p.arg.slot].without_after
+    bindings[reads.get(p, p)] = arg
+  value = next(u for u in x.body.toposort() if u.op is Ops.INS and u is not x.body).substitute(bindings, walk=True)
+  if len(call_stores(x)) > 1:
+    # The output index belongs to the body STORE, not to the one physical multi-result instruction.
+    value = value.replace(arg=value.arg[:2])
+  return with_regs(value, tuple(rdef(x.src[1+s.src[0].arg.slot]) for s in call_stores(x)))
+
 class LinearContext:
   def __init__(self, ren:ISARenderer):
     self.ren, self.stack_size = ren, 0
   def insert_linearized(self, uops:list[UOp]) -> list[UOp]: return uops
-  def assign_spill_slot(self, r:Register, u:UOp) -> Any: raise NotImplementedError("arch specific")
+  def assign_spill_slot(self, r:Register|tuple[Register,...], u:UOp) -> Any: raise NotImplementedError("arch specific")
 
 class ISARenderer(Renderer):
   pre_isel_matcher: PatternMatcher
@@ -229,6 +308,8 @@ RSI = Register("rsi", 6)
 RDI = Register("rdi", 7)
 GPR = (RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI) + tuple(Register(f"r{i}", i) for i in range(8, 16))
 XMM = tuple(Register(f"xmm{i}", i, size=16) for i in range(16))
+XMM_NAMES = {r.name for r in XMM}
+def is_xmm(r:Register): return r.cons[0].name in XMM_NAMES
 # gprs you can write to
 WGPR = tuple(r for r in GPR if r != RSP)
 
@@ -334,20 +415,11 @@ def _xmm_sz(x: UOp) -> X86Ops:
   return X86Ops.VMOVSS
 
 def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
-  # register placeholders with real registers
-  if is_imm(x): return None
-  # no register definition
-  if x.dtype is dtypes.void: return None
-  # already allocated vregs
-  if regs(x) and regs(x)[0]._cons: return None
-  # a register buffer is a REG, a stack buffer becomes the LEA of its address before regalloc
-  if x.op in {Ops.BUFFER, Ops.ALLOC}: return reg(x.dtype, regbuf_reg(x)) if x.addrspace is AddrSpace.REG else None
-  if regs(x): defs = [ctx.vreg(regs(x), x.dtype.itemsize)]
-  elif x.dtype in dtypes.floats or x.arg[0] in XMM_OPS: defs = [ctx.vreg(XMM)]
-  else: defs = [ctx.vreg(WGPR, x.dtype.itemsize)]
-  # TODO: add this once the scheduler can track register pressure
-  # if x.arg[0] in X86GroupOp.WriteFlags: defs.append(ctx.vreg(RFLAGS))
-  return with_regs(x, tuple(defs))
+  # immediates and physical register locations are encoding operands, not register definitions
+  if is_imm(x) or x.op is not Ops.INS or x.arg[0] is X86Ops.REG: return None
+  # A result-producing INS source gets its storage before its consumer's body is constructed.
+  if any(s.op is Ops.INS and s.dtype is not dtypes.void and not is_imm(s) and s.arg[0] is not X86Ops.REG for s in x.src): return None
+  return instruction_call(ctx, x)
 
 def copy_op(dt:DType) -> X86Ops:
   return {dtypes.float16:X86Ops.VMOVSS, dtypes.float32:X86Ops.VMOVSS, dtypes.float64:X86Ops.VMOVSD, dtypes.bool:X86Ops.MOVZX}.get(dt, X86Ops.MOV)
@@ -461,12 +533,10 @@ isel_matcher = PatternMatcher([
   (UPat(dtype=dtypes.int64s).bitcast(dtypes.float64).named("x"), lambda x: x.ins(X86Ops.VMOVQ)),
   (UPat(dtype=dtypes.float32).bitcast(dtypes.int32s).named("x"), lambda x: x.ins(X86Ops.VMOVDm)),
   (UPat(dtype=dtypes.float64).bitcast(dtypes.int64s).named("x"), lambda x: x.ins(X86Ops.VMOVQm)),
-  # lower register mops: a store is just a copy, load is an anon copy to preserve ordering
+  # scalar register writes mutate their allocation; reads stay explicit until physical locations are assigned
   (UPat.var("a").store(UPat.var("val")), lambda a,val:
-    UOp(Ops.STACK).after(buf.ins(copy_op(val.dtype), regbuf_reg(buf.without_after), src=(val.after(buf),)))
-    if is_regbuf((buf := a.src[0] if a.op is Ops.INDEX else a)) else None),
-  (UPat.var("a").load().named("x"), lambda a,x:
-    x.ins(copy_op(x.dtype), src=(buf,)) if is_regbuf((buf:=a.src[0] if a.op is Ops.INDEX else a)) else None),
+    store_register(buf.without_after, val) if is_regbuf((buf := a.src[0] if a.op is Ops.INDEX else a)) else None),
+  (UPat.var("a").load().named("x"), lambda a,x: None if a.addrspace is not AddrSpace.REG else x),
   # index on a buffer (or the stack pointer) computes an address, addresses are 64bit values
   (UPat((Ops.INDEX, Ops.SHRINK), name="x"), lambda x: lea(x) if not _is_vec_xmm(x.src[0]) and x.addrspace is not AddrSpace.REG else None),
   # TODO: fuse stores, very few cases -- store cmp becomes setcc, store gep int becomes vpextr, store bitcast to int becomes vmovd/q
@@ -546,7 +616,9 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
     nonlocal reg, opc
     # get the encoding values of the different fields
     reg = cast(int, cast(Register, rdef(reg_uop)).index if reg_uop is not None else reg)
-    rm = cast(Register, rdef(rm_uop)).index
+    rm_reg = rdef(rm_uop)
+    assert rm_reg is not None, f"missing register operand in {x}, operand {rm_uop}"
+    rm = rm_reg.index
     idx = cast(Register, rdef(idx_uop)).index if idx_uop is not None and rdef(idx_uop) is not None else 4
     # TODO: shouldn't rely on bitcast to convey encoding info
     def _sz(x:UOp): return x.dtype.itemsize if x.op is Ops.BITCAST else rdef(x).size
@@ -721,8 +793,8 @@ class X86LinearContext(LinearContext):
       after.append(stack_pointer().ins(X86Ops.ADDi, RSP, src=(stack_pointer(),imm(dtypes.int32, self.stack_size))))
     return before + uops[:-1] + after + [uops[-1]]
 
-  def assign_spill_slot(self, r:Register, u:UOp) -> int:
-    sz = r.cons[0].size
+  def assign_spill_slot(self, r:Register|tuple[Register, ...], u:UOp) -> int:
+    sz = (r.cons if isinstance(r, Register) else r)[0].size
     offset = self.stack_size + (sz - self.stack_size % sz) %sz
     self.stack_size = offset + sz
     return offset
@@ -743,17 +815,18 @@ class X86Renderer(ISARenderer):
     super().__init__(target)
     from tinygrad.runtime.support.compiler_cpu import X86Compiler
     self.compiler = X86Compiler()
-  def is_two_address(self, x:UOp) -> bool: return x.op is Ops.INS and x.arg[0] in X86GroupOp.TwoAddress
+  def is_two_address(self, x:UOp) -> bool: return (x.op is Ops.INS or (x.op is Ops.CALL and x.body.op is Ops.INS)) and \
+    (x.arg[0] if x.op is Ops.INS else x.body.arg[0]) in X86GroupOp.TwoAddress
   def copy(self, x:UOp, reg:Register) -> UOp: return x.ins(X86Ops.MOV, reg, src=(x,))
 
   def spill(self, spill_slot:int, x:UOp) -> UOp:
-    op = X86Ops.VMOVUPSm if rdef(x).cons[0] in XMM else X86Ops.MOVm
+    op = X86Ops.VMOVUPSm if is_xmm(rdef(x)) else X86Ops.MOVm
     disp = UOp.cconst(spill_slot, dtypes.int32)
     return UOp(Ops.INS, src=fold_address(stack_pointer().index(disp)) + (x,), arg=(op, dtypes.void))
 
   def fill(self, spill_slot:int, x:UOp, reg:Register) -> UOp:
     disp = UOp.cconst(spill_slot, dtypes.int32)
-    return UOp(Ops.INS, src=fold_address(stack_pointer().index(disp)), arg=(X86Ops.VMOVUPS if reg.cons[0] in XMM else X86Ops.MOV, x.dtype, reg))
+    return UOp(Ops.INS, src=fold_address(stack_pointer().index(disp)), arg=(X86Ops.VMOVUPS if is_xmm(reg) else X86Ops.MOV, x.dtype, reg))
 
   def asm_str(self, uops:list[UOp], function_name:str) -> str:
     def _format_op(x:UOp) -> str: return f"    {(o[7:-1] if (o:=str(x.arg[0]))[-1] in ('i', 'm') else o[7:]).lower():7s}"

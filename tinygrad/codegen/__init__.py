@@ -420,7 +420,8 @@ class LowerCallsCtx:
   names: dict[str, dict[UOp, int]] = field(default_factory=dict)
 
 def lower_call(ctx:LowerCallsCtx, call:UOp, b:UOp) -> UOp|None:
-  if b.op is Ops.PROGRAM and b.src[-1].op is Ops.BINARY: return None
+  # ISA instruction bodies are consumed by instruction selection/regalloc, not lowered as host function calls
+  if b.op is Ops.INS or (b.op is Ops.PROGRAM and b.src[-1].op is Ops.BINARY): return None
   bodies = ctx.names.setdefault(name:=to_function_name(call.arg.name), {})
   ki = KernelInfo(name + (f"_{i}" if (i:=bodies.setdefault(b, len(bodies))) else ""), optimized=True, kernel=False)
   if ctx.renderer.inline_prefix:
@@ -431,7 +432,7 @@ def lower_call(ctx:LowerCallsCtx, call:UOp, b:UOp) -> UOp|None:
   return call.replace(src=(b,)+call.src[1:])
 
 pm_lower_calls = PatternMatcher([
-  (UPat(Ops.CALL, src=(UPat((Ops.SINK, Ops.PROGRAM), name="b"),), allow_any_len=True, name="call"), lower_call),
+  (UPat(Ops.CALL, src=(UPat((Ops.SINK, Ops.PROGRAM, Ops.INS), name="b"),), allow_any_len=True, name="call"), lower_call),
 ])
 
 def pack_args(sink:UOp, params:tuple[UOp, ...]) -> UOp:
