@@ -251,7 +251,7 @@ def pin(ctx:IselContext, x:UOp, cons:Register|tuple[Register, ...]) -> UOp: retu
 def base(x:UOp, i:int) -> UOp: return s.src[0] if (s:=x.src[i]).op is Ops.INDEX else s
 def lane(x:UOp, i:int) -> int: return s.src[1].src[0].val if (s:=x.src[i]).op is Ops.INDEX else 0
 def to_int(dt:DType): return {dtypes.float16: dtypes.int16, dtypes.float32: dtypes.int32, dtypes.float64: dtypes.int64}[dt]
-def imm(dt:DType, v:int) -> UOp: return UOp.cconst(truncate[dt](v), dt).ins(X86Ops.IMM)
+def imm(dt:DType, v:int) -> UOp: return UOp.cconst(truncate[dt](v), dt) #.ins(X86Ops.IMM)
 def is_imm(x:UOp) -> bool: return x.op is Ops.INS and x.arg[0] is X86Ops.IMM
 def to_imm(c:UOp) -> UOp|None:
   if not (c.op is Ops.CAST and (v:=c.src[0]).op is Ops.CONST): return None
@@ -355,7 +355,8 @@ def copy_op(dt:DType) -> X86Ops:
 def store_float(a:UOp, b:UOp, x:UOp) -> UOp|None:
   if a.addrspace is AddrSpace.REG: return None
   if b.max_numel() * b.dtype.itemsize == 2: return x.ins(X86Ops.VPEXTRW, src=fold_address(a) + (b, imm(dtypes.uint8, 0)))
-  return x.ins(X86Ops[_xmm_sz(b).name+"m"], src=fold_address(a) + (b,))
+  asm = UOp(Ops.ASM, (), X86Ops[_xmm_sz(b).name+"m"])
+  return asm.call(*fold_address(a) + (b,))
 
 isel_matcher = PatternMatcher([
   # **** Op -> Op ****

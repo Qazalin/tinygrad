@@ -122,6 +122,7 @@ def uop_to_json(data:VizData, x:UOp) -> dict[int, dict]:
   for u in (toposort:=x.toposort(enter_calls=True)):
     # always exclude CONST
     if u.op is Ops.CONST and u is not x: excluded.add(u)
+    if u.op is Ops.CAST and u.src[0].op is Ops.CONST: excluded.add(u)
     if u.op is Ops.STACK and len(u.src) == 0: excluded.add(u)
     # exclude RESHAPE/EXPAND that only serve to broadcast a CONST
     if u.op in {Ops.RESHAPE, Ops.EXPAND} and len(u.src) >= 1 and u.src[0] in excluded and u is not x: excluded.add(u)
