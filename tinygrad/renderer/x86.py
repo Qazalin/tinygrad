@@ -340,6 +340,11 @@ def _xmm_sz(x: UOp) -> X86Ops:
 def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
   # register placeholders with real registers
   if is_imm(x): return None
+  #raise Exception(x.render_uir(), regs(x))
+  return None
+
+"""
+  if is_imm(x): return None
   # no register definition
   if x.dtype is dtypes.void: return None
   # already allocated vregs
@@ -354,6 +359,7 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
   # TODO: add this once the scheduler can track register pressure
   # if x.arg[0] in X86GroupOp.WriteFlags: defs.append(ctx.vreg(RFLAGS))
   return with_regs(x, tuple(defs))
+"""
 
 def copy_op(dt:DType) -> X86Ops:
   return {dtypes.float16:X86Ops.VMOVSS, dtypes.float32:X86Ops.VMOVSS, dtypes.float64:X86Ops.VMOVSD, dtypes.bool:X86Ops.MOVZX}.get(dt, X86Ops.MOV)
@@ -489,7 +495,7 @@ isel_matcher = PatternMatcher([
    x.ins(X86Ops[_xmm_sz(b).name+"m"], src=fold_address(a) + (b,)) if b.max_numel() > 1 else
    x.ins(X86Ops.MOVm, src=fold_address(a) + (b,)) if (i:=to_imm(b)) is None else x.ins(X86Ops.MOVi, src=fold_address(a) + (i,))),
   # allocate virtual registers
-  (UPat((Ops.BUFFER, Ops.ALLOC), name="x"), alloc_vregs),
+  #(UPat(Ops.CALL, name="x"), alloc_vregs),
 ])
 
 # ***** pre register allocation *****
