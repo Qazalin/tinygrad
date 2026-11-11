@@ -358,9 +358,18 @@ def copy_op(dt:DType) -> X86Ops:
 def store_float(a:UOp, b:UOp, x:UOp) -> UOp|None:
   if a.addrspace is AddrSpace.REG: return None
   if b.max_numel() * b.dtype.itemsize == 2: return x.ins(X86Ops.VPEXTRW, src=fold_address(a) + (b, imm(dtypes.uint8, 0)))
-  asm = UOp(Ops.ASM, (), X86Ops[_xmm_sz(b).name+"m"])
   base, index, disp, size = fold_address(a)
-  return asm.call(base, index, disp, size, b)
+  # TODO: reg constraints can also be a rewrite based on the dtype, but that would require entering calls.
+  base_param = UOp.param(0, dtypes.uint64, addrspace=AddrSpace.REG, reg=Register("v0", 0, WGPR, 8))
+  disp_param = UOp.param(2, disp.dtype, addrspace=AddrSpace.ALU)
+  size_param = UOp.param(3, size.dtype, addrspace=AddrSpace.ALU)
+  value_param = UOp.param(4, b.dtype, addrspace=AddrSpace.REG, reg=Register("v4", 0, XMM, 16))
+  effect = base_param.load()
+  if index.op is not Ops.NOOP:
+    index_param = UOp.param(1, index.dtype, addrspace=AddrSpace.REG, reg=Register("v1", 0, WGPR, index.dtype.itemsize))
+    effect = index_param.after(effect).load()
+  effect = value_param.after(size_param.after(disp_param.after(effect))).load()
+  return UOp.asm(X86Ops[_xmm_sz(b).name+"m"], effect).call(base, index, disp, size, b)
 
 isel_matcher = PatternMatcher([
   # **** Op -> Op ****
