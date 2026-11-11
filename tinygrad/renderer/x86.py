@@ -255,8 +255,7 @@ def pin(ctx:IselContext, x:UOp, cons:Register|tuple[Register, ...]) -> UOp: retu
 def base(x:UOp, i:int) -> UOp: return s.src[0] if (s:=x.src[i]).op is Ops.INDEX else s
 def lane(x:UOp, i:int) -> int: return s.src[1].src[0].val if (s:=x.src[i]).op is Ops.INDEX else 0
 def to_int(dt:DType): return {dtypes.float16: dtypes.int16, dtypes.float32: dtypes.int32, dtypes.float64: dtypes.int64}[dt]
-def imm(dt:DType, v:int) -> UOp:
-  return UOp.asm(X86Ops.IMM, UOp.param(0, dtypes.int64, addrspace=AddrSpace.ALU).cast(dt)).call(UOp.const(v))
+def imm(dt:DType, v:int) -> UOp: return UOp.asm(X86Ops.IMM, UOp.param(0, dtypes.int64, addrspace=AddrSpace.ALU).cast(dt)).call(UOp.const(v))
 def is_imm(x:UOp) -> bool: return x.op is Ops.CALL and x.body.op is Ops.ASM and x.body.arg is X86Ops.IMM
 def imm_dtype(x:UOp) -> DType: return x.body.src[0].dtype
 def imm_value(x:UOp) -> int: return truncate[imm_dtype(x)](x.src[1].val)
@@ -328,14 +327,7 @@ def abi(ctx:IselContext, x:UOp) -> UOp:
   base, index, disp, size = fold_address(args_pointer().index(UOp.cconst(ctx.arg_offsets[x], dtypes.uint32)))
   dtype = x.dtype if x.addrspace is AddrSpace.ALU else dtypes.uint64
   dst = ctx.vreg(WGPR, dtype.itemsize)
-  base_param = UOp.param(0, dtypes.uint64, addrspace=AddrSpace.REG, reg=RDI)
-  index_param = UOp.param(1, dtypes.uint64, addrspace=AddrSpace.REG, reg=Register("v1", 0, WGPR, 8))
-  disp_param = UOp.param(2, imm_dtype(disp), addrspace=AddrSpace.ALU)
-  size_param = UOp.param(3, imm_dtype(size), addrspace=AddrSpace.ALU)
-  dst_param = UOp.param(4, dtype, addrspace=AddrSpace.REG, reg=dst.base.arg.reg)
-  effect = size_param.after(disp_param.after(index_param.after(base_param.load()).load()))
-  effect = dst_param.after(effect).store(0)
-  call = UOp.asm(X86Ops.MOV, effect).call(base, index, disp, size, dst)
+  call = UOp.asm(X86Ops.MOV).call(base, index, disp, size, dst)
   return dst.after(call)
 
 GPR_DEST_OPS = {X86Ops.VPEXTRW, X86Ops.VPEXTRD, X86Ops.VCVTTSS2SI, X86Ops.VCVTTSD2SI, X86Ops.VMOVDm, X86Ops.VMOVQm}
@@ -374,16 +366,7 @@ def copy_op(dt:DType) -> X86Ops:
 def store_float(a:UOp, b:UOp, x:UOp) -> UOp|None:
   if a.addrspace is AddrSpace.REG: return None
   if b.max_numel() * b.dtype.itemsize == 2: return x.ins(X86Ops.VPEXTRW, src=fold_address(a) + (b, imm(dtypes.uint8, 0)))
-  base, index, disp, size = fold_address(a)
-  # TODO: reg constraints can also be a rewrite based on the dtype, but that would require entering calls.
-  base_param = UOp.param(0, dtypes.uint64, addrspace=AddrSpace.REG, reg=Register("v0", 0, WGPR, 8))
-  index_param = UOp.param(1, dtypes.uint64, addrspace=AddrSpace.REG, reg=Register("v1", 0, WGPR, 8))
-  disp_param = UOp.param(2, imm_dtype(disp), addrspace=AddrSpace.ALU)
-  size_param = UOp.param(3, imm_dtype(size), addrspace=AddrSpace.ALU)
-  value_param = UOp.param(4, b.dtype, addrspace=AddrSpace.REG, reg=Register("v4", 0, XMM, 16))
-  effect = index_param.after(base_param.load()).load()
-  effect = value_param.after(size_param.after(disp_param.after(effect))).load()
-  return UOp.asm(X86Ops[_xmm_sz(b).name+"m"], effect).call(base, index, disp, size, b)
+  return UOp.asm(X86Ops[_xmm_sz(b).name+"m"]).call(*fold_address(a), b)
 
 isel_matcher = PatternMatcher([
   # **** Op -> Op ****
@@ -465,7 +448,7 @@ isel_matcher = PatternMatcher([
   (UPat.var("a", dtypes.ints+(dtypes.bool,)) ^ UPat.var("b"), lambda a,b: a.ins(X86Ops.XOR, src=(a, b))),
   (UPat(Ops.SUB, dtypes.ints, (UPat.var("a"), UPat.var("b"))), lambda a,b: a.ins(X86Ops.SUB, src=(a, b))),
   # float binary
-  ((UPat(dtype=dtypes.float32) + UPat()).named("x"), lambda x: x.ins(X86Ops.VADDSS)),
+  ((UPat(dtype=dtypes.float32) + UPat()).named("x"), lambda ctx,x: (dst:=ctx.vreg(XMM)).after(UOp.asm(X86Ops.VADDSS).call(*x.src, dst))),
   ((UPat(dtype=dtypes.float64) + UPat()).named("x"), lambda x: x.ins(X86Ops.VADDSD)),
   ((UPat(dtype=dtypes.float32) * UPat()).named("x"), lambda x: x.ins(X86Ops.VMULSS)),
   ((UPat(dtype=dtypes.float64) * UPat()).named("x"), lambda x: x.ins(X86Ops.VMULSD)),
