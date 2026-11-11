@@ -239,7 +239,7 @@ reg_strs = {"rax": {4:"eax", 2:"ax", 1:"al"}, "rcx": {4:"ecx", 2:"cx", 1:"cl"}, 
         **{f"r{i}": {4:f"r{i}d", 2:f"r{i}w", 1:f"r{i}b"} for i in range(8, 16)}}
 
 # a register defined outside the instruction stream: the stack pointer, the args pointer, a callee saved register
-def reg(dt:DType, r:Register) -> UOp: return UOp(Ops.INS, arg=(X86Ops.REG, dt, r))
+def reg(dt:DType, r:Register) -> UOp: return UOp.alloc((), dt, slot=r.index, addrspace=AddrSpace.REG, reg=r)
 def stack_pointer() -> UOp: return reg(dtypes.uint64, RSP)
 def args_pointer() -> UOp: return reg(dtypes.uint64, RDI)
 
@@ -321,8 +321,19 @@ def fold_address(x:UOp) -> tuple[UOp, UOp, UOp, UOp]:
 # the value of a BUFFER is its address, it moves through registers and the stack as a 64bit int
 def lea(x:UOp) -> UOp: return x.ins(X86Ops.LEA, src=fold_address(x), dtype=dtypes.uint64)
 def abi(ctx:IselContext, x:UOp) -> UOp:
-  src = fold_address(args_pointer().index(UOp.cconst(ctx.arg_offsets[x], dtypes.uint32)))
-  return x.ins(X86Ops.MOV, dtype=x.dtype if x.addrspace is AddrSpace.ALU else dtypes.uint64, src=src)
+  base, index, disp, size = fold_address(args_pointer().index(UOp.cconst(ctx.arg_offsets[x], dtypes.uint32)))
+  dtype = x.dtype if x.addrspace is AddrSpace.ALU else dtypes.uint64
+  dst_reg = ctx.vreg(WGPR, dtype.itemsize)
+  dst = UOp.alloc((), dtype, addrspace=AddrSpace.REG, reg=dst_reg)
+  base_param = UOp.param(0, dtypes.uint64, addrspace=AddrSpace.REG, reg=RDI)
+  index_param = UOp.param(1, dtypes.uint64, addrspace=AddrSpace.REG, reg=Register("v1", 0, WGPR, 8))
+  disp_param = UOp.param(2, disp.dtype, addrspace=AddrSpace.ALU)
+  size_param = UOp.param(3, size.dtype, addrspace=AddrSpace.ALU)
+  dst_param = UOp.param(4, dtype, addrspace=AddrSpace.REG, reg=dst_reg)
+  effect = size_param.after(disp_param.after(index_param.after(base_param.load()).load()))
+  effect = dst_param.after(effect).store(0)
+  call = UOp.asm(X86Ops.MOV, effect).call(base, index, disp, size, dst)
+  return dst.after(call)
 
 GPR_DEST_OPS = {X86Ops.VPEXTRW, X86Ops.VPEXTRD, X86Ops.VCVTTSS2SI, X86Ops.VCVTTSD2SI, X86Ops.VMOVDm, X86Ops.VMOVQm}
 XMM_OPS = {op for op in X86Ops if op.name.startswith('V')} - GPR_DEST_OPS
@@ -344,7 +355,9 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
   # already allocated vregs
   if regs(x) and regs(x)[0]._cons: return None
   # a register buffer is a REG, a stack buffer becomes the LEA of its address before regalloc
-  if x.op in {Ops.BUFFER, Ops.ALLOC}: return reg(x.dtype, regbuf_reg(x)) if x.addrspace is AddrSpace.REG else None
+  if x.op in {Ops.BUFFER, Ops.ALLOC}:
+    if x.arg.reg is not None: return None
+    return reg(x.dtype, regbuf_reg(x)) if x.addrspace is AddrSpace.REG else None
   if regs(x): defs = [ctx.vreg(regs(x), x.dtype.itemsize)]
   elif x.dtype in dtypes.floats or x.arg[0] in XMM_OPS: defs = [ctx.vreg(XMM)]
   else: defs = [ctx.vreg(WGPR, x.dtype.itemsize)]
@@ -361,13 +374,11 @@ def store_float(a:UOp, b:UOp, x:UOp) -> UOp|None:
   base, index, disp, size = fold_address(a)
   # TODO: reg constraints can also be a rewrite based on the dtype, but that would require entering calls.
   base_param = UOp.param(0, dtypes.uint64, addrspace=AddrSpace.REG, reg=Register("v0", 0, WGPR, 8))
+  index_param = UOp.param(1, dtypes.uint64, addrspace=AddrSpace.REG, reg=Register("v1", 0, WGPR, 8))
   disp_param = UOp.param(2, disp.dtype, addrspace=AddrSpace.ALU)
   size_param = UOp.param(3, size.dtype, addrspace=AddrSpace.ALU)
   value_param = UOp.param(4, b.dtype, addrspace=AddrSpace.REG, reg=Register("v4", 0, XMM, 16))
-  effect = base_param.load()
-  if index.op is not Ops.NOOP:
-    index_param = UOp.param(1, index.dtype, addrspace=AddrSpace.REG, reg=Register("v1", 0, WGPR, index.dtype.itemsize))
-    effect = index_param.after(effect).load()
+  effect = index_param.after(base_param.load()).load()
   effect = value_param.after(size_param.after(disp_param.after(effect))).load()
   return UOp.asm(X86Ops[_xmm_sz(b).name+"m"], effect).call(base, index, disp, size, b)
 
