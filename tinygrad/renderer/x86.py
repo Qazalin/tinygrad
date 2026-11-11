@@ -29,7 +29,6 @@ class IselContext:
 
   def vreg(self, cons:tuple[Register, ...]|Register, size:int=0) -> UOp:
     cons, slot = cons if isinstance(cons, tuple) else (cons,), next(self.reg_n)
-    # TODO: char with shape () for XMM with 16 bytes?
     size = size or cons[0].size
     return UOp.alloc((size,), dtypes.u8, slot=slot, addrspace=AddrSpace.REG, reg=Register(f"v{slot}", 0, cons, size))
 
@@ -241,9 +240,7 @@ reg_strs = {"rax": {4:"eax", 2:"ax", 1:"al"}, "rcx": {4:"ecx", 2:"cx", 1:"cl"}, 
         **{f"r{i}": {4:f"r{i}d", 2:f"r{i}w", 1:f"r{i}b"} for i in range(8, 16)}}
 
 # a register defined outside the instruction stream: the stack pointer, the args pointer, a callee saved register
-def reg(dt:DType, r:Register) -> UOp:
-  return UOp.alloc((), dt, slot=r.index, addrspace=AddrSpace.REG, reg=r)
-  # return UOp.alloc((r.size,), dtype, slot=r.index, addrspace=AddrSpace.REG, reg=r)
+def reg(dt:DType, r:Register) -> UOp: return UOp.alloc((), dt, slot=r.index, addrspace=AddrSpace.REG, reg=r)
 def stack_pointer() -> UOp: return reg(dtypes.uint64, RSP)
 def args_pointer() -> UOp: return reg(dtypes.uint64, RDI)
 
@@ -324,11 +321,9 @@ def fold_address(x:UOp) -> tuple[UOp, UOp, UOp, UOp]:
 # the value of a BUFFER is its address, it moves through registers and the stack as a 64bit int
 def lea(x:UOp) -> UOp: return x.ins(X86Ops.LEA, src=fold_address(x), dtype=dtypes.uint64)
 def abi(ctx:IselContext, x:UOp) -> UOp:
-  base, index, disp, size = fold_address(args_pointer().index(UOp.cconst(ctx.arg_offsets[x], dtypes.uint32)))
-  dtype = x.dtype if x.addrspace is AddrSpace.ALU else dtypes.uint64
-  dst = ctx.vreg(WGPR, dtype.itemsize)
-  call = UOp.asm(X86Ops.MOV).call(base, index, disp, size, dst)
-  return dst.after(call)
+  src = fold_address(args_pointer().index(UOp.cconst(ctx.arg_offsets[x], dtypes.uint32)))
+  dst = ctx.vreg(WGPR, x.dtype.itemsize if x.addrspace is AddrSpace.ALU else 8)
+  return dst.after(UOp.asm(X86Ops.MOV).call(*src, dst))
 
 GPR_DEST_OPS = {X86Ops.VPEXTRW, X86Ops.VPEXTRD, X86Ops.VCVTTSS2SI, X86Ops.VCVTTSD2SI, X86Ops.VMOVDm, X86Ops.VMOVQm}
 XMM_OPS = {op for op in X86Ops if op.name.startswith('V')} - GPR_DEST_OPS
@@ -358,15 +353,10 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
   else: defs = [ctx.vreg(WGPR, x.dtype.itemsize)]
   # TODO: add this once the scheduler can track register pressure
   # if x.arg[0] in X86GroupOp.WriteFlags: defs.append(ctx.vreg(RFLAGS))
-  return with_regs(x, tuple(unwrap(d.base.arg.reg) for d in defs))
+  return with_regs(x, tuple(defs))
 
 def copy_op(dt:DType) -> X86Ops:
   return {dtypes.float16:X86Ops.VMOVSS, dtypes.float32:X86Ops.VMOVSS, dtypes.float64:X86Ops.VMOVSD, dtypes.bool:X86Ops.MOVZX}.get(dt, X86Ops.MOV)
-
-def store_float(a:UOp, b:UOp, x:UOp) -> UOp|None:
-  if a.addrspace is AddrSpace.REG: return None
-  if b.max_numel() * b.dtype.itemsize == 2: return x.ins(X86Ops.VPEXTRW, src=fold_address(a) + (b, imm(dtypes.uint8, 0)))
-  return UOp.asm(X86Ops[_xmm_sz(b).name+"m"]).call(*fold_address(a), b)
 
 isel_matcher = PatternMatcher([
   # **** Op -> Op ****
@@ -492,7 +482,9 @@ isel_matcher = PatternMatcher([
    x.ins(_xmm_sz(x), src=fold_address(a))),
   (UPat(Ops.LOAD, dtypes.ints+(dtypes.bool,), src=(UPat(name="a"),), name="x"), lambda x,a: None if a.addrspace is AddrSpace.REG else
    x.ins(X86Ops.MOV, src=fold_address(a)) if x.max_numel() == 1 else x.ins(_xmm_sz(x), src=fold_address(a))),
-  (UPat.var("a").store(UPat.var("b", dtypes.floats), name="x"), store_float),
+  (UPat.var("a").store(UPat.var("b", dtypes.floats), name="x"), lambda a,b,x: None if a.addrspace is AddrSpace.REG else
+   x.ins(X86Ops.VPEXTRW, src=fold_address(a) + (b, imm(dtypes.uint8, 0))) if b.max_numel() * b.dtype.itemsize == 2 else
+   UOp.asm(X86Ops[_xmm_sz(b).name+"m"]).call(*fold_address(a), b)),
   (UPat.var("a").store(UPat.var("b", dtypes.ints+(dtypes.bool,)), name="x"), lambda a,b,x: None if a.addrspace is AddrSpace.REG else
    x.ins(X86Ops[_xmm_sz(b).name+"m"], src=fold_address(a) + (b,)) if b.max_numel() > 1 else
    x.ins(X86Ops.MOVm, src=fold_address(a) + (b,)) if (i:=to_imm(b)) is None else x.ins(X86Ops.MOVi, src=fold_address(a) + (i,))),
