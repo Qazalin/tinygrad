@@ -27,9 +27,11 @@ class IselContext:
     params = sorted([u for u in sink.toposort() if u.op is Ops.PARAM], key=lambda u: u.arg.slot)
     self.arg_offsets = {u: o for u, (o, _) in zip(params, TinyELF.iter_sig(tuple((None, u.addrspace, u.dtype, ()) for u in params)))}
 
-  def vreg(self, cons:tuple[Register, ...]|Register, size:int=0):
-    cons = cons if isinstance(cons, tuple) else (cons,)
-    return Register(f"v{next(self.reg_n)}", 0, cons, size or cons[0].size)
+  def vreg(self, cons:tuple[Register, ...]|Register, size:int=0) -> UOp:
+    cons, slot = cons if isinstance(cons, tuple) else (cons,), next(self.reg_n)
+    # TODO: char with shape () for XMM with 16 bytes?
+    size = size or cons[0].size
+    return UOp.alloc((size,), dtypes.u8, slot=slot, addrspace=AddrSpace.REG, reg=Register(f"v{slot}", 0, cons, size))
 
 # the registers an INS defines follow its opcode and dtype in its arg
 def regs(u:UOp) -> tuple[Register, ...]: return u.arg[2:] if u.op is Ops.INS else ()
@@ -239,7 +241,7 @@ reg_strs = {"rax": {4:"eax", 2:"ax", 1:"al"}, "rcx": {4:"ecx", 2:"cx", 1:"cl"}, 
         **{f"r{i}": {4:f"r{i}d", 2:f"r{i}w", 1:f"r{i}b"} for i in range(8, 16)}}
 
 # a register defined outside the instruction stream: the stack pointer, the args pointer, a callee saved register
-def reg(dt:DType, r:Register) -> UOp: return UOp.alloc((), dt, slot=r.index, addrspace=AddrSpace.REG, reg=r)
+def reg(dt:DType, r:Register) -> UOp: return UOp.alloc((r.size,), dtypes.u8, slot=r.index, addrspace=AddrSpace.REG, reg=r)
 def stack_pointer() -> UOp: return reg(dtypes.uint64, RSP)
 def args_pointer() -> UOp: return reg(dtypes.uint64, RDI)
 
@@ -323,13 +325,12 @@ def lea(x:UOp) -> UOp: return x.ins(X86Ops.LEA, src=fold_address(x), dtype=dtype
 def abi(ctx:IselContext, x:UOp) -> UOp:
   base, index, disp, size = fold_address(args_pointer().index(UOp.cconst(ctx.arg_offsets[x], dtypes.uint32)))
   dtype = x.dtype if x.addrspace is AddrSpace.ALU else dtypes.uint64
-  dst_reg = ctx.vreg(WGPR, dtype.itemsize)
-  dst = UOp.alloc((), dtype, addrspace=AddrSpace.REG, reg=dst_reg)
+  dst = ctx.vreg(WGPR, dtype.itemsize)
   base_param = UOp.param(0, dtypes.uint64, addrspace=AddrSpace.REG, reg=RDI)
   index_param = UOp.param(1, dtypes.uint64, addrspace=AddrSpace.REG, reg=Register("v1", 0, WGPR, 8))
   disp_param = UOp.param(2, disp.dtype, addrspace=AddrSpace.ALU)
   size_param = UOp.param(3, size.dtype, addrspace=AddrSpace.ALU)
-  dst_param = UOp.param(4, dtype, addrspace=AddrSpace.REG, reg=dst_reg)
+  dst_param = UOp.param(4, dtype, addrspace=AddrSpace.REG, reg=dst.base.arg.reg)
   effect = size_param.after(disp_param.after(index_param.after(base_param.load()).load()))
   effect = dst_param.after(effect).store(0)
   call = UOp.asm(X86Ops.MOV, effect).call(base, index, disp, size, dst)
@@ -363,7 +364,7 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
   else: defs = [ctx.vreg(WGPR, x.dtype.itemsize)]
   # TODO: add this once the scheduler can track register pressure
   # if x.arg[0] in X86GroupOp.WriteFlags: defs.append(ctx.vreg(RFLAGS))
-  return with_regs(x, tuple(defs))
+  return with_regs(x, tuple(unwrap(d.base.arg.reg) for d in defs))
 
 def copy_op(dt:DType) -> X86Ops:
   return {dtypes.float16:X86Ops.VMOVSS, dtypes.float32:X86Ops.VMOVSS, dtypes.float64:X86Ops.VMOVSD, dtypes.bool:X86Ops.MOVZX}.get(dt, X86Ops.MOV)
