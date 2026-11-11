@@ -489,7 +489,7 @@ isel_matcher = PatternMatcher([
    x.ins(X86Ops[_xmm_sz(b).name+"m"], src=fold_address(a) + (b,)) if b.max_numel() > 1 else
    x.ins(X86Ops.MOVm, src=fold_address(a) + (b,)) if (i:=to_imm(b)) is None else x.ins(X86Ops.MOVi, src=fold_address(a) + (i,))),
   # allocate virtual registers
-  (UPat((Ops.INS, Ops.BUFFER, Ops.ALLOC), name="x"), alloc_vregs),
+  (UPat((Ops.BUFFER, Ops.ALLOC), name="x"), alloc_vregs),
 ])
 
 # ***** pre register allocation *****
