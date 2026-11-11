@@ -256,10 +256,10 @@ def base(x:UOp, i:int) -> UOp: return s.src[0] if (s:=x.src[i]).op is Ops.INDEX 
 def lane(x:UOp, i:int) -> int: return s.src[1].src[0].val if (s:=x.src[i]).op is Ops.INDEX else 0
 def to_int(dt:DType): return {dtypes.float16: dtypes.int16, dtypes.float32: dtypes.int32, dtypes.float64: dtypes.int64}[dt]
 def imm(dt:DType, v:int) -> UOp:
-  c = UOp.cconst(truncate[dt](v), dt)
-  return c.after(UOp.asm(X86Ops.IMM).call(c))
-  #return UOp.cconst(truncate[dt](v), dt) #.ins(X86Ops.IMM)
-def is_imm(x:UOp) -> bool: return x.op is Ops.INS and x.arg[0] is X86Ops.IMM
+  return UOp.asm(X86Ops.IMM, UOp.param(0, dtypes.int64, addrspace=AddrSpace.ALU).cast(dt)).call(UOp.const(v))
+def is_imm(x:UOp) -> bool: return x.op is Ops.CALL and x.body.op is Ops.ASM and x.body.arg is X86Ops.IMM
+def imm_dtype(x:UOp) -> DType: return x.body.src[0].dtype
+def imm_value(x:UOp) -> int: return truncate[imm_dtype(x)](x.src[1].val)
 def to_imm(c:UOp) -> UOp|None:
   if not (c.op is Ops.CAST and (v:=c.src[0]).op is Ops.CONST): return None
   if c.dtype in dtypes.int64s: return imm(dtypes.int32, v.val) if not v.overflows(dtypes.int32) else None
@@ -330,8 +330,8 @@ def abi(ctx:IselContext, x:UOp) -> UOp:
   dst = ctx.vreg(WGPR, dtype.itemsize)
   base_param = UOp.param(0, dtypes.uint64, addrspace=AddrSpace.REG, reg=RDI)
   index_param = UOp.param(1, dtypes.uint64, addrspace=AddrSpace.REG, reg=Register("v1", 0, WGPR, 8))
-  disp_param = UOp.param(2, disp.dtype, addrspace=AddrSpace.ALU)
-  size_param = UOp.param(3, size.dtype, addrspace=AddrSpace.ALU)
+  disp_param = UOp.param(2, imm_dtype(disp), addrspace=AddrSpace.ALU)
+  size_param = UOp.param(3, imm_dtype(size), addrspace=AddrSpace.ALU)
   dst_param = UOp.param(4, dtype, addrspace=AddrSpace.REG, reg=dst.base.arg.reg)
   effect = size_param.after(disp_param.after(index_param.after(base_param.load()).load()))
   effect = dst_param.after(effect).store(0)
@@ -378,8 +378,8 @@ def store_float(a:UOp, b:UOp, x:UOp) -> UOp|None:
   # TODO: reg constraints can also be a rewrite based on the dtype, but that would require entering calls.
   base_param = UOp.param(0, dtypes.uint64, addrspace=AddrSpace.REG, reg=Register("v0", 0, WGPR, 8))
   index_param = UOp.param(1, dtypes.uint64, addrspace=AddrSpace.REG, reg=Register("v1", 0, WGPR, 8))
-  disp_param = UOp.param(2, disp.dtype, addrspace=AddrSpace.ALU)
-  size_param = UOp.param(3, size.dtype, addrspace=AddrSpace.ALU)
+  disp_param = UOp.param(2, imm_dtype(disp), addrspace=AddrSpace.ALU)
+  size_param = UOp.param(3, imm_dtype(size), addrspace=AddrSpace.ALU)
   value_param = UOp.param(4, b.dtype, addrspace=AddrSpace.REG, reg=Register("v4", 0, XMM, 16))
   effect = index_param.after(base_param.load()).load()
   effect = value_param.after(size_param.after(disp_param.after(effect))).load()
@@ -582,7 +582,7 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
     # TODO: shouldn't rely on bitcast to convey encoding info
     def _sz(x:UOp): return x.dtype.itemsize if x.op is Ops.BITCAST else rdef(x).size
     # for a memory operand the rm size is the element size carried by the address, otherwise it's the size of the value in the register
-    rm_sz = scale_uop.src[0].val if scale_uop is not None else _sz(rm_uop)
+    rm_sz = imm_value(scale_uop) if scale_uop is not None else _sz(rm_uop)
     reg_sz = _sz(reg_uop) if reg_uop is not None else 0
     sz = reg_sz or rm_sz
 
@@ -617,9 +617,9 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
     # 0b11 -- signals no memory access
     if disp_uop is not None:
       assert is_imm(disp_uop), "displacement must be an immediate"
-      assert disp_uop.dtype in (dtypes.int8, dtypes.int32), "displacement can only be 1 or 4 byte signed int"
+      assert imm_dtype(disp_uop) in (dtypes.int8, dtypes.int32), "displacement can only be 1 or 4 byte signed int"
       # rbp/r13 always require a displacement
-      if disp_uop.src[0].val != 0 or rm == 0b101: mod = 0b01 if disp_uop.dtype.itemsize == 1 else 0b10
+      if imm_value(disp_uop) != 0 or rm == 0b101: mod = 0b01 if imm_dtype(disp_uop).itemsize == 1 else 0b10
       else: mod = 0b00
     else: mod = 0b11
     # x 0b0 and idx 0b100 means rsp which means no index exists
@@ -633,10 +633,10 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
     # DISP byte
     if mod == 0b01 or mod == 0b10:
       assert disp_uop is not None
-      inst += struct.pack(unwrap(disp_uop.dtype.fmt), disp_uop.src[0].val)
+      inst += struct.pack(unwrap(imm_dtype(disp_uop).fmt), imm_value(disp_uop))
     # IMM byte
     if imm_uop is not None:
-      if is_imm(imm_uop): inst += struct.pack(unwrap(imm_uop.dtype.fmt), imm_uop.src[0].val)
+      if is_imm(imm_uop): inst += struct.pack(unwrap(imm_dtype(imm_uop).fmt), imm_value(imm_uop))
       elif isinstance(rdef(imm_uop), Register): inst += bytes([(rdef(imm_uop).index & 0b1111) << 4 | 0b0000])
     return inst
 
@@ -670,7 +670,7 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
 encodings = {
   # moves
   X86Ops.MOVABS: lambda x:
-   bytes([0b0100 << 4 | 0b1 << 3 | 0b00 << 2 | rdef(x).index >> 3, 0xB8 + (rdef(x).index & 0b111)]) + struct.pack(x.dtype.fmt, x.src[0].src[0].val),
+   bytes([0b0100 << 4 | 0b1 << 3 | 0b00 << 2 | rdef(x).index >> 3, 0xB8 + (rdef(x).index & 0b111)]) + struct.pack(x.dtype.fmt, imm_value(x.src[0])),
   X86Ops.MOV: lambda x: encode(x, 0x8B), X86Ops.MOVi: lambda x: encode(x, 0xC7, reg=0),
   X86Ops.MOVm: lambda x: encode(x, 0x89), X86Ops.LEA: lambda x: encode(x, 0x8D),
   X86Ops.VMOVSS: lambda x: encode(x, 0x10, pp=2, sel=1), X86Ops.VMOVSSm: lambda x: encode(x, 0x11, pp=2, sel=1),
@@ -790,10 +790,10 @@ class X86Renderer(ISARenderer):
     def _format_op(x:UOp) -> str: return f"    {(o[7:-1] if (o:=str(x.arg[0]))[-1] in ('i', 'm') else o[7:]).lower():7s}"
     def _format_operands(x:UOp) -> str:
       def _format(src:tuple[UOp, ...]) -> list[str]:
-        return [str(s.src[0].val) if is_imm(s) else reg_strs[o].get(rdef(s).size, o) if \
+        return [str(imm_value(s)) if is_imm(s) else reg_strs[o].get(rdef(s).size, o) if \
                 (o:=str(rdef(s))) in reg_strs else o for s in src if is_imm(s) or rdef(s) is not None]
       def _mem_adress(base:UOp, idx:UOp, disp:UOp, scale:UOp) -> list[str]:
-        return [f"[{rdef(base)}" + (f" + {rdef(idx)}*{scale.src[0].val}" if rdef(idx) else "") + (f" + {d}" if (d:=disp.src[0].val) else "") + "]"]
+        return [f"[{rdef(base)}" + (f" + {rdef(idx)}*{imm_value(scale)}" if rdef(idx) else "") + (f" + {d}" if (d:=imm_value(disp)) else "") + "]"]
 
       if len(x.src) > 4 and x.arg[0] in X86GroupOp.WriteMem: ret = _mem_adress(*x.src[:4]) + _format(x.src[4:])
       elif len(x.src) > 3 and x.arg[0] in X86GroupOp.Rm1st: ret = _format((x,)) + _mem_adress(*x.src[:4]) + _format(x.src[4:])
