@@ -35,6 +35,11 @@ class IselContext:
     r = self.vreg(cons, size)
     return UOp.alloc((r.size,), dtypes.u8, slot=-1, addrspace=AddrSpace.REG, reg=r)
 
+def asm_dtype(u:UOp) -> DType:
+  if u.op in {Ops.AFTER, Ops.BITCAST}: return asm_dtype(u.src[0])
+  assert u.op is Ops.CALL and u.body.op is Ops.ASM
+  return u.body.src[0].src[0].dtype if u.body.src else dtypes.void
+
 # An unbound parameter is a type declaration for construction, not an output until it is attached to a register.
 def _asm_outputs(u:UOp) -> tuple[UOp, ...]: return tuple(s for s in u.body.src if s.op is Ops.STORE and s.src[0].arg.reg is not None)
 
@@ -345,11 +350,12 @@ def pin(ctx:IselContext, x:UOp, cons:Register|tuple[Register, ...]) -> UOp:
 def base(x:UOp, i:int) -> UOp: return s.src[0] if (s:=x.src[i]).op is Ops.INDEX else s
 def lane(x:UOp, i:int) -> int: return s.src[1].src[0].val if (s:=x.src[i]).op is Ops.INDEX else 0
 def to_int(dt:DType): return {dtypes.float16: dtypes.int16, dtypes.float32: dtypes.int32, dtypes.float64: dtypes.int64}[dt]
-def imm(dt:DType, v:int) -> UOp: return UOp.asm(X86Ops.IMM, dtype=dt).call(UOp.const(v))
-def is_imm(x:UOp) -> bool: return is_imm(x.src[0]) if x.op is Ops.AFTER else x.op is Ops.CALL and x.body.arg is X86Ops.IMM
+# The machine nodes are void, but the immediate still needs a logical type as an IR operand (for example, a RANGE bound).
+def imm(dt:DType, v:int) -> UOp: return UOp.asm(X86Ops.IMM, dtype=dt).call(UOp.const(v)).bitcast(dt)
+def is_imm(x:UOp) -> bool: return is_imm(x.src[0]) if x.op in {Ops.AFTER, Ops.BITCAST} else x.op is Ops.CALL and x.body.arg is X86Ops.IMM
 def imm_value(x:UOp) -> int:
-  if x.op is Ops.AFTER: return imm_value(x.src[0])
-  return truncate[x.dtype](x.src[1].val)
+  if x.op in {Ops.AFTER, Ops.BITCAST}: return imm_value(x.src[0])
+  return truncate[asm_dtype(x)](x.src[1].val)
 def to_imm(c:UOp) -> UOp|None:
   if not (c.op is Ops.CAST and (v:=c.src[0]).op is Ops.CONST): return None
   if c.dtype in dtypes.int64s: return imm(dtypes.int32, v.val) if not v.overflows(dtypes.int32) else None
@@ -417,7 +423,7 @@ def fold_address(x:UOp, size:int|None=None) -> tuple[UOp, UOp, UOp, UOp]:
   return _operand(base, _cast(idx), 0, sz)
 
 # the value of a BUFFER is its address, it moves through registers and the stack as a 64bit int
-def lea(x:UOp) -> UOp: return UOp.asm(X86Ops.LEA, dtype=dtypes.uint64).call(*fold_address(x))
+def lea(x:UOp) -> UOp: return UOp.asm(X86Ops.LEA, dtype=dtypes.uint64).call(*fold_address(x)).bitcast(dtypes.uint64)
 def abi(ctx:IselContext, x:UOp) -> UOp:
   address = fold_address(args_pointer().index(UOp.cconst(ctx.arg_offsets[x], dtypes.uint32)))
   return UOp.asm(X86Ops.MOV, dtype=x.dtype if x.addrspace is AddrSpace.ALU else dtypes.uint64).call(*address)
@@ -439,7 +445,7 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
   # register placeholders with real registers
   if is_imm(x): return None
   # no register definition
-  if x.dtype is dtypes.void: return None
+  if x.op is Ops.CALL and asm_dtype(x) is dtypes.void: return None
   # a register buffer is a REG, a stack buffer becomes the LEA of its address before regalloc
   if x.op in {Ops.BUFFER, Ops.ALLOC}:
     if x.addrspace is not AddrSpace.REG or x.arg.reg is not None: return None
@@ -451,8 +457,9 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
       if not r._cons: params[p] = p.replace(arg=replace(p.arg, reg=ctx.vreg(r, r.size)))
     if params: x = x.replace(src=(x.body.substitute(params),)+x.src[1:])
     return x if params else None
-  defs = [ctx.valloc(XMM)] if x.dtype in dtypes.floats or x.body.arg in XMM_OPS else [ctx.valloc(WGPR, x.dtype.itemsize)]
-  return defs[0].bitcast(x.dtype).after(with_regs(x, tuple(defs)))
+  dt = asm_dtype(x)
+  defs = [ctx.valloc(XMM)] if dt in dtypes.floats or x.body.arg in XMM_OPS else [ctx.valloc(WGPR, dt.itemsize)]
+  return defs[0].bitcast(dt).after(with_regs(x, tuple(defs)))
 
 def copy_op(dt:DType) -> X86Ops:
   return {dtypes.float16:X86Ops.VMOVSS, dtypes.float32:X86Ops.VMOVSS, dtypes.float64:X86Ops.VMOVSD, dtypes.bool:X86Ops.MOVZX}.get(dt, X86Ops.MOV)
@@ -716,9 +723,9 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
     # 0b11 -- signals no memory access
     if disp_uop is not None:
       assert is_imm(disp_uop), "displacement must be an immediate"
-      assert disp_uop.dtype in (dtypes.int8, dtypes.int32), "displacement can only be 1 or 4 byte signed int"
+      assert asm_dtype(disp_uop) in (dtypes.int8, dtypes.int32), "displacement can only be 1 or 4 byte signed int"
       # rbp/r13 always require a displacement
-      if imm_value(disp_uop) != 0 or rm == 0b101: mod = 0b01 if disp_uop.dtype.itemsize == 1 else 0b10
+      if imm_value(disp_uop) != 0 or rm == 0b101: mod = 0b01 if asm_dtype(disp_uop).itemsize == 1 else 0b10
       else: mod = 0b00
     else: mod = 0b11
     # x 0b0 and idx 0b100 means rsp which means no index exists
@@ -732,10 +739,10 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
     # DISP byte
     if mod == 0b01 or mod == 0b10:
       assert disp_uop is not None
-      inst += struct.pack(unwrap(disp_uop.dtype.fmt), imm_value(disp_uop))
+      inst += struct.pack(unwrap(asm_dtype(disp_uop).fmt), imm_value(disp_uop))
     # IMM byte
     if imm_uop is not None:
-      if is_imm(imm_uop): inst += struct.pack(unwrap(imm_uop.dtype.fmt), imm_value(imm_uop))
+      if is_imm(imm_uop): inst += struct.pack(unwrap(asm_dtype(imm_uop).fmt), imm_value(imm_uop))
       elif isinstance(rdef(imm_uop), UOp): inst += bytes([(rreg(imm_uop).index & 0b1111) << 4 | 0b0000])
     return inst
 
@@ -763,7 +770,7 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
     fields = src[1:5] if memory else (src[1], None, None, None)
     rest = (src[0],) + src[5:] if memory else src[:1] + src[2:]
     # cmp reg, rm doesn't define a new register
-    return _encode(x, *fields, *rest) if x.dtype is not dtypes.void else _encode(rest[0], *fields) if rest else None
+    return _encode(x, *fields, *rest) if asm_dtype(x) is not dtypes.void else _encode(rest[0], *fields) if rest else None
   return None
 
 # https://www.felixcloutier.com/x86/
@@ -774,7 +781,7 @@ encodings = {
   # moves
   X86Ops.MOVABS: lambda x:
    bytes([0b0100 << 4 | 0b1 << 3 | 0b00 << 2 | rreg(x).index >> 3, 0xB8 + (rreg(x).index & 0b111)]) +
-   struct.pack(x.dtype.fmt, imm_value(asm_inputs(x)[0])),
+   struct.pack(unwrap(asm_dtype(x).fmt), imm_value(asm_inputs(x)[0])),
   X86Ops.MOV: lambda x: encode(x, 0x8B), X86Ops.MOVi: lambda x: encode(x, 0xC7, reg=0),
   X86Ops.MOVm: lambda x: encode(x, 0x89), X86Ops.LEA: lambda x: encode(x, 0x8D),
   X86Ops.VMOVSS: lambda x: encode(x, 0x10, pp=2, sel=1), X86Ops.VMOVSSm: lambda x: encode(x, 0x11, pp=2, sel=1),
@@ -790,8 +797,8 @@ encodings = {
   # the int src is the 2nd src (the rm field), its width picks the 32 or 64 bit form
   X86Ops.VCVTSI2SS: lambda x: encode(x, 0x2A, pp=2, sel=1, we=asm_inputs(x)[1].dtype.itemsize == 8),
   X86Ops.VCVTSI2SD: lambda x: encode(x, 0x2A, pp=3, sel=1, we=asm_inputs(x)[1].dtype.itemsize == 8),
-  X86Ops.VCVTTSS2SI: lambda x: encode(x, 0x2C, pp=2, sel=1, we=x.dtype.itemsize == 8),
-  X86Ops.VCVTTSD2SI: lambda x: encode(x, 0x2C, pp=3, sel=1, we=x.dtype.itemsize == 8),
+  X86Ops.VCVTTSS2SI: lambda x: encode(x, 0x2C, pp=2, sel=1, we=asm_dtype(x).itemsize == 8),
+  X86Ops.VCVTTSD2SI: lambda x: encode(x, 0x2C, pp=3, sel=1, we=asm_dtype(x).itemsize == 8),
   # int division
   X86Ops.IDIV: lambda x: encode(x, 0xF7, reg=7), X86Ops.DIV: lambda x: encode(x, 0xF7, reg=6),
   # scalar int binary
@@ -880,7 +887,8 @@ class X86Renderer(ISARenderer):
     from tinygrad.runtime.support.compiler_cpu import X86Compiler
     self.compiler = X86Compiler()
   def is_two_address(self, x:UOp) -> bool: return x.op is Ops.CALL and x.body.arg in X86GroupOp.TwoAddress
-  def copy(self, x:UOp, reg:UOp) -> UOp: return with_regs(UOp.asm(X86Ops.MOV, dtype=x.dtype).call(x), (reg,))
+  def copy(self, x:UOp, reg:UOp) -> UOp:
+    return with_regs(UOp.asm(X86Ops.MOV, dtype=asm_dtype(x) if x.op is Ops.CALL else x.dtype).call(x), (reg,))
 
   def spill(self, spill_slot:int, x:UOp) -> UOp:
     # Retagged physical registers retain their class, but their access width can be less than the full register.
@@ -909,7 +917,7 @@ class X86Renderer(ISARenderer):
         return [f"[{rreg(base)}" + idx_str + (f" + {d}" if (d:=imm_value(disp)) else "") + "]"]
 
       if x.body.arg in X86GroupOp.WriteMem:
-        fields = src[:4] if len(src) >= 4 else (x, UOp(Ops.NOOP), imm(dtypes.int32, 0), imm(dtypes.uint32, x.dtype.itemsize))
+        fields = src[:4] if len(src) >= 4 else (x, UOp(Ops.NOOP), imm(dtypes.int32, 0), imm(dtypes.uint32, asm_dtype(x).itemsize))
         ret = _mem_adress(*fields) + _format(src[4:] if len(src) >= 4 else ())
       elif x.body.arg in X86GroupOp.Rm1st and len(src) > 3: ret = _format((x,)) + _mem_adress(*src[:4]) + _format(src[4:])
       elif x.body.arg in X86GroupOp.Rm2nd and len(src) > 4:
@@ -936,7 +944,7 @@ class X86Renderer(ISARenderer):
         targets[asm_inputs(u)[0]] = len(binary)
         continue
       if u.body.arg not in encodings or (l:=encodings[u.body.arg](u)) is None:
-        raise RuntimeError(f"failed to encode {u.body.arg} with {u.dtype} srcs {[x.dtype for x in asm_inputs(u)]}")
+        raise RuntimeError(f"failed to encode {u.body.arg} with {asm_dtype(u)} srcs {[x.dtype for x in asm_inputs(u)]}")
       binary.extend(l)
       if u.body.arg in X86GroupOp.Jump: jumps[u] = len(binary)
     # fixup jump targets now that encoding size is known
