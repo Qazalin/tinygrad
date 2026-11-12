@@ -122,22 +122,18 @@ def dtype_from_uop(op:Ops, src:tuple[UOp,...], arg:Any) -> DType:
   match op:
     case Ops.STORE | Ops.LINEAR | Ops.SINK | Ops.PROGRAM | Ops.SOURCE | \
          Ops.BACKEDGE | Ops.BARRIER | Ops.IF | Ops.ENDIF | Ops.NOOP | \
-         Ops.REWRITE_ERROR | Ops.PYLITERAL:
+         Ops.REWRITE_ERROR | Ops.PYLITERAL | Ops.ASM:
       # always void
       return dtypes.void
     case Ops.CALL:
-      # machine instructions declare typed results with output stores
-      if src[0].op is Ops.ASM:
-        return next((s.src[0].dtype for s in src[0].src if s.op is Ops.STORE and s.src[0].dtype is not dtypes.void), dtypes.void)
-      # a call has the dtype of its body
+      # a call has the dtype of its body, void for opaque bodies
       return src[0].dtype
     case Ops.CUSTOM_FUNCTION:
       # an external function states its return dtype in the arg
       return arg.dtype
-    case Ops.ASM: return dtypes.void
     case Ops.INS:
-      # arg is (instruction, dtype, *registers), a queue command
-      assert isinstance(arg, tuple) and len(arg) >= 2 and isinstance(arg[1], DType), f"{op} arg must start with (instruction, DType), got {arg}"
+      # arg is (instruction, dtype, *registers), a queue command or an asm line is void
+      assert isinstance(arg, tuple) and len(arg) >= 2 and isinstance(arg[1], DType), f"INS arg must be (instruction, DType, *registers), got {arg}"
       return arg[1]
     case Ops.INDEX:
       # an image access is always float, no matter the storage dtype
@@ -336,11 +332,11 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     match self.op:
       # late ops don't have shape
       case Ops.IF | Ops.BARRIER | Ops.SINK | Ops.REWRITE_ERROR | Ops.ENDIF | Ops.BACKEDGE | \
-           Ops.LINEAR | Ops.PROGRAM | Ops.SOURCE:
+           Ops.LINEAR | Ops.PROGRAM | Ops.SOURCE | Ops.ASM:
         return None
 
-      # instruction shape is always scalar, vector width is in the instruction encoding
-      case Ops.INS | Ops.ASM:
+      # INS shape is always scalar, vector width is in the instruction encoding
+      case Ops.INS:
         if self.dtype is dtypes.void: return None
         return ()
 
@@ -600,9 +596,8 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     return UOp(Ops.INS, self.src if src is None else src, (arg, self.dtype if dtype is None else dtype))
   @staticmethod
   def asm(arg, *src, dtype:DType=dtypes.void):
-    # The output parameter carries the result type; the assembly operation itself is void.
-    if dtype is not dtypes.void: src = (UOp.param(0, dtype, addrspace=AddrSpace.REG).store(0),)+src
-    return UOp(Ops.ASM, src, arg)
+    # asm is always void, output param holds the result dtype
+    return UOp(Ops.ASM, (UOp.param(0, dtype, addrspace=AddrSpace.REG).store(0),)+src if dtype is not dtypes.void else src, arg)
   def contract(self, *rngs:UOp):
     assert all(x.axis_type == AxisType.UPCAST for x in rngs), "all contract ranges must be upcast"
     return UOp.stack(*[self.substitute(dict(zip(rngs, [r.const_like(i) for r,i in zip(rngs, idx)])))
