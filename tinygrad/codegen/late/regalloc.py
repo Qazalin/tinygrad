@@ -103,7 +103,9 @@ def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
   if x.op in PSEUDO_OPS: return None
   nsrc = []
   def retag(x:UOp, r:Register) -> UOp:
+    if x.op is Ops.CALL and regs(x): return x  # the output bindings were retagged with the CALL
     if x.op in {Ops.AFTER, Ops.BITCAST, Ops.RESHAPE}: return x.replace(src=(retag(x.src[0],r),*x.src[1:]))
+    if x.op not in {Ops.BUFFER, Ops.ALLOC}: raise RuntimeError(f"can't retag {x.op} {x.arg}")
     return x.replace(arg=replace(x.arg, reg=r))
   for j,s in enumerate(x.src):
     # v here is the virtual defined by the original s as s is the rewritten version

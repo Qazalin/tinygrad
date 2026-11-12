@@ -43,12 +43,15 @@ def with_regs(u:UOp, r:tuple[UOp, ...]) -> UOp:
   return u.replace(src=(u.body.replace(src=stores),)+src+r)
 
 def rdef(u:UOp):
+  if u.op in {Ops.AFTER, Ops.BITCAST}: return rdef(u.src[0])
   if u.op is Ops.CALL: return r[0] if (r:=regs(u)) else None
   b = u.storage_base
   return b if b.op in {Ops.BUFFER, Ops.ALLOC} and b.addrspace is AddrSpace.REG else None
 
 def call_src(u:UOp) -> tuple[UOp, ...]: return u.src[1:len(u.src)-len(u.body.src)]
-def rreg(u:UOp) -> Register: return rdef(u).arg.reg
+def rreg(u:UOp) -> Register:
+  if (r:=rdef(u)) is None: raise RuntimeError(f"no register storage for {u}")
+  return r.arg.reg
 
 class LinearContext:
   def __init__(self, ren:ISARenderer):
@@ -261,14 +264,17 @@ def args_pointer() -> UOp: return reg(dtypes.uint64, RDI)
 def regbuf_reg(x:UOp) -> Register: return Register(f"b{x.key.hex()}", 0, *((XMM, 16) if x.dtype in dtypes.floats else (WGPR, x.dtype.itemsize)))
 # a value moved into a register constrained to cons
 def pin(ctx:IselContext, x:UOp, cons:Register|tuple[Register, ...]) -> UOp:
-  return with_regs(x.ins(X86Ops.MOV, src=(x,)), (ctx.vreg(cons, x.dtype.itemsize),))
+  dst = ctx.valloc(cons, x.dtype.itemsize)
+  return dst.bitcast(x.dtype).after(with_regs(UOp.asm(X86Ops.MOV, dtype=x.dtype).call(x), (dst,)))
 def base(x:UOp, i:int) -> UOp: return s.src[0] if (s:=x.src[i]).op is Ops.INDEX else s
 def lane(x:UOp, i:int) -> int: return s.src[1].src[0].val if (s:=x.src[i]).op is Ops.INDEX else 0
 def to_int(dt:DType): return {dtypes.float16: dtypes.int16, dtypes.float32: dtypes.int32, dtypes.float64: dtypes.int64}[dt]
 def imm(dt:DType, v:int) -> UOp: return UOp.asm(X86Ops.IMM, UOp.param(0, dtypes.int64, addrspace=AddrSpace.ALU).cast(dt), dtype=dt).call(UOp.const(v))
-def is_imm(x:UOp) -> bool: return x.op is Ops.CALL and x.body.op is Ops.ASM and x.body.arg[0] is X86Ops.IMM
+def is_imm(x:UOp) -> bool: return is_imm(x.src[0]) if x.op is Ops.AFTER else x.op is Ops.CALL and x.body.arg[0] is X86Ops.IMM
 def imm_dtype(x:UOp) -> DType: return x.dtype
-def imm_value(x:UOp) -> int: return truncate[imm_dtype(x)](x.src[1].val)
+def imm_value(x:UOp) -> int:
+  if x.op is Ops.AFTER: return imm_value(x.src[0])
+  return truncate[imm_dtype(x)](x.src[1].val)
 def to_imm(c:UOp) -> UOp|None:
   if not (c.op is Ops.CAST and (v:=c.src[0]).op is Ops.CONST): return None
   if c.dtype in dtypes.int64s: return imm(dtypes.int32, v.val) if not v.overflows(dtypes.int32) else None
@@ -278,11 +284,11 @@ def to_imm(c:UOp) -> UOp|None:
 # operand is NaN, so a NaN reads as "below" and as "equal", and it clears sign and overflow, so nothing reads as "less"
 def cmp(x:UOp) -> UOp:
   if x.src[0].dtype in dtypes.floats: raise RuntimeError(f"no flag compare for {x.src[0].dtype}, a float gate must be a mask")
-  return x.ins(X86Ops.CMP, dtype=dtypes.void) if (i:=to_imm(x.src[1])) is None else x.ins(X86Ops.CMPi, dtype=dtypes.void, src=(x.src[0], i))
+  return UOp.asm(X86Ops.CMP).call(*x.src) if (i:=to_imm(x.src[1])) is None else UOp.asm(X86Ops.CMPi).call(x.src[0], i)
 # comparisons that produce masks, the mask has the width of the operands
 def mask(x:UOp) -> UOp:
   dt, v = x.src[0].dtype, imm(dtypes.uint8, {Ops.CMPLT: 1, Ops.CMPNE: 4, Ops.CMPEQ: 0}[x.op])
-  return x.ins(X86Ops.VCMPSS if dt is dtypes.float32 else X86Ops.VCMPSD, dtype=dt, src=x.src + (v,))
+  return UOp.asm(X86Ops.VCMPSS if dt is dtypes.float32 else X86Ops.VCMPSD, dtype=dt).call(*x.src, v)
 
 # vinsertps xmm2, xmm0, xmm1, imm
 # inserts any 32 bit element in xmm1 into any position in xmm0 according to immm, result is written to xmm2
@@ -290,14 +296,14 @@ def mask(x:UOp) -> UOp:
 def vinsertps(x:UOp) -> UOp:
   def _insert(ret:UOp, i:int) -> UOp:
     s, v = base(x, i), lane(x, i)
-    return x.ins(X86Ops.VINSERTPS, src=(ret, s, imm(dtypes.uint8, v << 6 | i << 4)))
+    return UOp.asm(X86Ops.VINSERTPS, dtype=x.dtype).call(ret, s, imm(dtypes.uint8, v << 6 | i << 4))
   return functools.reduce(_insert, range(len(x.src)), UOp(Ops.NOOP))
 
 # vpinsrd xmm2, xmm0, eax, imm
 # inserts the element in eax into any position in xmm0, result is written to xmm2 according to imm
 def vpins(x:UOp, srcs:tuple[UOp, ...]) -> UOp:
   op = {2: X86Ops.VPINSRW, 4: X86Ops.VPINSRD}[x.dtype.itemsize]
-  return functools.reduce(lambda ret,i: x.ins(op, src=(ret, srcs[i], imm(dtypes.uint8, i))), range(len(srcs)), UOp(Ops.NOOP))
+  return functools.reduce(lambda ret,i: UOp.asm(op, dtype=x.dtype).call(ret, srcs[i], imm(dtypes.uint8, i)), range(len(srcs)), UOp(Ops.NOOP))
 
 def idiv(ctx:IselContext, x:UOp) -> UOp:
   op = X86Ops.DIV if x.dtype in dtypes.uints else X86Ops.IDIV
@@ -305,17 +311,17 @@ def idiv(ctx:IselContext, x:UOp) -> UOp:
   ext = [] if x.dtype in dtypes.int8s else [pin(ctx, val, RDX)]
   dividend_dtype = dtypes.int16 if x.dtype in dtypes.int8s else x.dtype
   dividend = pin(ctx, x.src[0].cast(dividend_dtype), RAX)
-  defs = [ctx.vreg(RAX, x.dtype.itemsize), ctx.vreg(RDX, x.dtype.itemsize)][:1+(x.dtype not in dtypes.int8s)]
+  defs = [ctx.valloc(RAX, x.dtype.itemsize), ctx.valloc(RDX, x.dtype.itemsize)][:1+(x.dtype not in dtypes.int8s)]
   divisor = pin(ctx, x.src[1], tuple(r for r in WGPR if r not in (RAX, RDX)))
-  idiv = with_regs(x.ins(op, src=(dividend, divisor) + tuple(ext)), tuple(defs))
+  idiv = with_regs(UOp.asm(op, dtype=x.dtype).call(dividend, divisor, *ext), tuple(defs))
   # this move "cleanses" the register constraints (rax/rdx) of idiv
-  return x.ins(X86Ops.MOV, src=(idiv,))
+  return UOp.asm(X86Ops.MOV, dtype=x.dtype).call(defs[0].after(idiv))
 
 # a variable shift count implicitly reads cl so it goes in rcx, the shifted value can't be in rcx
 def shift(ctx:IselContext, x:UOp, op:X86Ops) -> UOp:
   val = pin(ctx, x.src[0], tuple(r for r in WGPR if r is not RCX))
   cnt = pin(ctx, x.src[1], RCX)
-  return x.ins(op, src=(val, cnt))
+  return UOp.asm(op, dtype=x.dtype).call(val, cnt)
 
 # a memory address operand is (base, index, displacement, size)
 def fold_address(x:UOp) -> tuple[UOp, UOp, UOp, UOp]:
@@ -332,7 +338,7 @@ def fold_address(x:UOp) -> tuple[UOp, UOp, UOp, UOp]:
   return (base, _cast(idx), _disp(0), sz)
 
 # the value of a BUFFER is its address, it moves through registers and the stack as a 64bit int
-def lea(x:UOp) -> UOp: return x.ins(X86Ops.LEA, src=fold_address(x), dtype=dtypes.uint64)
+def lea(x:UOp) -> UOp: return UOp.asm(X86Ops.LEA, dtype=dtypes.uint64).call(*fold_address(x))
 def abi(ctx:IselContext, x:UOp) -> UOp:
   src = fold_address(args_pointer().index(UOp.cconst(ctx.arg_offsets[x], dtypes.uint32)))
   return UOp.asm(X86Ops.MOV, dtype=x.dtype if x.addrspace is AddrSpace.ALU else dtypes.uint64).call(*src)
@@ -341,7 +347,8 @@ GPR_DEST_OPS = {X86Ops.VPEXTRW, X86Ops.VPEXTRD, X86Ops.VCVTTSS2SI, X86Ops.VCVTTS
 XMM_OPS = {op for op in X86Ops if op.name.startswith('V')} - GPR_DEST_OPS
 
 def _is_vec_xmm(y: UOp) -> bool:
-  return (y.op is Ops.INS and y.arg[0] in XMM_OPS) or (y.op not in (Ops.BUFFER, Ops.ALLOC, Ops.PARAM, Ops.AFTER, Ops.INS) and y.max_numel() > 1)
+  return (y.op is Ops.CALL and y.body.arg[0] in XMM_OPS) or \
+         (y.op not in (Ops.BUFFER, Ops.ALLOC, Ops.PARAM, Ops.AFTER, Ops.CALL) and y.max_numel() > 1)
 
 def _xmm_sz(x: UOp) -> X86Ops:
   bits = x.max_numel() * x.dtype.itemsize
@@ -366,7 +373,7 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
   else: defs = [ctx.valloc(WGPR, x.dtype.itemsize)]
   # TODO: add this once the scheduler can track register pressure
   # if x.body.arg[0] in X86GroupOp.WriteFlags: defs.append(ctx.valloc(RFLAGS))
-  return defs[0].after(with_regs(x, tuple(defs)))
+  return defs[0].bitcast(x.dtype).after(with_regs(x, tuple(defs)))
 
 def copy_op(dt:DType) -> X86Ops:
   return {dtypes.float16:X86Ops.VMOVSS, dtypes.float32:X86Ops.VMOVSS, dtypes.float64:X86Ops.VMOVSD, dtypes.bool:X86Ops.MOVZX}.get(dt, X86Ops.MOV)
@@ -375,8 +382,8 @@ isel_matcher = PatternMatcher([
   # **** Op -> Op ****
   (UPat(Ops.RANGE, src=(UPat.cvar("c").cast(),), name="x"), lambda c,x: x.replace(src=(imm(x.dtype, c.val),))),
   # BACKEDGE becomes a conditional jump to its RANGE, it uses flags
-  (UPat(Ops.BACKEDGE, src=(UPat(), UPat(), UPat(GroupOp.Comparison, name="y")), name="x"), lambda x,y: x.ins({Ops.CMPEQ: X86Ops.JE,
-   Ops.CMPNE: X86Ops.JNE, Ops.CMPLT: X86Ops.JB if y.src[0].dtype in dtypes.uints else X86Ops.JL}[y.op], src=(x.src[1], x.src[0], cmp(y)))),
+  (UPat(Ops.BACKEDGE, src=(UPat(), UPat(), UPat(GroupOp.Comparison, name="y")), name="x"), lambda x,y: UOp.asm({Ops.CMPEQ: X86Ops.JE,
+   Ops.CMPNE: X86Ops.JNE, Ops.CMPLT: X86Ops.JB if y.src[0].dtype in dtypes.uints else X86Ops.JL}[y.op]).call(x.src[1], x.src[0], cmp(y))),
   # **** Op -> X86Op ****
   # function abi constraints
   (UPat(Ops.PARAM, name="x"), abi),
@@ -384,15 +391,15 @@ isel_matcher = PatternMatcher([
   (UPat.var("m").where(UPat((Ops.INDEX, Ops.SHRINK), name="a"), UPat((Ops.INDEX, Ops.SHRINK), name="b")), lambda m,a,b:
    m.where(lea(a), lea(b)) if not _is_vec_xmm(a.src[0]) else None),
   # constants that can't be immediates, move them to registers
-  (UPat.cvar("c").cast(dtypes.int64s, name="x"), lambda c,x: x.ins(X86Ops.MOVABS, src=(imm(x.dtype, c.val),))),
-  (UPat.cvar("c").cast(dtypes.ints+(dtypes.bool,), name="x"), lambda c,x: x.ins(X86Ops.MOVi, src=(imm(x.dtype, c.val),))),
+  (UPat.cvar("c").cast(dtypes.int64s, name="x"), lambda c,x: UOp.asm(X86Ops.MOVABS, dtype=x.dtype).call(imm(x.dtype, c.val))),
+  (UPat.cvar("c").cast(dtypes.ints+(dtypes.bool,), name="x"), lambda c,x: UOp.asm(X86Ops.MOVi, dtype=x.dtype).call(imm(x.dtype, c.val))),
   (UPat.cvar("c").cast(dtypes.floats, name="x"), lambda c,x:
    UOp.cconst(struct.unpack((dt:=to_int(x.dtype)).fmt, struct.pack(x.dtype.fmt, c.val))[0], dt).bitcast(x.dtype)),
   # conditional moves that use masks, the mask has the width of the values
   (UPat(GroupOp.Comparison, src=(UPat(dtype=dtypes.float32), UPat()), name="m").where(UPat.var("a", dtypes.float32), UPat.var("b")), lambda m,a,b:
-   a.ins(X86Ops.VBLENDVPS, src=(b, a, mask(m)))),
+   UOp.asm(X86Ops.VBLENDVPS, dtype=a.dtype).call(b, a, mask(m))),
   (UPat(GroupOp.Comparison, src=(UPat(dtype=dtypes.float64), UPat()), name="m").where(UPat.var("a", dtypes.float64), UPat.var("b")), lambda m,a,b:
-   a.ins(X86Ops.VBLENDVPD, src=(b, a, mask(m)))),
+   UOp.asm(X86Ops.VBLENDVPD, dtype=a.dtype).call(b, a, mask(m))),
   # in this case we have a mask producing comparison whose user expects a bool, so we convert to bool
   (UPat(GroupOp.Comparison, src=(UPat.var("y", (dtypes.float32, dtypes.float64)), UPat()), name="x"), lambda y,x:
    UOp(Ops.AND, src=(mask(x).bitcast(dt:=to_int(y.dtype)), UOp.cconst(1, dt))).bitcast(dtypes.bool)),
@@ -401,106 +408,111 @@ isel_matcher = PatternMatcher([
   # the blends took every float gate a mask can serve, so a gate that is still not an integer comparison becomes one here
   (UPat.var("m", dtypes.bool).where(UPat.var("a"), UPat.var("b")), lambda m,a,b: g.where(a, b) if (g:=flag_gate(m)) is not None else None),
   (UPat(Ops.CMPLT, src=(UPat(dtype=dtypes.sints), UPat()), name="m").where(UPat.var("a"), UPat.var("b")), lambda m,a,b:
-   a.ins(X86Ops.CMOVL, src=(b, a, cmp(m)))),
-  (UPat(Ops.CMPLT, name="m").where(UPat.var("a"), UPat.var("b")), lambda m,a,b: a.ins(X86Ops.CMOVB, src=(b, a, cmp(m)))),
-  (UPat(Ops.CMPEQ, name="m").where(UPat.var("a"), UPat.var("b")), lambda m,a,b: a.ins(X86Ops.CMOVE, src=(b, a, cmp(m)))),
-  (UPat(Ops.CMPNE, name="m").where(UPat.var("a"), UPat.var("b")), lambda m,a,b: a.ins(X86Ops.CMOVNE, src=(b, a, cmp(m)))),
+   UOp.asm(X86Ops.CMOVL, dtype=a.dtype).call(b, a, cmp(m))),
+  (UPat(Ops.CMPLT, name="m").where(UPat.var("a"), UPat.var("b")), lambda m,a,b: UOp.asm(X86Ops.CMOVB, dtype=a.dtype).call(b, a, cmp(m))),
+  (UPat(Ops.CMPEQ, name="m").where(UPat.var("a"), UPat.var("b")), lambda m,a,b: UOp.asm(X86Ops.CMOVE, dtype=a.dtype).call(b, a, cmp(m))),
+  (UPat(Ops.CMPNE, name="m").where(UPat.var("a"), UPat.var("b")), lambda m,a,b: UOp.asm(X86Ops.CMOVNE, dtype=a.dtype).call(b, a, cmp(m))),
   # comparisons whose user doesn't use the flag, move flag result to register
-  (UPat(Ops.CMPLT, src=(UPat(dtype=dtypes.uints), UPat()), name="x"), lambda x: x.ins(X86Ops.SETB, src=(cmp(x),))),
-  (UPat(Ops.CMPLT, name="x"), lambda x: x.ins(X86Ops.SETL, src=(cmp(x),))),
-  (UPat(Ops.CMPEQ, name="x"), lambda x: x.ins(X86Ops.SETE, src=(cmp(x),))),
-  (UPat(Ops.CMPNE, name="x"), lambda x: x.ins(X86Ops.SETNE, src=(cmp(x),))),
+  (UPat(Ops.CMPLT, src=(UPat(dtype=dtypes.uints), UPat()), name="x"), lambda x: UOp.asm(X86Ops.SETB, dtype=x.dtype).call(cmp(x))),
+  (UPat(Ops.CMPLT, name="x"), lambda x: UOp.asm(X86Ops.SETL, dtype=x.dtype).call(cmp(x))),
+  (UPat(Ops.CMPEQ, name="x"), lambda x: UOp.asm(X86Ops.SETE, dtype=x.dtype).call(cmp(x))),
+  (UPat(Ops.CMPNE, name="x"), lambda x: UOp.asm(X86Ops.SETNE, dtype=x.dtype).call(cmp(x))),
   # float unary
-  (UPat.var("y", dtypes.float32).sqrt().named("x"), lambda y,x: x.ins(X86Ops.VSQRTSS, src=(y, y))),
-  (UPat.var("y", dtypes.float64).sqrt().named("x"), lambda y,x: x.ins(X86Ops.VSQRTSD, src=(y, y))),
-  (UPat.var("y", dtypes.float32).trunc().named("x"), lambda y,x: x.ins(X86Ops.VROUNDSS, src=(y, y, imm(dtypes.uint8, 3)))),
-  (UPat.var("y", dtypes.float64).trunc().named("x"), lambda y,x: x.ins(X86Ops.VROUNDSD, src=(y, y, imm(dtypes.uint8, 3)))),
+  (UPat.var("y", dtypes.float32).sqrt().named("x"), lambda y,x: UOp.asm(X86Ops.VSQRTSS, dtype=x.dtype).call(y, y)),
+  (UPat.var("y", dtypes.float64).sqrt().named("x"), lambda y,x: UOp.asm(X86Ops.VSQRTSD, dtype=x.dtype).call(y, y)),
+  (UPat.var("y", dtypes.float32).trunc().named("x"), lambda y,x: UOp.asm(X86Ops.VROUNDSS, dtype=x.dtype).call(y, y, imm(dtypes.uint8, 3))),
+  (UPat.var("y", dtypes.float64).trunc().named("x"), lambda y,x: UOp.asm(X86Ops.VROUNDSD, dtype=x.dtype).call(y, y, imm(dtypes.uint8, 3))),
   # for float16 we route the srcs through gprs, this is suboptimal for values in xmms, in that case we want vpunpcklwd
   (UPat(Ops.STACK, dtypes.float16, name="x"), lambda x: vpins(x, tuple(s.bitcast(dtypes.int16) for s in x.src))),
   (UPat(Ops.STACK, dtypes.float32, name="x"), vinsertps),
   (UPat(Ops.STACK, dtypes.int32s, name="x"), lambda x: vpins(x, x.src)),
   # INDEX on a vector register value extracts a single element
   (UPat.var("y", dtypes.int32s).index(UPat.cvar("c").cast(), name="x"),
-   lambda y,c,x: x.ins(X86Ops.VPEXTRD, src=(y, imm(dtypes.uint8, c.val))) if _is_vec_xmm(y) else None),
+   lambda y,c,x: UOp.asm(X86Ops.VPEXTRD, dtype=x.dtype).call(y, imm(dtypes.uint8, c.val)) if _is_vec_xmm(y) else None),
   (UPat.var("y", dtypes.floats).index(UPat.cvar("c").cast(), name="x"),
-   lambda y,c,x: x.ins(X86Ops.VPSRLDQ, src=(y, imm(dtypes.uint8, c.val * x.dtype.itemsize))) if _is_vec_xmm(y) else None),
+   lambda y,c,x: UOp.asm(X86Ops.VPSRLDQ, dtype=x.dtype).call(y, imm(dtypes.uint8, c.val * x.dtype.itemsize)) if _is_vec_xmm(y) else None),
   # int binary
   ((UPat(dtype=dtypes.ints).alu(Ops.TRUNCDIV, UPat())).named("x"), idiv),
   # int binary with immediate
-  (UPat.var("a", dtypes.ints) << UPat.cvar("c").cast(), lambda a,c: a.ins(X86Ops.SHLi, src=(a, imm(dtypes.uint8, c.val)))),
-  (UPat.var("a", dtypes.uints) >> UPat.cvar("c").cast(), lambda a,c: a.ins(X86Ops.SHRi, src=(a, imm(dtypes.uint8, c.val)))),
-  (UPat.var("a", dtypes.sints) >> UPat.cvar("c").cast(), lambda a,c: a.ins(X86Ops.SARi, src=(a, imm(dtypes.uint8, c.val)))),
-  (UPat.var("a", dtypes.ints) + UPat.cvar().cast(name="c"), lambda a,c: a.ins(X86Ops.ADDi, src=(a, i)) if (i:=to_imm(c)) is not None else None),
-  (UPat.var("a", dtypes.ints) * UPat.cvar().cast(name="c"), lambda a,c: a.ins(X86Ops.IMULi, src=(a, i)) if (i:=to_imm(c)) is not None else None),
+  (UPat.var("a", dtypes.ints) << UPat.cvar("c").cast(), lambda a,c: UOp.asm(X86Ops.SHLi, dtype=a.dtype).call(a, imm(dtypes.uint8, c.val))),
+  (UPat.var("a", dtypes.uints) >> UPat.cvar("c").cast(), lambda a,c: UOp.asm(X86Ops.SHRi, dtype=a.dtype).call(a, imm(dtypes.uint8, c.val))),
+  (UPat.var("a", dtypes.sints) >> UPat.cvar("c").cast(), lambda a,c: UOp.asm(X86Ops.SARi, dtype=a.dtype).call(a, imm(dtypes.uint8, c.val))),
+  (UPat.var("a", dtypes.ints) + UPat.cvar().cast(name="c"),
+   lambda a,c: UOp.asm(X86Ops.ADDi, dtype=a.dtype).call(a, i) if (i:=to_imm(c)) is not None else None),
+  (UPat.var("a", dtypes.ints) * UPat.cvar().cast(name="c"),
+   lambda a,c: UOp.asm(X86Ops.IMULi, dtype=a.dtype).call(a, i) if (i:=to_imm(c)) is not None else None),
   (UPat.var("a", dtypes.ints+(dtypes.bool,)) & UPat.cvar().cast(name="c"),
-   lambda a,c: a.ins(X86Ops.ANDi, src=(a, i)) if (i:=to_imm(c)) is not None else None),
+   lambda a,c: UOp.asm(X86Ops.ANDi, dtype=a.dtype).call(a, i) if (i:=to_imm(c)) is not None else None),
   (UPat.var("a", dtypes.ints+(dtypes.bool,)) | UPat.cvar().cast(name="c"),
-   lambda a,c: a.ins(X86Ops.ORi, src=(a, i)) if (i:=to_imm(c)) is not None else None),
+   lambda a,c: UOp.asm(X86Ops.ORi, dtype=a.dtype).call(a, i) if (i:=to_imm(c)) is not None else None),
   (UPat.var("a", dtypes.ints+(dtypes.bool,)) ^ UPat.cvar().cast(name="c"),
-   lambda a,c: a.ins(X86Ops.XORi, src=(a, i)) if (i:=to_imm(c)) is not None else None),
+   lambda a,c: UOp.asm(X86Ops.XORi, dtype=a.dtype).call(a, i) if (i:=to_imm(c)) is not None else None),
   (UPat(Ops.SUB, dtypes.ints, (UPat.var("a"), UPat.cvar().cast(name="c"))),
-   lambda a,c: a.ins(X86Ops.SUBi, src=(a, i)) if (i:=to_imm(c)) is not None else None),
+   lambda a,c: UOp.asm(X86Ops.SUBi, dtype=a.dtype).call(a, i) if (i:=to_imm(c)) is not None else None),
   # int binary with register
   ((UPat(dtype=dtypes.ints) << UPat()).named("x"), lambda ctx,x: shift(ctx, x, X86Ops.SHL)),
   ((UPat(dtype=dtypes.uints) >> UPat()).named("x"), lambda ctx,x: shift(ctx, x, X86Ops.SHR)),
   ((UPat(dtype=dtypes.sints) >> UPat()).named("x"), lambda ctx,x: shift(ctx, x, X86Ops.SAR)),
-  (UPat.var("a", dtypes.ints) + UPat.var("b"), lambda a,b: a.ins(X86Ops.ADD, src=(a, b))),
-  (UPat.var("a", dtypes.ints) * UPat.var("b"), lambda a,b: a.ins(X86Ops.IMUL, src=(a, b))),
-  (UPat.var("a", dtypes.ints+(dtypes.bool,)) & UPat.var("b"), lambda a,b: a.ins(X86Ops.AND, src=(a, b))),
-  (UPat.var("a", dtypes.ints+(dtypes.bool,)) | UPat.var("b"), lambda a,b: a.ins(X86Ops.OR, src=(a, b))),
-  (UPat.var("a", dtypes.ints+(dtypes.bool,)) ^ UPat.var("b"), lambda a,b: a.ins(X86Ops.XOR, src=(a, b))),
-  (UPat(Ops.SUB, dtypes.ints, (UPat.var("a"), UPat.var("b"))), lambda a,b: a.ins(X86Ops.SUB, src=(a, b))),
+  (UPat.var("a", dtypes.ints) + UPat.var("b"), lambda a,b: UOp.asm(X86Ops.ADD, dtype=a.dtype).call(a, b)),
+  (UPat.var("a", dtypes.ints) * UPat.var("b"), lambda a,b: UOp.asm(X86Ops.IMUL, dtype=a.dtype).call(a, b)),
+  (UPat.var("a", dtypes.ints+(dtypes.bool,)) & UPat.var("b"), lambda a,b: UOp.asm(X86Ops.AND, dtype=a.dtype).call(a, b)),
+  (UPat.var("a", dtypes.ints+(dtypes.bool,)) | UPat.var("b"), lambda a,b: UOp.asm(X86Ops.OR, dtype=a.dtype).call(a, b)),
+  (UPat.var("a", dtypes.ints+(dtypes.bool,)) ^ UPat.var("b"), lambda a,b: UOp.asm(X86Ops.XOR, dtype=a.dtype).call(a, b)),
+  (UPat(Ops.SUB, dtypes.ints, (UPat.var("a"), UPat.var("b"))), lambda a,b: UOp.asm(X86Ops.SUB, dtype=a.dtype).call(a, b)),
   # float binary
   ((UPat(dtype=dtypes.float32) + UPat()).named("x"), lambda x: UOp.asm(X86Ops.VADDSS, dtype=x.dtype).call(*x.src)),
-  ((UPat(dtype=dtypes.float64) + UPat()).named("x"), lambda x: x.ins(X86Ops.VADDSD)),
-  ((UPat(dtype=dtypes.float32) * UPat()).named("x"), lambda x: x.ins(X86Ops.VMULSS)),
-  ((UPat(dtype=dtypes.float64) * UPat()).named("x"), lambda x: x.ins(X86Ops.VMULSD)),
-  (UPat(Ops.SUB, dtypes.float32, name="x"), lambda x: x.ins(X86Ops.VSUBSS)),
-  (UPat(Ops.SUB, dtypes.float64, name="x"), lambda x: x.ins(X86Ops.VSUBSD)),
-  (UPat(Ops.FDIV, dtypes.float32, name="x"), lambda x: x.ins(X86Ops.VDIVSS)),
-  (UPat(Ops.FDIV, dtypes.float64, name="x"), lambda x: x.ins(X86Ops.VDIVSD)),
+  ((UPat(dtype=dtypes.float64) + UPat()).named("x"), lambda x: UOp.asm(X86Ops.VADDSD, dtype=x.dtype).call(*x.src)),
+  ((UPat(dtype=dtypes.float32) * UPat()).named("x"), lambda x: UOp.asm(X86Ops.VMULSS, dtype=x.dtype).call(*x.src)),
+  ((UPat(dtype=dtypes.float64) * UPat()).named("x"), lambda x: UOp.asm(X86Ops.VMULSD, dtype=x.dtype).call(*x.src)),
+  (UPat(Ops.SUB, dtypes.float32, name="x"), lambda x: UOp.asm(X86Ops.VSUBSS, dtype=x.dtype).call(*x.src)),
+  (UPat(Ops.SUB, dtypes.float64, name="x"), lambda x: UOp.asm(X86Ops.VSUBSD, dtype=x.dtype).call(*x.src)),
+  (UPat(Ops.FDIV, dtypes.float32, name="x"), lambda x: UOp.asm(X86Ops.VDIVSS, dtype=x.dtype).call(*x.src)),
+  (UPat(Ops.FDIV, dtypes.float64, name="x"), lambda x: UOp.asm(X86Ops.VDIVSD, dtype=x.dtype).call(*x.src)),
   # casts
-  (UPat(dtype=dtypes.float32).cast(dtypes.float16, name="x"), lambda x: x.ins(X86Ops.VCVTPS2PH, src=x.src + (imm(dtypes.uint8, 4),))),
-  (UPat(dtype=dtypes.float16).cast(dtypes.float32, name="x"), lambda x: x.ins(X86Ops.VCVTPH2PS)),
-  (UPat(dtype=dtypes.float32).cast(dtypes.int32s+dtypes.int64s, name="x"), lambda x: x.ins(X86Ops.VCVTTSS2SI)),
-  (UPat(dtype=dtypes.float64).cast(dtypes.int32s+dtypes.int64s, name="x"), lambda x: x.ins(X86Ops.VCVTTSD2SI)),
-  (UPat.var("y", dtypes.float32).cast(dtypes.float64, name="x"), lambda y,x: x.ins(X86Ops.VCVTSS2SD, src=(y, y))),
-  (UPat.var("y", dtypes.float64).cast(dtypes.float32, name="x"), lambda y,x: x.ins(X86Ops.VCVTSD2SS, src=(y, y))),
-  (UPat.var("y", (dtypes.int32, dtypes.int64)).cast(dtypes.float32, name="x"), lambda y,x: x.ins(X86Ops.VCVTSI2SS, src=(UOp(Ops.NOOP), y))),
-  (UPat.var("y", (dtypes.int32, dtypes.int64)).cast(dtypes.float64, name="x"), lambda y,x: x.ins(X86Ops.VCVTSI2SD, src=(UOp(Ops.NOOP), y))),
+  (UPat(dtype=dtypes.float32).cast(dtypes.float16, name="x"), lambda x: UOp.asm(X86Ops.VCVTPS2PH, dtype=x.dtype).call(*x.src, imm(dtypes.uint8, 4))),
+  (UPat(dtype=dtypes.float16).cast(dtypes.float32, name="x"), lambda x: UOp.asm(X86Ops.VCVTPH2PS, dtype=x.dtype).call(*x.src)),
+  (UPat(dtype=dtypes.float32).cast(dtypes.int32s+dtypes.int64s, name="x"), lambda x: UOp.asm(X86Ops.VCVTTSS2SI, dtype=x.dtype).call(*x.src)),
+  (UPat(dtype=dtypes.float64).cast(dtypes.int32s+dtypes.int64s, name="x"), lambda x: UOp.asm(X86Ops.VCVTTSD2SI, dtype=x.dtype).call(*x.src)),
+  (UPat.var("y", dtypes.float32).cast(dtypes.float64, name="x"), lambda y,x: UOp.asm(X86Ops.VCVTSS2SD, dtype=x.dtype).call(y, y)),
+  (UPat.var("y", dtypes.float64).cast(dtypes.float32, name="x"), lambda y,x: UOp.asm(X86Ops.VCVTSD2SS, dtype=x.dtype).call(y, y)),
+  (UPat.var("y", (dtypes.int32, dtypes.int64)).cast(dtypes.float32, name="x"),
+   lambda y,x: UOp.asm(X86Ops.VCVTSI2SS, dtype=x.dtype).call(UOp(Ops.NOOP), y)),
+  (UPat.var("y", (dtypes.int32, dtypes.int64)).cast(dtypes.float64, name="x"),
+   lambda y,x: UOp.asm(X86Ops.VCVTSI2SD, dtype=x.dtype).call(UOp(Ops.NOOP), y)),
   (UPat(dtype=(dtypes.uint8, dtypes.uint16, dtypes.bool)).cast(dtypes.ints, name="x"), lambda x:
-   x.ins(X86Ops.MOVZX) if x.src[0].dtype.itemsize < x.dtype.itemsize else None),
-  (UPat(dtype=dtypes.int32).cast(dtypes.int64s, name="x"), lambda x: x.ins(X86Ops.MOVSXD)),
-  (UPat(dtype=dtypes.sints).cast(dtypes.ints, name="x"), lambda x: x.ins(X86Ops.MOVSX) if x.src[0].dtype.itemsize < x.dtype.itemsize else None),
-  (UPat(dtype=dtypes.ints).cast(dtypes.ints, name="x"), lambda x: x.ins(X86Ops.MOV)),
+   UOp.asm(X86Ops.MOVZX, dtype=x.dtype).call(*x.src) if x.src[0].dtype.itemsize < x.dtype.itemsize else None),
+  (UPat(dtype=dtypes.int32).cast(dtypes.int64s, name="x"), lambda x: UOp.asm(X86Ops.MOVSXD, dtype=x.dtype).call(*x.src)),
+  (UPat(dtype=dtypes.sints).cast(dtypes.ints, name="x"),
+   lambda x: UOp.asm(X86Ops.MOVSX, dtype=x.dtype).call(*x.src) if x.src[0].dtype.itemsize < x.dtype.itemsize else None),
+  (UPat(dtype=dtypes.ints).cast(dtypes.ints, name="x"), lambda x: UOp.asm(X86Ops.MOV, dtype=x.dtype).call(*x.src)),
   # bitcasts between scalar floats and ints
-  (UPat.var("y", dtypes.float16).bitcast(dtypes.int16s).named("x"), lambda y,x: x.ins(X86Ops.VPEXTRW, src=(y, imm(dtypes.uint8, 0)))),
+  (UPat.var("y", dtypes.float16).bitcast(dtypes.int16s).named("x"), lambda y,x: UOp.asm(X86Ops.VPEXTRW, dtype=x.dtype).call(y, imm(dtypes.uint8, 0))),
   (UPat(dtype=dtypes.int16s).bitcast(dtypes.float16).named("x"), lambda x: vpins(x, x.src)),
-  (UPat(dtype=dtypes.int32s).bitcast(dtypes.float32).named("x"), lambda x: x.ins(X86Ops.VMOVD)),
-  (UPat(dtype=dtypes.int64s).bitcast(dtypes.float64).named("x"), lambda x: x.ins(X86Ops.VMOVQ)),
-  (UPat(dtype=dtypes.float32).bitcast(dtypes.int32s).named("x"), lambda x: x.ins(X86Ops.VMOVDm)),
-  (UPat(dtype=dtypes.float64).bitcast(dtypes.int64s).named("x"), lambda x: x.ins(X86Ops.VMOVQm)),
+  (UPat(dtype=dtypes.int32s).bitcast(dtypes.float32).named("x"), lambda x: UOp.asm(X86Ops.VMOVD, dtype=x.dtype).call(*x.src)),
+  (UPat(dtype=dtypes.int64s).bitcast(dtypes.float64).named("x"), lambda x: UOp.asm(X86Ops.VMOVQ, dtype=x.dtype).call(*x.src)),
+  (UPat(dtype=dtypes.float32).bitcast(dtypes.int32s).named("x"), lambda x: UOp.asm(X86Ops.VMOVDm, dtype=x.dtype).call(*x.src)),
+  (UPat(dtype=dtypes.float64).bitcast(dtypes.int64s).named("x"), lambda x: UOp.asm(X86Ops.VMOVQm, dtype=x.dtype).call(*x.src)),
   # lower register mops: a store is just a copy, load is an anon copy to preserve ordering
   (UPat.var("a").store(UPat.var("val")), lambda a,val:
-    UOp(Ops.STACK).after(with_regs(buf.ins(copy_op(val.dtype), src=(val.after(buf),)), (regbuf_reg(buf.without_after),)))
+    UOp(Ops.STACK).after(with_regs(UOp.asm(copy_op(val.dtype), dtype=val.dtype).call(val.after(buf)), (buf.without_after,)))
     if is_regbuf((buf := a.src[0] if a.op is Ops.INDEX else a)) else None),
   (UPat.var("a").load().named("x"), lambda a,x:
-    x.ins(copy_op(x.dtype), src=(buf,)) if is_regbuf((buf:=a.src[0] if a.op is Ops.INDEX else a)) else None),
+    UOp.asm(copy_op(x.dtype), dtype=x.dtype).call(buf) if is_regbuf((buf:=a.src[0] if a.op is Ops.INDEX else a)) else None),
   # index on a buffer (or the stack pointer) computes an address, addresses are 64bit values
   (UPat((Ops.INDEX, Ops.SHRINK), name="x"), lambda x: lea(x) if not _is_vec_xmm(x.src[0]) and x.addrspace is not AddrSpace.REG else None),
   # TODO: fuse stores, very few cases -- store cmp becomes setcc, store gep int becomes vpextr, store bitcast to int becomes vmovd/q
   # load, store
   (UPat(Ops.LOAD, dtypes.floats, src=(UPat(name="a"),), name="x"), lambda x,a: None if a.addrspace is AddrSpace.REG else
-   x.ins(X86Ops.VPINSRW, src=(UOp(Ops.NOOP),) + fold_address(a) + (imm(dtypes.uint8, 0),)) if x.max_numel() * x.dtype.itemsize == 2 else
+   UOp.asm(X86Ops.VPINSRW, dtype=x.dtype).call(UOp(Ops.NOOP), *fold_address(a), imm(dtypes.uint8, 0)) if x.max_numel() * x.dtype.itemsize == 2 else
    UOp.asm(_xmm_sz(x), dtype=x.dtype).call(*fold_address(a))),
   (UPat(Ops.LOAD, dtypes.ints+(dtypes.bool,), src=(UPat(name="a"),), name="x"), lambda x,a: None if a.addrspace is AddrSpace.REG else
-   x.ins(X86Ops.MOV, src=fold_address(a)) if x.max_numel() == 1 else x.ins(_xmm_sz(x), src=fold_address(a))),
+   UOp.asm(X86Ops.MOV if x.max_numel() == 1 else _xmm_sz(x), dtype=x.dtype).call(*fold_address(a))),
   (UPat.var("a").store(UPat.var("b", dtypes.floats), name="x"), lambda a,b,x: None if a.addrspace is AddrSpace.REG else
-   x.ins(X86Ops.VPEXTRW, src=fold_address(a) + (b, imm(dtypes.uint8, 0))) if b.max_numel() * b.dtype.itemsize == 2 else
+   UOp.asm(X86Ops.VPEXTRW).call(*fold_address(a), b, imm(dtypes.uint8, 0)) if b.max_numel() * b.dtype.itemsize == 2 else
    (src:=fold_address(a))[0].after(UOp.asm(X86Ops[_xmm_sz(b).name+"m"]).call(*src, b))),
   (UPat.var("a").store(UPat.var("b", dtypes.ints+(dtypes.bool,)), name="x"), lambda a,b,x: None if a.addrspace is AddrSpace.REG else
-   x.ins(X86Ops[_xmm_sz(b).name+"m"], src=fold_address(a) + (b,)) if b.max_numel() > 1 else
-   x.ins(X86Ops.MOVm, src=fold_address(a) + (b,)) if (i:=to_imm(b)) is None else x.ins(X86Ops.MOVi, src=fold_address(a) + (i,))),
+   UOp.asm(X86Ops[_xmm_sz(b).name+"m"]).call(*fold_address(a), b) if b.max_numel() > 1 else
+   UOp.asm(X86Ops.MOVm).call(*fold_address(a), b) if (i:=to_imm(b)) is None else UOp.asm(X86Ops.MOVi).call(*fold_address(a), i)),
   # allocate virtual registers
   (UPat((Ops.CALL, Ops.BUFFER, Ops.ALLOC), name="x"), alloc_vregs),
 ])
@@ -510,18 +522,20 @@ isel_matcher = PatternMatcher([
 # handle it), so a consumer that no longer owns its compare re-emits it. Unlike a regalloc rematerialization this is not
 # optional, there is no fallback load from stack
 def flag_rematerialize(ctx:X86LinearContext, x:UOp):
-  if x.op in (Ops.RANGE, Ops.END) or x.arg[0] in X86GroupOp.WriteFlags: ctx.lock = x
-  elif x.arg[0] in X86GroupOp.ReadFlags and ctx.lock is not (flag_def:=x.src[-1]):
+  if x.op in (Ops.RANGE, Ops.END) or x.body.arg[0] in X86GroupOp.WriteFlags: ctx.lock = x
+  elif x.body.arg[0] in X86GroupOp.ReadFlags and ctx.lock is not (flag_def:=x.src[-1]):
     ctx.lock = flag_def
     return (x, [flag_def, x])
   return None
 
 # the address of a stack buffer keeps the buffer's dtype so the element size of loads and stores through it is known
 def alloc_buffer(ctx:X86LinearContext, x:UOp):
-  dst = Register(f"s{ctx.stack_size}", 0, WGPR, 8)
-  nx = with_regs(x.ins(X86Ops.LEA, src=fold_address(stack_pointer().index(UOp.cconst(ctx.stack_size, dtypes.uint32)))), (dst,))
+  dst = UOp.alloc((8,), dtypes.u8, slot=-1, addrspace=AddrSpace.REG, reg=Register(f"s{ctx.stack_size}", 0, WGPR, 8))
+  sp = stack_pointer()
+  address = fold_address(sp.index(UOp.cconst(ctx.stack_size, dtypes.uint32)))
+  nx = with_regs(UOp.asm(X86Ops.LEA, dtype=x.dtype).call(*address), (dst,))
   ctx.stack_size += x.max_numel() * x.dtype.itemsize
-  return nx, [stack_pointer(), nx]
+  return nx, [sp.src[1], sp, nx]
 
 # TODO: control flow should be overhauled so that this isn't necessary
 # a LABEL marks its src: the start of a loop its RANGE, the exit of a loop the start LABEL. a jump's first src is what its LABEL marks
@@ -534,7 +548,7 @@ def lower_range(x:UOp) -> tuple[UOp, list[UOp]]:
   bound, deps = (x.src[0].src[0], x.src[0].src[1:]) if x.src[0].op is Ops.AFTER else (x.src[0], ())
   dst = UOp.alloc((), x.dtype, slot=-1, addrspace=AddrSpace.REG, reg=regbuf_reg(x))
   init = with_regs(UOp.asm(X86Ops.MOVi, dtype=x.dtype).call(imm(x.dtype, 0).after(*deps)), (dst,))
-  idx = dst.after(init)
+  idx = dst.bitcast(x.dtype).after(init)
   cmp = UOp.asm(X86Ops.CMPi if is_imm(bound) else X86Ops.CMP).call(idx, bound)
   return idx.after(x), [dst, init, idx, x, start:=label(x), cmp, UOp.asm(X86Ops.JGE).call(start, cmp)]
 
@@ -544,7 +558,7 @@ def lower_end(x:UOp, c:UOp) -> tuple[UOp, list[UOp]]:
 
 pre_regalloc_matcher = PatternMatcher([
   (UPat(Ops.BUFFER, name="x"), lambda ctx,x: alloc_buffer(ctx,x) if x.addrspace is not AddrSpace.REG else None),
-  (UPat((Ops.INS, Ops.RANGE, Ops.END), name="x"), flag_rematerialize),
+  (UPat((Ops.CALL, Ops.RANGE, Ops.END), name="x"), flag_rematerialize),
   (UPat(Ops.RANGE, name="x"), lower_range),
   (UPat(Ops.END, src=(UPat(), UPat(Ops.AFTER, name="c")), name="x"), lower_end),
 ])
@@ -557,7 +571,7 @@ post_regalloc_matcher = PatternMatcher([
   (UPat(Ops.END, name="x"), lambda x: (x, [UOp.asm(X86Ops.JMP).call(x.src[1]), label(label(x.src[1]))])),
   # rewrite two address instructions to two address form, if reused src wasn't coalesced insert a move
   (UPat(Ops.CALL, name="x"), lambda ctx,x: (nx:=with_regs(x.replace(src=(x.src[0],)+x.src[2:]), regs(x)),
-   [ctx.ren.copy(x.src[1], rdef(x)), nx] if rdef(x) != rdef(x.src[1]) else [nx]) if x.body.arg[0] in X86GroupOp.TwoAddress else None),
+   [ctx.ren.copy(x.src[1], rdef(x)), nx] if rdef(x) is not rdef(x.src[1]) else [nx]) if x.body.arg[0] in X86GroupOp.TwoAddress else None),
 ])
 
 # ***** X86 instruction encoding *****
@@ -732,7 +746,7 @@ class X86LinearContext(LinearContext):
 
   # stack alloc/dealloc and callee saved handling
   def insert_linearized(self, uops:list[UOp]) -> list[UOp]:
-    before, after, used = [], [], {r.name for u in uops if isinstance((r:=rdef(u)), Register)}
+    before, after, used = [], [], {d.arg.reg.name for u in uops if (d:=rdef(u)) is not None}
     for r in CALLEE_SAVED:
       if r.name in used:
         a = reg(dtypes.uint64, r)
@@ -741,8 +755,9 @@ class X86LinearContext(LinearContext):
         after.append(self.ren.fill(slot,a,r))
 
     if self.stack_size > 0:
-      before.insert(0, with_regs(stack_pointer().ins(X86Ops.SUBi, src=(stack_pointer(),imm(dtypes.int32, self.stack_size))), (RSP,)))
-      after.append(with_regs(stack_pointer().ins(X86Ops.ADDi, src=(stack_pointer(),imm(dtypes.int32, self.stack_size))), (RSP,)))
+      sp, amount = stack_pointer(), imm(dtypes.int32, self.stack_size)
+      before.insert(0, with_regs(UOp.asm(X86Ops.SUBi, dtype=sp.dtype).call(sp, amount), (sp.without_after,)))
+      after.append(with_regs(UOp.asm(X86Ops.ADDi, dtype=sp.dtype).call(sp, amount), (sp.without_after,)))
     return before + uops[:-1] + after + [uops[-1]]
 
   def assign_spill_slot(self, r:Register, u:UOp) -> int:
@@ -773,11 +788,13 @@ class X86Renderer(ISARenderer):
   def spill(self, spill_slot:int, x:UOp) -> UOp:
     op = X86Ops.VMOVUPSm if rreg(x).cons[0] in XMM else X86Ops.MOVm
     disp = UOp.cconst(spill_slot, dtypes.int32)
-    return x.ins(op, dtype=dtypes.void, src=fold_address(stack_pointer().index(disp)) + (x,))
+    return UOp.asm(op).call(*fold_address(stack_pointer().index(disp)), x)
 
   def fill(self, spill_slot:int, x:UOp, reg:Register) -> UOp:
     disp = UOp.cconst(spill_slot, dtypes.int32)
-    return with_regs(x.ins(X86Ops.VMOVUPS if reg.cons[0] in XMM else X86Ops.MOV, src=fold_address(stack_pointer().index(disp))), (reg,))
+    dst = UOp.alloc((reg.size,), dtypes.u8, slot=-1, addrspace=AddrSpace.REG, reg=reg)
+    op = X86Ops.VMOVUPS if reg.cons[0] in XMM else X86Ops.MOV
+    return with_regs(UOp.asm(op, dtype=x.dtype).call(*fold_address(stack_pointer().index(disp))), (dst,))
 
   def asm_str(self, uops:list[UOp], function_name:str) -> str:
     def _format_op(x:UOp) -> str: return f"    {(o[7:-1] if (o:=str(x.body.arg[0]))[-1] in ('i', 'm') else o[7:]).lower():7s}"
