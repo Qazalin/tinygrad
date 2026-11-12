@@ -156,13 +156,6 @@ class TestAssemblyBindings(unittest.TestCase):
     self.assertIs(out[1], b)
     self.assertEqual(result.src[1:-2], call.src[1:-2])
 
-  def test_input_register_is_an_instruction_property(self):
-    ren = object.__new__(X86Renderer)
-    result = with_regs(UOp.asm(X86Ops.REG, dtype=dtypes.int32).call(), (self.alloc(),))
-    self.assertTrue(ren.is_input_register(result))
-    zero_input = with_regs(UOp.asm("new_value", dtype=dtypes.int32).call(), (self.alloc(),))
-    self.assertFalse(ren.is_input_register(zero_input))
-
 class TestX86Operands(unittest.TestCase):
   def alloc(self, r:Register, size:int=4) -> UOp:
     return UOp.alloc((size,), dtypes.uint8, device="CPU", addrspace=AddrSpace.REG, slot=-1, reg=replace(r, size=size))

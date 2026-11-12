@@ -25,7 +25,7 @@ from tinygrad.schedule.multi import multi_pm
 from tinygrad.schedule.prepare import pm_mops, expand_bitcast, _mop_index
 from tinygrad.schedule.indexing import _stack_select
 from tinygrad.codegen.late.linearizer import CFGContext, pm_split_ends, pm_add_control_flow, linearize
-from tinygrad.codegen.late.regalloc import LinearScanRegallocContext, pm_regalloc_rewrite
+from tinygrad.codegen.late.regalloc import LinearScanRegallocContext, pm_regalloc_rewrite, read_src, regs
 from tinygrad.codegen.late.coalesce import memory_coalescing, pm_simplify_add_image
 from tinygrad.helpers import all_same, argsort, partition, to_function_name
 from tinygrad.device import TinyELF
@@ -454,8 +454,8 @@ def do_linearize(ctx:Renderer, prg:UOp, sink:UOp) -> UOp:
   if isinstance(ctx, ISARenderer):
     lin_ctx = ctx.linear_ctx_type(ctx)
     lst = line_rewrite(lst, ctx.pre_regalloc_matcher, lin_ctx)
-    # Backend-defined register inputs must precede every use, so regalloc sees their program-wide live ranges.
-    lst = sorted(lst, key=lambda u: not ctx.is_input_register(u))
+    # register definitions (without inputs) move to the top so regalloc sees their live ranges span the whole program (callee saved regs)
+    lst = sorted(lst, key=lambda u: not (regs(u) and not read_src(u)))
     regalloc_ctx = LinearScanRegallocContext(lin_ctx, lst, ctx)
     lst = line_rewrite(lst, pm_regalloc_rewrite, regalloc_ctx)
     lst = lin_ctx.insert_linearized(lst)

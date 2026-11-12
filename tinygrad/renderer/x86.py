@@ -131,7 +131,6 @@ class ISARenderer(Renderer):
   post_regalloc_matcher: PatternMatcher
   linear_ctx_type: type = LinearContext
 
-  def is_input_register(self, x:UOp) -> bool: return False
   def is_two_address(self, x:UOp) -> bool: return False
   def copy(self, x:UOp, reg:UOp) -> UOp: raise NotImplementedError("arch specific")
   def spill(self, spill_slot:Any, x:UOp) -> UOp: raise NotImplementedError("arch specific")
@@ -342,10 +341,9 @@ def lane(x:UOp, i:int) -> int: return s.src[1].src[0].val if (s:=x.src[i]).op is
 def to_int(dt:DType): return {dtypes.float16: dtypes.int16, dtypes.float32: dtypes.int32, dtypes.float64: dtypes.int64}[dt]
 def imm(dt:DType, v:int) -> UOp: return UOp.asm(X86Ops.IMM, UOp.param(0, dtypes.int64, addrspace=AddrSpace.ALU).cast(dt), dtype=dt).call(UOp.const(v))
 def is_imm(x:UOp) -> bool: return is_imm(x.src[0]) if x.op is Ops.AFTER else x.op is Ops.CALL and x.body.arg[0] is X86Ops.IMM
-def imm_dtype(x:UOp) -> DType: return x.dtype
 def imm_value(x:UOp) -> int:
   if x.op is Ops.AFTER: return imm_value(x.src[0])
-  return truncate[imm_dtype(x)](x.src[1].val)
+  return truncate[x.dtype](x.src[1].val)
 def to_imm(c:UOp) -> UOp|None:
   if not (c.op is Ops.CAST and (v:=c.src[0]).op is Ops.CONST): return None
   if c.dtype in dtypes.int64s: return imm(dtypes.int32, v.val) if not v.overflows(dtypes.int32) else None
@@ -704,9 +702,9 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
     # 0b11 -- signals no memory access
     if disp_uop is not None:
       assert is_imm(disp_uop), "displacement must be an immediate"
-      assert imm_dtype(disp_uop) in (dtypes.int8, dtypes.int32), "displacement can only be 1 or 4 byte signed int"
+      assert disp_uop.dtype in (dtypes.int8, dtypes.int32), "displacement can only be 1 or 4 byte signed int"
       # rbp/r13 always require a displacement
-      if imm_value(disp_uop) != 0 or rm == 0b101: mod = 0b01 if imm_dtype(disp_uop).itemsize == 1 else 0b10
+      if imm_value(disp_uop) != 0 or rm == 0b101: mod = 0b01 if disp_uop.dtype.itemsize == 1 else 0b10
       else: mod = 0b00
     else: mod = 0b11
     # x 0b0 and idx 0b100 means rsp which means no index exists
@@ -720,10 +718,10 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
     # DISP byte
     if mod == 0b01 or mod == 0b10:
       assert disp_uop is not None
-      inst += struct.pack(unwrap(imm_dtype(disp_uop).fmt), imm_value(disp_uop))
+      inst += struct.pack(unwrap(disp_uop.dtype.fmt), imm_value(disp_uop))
     # IMM byte
     if imm_uop is not None:
-      if is_imm(imm_uop): inst += struct.pack(unwrap(imm_dtype(imm_uop).fmt), imm_value(imm_uop))
+      if is_imm(imm_uop): inst += struct.pack(unwrap(imm_uop.dtype.fmt), imm_value(imm_uop))
       elif isinstance(rdef(imm_uop), UOp): inst += bytes([(rreg(imm_uop).index & 0b1111) << 4 | 0b0000])
     return inst
 
@@ -867,8 +865,6 @@ class X86Renderer(ISARenderer):
     super().__init__(target)
     from tinygrad.runtime.support.compiler_cpu import X86Compiler
     self.compiler = X86Compiler()
-  def is_input_register(self, x:UOp) -> bool:
-    return x.op is Ops.CALL and x.body.op is Ops.ASM and x.body.arg[0] is X86Ops.REG
   def is_two_address(self, x:UOp) -> bool: return x.op is Ops.CALL and x.body.arg[0] in X86GroupOp.TwoAddress
   def copy(self, x:UOp, reg:UOp) -> UOp: return with_regs(UOp.asm(X86Ops.MOV, dtype=x.dtype).call(x), (reg,))
 
