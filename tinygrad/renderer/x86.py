@@ -1,4 +1,3 @@
-from __future__ import annotations
 # flake8: noqa: E702
 # allow semicolons to put multiple ops on one line
 import struct, functools, itertools
@@ -16,7 +15,7 @@ from dataclasses import dataclass, field, replace
 class Register:
   name: str
   index: int
-  _cons: tuple[Register, ...] = field(default_factory=tuple)
+  _cons: tuple['Register', ...] = field(default_factory=tuple)
   size: int = 8
   @property
   def cons(self): return self._cons or (self,)
@@ -97,7 +96,7 @@ def asm_inputs(u:UOp) -> tuple[UOp, ...]:
   return u.src[1:len(u.src)-len(_asm_outputs(u))]
 
 # Flags are a named machine-state dependency. Address operands carry their base/index/displacement/width as one structured operand.
-def operand(x:UOp, role:X86OperandRole) -> UOp|None:
+def operand(x:UOp, role:'X86OperandRole') -> UOp|None:
   matches = [s for s in asm_inputs(x) if s.op is Ops.OPERAND and s.arg is role]
   assert len(matches) <= 1, "duplicate structured instruction operands"
   return matches[0] if matches else None
@@ -120,7 +119,7 @@ class LinearContext:
   # Definitions are unconditional in a linear stream. Lowering defines loop-carried values again each iteration, and
   # conditional IF/ENDIF definitions are rejected before allocation. Each register write, including implicit clobbers,
   # must be an ASM output. Allocation reserves the whole physical register, so unrelated values cannot share aliases.
-  def __init__(self, ren:ISARenderer):
+  def __init__(self, ren:'ISARenderer'):
     self.ren, self.stack_size = ren, 0
   def insert_linearized(self, uops:list[UOp]) -> list[UOp]: return uops
   def assign_spill_slot(self, r:Register, u:UOp) -> Any: raise NotImplementedError("arch specific")
@@ -597,7 +596,7 @@ isel_matcher = PatternMatcher([
 # the flags belong to the last instruction that wrote them. x86 has no good way to store/restore them (then regalloc would
 # handle it), so a consumer that no longer owns its compare re-emits it. Unlike a regalloc rematerialization this is not
 # optional, there is no fallback load from stack
-def flag_rematerialize(ctx:X86LinearContext, x:UOp):
+def flag_rematerialize(ctx:'X86LinearContext', x:UOp):
   if x.op in (Ops.RANGE, Ops.END) or x.body.arg[0] in X86GroupOp.WriteFlags: ctx.lock = x
   elif x.body.arg[0] in X86GroupOp.ReadFlags and ctx.lock is not (flag_def:=unwrap(operand(x, X86OperandRole.FLAGS)).src[0]):
     ctx.lock = flag_def
@@ -605,7 +604,7 @@ def flag_rematerialize(ctx:X86LinearContext, x:UOp):
   return None
 
 # the address of a stack buffer keeps the buffer's dtype so the element size of loads and stores through it is known
-def alloc_buffer(ctx:X86LinearContext, x:UOp):
+def alloc_buffer(ctx:'X86LinearContext', x:UOp):
   dst = UOp.alloc((8,), dtypes.u8, slot=-1, addrspace=AddrSpace.REG, reg=Register(f"s{ctx.stack_size}", 0, WGPR, 8))
   sp = stack_pointer()
   address = fold_address(sp.index(UOp.cconst(ctx.stack_size, dtypes.uint32)))
@@ -641,7 +640,7 @@ pre_regalloc_matcher = PatternMatcher([
 
 # ***** post register allocation *****
 # final rewrite to match the isa spec
-def two_address(ctx:X86LinearContext, x:UOp):
+def two_address(ctx:'X86LinearContext', x:UOp):
   data_in = next(i for i,s in enumerate(x.src[1:], 1) if s.op is not Ops.OPERAND)
   nx = with_regs(x.replace(src=x.src[:data_in]+x.src[data_in+1:]), regs(x))
   return nx, [ctx.ren.copy(x.src[data_in], rdef(x)), nx] if rdef(x) is not rdef(x.src[data_in]) else [nx]
@@ -826,7 +825,7 @@ encodings = {
 }
 
 class X86LinearContext(LinearContext):
-  def __init__(self, ren:X86Renderer):
+  def __init__(self, ren:'X86Renderer'):
     super().__init__(ren)
     self.lock: UOp|None = None
 
