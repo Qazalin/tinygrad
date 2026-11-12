@@ -596,7 +596,8 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   @property
   def without_after(self) -> UOp: return self.src[0].without_after if self.op is Ops.AFTER else self
   def barrier(self, *src:UOp): return UOp(Ops.BARRIER, src=(self,)+src)
-  def ins(self, arg, **kwargs): return UOp(Ops.INS, kwargs.pop("src", self.src), (arg, kwargs.pop("dtype", self.dtype)))
+  def ins(self, arg, src:tuple[UOp, ...]|None=None, dtype:DType|None=None) -> UOp:
+    return UOp(Ops.INS, self.src if src is None else src, (arg, self.dtype if dtype is None else dtype))
   @staticmethod
   def asm(arg, *src, dtype:DType=dtypes.void):
     # The output parameter carries the result type; the assembly operation itself is void.
@@ -1735,8 +1736,8 @@ if TRACK_MATCH_STATS or PROFILE:
     os.environ[f"{env_str}_DATA"] = data
     if not TRACK_MATCH_STATS and not PROFILE:
       os.environ["VIZ"], os.environ["PROFILE"], os.environ["TRACK_MATCH_STATS"] = "0", "0", "0"
-      args = ['--rewrites-path', os.getenv("REWRITE_DATA", "")] if os.getenv("REWRITE_DATA", "") else []
-      args += ['--profile-path', os.getenv("PROFILE_DATA", "")] if os.getenv("PROFILE_DATA", "") else []
+      args = ['--paths', os.getenv("PROFILE_DATA", temp("profile.pkl", append_user=True)),
+                         os.getenv("REWRITE_DATA", temp("rewrites.pkl", append_user=True))]
       viz_path = pathlib.Path(__file__).resolve().parent.parent / "viz" / "serve.py"
       if VIZ > 0 and sys.stdout.isatty(): os.execv(sys.executable, [sys.executable, viz_path.as_posix()] + args)
       if VIZ: print("saved viz files, view using: python -m tinygrad.viz.cli")

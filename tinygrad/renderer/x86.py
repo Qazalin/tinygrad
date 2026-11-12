@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 class Register:
   name: str
   index: int
-  _cons: tuple['Register', ...] = field(default_factory=tuple)
+  _cons: tuple["Register", ...] = field(default_factory=tuple)
   size: int = 8
   can_spill: bool = True
   @property
@@ -110,7 +110,7 @@ def asm_inputs(u:UOp) -> tuple[UOp, ...]:
   assert u.op is Ops.CALL and u.body.op is Ops.ASM
   return u.src[1:len(u.src)-len(_asm_outputs(u))]
 
-def flag_reg(ctx:'IselContext') -> UOp: return ctx.valloc(ctx.vreg(RFLAGS), RFLAGS.size)
+def flag_reg(ctx:IselContext) -> UOp: return ctx.valloc(ctx.vreg(RFLAGS), RFLAGS.size)
 
 def use_flags(x:UOp, flag:UOp) -> UOp:
   assert x.op is Ops.CALL and x.body.op is Ops.ASM and x.body.arg in X86GroupOp.ReadFlags
