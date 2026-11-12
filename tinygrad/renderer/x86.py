@@ -34,7 +34,9 @@ class IselContext:
 
 # the registers an INS defines follow its opcode and dtype in its arg
 def regs(u:UOp) -> tuple[Register, ...]: return u.arg[2:] if u.op is Ops.INS else ()
-def with_regs(u:UOp, r:tuple[UOp, ...]) -> UOp: return u.replace(src=u.src+tuple(p.store(0) for p in r))
+def with_regs(u:UOp, r:tuple[UOp, ...]) -> UOp:
+  stores = tuple(UOp.param(i, u.dtype, addrspace=AddrSpace.REG, reg=dst.base.arg.reg).store(0) for i,dst in enumerate(r, len(u.src)-1))
+  return u.replace(src=(u.body.replace(src=u.body.src+stores),)+u.src[1:]+r)
 
 def rdef(u:UOp):
   if u.op in {Ops.AFTER, Ops.BITCAST}: return rdef(u.src[0])
@@ -240,7 +242,7 @@ reg_strs = {"rax": {4:"eax", 2:"ax", 1:"al"}, "rcx": {4:"ecx", 2:"cx", 1:"cl"}, 
         **{f"r{i}": {4:f"r{i}d", 2:f"r{i}w", 1:f"r{i}b"} for i in range(8, 16)}}
 
 # a register defined outside the instruction stream: the stack pointer, the args pointer, a callee saved register
-def reg(dt:DType, r:Register) -> UOp: return UOp.alloc((), dt, slot=r.index, addrspace=AddrSpace.REG, reg=r)
+def reg(dt:DType, r:Register) -> UOp: return UOp.alloc((), dt, slot=-1, addrspace=AddrSpace.REG, reg=r)
 def stack_pointer() -> UOp: return reg(dtypes.uint64, RSP)
 def args_pointer() -> UOp: return reg(dtypes.uint64, RDI)
 
@@ -341,8 +343,7 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
   if is_imm(x) or x.dtype is dtypes.void or x.body.src: return None
   if x.dtype in dtypes.floats or x.body.arg[0] in XMM_OPS: dst = ctx.vreg(XMM)
   else: dst = ctx.vreg(WGPR, x.dtype.itemsize)
-  param = UOp.param(len(x.src)-1, x.dtype, addrspace=AddrSpace.REG, reg=dst.arg.reg)
-  return dst.after(x.replace(src=(with_regs(x.body, (param,)),)+x.src[1:]+(dst,)))
+  return dst.after(with_regs(x, (dst,)))
 
 def copy_op(dt:DType) -> X86Ops:
   return {dtypes.float16:X86Ops.VMOVSS, dtypes.float32:X86Ops.VMOVSS, dtypes.float64:X86Ops.VMOVSD, dtypes.bool:X86Ops.MOVZX}.get(dt, X86Ops.MOV)
@@ -501,19 +502,21 @@ def alloc_buffer(ctx:X86LinearContext, x:UOp):
 
 # TODO: control flow should be overhauled so that this isn't necessary
 # a LABEL marks its src: the start of a loop its RANGE, the exit of a loop the start LABEL. a jump's first src is what its LABEL marks
-def label(x:UOp) -> UOp: return x.ins(X86Ops.LABEL, dtype=dtypes.void, src=(x,))
+def label(x:UOp) -> UOp: return UOp.asm(X86Ops.LABEL).call(x)
 
 # a loop's LABEL follows its RANGE. a bounded RANGE's index is a register named by the RANGE, 0 before the loop, compared to the bound
 # after the LABEL and incremented before the END, the body reads it as AFTER(index, RANGE)
 def lower_range(x:UOp) -> tuple[UOp, list[UOp]]:
   if x.dtype is dtypes.void: return x, [x, label(x)]
   bound, deps = (x.src[0].src[0], x.src[0].src[1:]) if x.src[0].op is Ops.AFTER else (x.src[0], ())
-  idx = with_regs(x.ins(X86Ops.MOVi, src=(imm(x.dtype, 0),) + deps), (regbuf_reg(x),))
-  cmp = x.ins(X86Ops.CMPi if is_imm(bound) else X86Ops.CMP, dtype=dtypes.void, src=(idx, bound))
-  return idx.after(x), [idx, x, start:=label(x), cmp, x.ins(X86Ops.JGE, dtype=dtypes.void, src=(start, cmp))]
+  dst = reg(x.dtype, regbuf_reg(x))
+  init = with_regs(UOp.asm(X86Ops.MOVi, dtype=x.dtype).call(imm(x.dtype, 0).after(*deps)), (dst,))
+  idx = dst.after(init)
+  cmp = UOp.asm(X86Ops.CMPi if is_imm(bound) else X86Ops.CMP).call(idx, bound)
+  return idx.after(x), [dst, init, idx, x, start:=label(x), cmp, UOp.asm(X86Ops.JGE).call(start, cmp)]
 
 def lower_end(x:UOp, c:UOp) -> tuple[UOp, list[UOp]]:
-  inc = with_regs(c.ins(X86Ops.ADDi, src=(c, imm(c.dtype, 1))), regs(c.src[0]))
+  inc = with_regs(UOp.asm(X86Ops.ADDi, dtype=c.dtype).call(c, imm(c.dtype, 1)), (c.without_after,))
   return (end:=x.replace(src=(x.src[0], c.src[1]))), [inc, end]
 
 pre_regalloc_matcher = PatternMatcher([
