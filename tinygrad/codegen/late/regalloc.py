@@ -5,8 +5,7 @@ from tinygrad.renderer.x86 import ISARenderer, Register, rdef, regs, with_regs, 
 from typing import Any
 from dataclasses import replace
 
-PSEUDO_OPS = {Ops.CONST, Ops.CAST, Ops.BITCAST, Ops.NOOP, Ops.AFTER, Ops.BARRIER, Ops.STACK, Ops.BUFFER, Ops.ALLOC, Ops.RESHAPE,
-              Ops.OPERAND}
+PSEUDO_OPS = {Ops.CONST, Ops.CAST, Ops.BITCAST, Ops.NOOP, Ops.AFTER, Ops.BARRIER, Ops.STACK, Ops.BUFFER, Ops.ALLOC, Ops.RESHAPE}
 
 def retag(x:UOp, r:Register) -> UOp:
   if x.op is Ops.CALL and (outputs:=regs(x)):
@@ -17,8 +16,7 @@ def retag(x:UOp, r:Register) -> UOp:
   return x.replace(arg=replace(x.arg, reg=r))
 
 def read_src(u:UOp) -> tuple[UOp, ...]:
-  src = u.src[1:len(u.src)-len(regs(u))] if u.op is Ops.CALL else u.src
-  return tuple(s for x in src for s in (x.src if x.op is Ops.OPERAND else (x,)))
+  return u.src[1:len(u.src)-len(regs(u))] if u.op is Ops.CALL else u.src
 
 class LinearScanRegallocContext:
   # returns the uop that defines the virtual register
@@ -54,10 +52,14 @@ class LinearScanRegallocContext:
       # otherwise pick the one with the furthest next use. Regs that appear first in cons have priority in case of a tie
       reg,vreg = max(((r,live_inv.get(r)) for r in cons),
                     key=lambda rv: next((j-i for j in ([] if rv[1] is None else lr[rv[1]]) if j >= i), len(uops)))
+      if vreg is not None and not vreg.arg.reg.cons[0].can_spill:
+        live.pop(vreg)
+        return reg
       return live.pop(vreg) if vreg is not None else reg
 
     # assign register to spilled virtual and record load to be emitted before current uop, also assign it a stack slot
     def fill(v:UOp, i:int, cons:tuple[Register, ...]|None=None) -> Register:
+      assert v.arg.reg.cons[0].can_spill, "this register class cannot spill"
       if v not in self.spills:
         self.spills[v] = ctx.assign_spill_slot(v.arg.reg, self.vdef(v))
       r = alloc(cons if cons is not None else v.arg.reg.cons, i)
@@ -114,23 +116,15 @@ def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
   if x.op in PSEUDO_OPS: return None
   nsrc = []
   for j,s in enumerate(x.src):
-    original = ctx.uops[i].src[j]
-    old_fields = original.src if original.op is Ops.OPERAND else (original,)
-    fields = s.src if s.op is Ops.OPERAND else (s,)
-    assert len(old_fields) == len(fields), "regalloc cannot change the structure of an instruction operand"
-    new_fields, changed = [], False
-    for old,field in zip(old_fields, fields):
-      # v here is the virtual defined by the original field as field is the rewritten version
-      if (v:=rdef(old)) in ctx.reals.get(i, {}):
-        reg = replace(ctx.reals[i][v], size=v.arg.reg.size)
-        if v in ctx.spills:
-          fill = ctx.ren.fill(ctx.spills[v], ctx.vdef(v), reg)
-          # an AFTER-wrapped value (e.g. a RANGE bound) keeps its ordering deps around the fill
-          field = field.replace(src=(fill,)+field.src[1:]) if field.op is Ops.AFTER else fill
-        else: field = retag(field, reg)
-        changed = True
-      new_fields.append(field)
-    nsrc.append(s.replace(src=tuple(new_fields)) if changed and s.op is Ops.OPERAND else new_fields[0] if changed else s)
+    # v here is the virtual defined by the original s as s is the rewritten version
+    if (v:=rdef(ctx.uops[i].src[j])) in ctx.reals.get(i, {}):
+      reg = replace(ctx.reals[i][v], size=v.arg.reg.size)
+      if v in ctx.spills:
+        fill = ctx.ren.fill(ctx.spills[v], ctx.vdef(v), reg)
+        # an AFTER-wrapped value (e.g. a RANGE bound) keeps its ordering deps around the fill
+        nsrc.append(s.replace(src=(fill,)+s.src[1:]) if s.op is Ops.AFTER else fill)
+      else: nsrc.append(retag(s, reg))
+    else: nsrc.append(s)
   defs = tuple(v.replace(arg=replace(v.arg, reg=replace(ctx.reals[i][v], size=v.arg.reg.size))) for v in regs(x))
   nx = with_regs(x.replace(src=tuple(nsrc)), defs) if defs else x.replace(src=tuple(nsrc))
 

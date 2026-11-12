@@ -106,8 +106,6 @@ spec_shared = PatternMatcher([
 
   # a CUSTOM_FUNCTION names an external function: the arg is a CustomFunction stating the return dtype
   (UPat(Ops.CUSTOM_FUNCTION, name="x", allow_any_len=True), lambda x: isinstance(x.arg, CustomFunction)),
-  # OPERAND carries renderer-specific structure; its sources are fields of an instruction operand, not emitted values
-  (UPat(Ops.OPERAND, dtypes.void, name="x", allow_any_len=True), lambda x: isinstance(x.arg, str)),
   # CALL: the body is always an opaque body stating the dtype, the arg is a CallInfo
   (UPat(Ops.CALL, src=(UPat(tuple(OPAQUE_CALL_BODIES)),), allow_any_len=True, name="x"), lambda x: isinstance(x.arg, CallInfo)),
 

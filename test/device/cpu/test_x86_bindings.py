@@ -1,9 +1,9 @@
 import unittest
 from dataclasses import replace
 from tinygrad.dtype import dtypes, AddrSpace
-from tinygrad.renderer.x86 import UOp, Ops, X86Ops, X86OperandRole, Register, RAX, RCX, RBX, RDX, XMM, WGPR, with_regs, valid_asm_call, regs, call_src
-from tinygrad.renderer.x86 import X86Renderer, X86LinearContext, operand, use_flags, encodings, imm, imm_value, asm_inputs
-from tinygrad.renderer.x86 import two_address, rreg, rdef, regbuf_reg, IselContext, idiv
+from tinygrad.renderer.x86 import UOp, Ops, X86Ops, Register, RAX, RCX, RBX, RDX, XMM, WGPR, RFLAGS, with_regs, valid_asm_call, regs
+from tinygrad.renderer.x86 import X86Renderer, X86LinearContext, use_flags, encodings, imm, imm_value, asm_inputs
+from tinygrad.renderer.x86 import two_address, rreg, rdef, regbuf_reg, IselContext, idiv, flag_reg, pre_regalloc_matcher
 from tinygrad.codegen import line_rewrite, linearize_cleanups
 from tinygrad.codegen.late.regalloc import retag, read_src, LinearScanRegallocContext, pm_regalloc_rewrite
 
@@ -68,7 +68,7 @@ class TestAssemblyBindings(unittest.TestCase):
     self.assertTrue(valid_asm_call(fill))
     self.assertEqual(encodings[X86Ops.VMOVSSm](spill), bytes.fromhex("c5fa110c24"))
     self.assertEqual(encodings[X86Ops.VMOVSS](fill), bytes.fromhex("c5fa100c24"))
-    self.assertEqual([imm_value(operand(x, X86OperandRole.MEMORY).src[-1]) for x in (spill, fill)], [4, 4])
+    self.assertEqual([imm_value(asm_inputs(x)[3 if x is spill else 3]) for x in (spill, fill)], [4, 4])
 
   def test_spill_width_and_register_class(self):
     ren = object.__new__(X86Renderer)
@@ -86,7 +86,7 @@ class TestAssemblyBindings(unittest.TestCase):
                          (bytes.fromhex(sp_bytes), bytes.fromhex(ld_bytes)))
         for op in (spill, fill):
           self.assertTrue(valid_asm_call(op))
-          self.assertEqual(imm_value(operand(op, X86OperandRole.MEMORY).src[-1]), sz)
+          self.assertEqual(imm_value(asm_inputs(op)[4 if op.body.arg[0] is X86Ops.VPINSRW else 3]), sz)
     for sz, sp_bytes, ld_bytes in [(2, "66890424", "668b0424"), (8, "48890424", "488b0424")]:
       with self.subTest(width=sz, cls='gpr'):
         reg = replace(RAX, size=sz)
@@ -137,7 +137,7 @@ class TestAssemblyBindings(unittest.TestCase):
     call = UOp.asm(X86Ops.IMM, dtype=dtypes.int32).call(UOp.cconst(42, dtypes.int32))
     rebound = with_regs(call, (self.alloc(),))
     self.assertEqual(rebound.body.src[:-1], call.body.src)
-    self.assertEqual(call_src(rebound), call.src[1:])
+    self.assertEqual(asm_inputs(rebound), call.src[1:])
     self.assertEqual(regs(rebound), (rebound.src[-1],))
 
   def test_retag_applies_to_wrapped_definition(self):
@@ -145,7 +145,7 @@ class TestAssemblyBindings(unittest.TestCase):
     result = retag(call.bitcast(dtypes.float32), RBX)
     self.assertEqual(result.op, Ops.BITCAST)
     self.assertEqual(regs(result.src[0])[0].arg.reg, RBX)
-    self.assertEqual(call_src(result.src[0]), call_src(call))
+    self.assertEqual(asm_inputs(result.src[0]), asm_inputs(call))
 
   def test_retag_preserves_other_outputs(self):
     a, b = self.alloc(), self.alloc(RDX)
@@ -164,64 +164,72 @@ class TestX86Operands(unittest.TestCase):
     self.assertTrue(valid_asm_call(asm))
     return asm
 
-  def memory(self, base:UOp, displacement:int=0) -> UOp:
-    return UOp(Ops.OPERAND, (base, UOp(Ops.NOOP), imm(dtypes.int32, displacement), imm(dtypes.uint32, 4)), X86OperandRole.MEMORY)
+  def memory(self, base:UOp, displacement:int=0) -> tuple[UOp, UOp, UOp, UOp]:
+    return base, UOp(Ops.NOOP), imm(dtypes.int32, displacement), imm(dtypes.uint32, 4)
 
-  def test_memory_layout_from_role(self):
+  def test_memory_layout(self):
     base, src, dst = self.alloc(RAX, 8), self.alloc(RBX), self.alloc(RDX)
-    load = with_regs(UOp.asm(X86Ops.MOV, dtype=dtypes.int32).call(self.memory(base)), (dst,))
-    add = with_regs(UOp.asm(X86Ops.ADD, dtype=dtypes.int32).call(src, self.memory(base)), (dst,))
-    store = UOp.asm(X86Ops.MOVm, dtype=dtypes.void).call(self.memory(base), src)
-    # Memory-form selection is independent of the other input count and ordering.
+    load = with_regs(UOp.asm(X86Ops.MOV, dtype=dtypes.int32).call(*self.memory(base)), (dst,))
+    add = with_regs(UOp.asm(X86Ops.ADD, dtype=dtypes.int32).call(src, *self.memory(base)), (dst,))
+    store = UOp.asm(X86Ops.MOVm, dtype=dtypes.void).call(*self.memory(base), src)
     for asm in (load, add, store): self.verify(asm)
     self.assertEqual(encodings[X86Ops.MOV](load), bytes([0x8b, 0x10])) # mov edx, [rax]
     self.assertEqual(encodings[X86Ops.ADD](add), bytes([0x03, 0x10]))  # add edx, [rax]
     self.assertEqual(encodings[X86Ops.MOVm](store), bytes([0x89, 0x18])) # mov [rax], ebx
-    address = self.memory(base)
-    self.assertIsNone(address._shape)  # operand metadata has no shape of its own
-    self.assertFalse(valid_asm_call(UOp.asm(X86Ops.MOVm, dtype=dtypes.void).call(address, address, src)))
-    self.assertFalse(valid_asm_call(UOp.asm(X86Ops.MOVm, dtype=dtypes.void).call(address.replace(src=address.src[:3]), src)))
-    self.assertFalse(valid_asm_call(UOp.asm(X86Ops.MOVm, dtype=dtypes.void).call(address.replace(arg="unknown"), src)))
 
   def test_memory_form_keeps_other_rm_operands(self):
     vt = dtypes.float32
     left, right, mask = (self.alloc(x, 16).bitcast(vt) for x in (XMM[0], XMM[3], XMM[4]))
     dst = self.alloc(XMM[2], 16)
     register_form = with_regs(UOp.asm(X86Ops.VBLENDVPS, dtype=vt).call(left, right, mask), (dst,))
-    address = self.memory(self.alloc(RAX, 8)).replace(src=(self.alloc(RAX, 8), UOp(Ops.NOOP), imm(dtypes.int8, 0), imm(dtypes.uint32, 16)))
-    memory_form = with_regs(UOp.asm(X86Ops.VBLENDVPS, dtype=vt).call(left, address, mask), (dst,))
+    address = self.memory(self.alloc(RAX, 8))[:2] + (imm(dtypes.int8, 0), imm(dtypes.uint32, 16))
+    memory_form = with_regs(UOp.asm(X86Ops.VBLENDVPS, dtype=vt).call(left, *address, mask), (dst,))
     self.verify(register_form)
     self.verify(memory_form)
     mb = encodings[X86Ops.VBLENDVPS](memory_form)
-    self.assertEqual(mb[4], (dst.arg.reg.index << 3) | rreg(address.src[0]).index)
+    self.assertEqual(mb[4], (dst.arg.reg.index << 3) | rreg(address[0]).index)
     self.assertEqual(mb[-1], 0x40) # the mask is xmm4, not an address field
 
   def test_nonmemory_operand_is_not_a_memory_address(self):
     value, dst = self.alloc(RBX), self.alloc(RDX)
     add = with_regs(UOp.asm(X86Ops.ADD, dtype=dtypes.int32).call(value, value, value), (dst,))
     self.verify(add)
-    self.assertIsNone(operand(add, X86OperandRole.MEMORY))
+    self.assertEqual(encodings[X86Ops.ADD](add), bytes([0x03, 0xd3])) # add edx, ebx; the extra source is not a memory address
 
   def test_named_flag_dependency(self):
     left, right, dst = self.alloc(RAX).bitcast(dtypes.int32), self.alloc(RBX).bitcast(dtypes.int32), self.alloc(RDX)
     compare = UOp.asm(X86Ops.CMP, dtype=dtypes.void).call(left, right)
-    cmov = with_regs(use_flags(UOp.asm(X86Ops.CMOVNE, dtype=dtypes.int32).call(left, right), compare), (dst,))
-    flags = operand(cmov, X86OperandRole.FLAGS)
-    self.assertIs(flags.src[0], compare)
-    self.assertEqual(call_src(cmov), (left, right))
-    # Output bindings remain canonical even if the metadata is moved ahead of data operands.
-    moved = cmov.replace(src=(cmov.body, flags, left, right, dst))
-    self.verify(moved)
-    self.assertEqual(call_src(moved), (left, right))
-    self.assertIsNone(operand(moved, X86OperandRole.MEMORY))
-    self.assertIs(operand(moved, X86OperandRole.FLAGS), flags)
-    self.assertFalse(valid_asm_call(cmov.replace(src=(cmov.body, *cmov.src[1:3], flags, *cmov.src[3:]))))
-    bad_writer = UOp.asm(X86Ops.MOV, dtype=dtypes.void).call(left, right)
-    self.assertFalse(valid_asm_call(moved.replace(src=(moved.body, UOp(Ops.OPERAND, (bad_writer,), X86OperandRole.FLAGS), left, right, dst))))
-    copy, lowered = two_address(X86LinearContext(object.__new__(X86Renderer)), moved)[1]
-    self.assertEqual(encodings[X86Ops.MOV](copy), bytes([0x8b, 0xd0])) # copy left (eax), not the flag metadata, into edx
-    self.assertEqual(asm_inputs(lowered), (flags, right))
-    self.assertIs(operand(lowered, X86OperandRole.FLAGS), flags)
+    flags = with_regs(compare, (flag_reg(IselContext(UOp.sink())),))
+    cmov = with_regs(use_flags(UOp.asm(X86Ops.CMOVNE, dtype=dtypes.int32).call(left, right), flags), (dst,))
+    flags = asm_inputs(cmov)[-1]
+    self.assertEqual(asm_inputs(cmov), (left, right, flags))
+    self.assertEqual(encodings[X86Ops.CMP](flags), bytes([0x3b, 0xc3])) # cmp eax, ebx
+    self.assertEqual(rdef(flags).arg.reg.cons, (RFLAGS,))
+    self.assertIs(regs(flags)[0], flags.src[-1])
+    self.assertFalse(RFLAGS.can_spill)
+    copy, lowered = two_address(X86LinearContext(object.__new__(X86Renderer)), cmov)[1]
+    self.assertEqual(encodings[X86Ops.MOV](copy), bytes([0x8b, 0xd0])) # copy left (eax) into edx
+    self.assertEqual(asm_inputs(lowered), (right, flags))
+    self.assertEqual(rdef(asm_inputs(lowered)[-1]).arg.reg.cons, (RFLAGS,))
+
+  def test_flag_rematerialization_fresh_storage(self):
+    ctx = X86LinearContext(object.__new__(X86Renderer))
+    left, right = self.alloc(RAX).bitcast(dtypes.int32), self.alloc(RBX).bitcast(dtypes.int32)
+    compare = with_regs(UOp.asm(X86Ops.CMP, dtype=dtypes.void).call(left, right), (flag_reg(ctx),))
+    sete = with_regs(use_flags(UOp.asm(X86Ops.SETE, dtype=dtypes.bool).call(), compare), (self.alloc(RDX, 1),))
+    writer = with_regs(UOp.asm(X86Ops.ADD, dtype=dtypes.int32).call(left, right), (self.alloc(RCX), flag_reg(ctx)))
+    dst = self.alloc(RBX, 1)
+    setne = with_regs(use_flags(UOp.asm(X86Ops.SETNE, dtype=dtypes.bool).call(), compare), (dst,))
+    lowered = line_rewrite([compare, sete, writer, setne], pre_regalloc_matcher, ctx)
+    rebuilt = next(u for u in reversed(lowered) if u.body.arg[0] is X86Ops.CMP)
+    consumer = next(u for u in reversed(lowered) if u.body.arg[0] is X86Ops.SETNE)
+    self.assertIsNot(regs(rebuilt)[0], regs(compare)[0])
+    self.assertFalse(regs(rebuilt)[0].arg.reg.cons[0].can_spill)
+    self.assertIs(asm_inputs(consumer)[-1], rebuilt)
+    self.assertIs(regs(consumer)[0], dst)
+    self.assertIs(consumer.src[-1], dst)
+    self.assertEqual(asm_inputs(rebuilt), asm_inputs(compare))
+    for u in (rebuilt, consumer): self.verify(u)
 
   def test_memory_fields_have_independent_lifetimes(self):
     a = self.alloc(Register("a", 0, WGPR), 8)
@@ -229,30 +237,30 @@ class TestX86Operands(unittest.TestCase):
     dst = self.alloc(Register("dst", 0, WGPR))
     a_def = with_regs(UOp.asm(X86Ops.REG, dtype=dtypes.uint64).call(), (a,))
     b_def = with_regs(UOp.asm(X86Ops.REG, dtype=dtypes.uint64).call(), (b,))
-    address = UOp(Ops.OPERAND, (a, b, imm(dtypes.int32, 0), imm(dtypes.uint32, 4)), X86OperandRole.MEMORY)
-    load = with_regs(UOp.asm(X86Ops.MOV, dtype=dtypes.int32).call(address), (dst,))
+    address = a, b, imm(dtypes.int32, 0), imm(dtypes.uint32, 4)
+    load = with_regs(UOp.asm(X86Ops.MOV, dtype=dtypes.int32).call(*address), (dst,))
     self.verify(load)
-    self.assertEqual(read_src(load), address.src)
+    self.assertEqual(read_src(load), address)
     ren = object.__new__(X86Renderer)
-    ctx = LinearScanRegallocContext(X86LinearContext(ren), [a_def, b_def, address, load], ren)
-    self.assertIsNotNone(ctx.reals[3].get(a))
-    self.assertIsNotNone(ctx.reals[3].get(b))
-    self.assertNotEqual(ctx.reals[3][a], ctx.reals[3][b])
+    ctx = LinearScanRegallocContext(X86LinearContext(ren), [a_def, b_def, load], ren)
+    self.assertIsNotNone(ctx.reals[2].get(a))
+    self.assertIsNotNone(ctx.reals[2].get(b))
+    self.assertNotEqual(ctx.reals[2][a], ctx.reals[2][b])
 
   def test_memory_spill_rewrite(self):
     a, b, c = [self.alloc(Register(name, 0, (RAX, RBX)), 8) for name in ("a", "b", "c")]
     definitions = [with_regs(UOp.asm(X86Ops.REG, dtype=dtypes.uint64).call(), (v,)) for v in (a, b, c)]
     dst = self.alloc(Register("dst", 0, (RAX, RBX)))
-    address = UOp(Ops.OPERAND, (a, b, imm(dtypes.int32, 0), imm(dtypes.uint32, 4)), X86OperandRole.MEMORY)
-    load = with_regs(UOp.asm("load", dtype=dtypes.int32).call(address, c), (dst,))
+    address = a, b, imm(dtypes.int32, 0), imm(dtypes.uint32, 4)
+    load = with_regs(UOp.asm("load", dtype=dtypes.int32).call(*address, c), (dst,))
     tail = UOp.asm("use").call(c)
-    uops = [*definitions, address, load, tail]
+    uops = [*definitions, load, tail]
     ren = object.__new__(X86Renderer)
     ctx = LinearScanRegallocContext(X86LinearContext(ren), uops, ren)
     self.assertTrue(ctx.spills)
     rewritten = next(u for u in line_rewrite(uops, pm_regalloc_rewrite, ctx) if u.op is Ops.CALL and u.body.arg[0] == "load")
-    address = operand(rewritten, X86OperandRole.MEMORY)
-    self.assertEqual(tuple(rreg(field) for field in address.src[:2]), (ctx.reals[4][a], ctx.reals[4][b]))
-    self.assertNotEqual(rreg(address.src[0]), rreg(address.src[1]))
+    address = asm_inputs(rewritten)
+    self.assertEqual(tuple(rreg(field) for field in address[:2]), (ctx.reals[3][a], ctx.reals[3][b]))
+    self.assertNotEqual(rreg(address[0]), rreg(address[1]))
 
 if __name__ == "__main__": unittest.main()
