@@ -35,15 +35,16 @@ class IselContext:
     return UOp.alloc((r.size,), dtypes.u8, slot=-1, addrspace=AddrSpace.REG, reg=r)
 
 # the registers an INS defines follow its opcode and dtype in its arg
-def regs(u:UOp) -> tuple[UOp, ...]: return tuple(u.src[s.src[0].arg.slot+1] for s in u.body.src if s.op is Ops.STORE) if u.op is Ops.CALL else ()
+def regs(u:UOp) -> tuple[UOp, ...]: return tuple(u.src[s.src[0].arg.slot+1].storage_base for s in u.body.src if s.op is Ops.STORE) if u.op is Ops.CALL else ()
 def with_regs(u:UOp, r:tuple[UOp, ...]) -> UOp:
   src = u.src[1:len(u.src)-len(u.body.src)]
   stores = tuple(UOp.param(i, u.dtype, addrspace=AddrSpace.REG, reg=dst.base.arg.reg).store(0) for i,dst in enumerate(r, len(src)))
   return u.replace(src=(u.body.replace(src=stores),)+src+r)
 
 def rdef(u:UOp):
-  if u.op in {Ops.AFTER, Ops.BITCAST}: return rdef(u.src[0])
-  return r[0] if (r:=regs(u)) else None
+  if u.op is Ops.CALL: return r[0] if (r:=regs(u)) else None
+  b = u.storage_base
+  return b if b.op in {Ops.BUFFER, Ops.ALLOC} and b.addrspace is AddrSpace.REG else None
 
 class LinearContext:
   def __init__(self, ren:ISARenderer):
