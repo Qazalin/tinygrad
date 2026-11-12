@@ -5,7 +5,8 @@ from tinygrad.renderer.x86 import ISARenderer, Register, rdef, regs, with_regs, 
 from typing import Any
 from dataclasses import replace
 
-PSEUDO_OPS = {Ops.CONST, Ops.CAST, Ops.BITCAST, Ops.NOOP, Ops.AFTER, Ops.BARRIER, Ops.STACK, Ops.BUFFER, Ops.ALLOC, Ops.RESHAPE}
+PSEUDO_OPS = {Ops.CONST, Ops.CAST, Ops.BITCAST, Ops.NOOP, Ops.AFTER, Ops.BARRIER, Ops.STACK, Ops.BUFFER, Ops.ALLOC, Ops.RESHAPE,
+              Ops.OPERAND}
 
 def retag(x:UOp, r:Register) -> UOp:
   if x.op is Ops.CALL and (outputs:=regs(x)):
@@ -14,6 +15,10 @@ def retag(x:UOp, r:Register) -> UOp:
   if x.op in {Ops.AFTER, Ops.BITCAST, Ops.RESHAPE}: return x.replace(src=(retag(x.src[0],r),*x.src[1:]))
   if x.op not in {Ops.BUFFER, Ops.ALLOC}: raise RuntimeError(f"can't retag {x.op} {x.arg}")
   return x.replace(arg=replace(x.arg, reg=r))
+
+def read_src(u:UOp) -> tuple[UOp, ...]:
+  src = u.src[1:len(u.src)-len(regs(u))] if u.op is Ops.CALL else u.src
+  return tuple(s for x in src for s in (x.src if x.op is Ops.OPERAND else (x,)))
 
 class LinearScanRegallocContext:
   # returns the uop that defines the virtual register
@@ -30,8 +35,7 @@ class LinearScanRegallocContext:
     for idx,u in reversed(list(enumerate(uops))):
       if u.op in PSEUDO_OPS: continue
       defs = regs(u)
-      src = u.src[1:len(u.src)-len(defs)] if u.op is Ops.CALL else u.src
-      for v in defs + tuple(rdef(s) for s in dedup(src)):
+      for v in defs + tuple(rdef(s) for s in dedup(read_src(u))):
         if isinstance(v, UOp): lr.setdefault(v, []).insert(0, idx)
       for v in defs:
         if (n:=max((e for s,e in loops.items() if s <= lr[v][-1] < e), default=None)): lr[v].append(n)
@@ -63,8 +67,7 @@ class LinearScanRegallocContext:
     for i,u in enumerate(uops):
       if u.op in PSEUDO_OPS: continue
       # allocate uses, output bindings are not reads
-      src = u.src[1:len(u.src)-len(regs(u))] if u.op is Ops.CALL else u.src
-      for s in src:
+      for s in read_src(u):
         if not isinstance(v:=rdef(s), UOp): continue
         if v not in live: live[v] = fill(v, i)
         self.reals.setdefault(i, {})[v] = live[v]
@@ -77,7 +80,7 @@ class LinearScanRegallocContext:
             # two address instructions (src is reused by def) can only coalesce reused src.
             # reused src goes first to get priority in case of a tiebreak
             if ren.is_two_address(u) and j == 0:
-              uses = tuple(live.get(rdef(s)) for s in src)
+              uses = tuple(live.get(rdef(s)) for s in read_src(u))
               cons = ((uses[0],) if uses[0] in cons else ()) + tuple(r for r in cons if r not in uses)
             live[v] = alloc(cons, i+1)
           self.reals.setdefault(i, {})[v] = live[v]
@@ -111,15 +114,23 @@ def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
   if x.op in PSEUDO_OPS: return None
   nsrc = []
   for j,s in enumerate(x.src):
-    # v here is the virtual defined by the original s as s is the rewritten version
-    if (v:=rdef(ctx.uops[i].src[j])) in ctx.reals.get(i, {}):
-      reg = replace(ctx.reals[i][v], size=v.arg.reg.size)
-      if v in ctx.spills:
-        fill = ctx.ren.fill(ctx.spills[v], ctx.vdef(v), reg)
-        # an AFTER-wrapped value (e.g. a RANGE bound) keeps its ordering deps around the fill
-        nsrc.append(s.replace(src=(fill,)+s.src[1:]) if s.op is Ops.AFTER else fill)
-      else: nsrc.append(retag(s, reg))
-    else: nsrc.append(s)
+    original = ctx.uops[i].src[j]
+    old_fields = original.src if original.op is Ops.OPERAND else (original,)
+    fields = s.src if s.op is Ops.OPERAND else (s,)
+    assert len(old_fields) == len(fields), "regalloc cannot change the structure of an instruction operand"
+    new_fields, changed = [], False
+    for old,field in zip(old_fields, fields):
+      # v here is the virtual defined by the original field as field is the rewritten version
+      if (v:=rdef(old)) in ctx.reals.get(i, {}):
+        reg = replace(ctx.reals[i][v], size=v.arg.reg.size)
+        if v in ctx.spills:
+          fill = ctx.ren.fill(ctx.spills[v], ctx.vdef(v), reg)
+          # an AFTER-wrapped value (e.g. a RANGE bound) keeps its ordering deps around the fill
+          field = field.replace(src=(fill,)+field.src[1:]) if field.op is Ops.AFTER else fill
+        else: field = retag(field, reg)
+        changed = True
+      new_fields.append(field)
+    nsrc.append(s.replace(src=tuple(new_fields)) if changed and s.op is Ops.OPERAND else new_fields[0] if changed else s)
   defs = tuple(v.replace(arg=replace(v.arg, reg=replace(ctx.reals[i][v], size=v.arg.reg.size))) for v in regs(x))
   nx = with_regs(x.replace(src=tuple(nsrc)), defs) if defs else x.replace(src=tuple(nsrc))
 

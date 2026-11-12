@@ -75,9 +75,11 @@ class Ops(FastEnum):
   # const.
   CONST = auto()
 
-  # INS is a machine instruction
+  # ASM is a machine instruction body
   INS = auto()
   ASM = auto()
+  # OPERAND is renderer-defined metadata within a machine instruction. It is never emitted as an instruction.
+  OPERAND = auto()
 
   # ** 6 -- ops that don't exist in programs **
 
