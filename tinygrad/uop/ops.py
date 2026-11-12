@@ -126,13 +126,17 @@ def dtype_from_uop(op:Ops, src:tuple[UOp,...], arg:Any) -> DType:
       # always void
       return dtypes.void
     case Ops.CALL:
+      # machine instructions declare typed results with output stores
+      if src[0].op is Ops.ASM:
+        return next((s.src[0].dtype for s in src[0].src if s.op is Ops.STORE and s.src[0].dtype is not dtypes.void), dtypes.void)
       # a call has the dtype of its body
       return src[0].dtype
     case Ops.CUSTOM_FUNCTION:
       # an external function states its return dtype in the arg
       return arg.dtype
-    case Ops.INS | Ops.ASM:
-      # arg is (instruction, dtype, *registers), a queue command or an asm line is void
+    case Ops.ASM: return dtypes.void
+    case Ops.INS:
+      # arg is (instruction, dtype, *registers), a queue command
       assert isinstance(arg, tuple) and len(arg) >= 2 and isinstance(arg[1], DType), f"{op} arg must start with (instruction, DType), got {arg}"
       return arg[1]
     case Ops.INDEX:
@@ -594,7 +598,10 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   def barrier(self, *src:UOp): return UOp(Ops.BARRIER, src=(self,)+src)
   def ins(self, arg, **kwargs): return UOp(Ops.INS, kwargs.pop("src", self.src), (arg, kwargs.pop("dtype", self.dtype)))
   @staticmethod
-  def asm(arg, *src, dtype:DType=dtypes.void): return UOp(Ops.ASM, src, (arg, dtype))
+  def asm(arg, *src, dtype:DType=dtypes.void):
+    # The output parameter carries the result type; the assembly operation itself is void.
+    if dtype is not dtypes.void: src = (UOp.param(0, dtype, addrspace=AddrSpace.REG).store(0),)+src
+    return UOp(Ops.ASM, src, arg)
   def contract(self, *rngs:UOp):
     assert all(x.axis_type == AxisType.UPCAST for x in rngs), "all contract ranges must be upcast"
     return UOp.stack(*[self.substitute(dict(zip(rngs, [r.const_like(i) for r,i in zip(rngs, idx)])))

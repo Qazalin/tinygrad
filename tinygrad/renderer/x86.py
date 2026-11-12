@@ -35,11 +35,12 @@ class IselContext:
     r = self.vreg(cons, size)
     return UOp.alloc((r.size,), dtypes.u8, slot=-1, addrspace=AddrSpace.REG, reg=r)
 
-def _asm_outputs(u:UOp) -> tuple[UOp, ...]: return tuple(s for s in u.body.src if s.op is Ops.STORE)
+# An unbound parameter is a type declaration for construction, not an output until it is attached to a register.
+def _asm_outputs(u:UOp) -> tuple[UOp, ...]: return tuple(s for s in u.body.src if s.op is Ops.STORE and s.src[0].arg.reg is not None)
 
 def valid_asm_output_binding(u:UOp) -> bool:
   if u.op is not Ops.CALL or u.body.op is not Ops.ASM: return False
-  args = [s.src[0] for s in u.body.src if s.op is Ops.STORE and s.src[0].op is Ops.PARAM]
+  args = [s.src[0] for s in _asm_outputs(u) if s.src[0].op is Ops.PARAM]
   if len(args) != len(_asm_outputs(u)) or len(u.src) < 1+len(args): return False
   start = len(u.src) - len(args)
   outputs = tuple(x.storage_base for x in u.src[start:])
@@ -56,14 +57,14 @@ def valid_asm_call(u:UOp) -> bool:
   start = len(u.src) - len(_asm_outputs(u))
   # Output parameters index the ASM operand sequence; the CALL has one additional source for the ASM itself.
   if any(s.op in {Ops.AFTER, Ops.INDEX} and s.src[0].op is Ops.CALL and s.src[0].body.op is Ops.ASM and \
-      s.src[0].body.arg[0] in X86GroupOp.WriteFlags and regs(s.src[0]) and \
+      s.src[0].body.arg in X86GroupOp.WriteFlags and regs(s.src[0]) and \
       any(RFLAGS in x.arg.reg.cons for x in regs(s.src[0]))
-      for s in u.src[1:start-(u.body.arg[0] in X86GroupOp.ReadFlags)]): return False
-  if u.body.arg[0] not in X86GroupOp.ReadFlags: return True
+      for s in u.src[1:start-(u.body.arg in X86GroupOp.ReadFlags)]): return False
+  if u.body.arg not in X86GroupOp.ReadFlags: return True
   if not asm_inputs(u): return False
   flag = asm_inputs(u)[-1]
   return flag.op is Ops.CALL and flag.body.op is Ops.ASM and \
-    flag.body.arg[0] in X86GroupOp.WriteFlags and any(RFLAGS in x.arg.reg.cons for x in regs(flag))
+    flag.body.arg in X86GroupOp.WriteFlags and any(RFLAGS in x.arg.reg.cons for x in regs(flag))
 
 def regs(u:UOp) -> tuple[UOp, ...]:
   if u.op is not Ops.CALL or u.body.op is not Ops.ASM: return ()
@@ -72,6 +73,7 @@ def regs(u:UOp) -> tuple[UOp, ...]:
 
 def with_regs(u:UOp, r:tuple[UOp, ...]) -> UOp:
   assert u.op is Ops.CALL and u.body.op is Ops.ASM
+  output_types = tuple(s.src[0].dtype for s in u.body.src if s.op is Ops.STORE)
   if (n:=len(_asm_outputs(u))) < len(r):
     if n: assert all(a.storage_base is b for a,b in zip(regs(u), r))
     if n: u = u.replace(src=(u.body.replace(src=tuple(s for s in u.body.src if s.op is not Ops.STORE)),)+u.src[1:len(u.src)-n])
@@ -88,7 +90,8 @@ def with_regs(u:UOp, r:tuple[UOp, ...]) -> UOp:
     replacements[dst.storage_base] = base
     defs.append(base)
   if replacements: src = tuple(x.substitute(replacements) for x in src)
-  stores = tuple(UOp.param(i, u.dtype, addrspace=AddrSpace.REG, reg=dst.arg.reg).store(0) for i,dst in enumerate(defs, len(src)))
+  stores = tuple(UOp.param(len(src)+j, output_types[j] if j < len(output_types) else dtypes.void,
+                         addrspace=AddrSpace.REG, reg=dst.arg.reg).store(0) for j, dst in enumerate(defs))
   ret = u.replace(src=(u.body.replace(src=tuple(s for s in u.body.src if s.op is not Ops.STORE)+stores),)+src+tuple(defs))
   assert valid_asm_output_binding(ret)
   return ret
@@ -110,8 +113,8 @@ def asm_inputs(u:UOp) -> tuple[UOp, ...]:
 def flag_reg(ctx:'IselContext') -> UOp: return ctx.valloc(ctx.vreg(RFLAGS), RFLAGS.size)
 
 def use_flags(x:UOp, flag:UOp) -> UOp:
-  assert x.op is Ops.CALL and x.body.op is Ops.ASM and x.body.arg[0] in X86GroupOp.ReadFlags
-  assert flag.op is Ops.CALL and flag.body.op is Ops.ASM and flag.body.arg[0] in X86GroupOp.WriteFlags
+  assert x.op is Ops.CALL and x.body.op is Ops.ASM and x.body.arg in X86GroupOp.ReadFlags
+  assert flag.op is Ops.CALL and flag.body.op is Ops.ASM and flag.body.arg in X86GroupOp.WriteFlags
   return x.replace(src=x.src+(flag,))
 
 def rreg(u:UOp) -> Register:
@@ -342,8 +345,8 @@ def pin(ctx:IselContext, x:UOp, cons:Register|tuple[Register, ...]) -> UOp:
 def base(x:UOp, i:int) -> UOp: return s.src[0] if (s:=x.src[i]).op is Ops.INDEX else s
 def lane(x:UOp, i:int) -> int: return s.src[1].src[0].val if (s:=x.src[i]).op is Ops.INDEX else 0
 def to_int(dt:DType): return {dtypes.float16: dtypes.int16, dtypes.float32: dtypes.int32, dtypes.float64: dtypes.int64}[dt]
-def imm(dt:DType, v:int) -> UOp: return UOp.asm(X86Ops.IMM, UOp.param(0, dtypes.int64, addrspace=AddrSpace.ALU).cast(dt), dtype=dt).call(UOp.const(v))
-def is_imm(x:UOp) -> bool: return is_imm(x.src[0]) if x.op is Ops.AFTER else x.op is Ops.CALL and x.body.arg[0] is X86Ops.IMM
+def imm(dt:DType, v:int) -> UOp: return UOp.asm(X86Ops.IMM, dtype=dt).call(UOp.const(v))
+def is_imm(x:UOp) -> bool: return is_imm(x.src[0]) if x.op is Ops.AFTER else x.op is Ops.CALL and x.body.arg is X86Ops.IMM
 def imm_value(x:UOp) -> int:
   if x.op is Ops.AFTER: return imm_value(x.src[0])
   return truncate[x.dtype](x.src[1].val)
@@ -423,7 +426,7 @@ GPR_DEST_OPS = {X86Ops.VPEXTRW, X86Ops.VPEXTRD, X86Ops.VCVTTSS2SI, X86Ops.VCVTTS
 XMM_OPS = {op for op in X86Ops if op.name.startswith('V')} - GPR_DEST_OPS
 
 def _is_vec_xmm(y: UOp) -> bool:
-  return (y.op is Ops.CALL and y.body.arg[0] in XMM_OPS) or \
+  return (y.op is Ops.CALL and y.body.arg in XMM_OPS) or \
          (y.op not in (Ops.BUFFER, Ops.ALLOC, Ops.PARAM, Ops.AFTER, Ops.CALL) and y.max_numel() > 1)
 
 def _xmm_sz(x: UOp) -> X86Ops:
@@ -448,7 +451,7 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
       if not r._cons: params[p] = p.replace(arg=replace(p.arg, reg=ctx.vreg(r, r.size)))
     if params: x = x.replace(src=(x.body.substitute(params),)+x.src[1:])
     return x if params else None
-  defs = [ctx.valloc(XMM)] if x.dtype in dtypes.floats or x.body.arg[0] in XMM_OPS else [ctx.valloc(WGPR, x.dtype.itemsize)]
+  defs = [ctx.valloc(XMM)] if x.dtype in dtypes.floats or x.body.arg in XMM_OPS else [ctx.valloc(WGPR, x.dtype.itemsize)]
   return defs[0].bitcast(x.dtype).after(with_regs(x, tuple(defs)))
 
 def copy_op(dt:DType) -> X86Ops:
@@ -598,12 +601,12 @@ isel_matcher = PatternMatcher([
 # handle it), so a consumer that no longer owns its compare re-emits it. Unlike a regalloc rematerialization this is not
 # optional, there is no fallback load from stack
 def flag_rematerialize(ctx:'X86LinearContext', x:UOp):
-  if x.op is Ops.CALL and x.body.arg[0] in X86GroupOp.WriteFlags and not any(RFLAGS in r.arg.reg.cons for r in regs(x)):
+  if x.op is Ops.CALL and x.body.arg in X86GroupOp.WriteFlags and not any(RFLAGS in r.arg.reg.cons for r in regs(x)):
     x = with_regs(x, regs(x)+(flag_reg(ctx),))
     ctx.lock = x
     return x, [x]
-  if x.op in (Ops.RANGE, Ops.END) or x.body.arg[0] in X86GroupOp.WriteFlags: ctx.lock = x
-  elif x.body.arg[0] in X86GroupOp.ReadFlags and ctx.lock is not (flag_def:=asm_inputs(x)[-1]):
+  if x.op in (Ops.RANGE, Ops.END) or x.body.arg in X86GroupOp.WriteFlags: ctx.lock = x
+  elif x.body.arg in X86GroupOp.ReadFlags and ctx.lock is not (flag_def:=asm_inputs(x)[-1]):
     body = flag_def.body.replace(src=tuple(s for s in flag_def.body.src if s.op is not Ops.STORE))
     flag_def = with_regs(flag_def.replace(src=(body,)+asm_inputs(flag_def)),
                          tuple(ctx.valloc(r.arg.reg, r.arg.reg.size) for r in regs(flag_def)))
@@ -660,13 +663,13 @@ post_regalloc_matcher = PatternMatcher([
   # an END jumps back to its loop's LABEL and labels the loop's exit
   (UPat(Ops.END, name="x"), lambda x: (x, [UOp.asm(X86Ops.JMP).call(x.src[1]), label(label(x.src[1]))])),
   # rewrite two address instructions to two address form, if reused src wasn't coalesced insert a move
-  (UPat(Ops.CALL, name="x"), lambda ctx,x: two_address(ctx, x) if x.body.arg[0] in X86GroupOp.TwoAddress else None),
+  (UPat(Ops.CALL, name="x"), lambda ctx,x: two_address(ctx, x) if x.body.arg in X86GroupOp.TwoAddress else None),
 ])
 
 # ***** X86 instruction encoding *****
 
 def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> bytes|None:
-  op = x.body.arg[0]
+  op = x.body.arg
   src = asm_inputs(x)[:-1] if op in X86GroupOp.ReadFlags else asm_inputs(x)
   def _encode(reg_uop:UOp|None, rm_uop:UOp, idx_uop:UOp|None=None, disp_uop:UOp|None=None, scale_uop:UOp|None=None,
               vvvv_uop:UOp|None=None, imm_uop:UOp|None=None) -> bytes:
@@ -876,7 +879,7 @@ class X86Renderer(ISARenderer):
     super().__init__(target)
     from tinygrad.runtime.support.compiler_cpu import X86Compiler
     self.compiler = X86Compiler()
-  def is_two_address(self, x:UOp) -> bool: return x.op is Ops.CALL and x.body.arg[0] in X86GroupOp.TwoAddress
+  def is_two_address(self, x:UOp) -> bool: return x.op is Ops.CALL and x.body.arg in X86GroupOp.TwoAddress
   def copy(self, x:UOp, reg:UOp) -> UOp: return with_regs(UOp.asm(X86Ops.MOV, dtype=x.dtype).call(x), (reg,))
 
   def spill(self, spill_slot:int, x:UOp) -> UOp:
@@ -895,9 +898,9 @@ class X86Renderer(ISARenderer):
     return with_regs(UOp.asm(op, dtype=x.dtype).call(*src), (dst,))
 
   def asm_str(self, uops:list[UOp], function_name:str) -> str:
-    def _format_op(x:UOp) -> str: return f"    {(o[7:-1] if (o:=str(x.body.arg[0]))[-1] in ('i', 'm') else o[7:]).lower():7s}"
+    def _format_op(x:UOp) -> str: return f"    {(o[7:-1] if (o:=str(x.body.arg))[-1] in ('i', 'm') else o[7:]).lower():7s}"
     def _format_operands(x:UOp) -> str:
-      src = asm_inputs(x)[:-1] if x.body.arg[0] in X86GroupOp.ReadFlags else asm_inputs(x)
+      src = asm_inputs(x)[:-1] if x.body.arg in X86GroupOp.ReadFlags else asm_inputs(x)
       def _format(src:tuple[UOp, ...]) -> list[str]:
         return [str(imm_value(s)) if is_imm(s) else reg_strs[o].get(rreg(s).size, o) if \
                 (o:=str(rreg(s))) in reg_strs else o for s in src if is_imm(s) or rdef(s) is not None]
@@ -905,21 +908,21 @@ class X86Renderer(ISARenderer):
         idx_str = f" + {rreg(idx)}*{imm_value(scale)}" if rdef(idx) is not None else ""
         return [f"[{rreg(base)}" + idx_str + (f" + {d}" if (d:=imm_value(disp)) else "") + "]"]
 
-      if x.body.arg[0] in X86GroupOp.WriteMem:
+      if x.body.arg in X86GroupOp.WriteMem:
         fields = src[:4] if len(src) >= 4 else (x, UOp(Ops.NOOP), imm(dtypes.int32, 0), imm(dtypes.uint32, x.dtype.itemsize))
         ret = _mem_adress(*fields) + _format(src[4:] if len(src) >= 4 else ())
-      elif x.body.arg[0] in X86GroupOp.Rm1st and len(src) > 3: ret = _format((x,)) + _mem_adress(*src[:4]) + _format(src[4:])
-      elif x.body.arg[0] in X86GroupOp.Rm2nd and len(src) > 4:
+      elif x.body.arg in X86GroupOp.Rm1st and len(src) > 3: ret = _format((x,)) + _mem_adress(*src[:4]) + _format(src[4:])
+      elif x.body.arg in X86GroupOp.Rm2nd and len(src) > 4:
         ret = _format((x,) + src[:1]) + _mem_adress(*src[1:5]) + _format(src[5:])
       else: ret = _format((x,) + src)
       return ", ".join(ret)
 
     asm = [f".{function_name}:"]
     for u in uops:
-      if u.op is not Ops.CALL or u.body.arg[0] in {X86Ops.IMM, X86Ops.REG}: continue
-      if u.body.arg[0] is X86Ops.LABEL: asm.append(f".L{uops.index(u)}:")
-      elif u.body.arg[0] is X86Ops.RET: asm.append(_format_op(u))
-      elif u.body.arg[0] in X86GroupOp.Jump: asm.append(_format_op(u) + f" .L{uops.index(label(asm_inputs(u)[0]))}")
+      if u.op is not Ops.CALL or u.body.arg in {X86Ops.IMM, X86Ops.REG}: continue
+      if u.body.arg is X86Ops.LABEL: asm.append(f".L{uops.index(u)}:")
+      elif u.body.arg is X86Ops.RET: asm.append(_format_op(u))
+      elif u.body.arg in X86GroupOp.Jump: asm.append(_format_op(u) + f" .L{uops.index(label(asm_inputs(u)[0]))}")
       else: asm.append(_format_op(u) + " " + _format_operands(u))
     return "\n".join(asm)
 
@@ -928,14 +931,14 @@ class X86Renderer(ISARenderer):
     jumps: dict[UOp, int] = {}
     binary = bytearray()
     for u in uops:
-      if u.op is not Ops.CALL or u.body.arg[0] in {X86Ops.IMM, X86Ops.REG}: continue
-      if u.body.arg[0] is X86Ops.LABEL:
+      if u.op is not Ops.CALL or u.body.arg in {X86Ops.IMM, X86Ops.REG}: continue
+      if u.body.arg is X86Ops.LABEL:
         targets[asm_inputs(u)[0]] = len(binary)
         continue
-      if u.body.arg[0] not in encodings or (l:=encodings[u.body.arg[0]](u)) is None:
-        raise RuntimeError(f"failed to encode {u.body.arg[0]} with {u.dtype} srcs {[x.dtype for x in asm_inputs(u)]}")
+      if u.body.arg not in encodings or (l:=encodings[u.body.arg](u)) is None:
+        raise RuntimeError(f"failed to encode {u.body.arg} with {u.dtype} srcs {[x.dtype for x in asm_inputs(u)]}")
       binary.extend(l)
-      if u.body.arg[0] in X86GroupOp.Jump: jumps[u] = len(binary)
+      if u.body.arg in X86GroupOp.Jump: jumps[u] = len(binary)
     # fixup jump targets now that encoding size is known
     for u in uops:
       if (t:=jumps.get(u)) is not None: binary[t-4:t] = (targets[asm_inputs(u)[0]] - t).to_bytes(4, 'little', signed=True)

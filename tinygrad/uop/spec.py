@@ -116,7 +116,8 @@ spec_shared = PatternMatcher([
   (UPat(Ops.BARRIER, dtypes.void), lambda: True),
 
   # assembly instruction body and its CALL binding
-  (UPat((Ops.INS, Ops.ASM), name="x"), lambda x: isinstance(x.arg, tuple) and len(x.arg) >= 2 and isinstance(x.arg[1], DType)),
+  (UPat(Ops.INS, name="x"), lambda x: isinstance(x.arg, tuple) and len(x.arg) >= 2 and isinstance(x.arg[1], DType)),
+  (UPat(Ops.ASM, dtypes.void, allow_any_len=True), lambda: True),
 
   # LOAD(idx) / STORE(idx, val) with gates on the LOAD/STORE; a STORE's value matches its target's dtype
   (UPat(Ops.STORE, src=(UPat(name="t"), UPat(name="v")), allow_any_len=True),
