@@ -122,18 +122,18 @@ def dtype_from_uop(op:Ops, src:tuple[UOp,...], arg:Any) -> DType:
   match op:
     case Ops.STORE | Ops.LINEAR | Ops.SINK | Ops.PROGRAM | Ops.SOURCE | \
          Ops.BACKEDGE | Ops.BARRIER | Ops.IF | Ops.ENDIF | Ops.NOOP | \
-         Ops.REWRITE_ERROR | Ops.PYLITERAL | Ops.ASM:
+         Ops.REWRITE_ERROR | Ops.PYLITERAL:
       # always void
       return dtypes.void
     case Ops.CALL:
-      # a call has the dtype of its body, void for opaque bodies
+      # a call has the dtype of its body
       return src[0].dtype
     case Ops.CUSTOM_FUNCTION:
       # an external function states its return dtype in the arg
       return arg.dtype
-    case Ops.INS:
+    case Ops.INS | Ops.ASM:
       # arg is (instruction, dtype, *registers), a queue command or an asm line is void
-      assert isinstance(arg, tuple) and len(arg) >= 2 and isinstance(arg[1], DType), f"INS arg must be (instruction, DType, *registers), got {arg}"
+      assert isinstance(arg, tuple) and len(arg) >= 2 and isinstance(arg[1], DType), f"{op} arg must start with (instruction, DType), got {arg}"
       return arg[1]
     case Ops.INDEX:
       # an image access is always float, no matter the storage dtype
@@ -332,11 +332,11 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     match self.op:
       # late ops don't have shape
       case Ops.IF | Ops.BARRIER | Ops.SINK | Ops.REWRITE_ERROR | Ops.ENDIF | Ops.BACKEDGE | \
-           Ops.LINEAR | Ops.PROGRAM | Ops.SOURCE | Ops.ASM:
+           Ops.LINEAR | Ops.PROGRAM | Ops.SOURCE:
         return None
 
-      # INS shape is always scalar, vector width is in the instruction encoding
-      case Ops.INS:
+      # instruction shape is always scalar, vector width is in the instruction encoding
+      case Ops.INS | Ops.ASM:
         if self.dtype is dtypes.void: return None
         return ()
 
@@ -594,7 +594,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   def barrier(self, *src:UOp): return UOp(Ops.BARRIER, src=(self,)+src)
   def ins(self, arg, *regs, **kwargs): return UOp(Ops.INS, kwargs.pop("src", self.src), (arg, kwargs.pop("dtype", self.dtype), *regs))
   @staticmethod
-  def asm(arg, *src): return UOp(Ops.ASM, src, arg)
+  def asm(arg, *src, dtype:DType=dtypes.void): return UOp(Ops.ASM, src, (arg, dtype))
   def contract(self, *rngs:UOp):
     assert all(x.axis_type == AxisType.UPCAST for x in rngs), "all contract ranges must be upcast"
     return UOp.stack(*[self.substitute(dict(zip(rngs, [r.const_like(i) for r,i in zip(rngs, idx)])))

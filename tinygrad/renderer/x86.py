@@ -252,9 +252,9 @@ def pin(ctx:IselContext, x:UOp, cons:Register|tuple[Register, ...]) -> UOp: retu
 def base(x:UOp, i:int) -> UOp: return s.src[0] if (s:=x.src[i]).op is Ops.INDEX else s
 def lane(x:UOp, i:int) -> int: return s.src[1].src[0].val if (s:=x.src[i]).op is Ops.INDEX else 0
 def to_int(dt:DType): return {dtypes.float16: dtypes.int16, dtypes.float32: dtypes.int32, dtypes.float64: dtypes.int64}[dt]
-def imm(dt:DType, v:int) -> UOp: return UOp.asm(X86Ops.IMM, UOp.param(0, dtypes.int64, addrspace=AddrSpace.ALU).cast(dt)).call(UOp.const(v))
-def is_imm(x:UOp) -> bool: return x.op is Ops.CALL and x.body.op is Ops.ASM and x.body.arg is X86Ops.IMM
-def imm_dtype(x:UOp) -> DType: return x.body.src[0].dtype
+def imm(dt:DType, v:int) -> UOp: return UOp.asm(X86Ops.IMM, UOp.param(0, dtypes.int64, addrspace=AddrSpace.ALU).cast(dt), dtype=dt).call(UOp.const(v))
+def is_imm(x:UOp) -> bool: return x.op is Ops.CALL and x.body.op is Ops.ASM and x.body.arg[0] is X86Ops.IMM
+def imm_dtype(x:UOp) -> DType: return x.dtype
 def imm_value(x:UOp) -> int: return truncate[imm_dtype(x)](x.src[1].val)
 def to_imm(c:UOp) -> UOp|None:
   if not (c.op is Ops.CAST and (v:=c.src[0]).op is Ops.CONST): return None
@@ -323,7 +323,7 @@ def lea(x:UOp) -> UOp: return x.ins(X86Ops.LEA, src=fold_address(x), dtype=dtype
 def abi(ctx:IselContext, x:UOp) -> UOp:
   src = fold_address(args_pointer().index(UOp.cconst(ctx.arg_offsets[x], dtypes.uint32)))
   dst = ctx.vreg(WGPR, x.dtype.itemsize if x.addrspace is AddrSpace.ALU else 8)
-  return dst.after(UOp.asm(X86Ops.MOV).call(*src, dst))
+  return dst.after(UOp.asm(X86Ops.MOV, dtype=x.dtype if x.addrspace is AddrSpace.ALU else dtypes.uint64).call(*src, dst))
 
 GPR_DEST_OPS = {X86Ops.VPEXTRW, X86Ops.VPEXTRD, X86Ops.VCVTTSS2SI, X86Ops.VCVTTSD2SI, X86Ops.VMOVDm, X86Ops.VMOVQm}
 XMM_OPS = {op for op in X86Ops if op.name.startswith('V')} - GPR_DEST_OPS
@@ -338,10 +338,9 @@ def _xmm_sz(x: UOp) -> X86Ops:
   return X86Ops.VMOVSS
 
 def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
-  # register placeholders with real registers
-  if is_imm(x): return None
-  #raise Exception(x.render_uir(), regs(x))
-  return None
+  if is_imm(x) or x.dtype is dtypes.void or x.body.src: return None
+  dst = UOp.param(len(x.src)-2, x.dtype, addrspace=AddrSpace.REG, reg=x.src[-1].base.arg.reg)
+  return x.replace(src=(with_regs(x.body, (dst,)),)+x.src[1:])
 
 """
   if is_imm(x): return None
@@ -444,7 +443,8 @@ isel_matcher = PatternMatcher([
   (UPat.var("a", dtypes.ints+(dtypes.bool,)) ^ UPat.var("b"), lambda a,b: a.ins(X86Ops.XOR, src=(a, b))),
   (UPat(Ops.SUB, dtypes.ints, (UPat.var("a"), UPat.var("b"))), lambda a,b: a.ins(X86Ops.SUB, src=(a, b))),
   # float binary
-  ((UPat(dtype=dtypes.float32) + UPat()).named("x"), lambda ctx,x: (dst:=ctx.vreg(XMM)).after(UOp.asm(X86Ops.VADDSS).call(*x.src, dst))),
+  ((UPat(dtype=dtypes.float32) + UPat()).named("x"), lambda ctx,x:
+   (dst:=ctx.vreg(XMM)).after(UOp.asm(X86Ops.VADDSS, dtype=x.dtype).call(*x.src, dst))),
   ((UPat(dtype=dtypes.float64) + UPat()).named("x"), lambda x: x.ins(X86Ops.VADDSD)),
   ((UPat(dtype=dtypes.float32) * UPat()).named("x"), lambda x: x.ins(X86Ops.VMULSS)),
   ((UPat(dtype=dtypes.float64) * UPat()).named("x"), lambda x: x.ins(X86Ops.VMULSD)),
@@ -485,7 +485,7 @@ isel_matcher = PatternMatcher([
   # load, store
   (UPat(Ops.LOAD, dtypes.floats, src=(UPat(name="a"),), name="x"), lambda ctx,x,a: None if a.addrspace is AddrSpace.REG else
    x.ins(X86Ops.VPINSRW, src=(UOp(Ops.NOOP),) + fold_address(a) + (imm(dtypes.uint8, 0),)) if x.max_numel() * x.dtype.itemsize == 2 else
-   (dst:=ctx.vreg(XMM)).after(UOp.asm(_xmm_sz(x)).call(*fold_address(a), dst))),
+   (dst:=ctx.vreg(XMM)).after(UOp.asm(_xmm_sz(x), dtype=x.dtype).call(*fold_address(a), dst))),
   (UPat(Ops.LOAD, dtypes.ints+(dtypes.bool,), src=(UPat(name="a"),), name="x"), lambda x,a: None if a.addrspace is AddrSpace.REG else
    x.ins(X86Ops.MOV, src=fold_address(a)) if x.max_numel() == 1 else x.ins(_xmm_sz(x), src=fold_address(a))),
   (UPat.var("a").store(UPat.var("b", dtypes.floats), name="x"), lambda a,b,x: None if a.addrspace is AddrSpace.REG else
@@ -495,7 +495,7 @@ isel_matcher = PatternMatcher([
    x.ins(X86Ops[_xmm_sz(b).name+"m"], src=fold_address(a) + (b,)) if b.max_numel() > 1 else
    x.ins(X86Ops.MOVm, src=fold_address(a) + (b,)) if (i:=to_imm(b)) is None else x.ins(X86Ops.MOVi, src=fold_address(a) + (i,))),
   # allocate virtual registers
-  #(UPat(Ops.CALL, name="x"), alloc_vregs),
+  (UPat(Ops.CALL, src=(UPat(Ops.ASM),), allow_any_len=True, name="x"), alloc_vregs),
 ])
 
 # ***** pre register allocation *****
