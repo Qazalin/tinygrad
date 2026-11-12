@@ -38,6 +38,7 @@ class IselContext:
 def regs(u:UOp) -> tuple[UOp, ...]:
   return tuple(u.src[s.src[0].arg.slot+1].storage_base for s in u.body.src if s.op is Ops.STORE) if u.op is Ops.CALL else ()
 def with_regs(u:UOp, r:tuple[UOp, ...]) -> UOp:
+  if any((v:=s.base.arg.reg) is not None and v.name.startswith("b") for s in r): print("make binding", u.body.arg, id(u.body), [(s.arg.slot, s.src[0].arg.reg) for s in u.body.src], [(s.base.arg.reg.name, id(s.base)) for s in r])
   src = u.src[1:len(u.src)-len(u.body.src)]
   stores = tuple(UOp.param(i, u.dtype, addrspace=AddrSpace.REG, reg=dst.base.arg.reg).store(0) for i,dst in enumerate(r, len(src)))
   return u.replace(src=(u.body.replace(src=stores),)+src+r)
@@ -367,6 +368,7 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
     params: dict[UOp, UOp] = {}
     for s in x.body.src:
       p, r = s.src[0], s.src[0].arg.reg
+      if r is None: raise RuntimeError(f"unbound register parameter: {p}, body: {id(x.body)}, call: {id(x)}, binding: {id(x.src[p.arg.slot+1].storage_base)}, in {x}")
       if not r._cons: params[p] = p.replace(arg=replace(p.arg, reg=ctx.vreg(r, r.size)))
     return x.replace(src=(x.body.substitute(params),)+x.src[1:]) if params else None
   if x.dtype in dtypes.floats or x.body.arg[0] in XMM_OPS: defs = [ctx.valloc(XMM)]
