@@ -34,7 +34,7 @@ class IselContext:
 
 # the registers an INS defines follow its opcode and dtype in its arg
 def regs(u:UOp) -> tuple[Register, ...]: return u.arg[2:] if u.op is Ops.INS else ()
-def with_regs(u:UOp, r:tuple[Register, ...]) -> UOp: return u.replace(arg=u.arg[:2]+r)
+def with_regs(u:UOp, r:tuple[UOp, ...]) -> UOp: return u.replace(src=u.src+tuple(p.store(0) for p in r))
 
 def rdef(u:UOp):
   if u.op in {Ops.AFTER, Ops.BITCAST}: return rdef(u.src[0])
