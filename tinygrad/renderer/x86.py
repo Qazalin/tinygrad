@@ -343,24 +343,6 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
   param = UOp.param(len(x.src)-1, x.dtype, addrspace=AddrSpace.REG, reg=dst.arg.reg)
   return dst.after(x.replace(src=(with_regs(x.body, (param,)),)+x.src[1:]+(dst,)))
 
-"""
-  if is_imm(x): return None
-  # no register definition
-  if x.dtype is dtypes.void: return None
-  # already allocated vregs
-  if regs(x) and regs(x)[0]._cons: return None
-  # a register buffer is a REG, a stack buffer becomes the LEA of its address before regalloc
-  if x.op in {Ops.BUFFER, Ops.ALLOC}:
-    if x.arg.reg is not None: return None
-    return reg(x.dtype, regbuf_reg(x)) if x.addrspace is AddrSpace.REG else None
-  if regs(x): defs = [ctx.vreg(regs(x), x.dtype.itemsize)]
-  elif x.dtype in dtypes.floats or x.arg[0] in XMM_OPS: defs = [ctx.vreg(XMM)]
-  else: defs = [ctx.vreg(WGPR, x.dtype.itemsize)]
-  # TODO: add this once the scheduler can track register pressure
-  # if x.arg[0] in X86GroupOp.WriteFlags: defs.append(ctx.vreg(RFLAGS))
-  return with_regs(x, tuple(defs))
-"""
-
 def copy_op(dt:DType) -> X86Ops:
   return {dtypes.float16:X86Ops.VMOVSS, dtypes.float32:X86Ops.VMOVSS, dtypes.float64:X86Ops.VMOVSD, dtypes.bool:X86Ops.MOVZX}.get(dt, X86Ops.MOV)
 
