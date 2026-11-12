@@ -38,10 +38,18 @@ class IselContext:
 def regs(u:UOp) -> tuple[UOp, ...]:
   return tuple(u.src[s.src[0].arg.slot+1].storage_base for s in u.body.src if s.op is Ops.STORE) if u.op is Ops.CALL else ()
 def with_regs(u:UOp, r:tuple[UOp, ...]) -> UOp:
-  if any((v:=s.base.arg.reg) is not None and v.name.startswith("b") for s in r): print("make binding", u.body.arg, id(u.body), [(s.arg.slot, s.src[0].arg.reg) for s in u.body.src], [(s.base.arg.reg.name, id(s.base)) for s in r])
   src = u.src[1:len(u.src)-len(u.body.src)]
-  stores = tuple(UOp.param(i, u.dtype, addrspace=AddrSpace.REG, reg=dst.base.arg.reg).store(0) for i,dst in enumerate(r, len(src)))
-  return u.replace(src=(u.body.replace(src=stores),)+src+r)
+  replacements: dict[UOp, UOp] = {}
+  defs: list[UOp] = []
+  for dst in r:
+    base = dst.storage_base
+    if base.arg.reg is None:
+      base = base.replace(arg=replace(base.arg, reg=regbuf_reg(base)))
+      replacements[dst.storage_base] = base
+    defs.append(base)
+  if replacements: src = tuple(x.substitute(replacements) for x in src)
+  stores = tuple(UOp.param(i, u.dtype, addrspace=AddrSpace.REG, reg=dst.arg.reg).store(0) for i,dst in enumerate(defs, len(src)))
+  return u.replace(src=(u.body.replace(src=stores),)+src+tuple(defs))
 
 def rdef(u:UOp):
   if u.op in {Ops.AFTER, Ops.BITCAST}: return rdef(u.src[0])
@@ -363,12 +371,13 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
   # no register definition
   if x.dtype is dtypes.void: return None
   # a register buffer is a REG, a stack buffer becomes the LEA of its address before regalloc
-  if x.op in {Ops.BUFFER, Ops.ALLOC}: return None if x.arg.reg else reg(x.dtype, regbuf_reg(x)) if x.addrspace is AddrSpace.REG else None
+  if x.op in {Ops.BUFFER, Ops.ALLOC}:
+    if x.addrspace is not AddrSpace.REG or x.arg.reg is not None: return None
+    return x.replace(arg=replace(x.arg, reg=regbuf_reg(x)))
   if regs(x):
     params: dict[UOp, UOp] = {}
     for s in x.body.src:
       p, r = s.src[0], s.src[0].arg.reg
-      if r is None: raise RuntimeError(f"unbound register parameter: {p}, body: {id(x.body)}, call: {id(x)}, binding: {id(x.src[p.arg.slot+1].storage_base)}, in {x}")
       if not r._cons: params[p] = p.replace(arg=replace(p.arg, reg=ctx.vreg(r, r.size)))
     return x.replace(src=(x.body.substitute(params),)+x.src[1:]) if params else None
   if x.dtype in dtypes.floats or x.body.arg[0] in XMM_OPS: defs = [ctx.valloc(XMM)]
@@ -525,7 +534,7 @@ isel_matcher = PatternMatcher([
 # optional, there is no fallback load from stack
 def flag_rematerialize(ctx:X86LinearContext, x:UOp):
   if x.op in (Ops.RANGE, Ops.END) or x.body.arg[0] in X86GroupOp.WriteFlags: ctx.lock = x
-  elif x.body.arg[0] in X86GroupOp.ReadFlags and ctx.lock is not (flag_def:=x.src[-1]):
+  elif x.body.arg[0] in X86GroupOp.ReadFlags and ctx.lock is not (flag_def:=call_src(x)[-1]):
     ctx.lock = flag_def
     return (x, [flag_def, x])
   return None

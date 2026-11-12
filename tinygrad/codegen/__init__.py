@@ -7,7 +7,7 @@ from tinygrad.uop.weak import pm_lower_weak, pm_commit_weak, pm_cast_const
 from tinygrad.uop.uir import render_uir
 from tinygrad.uop.spec import type_verify, spec_tensor, spec_program
 from tinygrad.renderer import Renderer, Estimates
-from tinygrad.renderer.x86 import ISARenderer, IselContext
+from tinygrad.renderer.x86 import ISARenderer, IselContext, regs
 from tinygrad.dtype import dtypes, AddrSpace
 
 # import all pattern matchers here
@@ -454,8 +454,8 @@ def do_linearize(ctx:Renderer, prg:UOp, sink:UOp) -> UOp:
   if isinstance(ctx, ISARenderer):
     lin_ctx = ctx.linear_ctx_type(ctx)
     lst = line_rewrite(lst, ctx.pre_regalloc_matcher, lin_ctx)
-    # register definitions (INS without srcs) move to the top so regalloc sees their live ranges span the whole program (callee saved regs)
-    lst = sorted(lst, key=lambda u: u.op is not Ops.INS or bool(u.src))
+    # input-less register declarations move to the top so regalloc sees their live ranges span the whole program (callee saved regs)
+    lst = sorted(lst, key=lambda u: not (u.op is Ops.CALL and (defs := regs(u)) and len(u.src) == len(defs)+1))
     regalloc_ctx = LinearScanRegallocContext(lin_ctx, lst, ctx)
     lst = line_rewrite(lst, pm_regalloc_rewrite, regalloc_ctx)
     lst = lin_ctx.insert_linearized(lst)
