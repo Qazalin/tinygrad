@@ -27,16 +27,17 @@ class IselContext:
     params = sorted([u for u in sink.toposort() if u.op is Ops.PARAM], key=lambda u: u.arg.slot)
     self.arg_offsets = {u: o for u, (o, _) in zip(params, TinyELF.iter_sig(tuple((None, u.addrspace, u.dtype, ()) for u in params)))}
 
-  def vreg(self, cons:tuple[Register, ...]|Register, size:int=0) -> UOp:
-    cons, slot = cons if isinstance(cons, tuple) else (cons,), next(self.reg_n)
-    size = size or cons[0].size
-    return UOp.alloc((size,), dtypes.u8, slot=slot, addrspace=AddrSpace.REG, reg=Register(f"v{slot}", 0, cons, size))
+  def vreg(self, cons:tuple[Register, ...]|Register, size:int=0):
+    cons = cons if isinstance(cons, tuple) else (cons,)
+    reg = Register(f"v{next(self.reg_n)}", 0, cons, size or cons[0].size)
+    return UOp.alloc((reg.size,), dtypes.u8, slot=-1, addrspace=AddrSpace.REG, reg=reg)
 
 # the registers an INS defines follow its opcode and dtype in its arg
-def regs(u:UOp) -> tuple[Register, ...]: return u.arg[2:] if u.op is Ops.INS else ()
+def regs(u:UOp) -> tuple[UOp, ...]: return tuple(u.src[s.src[0].arg.slot+1] for s in u.body.src if s.op is Ops.STORE) if u.op is Ops.CALL else ()
 def with_regs(u:UOp, r:tuple[UOp, ...]) -> UOp:
-  stores = tuple(UOp.param(i, u.dtype, addrspace=AddrSpace.REG, reg=dst.base.arg.reg).store(0) for i,dst in enumerate(r, len(u.src)-1))
-  return u.replace(src=(u.body.replace(src=u.body.src+stores),)+u.src[1:]+r)
+  src = u.src[1:len(u.src)-len(u.body.src)]
+  stores = tuple(UOp.param(i, u.dtype, addrspace=AddrSpace.REG, reg=dst.base.arg.reg).store(0) for i,dst in enumerate(r, len(src)))
+  return u.replace(src=(u.body.replace(src=stores),)+src+r)
 
 def rdef(u:UOp):
   if u.op in {Ops.AFTER, Ops.BITCAST}: return rdef(u.src[0])
@@ -347,8 +348,11 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
   # no register definition
   if x.dtype is dtypes.void: return None
   # already allocated vregs
-  if x.body.src: return None
-  if x.dtype in dtypes.floats or x.body.arg[0] in XMM_OPS: defs = [ctx.vreg(XMM)]
+  if regs(x) and regs(x)[0].base.arg.reg._cons: return None
+  # a register buffer is a REG, a stack buffer becomes the LEA of its address before regalloc
+  if x.op in {Ops.BUFFER, Ops.ALLOC}: return None if x.arg.reg else reg(x.dtype, regbuf_reg(x)) if x.addrspace is AddrSpace.REG else None
+  if regs(x): defs = [ctx.vreg(tuple(r.base.arg.reg for r in regs(x)), x.dtype.itemsize)]
+  elif x.dtype in dtypes.floats or x.body.arg[0] in XMM_OPS: defs = [ctx.vreg(XMM)]
   else: defs = [ctx.vreg(WGPR, x.dtype.itemsize)]
   # TODO: add this once the scheduler can track register pressure
   # if x.body.arg[0] in X86GroupOp.WriteFlags: defs.append(ctx.vreg(RFLAGS))
@@ -488,7 +492,7 @@ isel_matcher = PatternMatcher([
    x.ins(X86Ops[_xmm_sz(b).name+"m"], src=fold_address(a) + (b,)) if b.max_numel() > 1 else
    x.ins(X86Ops.MOVm, src=fold_address(a) + (b,)) if (i:=to_imm(b)) is None else x.ins(X86Ops.MOVi, src=fold_address(a) + (i,))),
   # allocate virtual registers
-  (UPat(Ops.CALL, src=(UPat(Ops.ASM),), allow_any_len=True, name="x"), alloc_vregs),
+  (UPat((Ops.CALL, Ops.BUFFER, Ops.ALLOC), name="x"), alloc_vregs),
 ])
 
 # ***** pre register allocation *****
