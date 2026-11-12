@@ -242,7 +242,9 @@ reg_strs = {"rax": {4:"eax", 2:"ax", 1:"al"}, "rcx": {4:"ecx", 2:"cx", 1:"cl"}, 
         **{f"r{i}": {4:f"r{i}d", 2:f"r{i}w", 1:f"r{i}b"} for i in range(8, 16)}}
 
 # a register defined outside the instruction stream: the stack pointer, the args pointer, a callee saved register
-def reg(dt:DType, r:Register) -> UOp: return UOp.alloc((), dt, slot=-1, addrspace=AddrSpace.REG, reg=r)
+def reg(dt:DType, r:Register) -> UOp:
+  dst = UOp.alloc((), dt, slot=-1, addrspace=AddrSpace.REG, reg=r)
+  return dst.after(with_regs(UOp.asm(X86Ops.REG, dtype=dt).call(), (dst,)))
 def stack_pointer() -> UOp: return reg(dtypes.uint64, RSP)
 def args_pointer() -> UOp: return reg(dtypes.uint64, RDI)
 
@@ -340,10 +342,17 @@ def _xmm_sz(x: UOp) -> X86Ops:
   return X86Ops.VMOVSS
 
 def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
-  if is_imm(x) or x.dtype is dtypes.void or x.body.src: return None
-  if x.dtype in dtypes.floats or x.body.arg[0] in XMM_OPS: dst = ctx.vreg(XMM)
-  else: dst = ctx.vreg(WGPR, x.dtype.itemsize)
-  return dst.after(with_regs(x, (dst,)))
+  # register placeholders with real registers
+  if is_imm(x): return None
+  # no register definition
+  if x.dtype is dtypes.void: return None
+  # already allocated vregs
+  if x.body.src: return None
+  if x.dtype in dtypes.floats or x.body.arg[0] in XMM_OPS: defs = [ctx.vreg(XMM)]
+  else: defs = [ctx.vreg(WGPR, x.dtype.itemsize)]
+  # TODO: add this once the scheduler can track register pressure
+  # if x.body.arg[0] in X86GroupOp.WriteFlags: defs.append(ctx.vreg(RFLAGS))
+  return defs[0].after(with_regs(x, tuple(defs)))
 
 def copy_op(dt:DType) -> X86Ops:
   return {dtypes.float16:X86Ops.VMOVSS, dtypes.float32:X86Ops.VMOVSS, dtypes.float64:X86Ops.VMOVSD, dtypes.bool:X86Ops.MOVZX}.get(dt, X86Ops.MOV)
@@ -509,7 +518,7 @@ def label(x:UOp) -> UOp: return UOp.asm(X86Ops.LABEL).call(x)
 def lower_range(x:UOp) -> tuple[UOp, list[UOp]]:
   if x.dtype is dtypes.void: return x, [x, label(x)]
   bound, deps = (x.src[0].src[0], x.src[0].src[1:]) if x.src[0].op is Ops.AFTER else (x.src[0], ())
-  dst = reg(x.dtype, regbuf_reg(x))
+  dst = UOp.alloc((), x.dtype, slot=-1, addrspace=AddrSpace.REG, reg=regbuf_reg(x))
   init = with_regs(UOp.asm(X86Ops.MOVi, dtype=x.dtype).call(imm(x.dtype, 0).after(*deps)), (dst,))
   idx = dst.after(init)
   cmp = UOp.asm(X86Ops.CMPi if is_imm(bound) else X86Ops.CMP).call(idx, bound)
