@@ -7,6 +7,14 @@ from dataclasses import replace
 
 PSEUDO_OPS = {Ops.CONST, Ops.CAST, Ops.BITCAST, Ops.NOOP, Ops.AFTER, Ops.BARRIER, Ops.STACK, Ops.BUFFER, Ops.ALLOC, Ops.RESHAPE}
 
+def retag(x:UOp, r:Register) -> UOp:
+  if x.op is Ops.CALL and (outputs:=regs(x)):
+    dst = outputs[0].replace(arg=replace(outputs[0].arg, reg=r))
+    return with_regs(x, (dst,)+outputs[1:])
+  if x.op in {Ops.AFTER, Ops.BITCAST, Ops.RESHAPE}: return x.replace(src=(retag(x.src[0],r),*x.src[1:]))
+  if x.op not in {Ops.BUFFER, Ops.ALLOC}: raise RuntimeError(f"can't retag {x.op} {x.arg}")
+  return x.replace(arg=replace(x.arg, reg=r))
+
 class LinearScanRegallocContext:
   # returns the uop that defines the virtual register
   def vdef(self, v:UOp) -> UOp: return self.uops[self.live_range[v][0]]
@@ -102,11 +110,6 @@ def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
   i = next(ctx.idx)
   if x.op in PSEUDO_OPS: return None
   nsrc = []
-  def retag(x:UOp, r:Register) -> UOp:
-    if x.op is Ops.CALL and regs(x): return x  # the output bindings were retagged with the CALL
-    if x.op in {Ops.AFTER, Ops.BITCAST, Ops.RESHAPE}: return x.replace(src=(retag(x.src[0],r),*x.src[1:]))
-    if x.op not in {Ops.BUFFER, Ops.ALLOC}: raise RuntimeError(f"can't retag {x.op} {x.arg}")
-    return x.replace(arg=replace(x.arg, reg=r))
   for j,s in enumerate(x.src):
     # v here is the virtual defined by the original s as s is the rewritten version
     if (v:=rdef(ctx.uops[i].src[j])) in ctx.reals.get(i, {}):

@@ -34,22 +34,41 @@ class IselContext:
     r = self.vreg(cons, size)
     return UOp.alloc((r.size,), dtypes.u8, slot=-1, addrspace=AddrSpace.REG, reg=r)
 
-# CALL sources bound to the ASM's symbolic STOREs are its definitions
+def _asm_outputs(u:UOp) -> tuple[UOp, ...]: return tuple(s for s in u.body.src if s.op is Ops.STORE)
+
+def valid_asm_call(u:UOp) -> bool:
+  if u.op is not Ops.CALL or u.body.op is not Ops.ASM: return False
+  args = [s.src[0] for s in u.body.src if s.op is Ops.STORE and s.src[0].op is Ops.PARAM]
+  if len(args) != len(_asm_outputs(u)) or len(u.src) < 1+len(args): return False
+  start = len(u.src) - len(args)
+  outputs = tuple(x.storage_base for x in u.src[start:])
+  # Output parameters index the ASM operand sequence; the CALL has one additional source for the ASM itself.
+  return tuple(p.arg.slot for p in args) == tuple(range(start-1, len(u.src)-1)) and \
+    all(x.op in {Ops.BUFFER, Ops.ALLOC} and x.addrspace is AddrSpace.REG for x in outputs) and len(set(outputs)) == len(outputs)
+
 def regs(u:UOp) -> tuple[UOp, ...]:
-  return tuple(u.src[s.src[0].arg.slot+1].storage_base for s in u.body.src if s.op is Ops.STORE) if u.op is Ops.CALL else ()
+  if u.op is not Ops.CALL or u.body.op is not Ops.ASM: return ()
+  assert valid_asm_call(u), "invalid assembly output binding"
+  return tuple(x.storage_base for x in u.src[len(u.src)-len(_asm_outputs(u)):])
+
 def with_regs(u:UOp, r:tuple[UOp, ...]) -> UOp:
-  src = u.src[1:len(u.src)-len(u.body.src)]
+  assert u.op is Ops.CALL and u.body.op is Ops.ASM and len(_asm_outputs(u)) in {0, len(r)}
+  assert len(r) == 0 or all(x.storage_base.op in {Ops.BUFFER, Ops.ALLOC} and x.storage_base.addrspace is AddrSpace.REG for x in r)
+  src = u.src[1:len(u.src)-len(_asm_outputs(u))]
   replacements: dict[UOp, UOp] = {}
   defs: list[UOp] = []
   for dst in r:
     base = dst.storage_base
     if base.arg.reg is None:
       base = base.replace(arg=replace(base.arg, reg=regbuf_reg(base)))
-      replacements[dst.storage_base] = base
+
+    replacements[dst.storage_base] = base
     defs.append(base)
   if replacements: src = tuple(x.substitute(replacements) for x in src)
   stores = tuple(UOp.param(i, u.dtype, addrspace=AddrSpace.REG, reg=dst.arg.reg).store(0) for i,dst in enumerate(defs, len(src)))
-  return u.replace(src=(u.body.replace(src=stores),)+src+tuple(defs))
+  ret = u.replace(src=(u.body.replace(src=tuple(s for s in u.body.src if s.op is not Ops.STORE)+stores),)+src+tuple(defs))
+  assert valid_asm_call(ret)
+  return ret
 
 def rdef(u:UOp):
   if u.op in {Ops.AFTER, Ops.BITCAST}: return rdef(u.src[0])
@@ -57,7 +76,7 @@ def rdef(u:UOp):
   b = u.storage_base
   return b if b.op in {Ops.BUFFER, Ops.ALLOC} and b.addrspace is AddrSpace.REG else None
 
-def call_src(u:UOp) -> tuple[UOp, ...]: return u.src[1:len(u.src)-len(u.body.src)]
+def call_src(u:UOp) -> tuple[UOp, ...]: return u.src[1:len(u.src)-len(_asm_outputs(u))]
 def rreg(u:UOp) -> Register:
   if (r:=rdef(u)) is None: raise RuntimeError(f"no register storage for {u}")
   return r.arg.reg
@@ -75,6 +94,7 @@ class ISARenderer(Renderer):
   post_regalloc_matcher: PatternMatcher
   linear_ctx_type: type = LinearContext
 
+  def is_input_register(self, x:UOp) -> bool: return False
   def is_two_address(self, x:UOp) -> bool: return False
   def spill(self, spill_slot:Any, x:UOp) -> UOp: raise NotImplementedError("arch specific")
   def fill(self, spill_slot:Any, x:UOp, reg:Register) -> UOp: raise NotImplementedError("arch specific")
@@ -793,6 +813,8 @@ class X86Renderer(ISARenderer):
     super().__init__(target)
     from tinygrad.runtime.support.compiler_cpu import X86Compiler
     self.compiler = X86Compiler()
+  def is_input_register(self, x:UOp) -> bool:
+    return x.op is Ops.CALL and x.body.op is Ops.ASM and x.body.arg[0] is X86Ops.REG
   def is_two_address(self, x:UOp) -> bool: return x.op is Ops.CALL and x.body.arg[0] in X86GroupOp.TwoAddress
   def copy(self, x:UOp, reg:UOp) -> UOp: return with_regs(UOp.asm(X86Ops.MOV, dtype=x.dtype).call(x), (reg,))
 
