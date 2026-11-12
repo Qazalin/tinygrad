@@ -115,7 +115,8 @@ def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
         nsrc.append(s.replace(src=(fill,)+s.src[1:]) if s.op is Ops.AFTER else fill)
       else: nsrc.append(retag(s, reg))
     else: nsrc.append(s)
-  nx = with_regs(x.replace(src=tuple(nsrc)), tuple(v.replace(arg=replace(v.arg, reg=replace(ctx.reals[i][v], size=v.arg.reg.size))) for v in regs(x))) if regs(x) else x.replace(src=tuple(nsrc))
+  defs = tuple(v.replace(arg=replace(v.arg, reg=replace(ctx.reals[i][v], size=v.arg.reg.size))) for v in regs(x))
+  nx = with_regs(x.replace(src=tuple(nsrc)), defs) if defs else x.replace(src=tuple(nsrc))
 
   before = [ctx.ren.fill(ctx.spills[v], ctx.vdef(v), replace(r, size=v.arg.reg.size)) for v,r in ctx.insert_before.get(i, [])]
   after = [ctx.ren.spill(ctx.spills[v], nx) for v in regs(x) if v in ctx.spills]
