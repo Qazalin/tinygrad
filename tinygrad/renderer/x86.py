@@ -675,6 +675,8 @@ post_regalloc_matcher = PatternMatcher([
 
 # ***** X86 instruction encoding *****
 
+# An explicit view keeps the logical input type after register assignment; a materialized input exposes register storage.
+def input_width(x:UOp): return x.dtype.itemsize if x.op in {Ops.BITCAST, Ops.AFTER} else rreg(x).size
 def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> bytes|None:
   op = x.body.arg
   src = asm_inputs(x)[:-1] if op in X86GroupOp.ReadFlags else asm_inputs(x)
@@ -795,8 +797,8 @@ encodings = {
   X86Ops.VCVTSS2SD: lambda x: encode(x, 0x5A, pp=2, sel=1), X86Ops.VCVTSD2SS: lambda x: encode(x, 0x5A, pp=3, sel=1),
   X86Ops.VCVTPH2PS: lambda x: encode(x, 0x13, pp=1, sel=2), X86Ops.VCVTPS2PH: lambda x: encode(x, 0x1D, pp=1, sel=3),
   # the int src is the 2nd src (the rm field), its width picks the 32 or 64 bit form
-  X86Ops.VCVTSI2SS: lambda x: encode(x, 0x2A, pp=2, sel=1, we=asm_inputs(x)[1].dtype.itemsize == 8),
-  X86Ops.VCVTSI2SD: lambda x: encode(x, 0x2A, pp=3, sel=1, we=asm_inputs(x)[1].dtype.itemsize == 8),
+  X86Ops.VCVTSI2SS: lambda x: encode(x, 0x2A, pp=2, sel=1, we=input_width(asm_inputs(x)[1]) == 8),
+  X86Ops.VCVTSI2SD: lambda x: encode(x, 0x2A, pp=3, sel=1, we=input_width(asm_inputs(x)[1]) == 8),
   X86Ops.VCVTTSS2SI: lambda x: encode(x, 0x2C, pp=2, sel=1, we=asm_dtype(x).itemsize == 8),
   X86Ops.VCVTTSD2SI: lambda x: encode(x, 0x2C, pp=3, sel=1, we=asm_dtype(x).itemsize == 8),
   # int division
@@ -903,7 +905,7 @@ class X86Renderer(ISARenderer):
     op = {2:X86Ops.VPINSRW, 4:X86Ops.VMOVSS, 8:X86Ops.VMOVSD, 16:X86Ops.VMOVUPS}[reg.size] if reg.name.startswith("xmm") else X86Ops.MOV
     address = fold_address(stack_pointer().index(disp), reg.size)
     src = (UOp(Ops.NOOP), *address, imm(dtypes.uint8, 0)) if op is X86Ops.VPINSRW else address
-    return with_regs(UOp.asm(op, dtype=x.dtype).call(*src), (dst,))
+    return with_regs(UOp.asm(op, dtype=asm_dtype(x) if x.op is Ops.CALL else x.dtype).call(*src), (dst,))
 
   def asm_str(self, uops:list[UOp], function_name:str) -> str:
     def _format_op(x:UOp) -> str: return f"    {(o[7:-1] if (o:=str(x.body.arg))[-1] in ('i', 'm') else o[7:]).lower():7s}"
