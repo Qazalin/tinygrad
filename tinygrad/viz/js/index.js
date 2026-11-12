@@ -1066,8 +1066,8 @@ async function main() {
       if (e.data === "[DONE]") { ret.done = true; eventSource.close(); return; }
       const chunk = JSON.parse(e.data);
       ret.push(chunk);
-      // if it's the first one render this new rgaph
-      if (ret.length === 1) return main();
+      // render once the selected graph arrives
+      if (ret.length-1 === state.currentRewrite) return main();
       // otherwise just enable the graph selector
       const ul = document.getElementById(`rewrite-${ret.length-1}`);
       if (ul != null) ul.classList.remove("disabled");
@@ -1160,6 +1160,13 @@ const deselect = (element) => {
 const isExpanded = (el) => el?.classList.contains("expanded");
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "R") {
+    event.preventDefault();
+    for (const e of evtSources) e.close();
+    evtSources.length = 0;
+    cache = {};
+    return main();
+  }
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;
   // up and down change the step or context from the list
   const changeStep = expandSteps && ctxs[currentCtx].steps?.length;
