@@ -322,8 +322,7 @@ def fold_address(x:UOp) -> tuple[UOp, UOp, UOp, UOp]:
 def lea(x:UOp) -> UOp: return x.ins(X86Ops.LEA, src=fold_address(x), dtype=dtypes.uint64)
 def abi(ctx:IselContext, x:UOp) -> UOp:
   src = fold_address(args_pointer().index(UOp.cconst(ctx.arg_offsets[x], dtypes.uint32)))
-  dst = ctx.vreg(WGPR, x.dtype.itemsize if x.addrspace is AddrSpace.ALU else 8)
-  return dst.after(UOp.asm(X86Ops.MOV, dtype=x.dtype if x.addrspace is AddrSpace.ALU else dtypes.uint64).call(*src, dst))
+  return UOp.asm(X86Ops.MOV, dtype=x.dtype if x.addrspace is AddrSpace.ALU else dtypes.uint64).call(*src)
 
 GPR_DEST_OPS = {X86Ops.VPEXTRW, X86Ops.VPEXTRD, X86Ops.VCVTTSS2SI, X86Ops.VCVTTSD2SI, X86Ops.VMOVDm, X86Ops.VMOVQm}
 XMM_OPS = {op for op in X86Ops if op.name.startswith('V')} - GPR_DEST_OPS
@@ -339,8 +338,10 @@ def _xmm_sz(x: UOp) -> X86Ops:
 
 def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
   if is_imm(x) or x.dtype is dtypes.void or x.body.src: return None
-  dst = UOp.param(len(x.src)-2, x.dtype, addrspace=AddrSpace.REG, reg=x.src[-1].base.arg.reg)
-  return x.replace(src=(with_regs(x.body, (dst,)),)+x.src[1:])
+  if x.dtype in dtypes.floats or x.body.arg[0] in XMM_OPS: dst = ctx.vreg(XMM)
+  else: dst = ctx.vreg(WGPR, x.dtype.itemsize)
+  param = UOp.param(len(x.src)-1, x.dtype, addrspace=AddrSpace.REG, reg=dst.arg.reg)
+  return dst.after(x.replace(src=(with_regs(x.body, (param,)),)+x.src[1:]+(dst,)))
 
 """
   if is_imm(x): return None
@@ -443,8 +444,7 @@ isel_matcher = PatternMatcher([
   (UPat.var("a", dtypes.ints+(dtypes.bool,)) ^ UPat.var("b"), lambda a,b: a.ins(X86Ops.XOR, src=(a, b))),
   (UPat(Ops.SUB, dtypes.ints, (UPat.var("a"), UPat.var("b"))), lambda a,b: a.ins(X86Ops.SUB, src=(a, b))),
   # float binary
-  ((UPat(dtype=dtypes.float32) + UPat()).named("x"), lambda ctx,x:
-   (dst:=ctx.vreg(XMM)).after(UOp.asm(X86Ops.VADDSS, dtype=x.dtype).call(*x.src, dst))),
+  ((UPat(dtype=dtypes.float32) + UPat()).named("x"), lambda x: UOp.asm(X86Ops.VADDSS, dtype=x.dtype).call(*x.src)),
   ((UPat(dtype=dtypes.float64) + UPat()).named("x"), lambda x: x.ins(X86Ops.VADDSD)),
   ((UPat(dtype=dtypes.float32) * UPat()).named("x"), lambda x: x.ins(X86Ops.VMULSS)),
   ((UPat(dtype=dtypes.float64) * UPat()).named("x"), lambda x: x.ins(X86Ops.VMULSD)),
@@ -483,9 +483,9 @@ isel_matcher = PatternMatcher([
   (UPat((Ops.INDEX, Ops.SHRINK), name="x"), lambda x: lea(x) if not _is_vec_xmm(x.src[0]) and x.addrspace is not AddrSpace.REG else None),
   # TODO: fuse stores, very few cases -- store cmp becomes setcc, store gep int becomes vpextr, store bitcast to int becomes vmovd/q
   # load, store
-  (UPat(Ops.LOAD, dtypes.floats, src=(UPat(name="a"),), name="x"), lambda ctx,x,a: None if a.addrspace is AddrSpace.REG else
+  (UPat(Ops.LOAD, dtypes.floats, src=(UPat(name="a"),), name="x"), lambda x,a: None if a.addrspace is AddrSpace.REG else
    x.ins(X86Ops.VPINSRW, src=(UOp(Ops.NOOP),) + fold_address(a) + (imm(dtypes.uint8, 0),)) if x.max_numel() * x.dtype.itemsize == 2 else
-   (dst:=ctx.vreg(XMM)).after(UOp.asm(_xmm_sz(x), dtype=x.dtype).call(*fold_address(a), dst))),
+   UOp.asm(_xmm_sz(x), dtype=x.dtype).call(*fold_address(a))),
   (UPat(Ops.LOAD, dtypes.ints+(dtypes.bool,), src=(UPat(name="a"),), name="x"), lambda x,a: None if a.addrspace is AddrSpace.REG else
    x.ins(X86Ops.MOV, src=fold_address(a)) if x.max_numel() == 1 else x.ins(_xmm_sz(x), src=fold_address(a))),
   (UPat.var("a").store(UPat.var("b", dtypes.floats), name="x"), lambda a,b,x: None if a.addrspace is AddrSpace.REG else
