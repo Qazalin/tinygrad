@@ -27,10 +27,12 @@ class IselContext:
     params = sorted([u for u in sink.toposort() if u.op is Ops.PARAM], key=lambda u: u.arg.slot)
     self.arg_offsets = {u: o for u, (o, _) in zip(params, TinyELF.iter_sig(tuple((None, u.addrspace, u.dtype, ()) for u in params)))}
 
-  def vreg(self, cons:tuple[Register, ...]|Register, size:int=0):
+  def vreg(self, cons:tuple[Register, ...]|Register, size:int=0) -> Register:
     cons = cons if isinstance(cons, tuple) else (cons,)
-    reg = Register(f"v{next(self.reg_n)}", 0, cons, size or cons[0].size)
-    return UOp.alloc((reg.size,), dtypes.u8, slot=-1, addrspace=AddrSpace.REG, reg=reg)
+    return Register(f"v{next(self.reg_n)}", 0, cons, size or cons[0].size)
+  def valloc(self, cons:tuple[Register, ...]|Register, size:int=0) -> UOp:
+    r = self.vreg(cons, size)
+    return UOp.alloc((r.size,), dtypes.u8, slot=-1, addrspace=AddrSpace.REG, reg=r)
 
 # the registers an INS defines follow its opcode and dtype in its arg
 def regs(u:UOp) -> tuple[UOp, ...]: return tuple(u.src[s.src[0].arg.slot+1] for s in u.body.src if s.op is Ops.STORE) if u.op is Ops.CALL else ()
@@ -347,15 +349,18 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
   if is_imm(x): return None
   # no register definition
   if x.dtype is dtypes.void: return None
-  # already allocated vregs
-  if regs(x) and regs(x)[0].base.arg.reg._cons: return None
   # a register buffer is a REG, a stack buffer becomes the LEA of its address before regalloc
   if x.op in {Ops.BUFFER, Ops.ALLOC}: return None if x.arg.reg else reg(x.dtype, regbuf_reg(x)) if x.addrspace is AddrSpace.REG else None
-  if regs(x): defs = [ctx.vreg(tuple(r.base.arg.reg for r in regs(x)), x.dtype.itemsize)]
-  elif x.dtype in dtypes.floats or x.body.arg[0] in XMM_OPS: defs = [ctx.vreg(XMM)]
-  else: defs = [ctx.vreg(WGPR, x.dtype.itemsize)]
+  if regs(x):
+    params: dict[UOp, UOp] = {}
+    for s in x.body.src:
+      p, r = s.src[0], s.src[0].arg.reg
+      if not r._cons: params[p] = p.replace(arg=replace(p.arg, reg=ctx.vreg(r, r.size)))
+    return x.replace(src=(x.body.substitute(params),)+x.src[1:]) if params else None
+  if x.dtype in dtypes.floats or x.body.arg[0] in XMM_OPS: defs = [ctx.valloc(XMM)]
+  else: defs = [ctx.valloc(WGPR, x.dtype.itemsize)]
   # TODO: add this once the scheduler can track register pressure
-  # if x.body.arg[0] in X86GroupOp.WriteFlags: defs.append(ctx.vreg(RFLAGS))
+  # if x.body.arg[0] in X86GroupOp.WriteFlags: defs.append(ctx.valloc(RFLAGS))
   return defs[0].after(with_regs(x, tuple(defs)))
 
 def copy_op(dt:DType) -> X86Ops:
