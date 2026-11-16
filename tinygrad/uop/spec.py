@@ -4,6 +4,7 @@ from tinygrad.uop.uir import render_uir
 from tinygrad.dtype import DType, dtypes, AddrSpace, Invalid, weak_dtype
 from tinygrad.helpers import DEBUG, Context, CHECK_OOB, all_same, is_image_shape
 from tinygrad.device import is_disk_device
+from tinygrad.uop import FastEnum
 
 # ***** uop helpers *****
 
@@ -117,6 +118,7 @@ spec_shared = PatternMatcher([
 
   # assembly instruction
   (UPat(Ops.INS, name="x"), lambda x: isinstance(x.arg, tuple) and len(x.arg) >= 2 and isinstance(x.arg[1], DType)),
+  (UPat(Ops.ASM, src=(), name="x"), lambda x: isinstance(x.arg, FastEnum)),
 
   # LOAD(idx) / STORE(idx, val) with gates on the LOAD/STORE; a STORE's value matches its target's dtype
   (UPat(Ops.STORE, src=(UPat(name="t"), UPat(name="v")), allow_any_len=True),

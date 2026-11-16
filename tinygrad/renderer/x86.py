@@ -25,14 +25,11 @@ class IselContext:
 
 def tmp(ctx:IselContext, dtype): return UOp.alloc((), dtype, next(ctx.alloc_n), AddrSpace.REG).base
 
-# the registers an INS defines follow its opcode and dtype in its arg
 def regs(u:UOp) -> tuple[Register, ...]:
-  if u.op in {Ops.BUFFER, Ops.ALLOC}: return (u.arg.reg,) if u.arg.reg is not None else ()
-  return u.arg[2:] if u.op is Ops.INS else ()
+  return (u.arg.reg,) if u.op in {Ops.BUFFER, Ops.ALLOC} and u.arg.reg is not None else ()
 def with_regs(u:UOp, r:tuple[Register, ...]) -> UOp:
-  assert u.dtype is not dtypes.void, "void cannot have output registers"
-  if u.op in {Ops.BUFFER, Ops.ALLOC}: return u.replace(arg=replace(u.arg, reg=r[0]))
-  return u.replace(arg=u.arg[:2]+r)
+  assert u.op in {Ops.BUFFER, Ops.ALLOC} and len(r) == 1
+  return u.replace(arg=replace(u.arg, reg=r[0]))
 
 def rdef(u:UOp):
   if u.op in {Ops.AFTER, Ops.BITCAST}: return rdef(u.src[0])
@@ -318,7 +315,7 @@ def idiv(ctx:IselContext, x:UOp) -> UOp:
 def shift(ctx:IselContext, x:UOp, op:X86Ops) -> UOp:
   val = pin(ctx, x.src[0], tuple(r for r in WGPR if r is not RCX))
   cnt = pin(ctx, x.src[1], RCX)
-  return UOp.ins(op, (val, cnt), x.dtype)
+  return alu_flags(ctx, op, x.dtype, (val, cnt))
 
 def alu_flags(ctx:IselContext, op:X86Ops, dtype:DType, src:tuple[UOp, ...]) -> UOp:
   dst, flags = tmp(ctx, dtype), tmp(ctx, dtypes.uint64)
@@ -350,7 +347,7 @@ GPR_DEST_OPS = {X86Ops.VPEXTRW, X86Ops.VPEXTRD, X86Ops.VCVTTSS2SI, X86Ops.VCVTTS
 XMM_OPS = {op for op in X86Ops if op.name.startswith('V')} - GPR_DEST_OPS
 
 def _is_vec_xmm(y: UOp) -> bool:
-  return (rdef(y) is not None and rdef(y).cons[0] in XMM) or (y.op not in (Ops.BUFFER, Ops.ALLOC, Ops.PARAM, Ops.REFPARAM, Ops.AFTER, Ops.INS) \
+  return (rdef(y) is not None and rdef(y).cons[0] in XMM) or (y.op not in (Ops.BUFFER, Ops.ALLOC, Ops.PARAM, Ops.REFPARAM, Ops.AFTER) \
       and y.max_numel() > 1)
 
 def _xmm_sz(x: UOp) -> X86Ops:
@@ -358,21 +355,6 @@ def _xmm_sz(x: UOp) -> X86Ops:
   if bits >= 16: return X86Ops.VMOVUPS
   if bits >= 8: return X86Ops.VMOVSD
   return X86Ops.VMOVSS
-
-def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
-  # no register definition
-  if x.dtype is dtypes.void: return None
-  # already allocated vregs
-  if regs(x) and regs(x)[0]._cons: return None
-  # a register buffer is a BUFFER, a stack buffer becomes the LEA of its address before regalloc
-  if x.op in {Ops.BUFFER, Ops.ALLOC}:
-    return with_regs(x, (ctx.vreg(regs(x)) if regs(x) else regbuf_reg(x),)) if x.addrspace is AddrSpace.REG else None
-  if regs(x): defs = [ctx.vreg(regs(x))]
-  elif x.dtype in dtypes.floats or x.arg[0] in XMM_OPS: defs = [ctx.vreg(XMM)]
-  else: defs = [ctx.vreg(WGPR)]
-  # TODO: add this once the scheduler can track register pressure
-  # if x.arg[0] in X86GroupOp.WriteFlags: defs.append(ctx.vreg(RFLAGS))
-  return with_regs(x, tuple(defs))
 
 def copy_op(dt:DType) -> X86Ops:
   return {dtypes.float16:X86Ops.VMOVSS, dtypes.float32:X86Ops.VMOVSS, dtypes.float64:X86Ops.VMOVSD, dtypes.bool:X86Ops.MOVZX}.get(dt, X86Ops.MOV)
@@ -403,8 +385,8 @@ def alloc_after(ctx:IselContext, alloc:UOp, call:UOp) -> UOp|None:
 isel_matcher = PatternMatcher([
   # **** Op -> Op ****
   # BACKEDGE becomes a conditional jump to its RANGE, it uses flags
-  (UPat(Ops.BACKEDGE, src=(UPat(), UPat(), UPat(GroupOp.Comparison, name="y")), name="x"), lambda ctx,x,y: UOp.ins({Ops.CMPEQ: X86Ops.JE,
-   Ops.CMPNE: X86Ops.JNE, Ops.CMPLT: X86Ops.JB if y.src[0].dtype in dtypes.uints else X86Ops.JL}[y.op], (x.src[1], x.src[0], cmp(ctx, y)), x.dtype)),
+  (UPat(Ops.BACKEDGE, src=(UPat(), UPat(), UPat(GroupOp.Comparison, name="y")), name="x"), lambda ctx,x,y: UOp.asm({Ops.CMPEQ: X86Ops.JE,
+   Ops.CMPNE: X86Ops.JNE, Ops.CMPLT: X86Ops.JB if y.src[0].dtype in dtypes.uints else X86Ops.JL}[y.op]).call(x.src[1], x.src[0], cmp(ctx, y))),
   # **** Op -> X86Op ****
   # function abi constraints
   (UPat(Ops.PARAM), args_pointer),
@@ -492,16 +474,20 @@ isel_matcher = PatternMatcher([
   # float binary
   ((UPat(dtype=dtypes.float32) + UPat()).named("x"), lambda ctx,x:
    (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VADDSS).call(dst, *x.src))),
-  ((UPat(dtype=dtypes.float64) + UPat()).named("x"), lambda x: UOp.ins(X86Ops.VADDSD, x.src, x.dtype)),
+  ((UPat(dtype=dtypes.float64) + UPat()).named("x"), lambda ctx,x:
+   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VADDSD).call(dst, *x.src))),
   ((UPat(dtype=dtypes.float32) * UPat()).named("x"), lambda ctx,x:
    (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VMULSS).call(dst, *x.src))),
-  ((UPat(dtype=dtypes.float64) * UPat()).named("x"), lambda x: UOp.ins(X86Ops.VMULSD, x.src, x.dtype)),
+  ((UPat(dtype=dtypes.float64) * UPat()).named("x"), lambda ctx,x:
+   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VMULSD).call(dst, *x.src))),
   (UPat(Ops.SUB, dtypes.float32, name="x"), lambda ctx,x:
    (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VSUBSS).call(dst, *x.src))),
-  (UPat(Ops.SUB, dtypes.float64, name="x"), lambda x: UOp.ins(X86Ops.VSUBSD, x.src, x.dtype)),
+  (UPat(Ops.SUB, dtypes.float64, name="x"), lambda ctx,x:
+   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VSUBSD).call(dst, *x.src))),
   (UPat(Ops.FDIV, dtypes.float32, name="x"), lambda ctx,x:
    (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VDIVSS).call(dst, *x.src))),
-  (UPat(Ops.FDIV, dtypes.float64, name="x"), lambda x: UOp.ins(X86Ops.VDIVSD, x.src, x.dtype)),
+  (UPat(Ops.FDIV, dtypes.float64, name="x"), lambda ctx,x:
+   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VDIVSD).call(dst, *x.src))),
   # casts
   (UPat(dtype=dtypes.float32).cast(dtypes.float16, name="x"), lambda ctx,x:
    (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VCVTPS2PH).call(dst, *x.src, imm(dtypes.uint8, 4)))),
@@ -509,12 +495,16 @@ isel_matcher = PatternMatcher([
    (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VCVTPH2PS).call(dst, *x.src))),
   (UPat(dtype=dtypes.float32).cast(dtypes.int32s+dtypes.int64s, name="x"), lambda ctx,x:
    (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VCVTTSS2SI).call(dst, *x.src))),
-  (UPat(dtype=dtypes.float64).cast(dtypes.int32s+dtypes.int64s, name="x"), lambda x: UOp.ins(X86Ops.VCVTTSD2SI, x.src, x.dtype)),
-  (UPat.var("y", dtypes.float32).cast(dtypes.float64, name="x"), lambda y,x: UOp.ins(X86Ops.VCVTSS2SD, (y, y), x.dtype)),
-  (UPat.var("y", dtypes.float64).cast(dtypes.float32, name="x"), lambda y,x: UOp.ins(X86Ops.VCVTSD2SS, (y, y), x.dtype)),
+  (UPat(dtype=dtypes.float64).cast(dtypes.int32s+dtypes.int64s, name="x"), lambda ctx,x:
+   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VCVTTSD2SI).call(dst, *x.src))),
+  (UPat.var("y", dtypes.float32).cast(dtypes.float64, name="x"), lambda ctx,y,x:
+   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VCVTSS2SD).call(dst, y, y))),
+  (UPat.var("y", dtypes.float64).cast(dtypes.float32, name="x"), lambda ctx,y,x:
+   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VCVTSD2SS).call(dst, y, y))),
   (UPat.var("y", (dtypes.int32, dtypes.int64)).cast(dtypes.float32, name="x"), lambda ctx,y,x:
    (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VCVTSI2SS).call(dst, UOp(Ops.NOOP), y))),
-  (UPat.var("y", (dtypes.int32, dtypes.int64)).cast(dtypes.float64, name="x"), lambda y,x: UOp.ins(X86Ops.VCVTSI2SD, (UOp(Ops.NOOP), y), x.dtype)),
+  (UPat.var("y", (dtypes.int32, dtypes.int64)).cast(dtypes.float64, name="x"), lambda ctx,y,x:
+   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VCVTSI2SD).call(dst, UOp(Ops.NOOP), y))),
   (UPat(dtype=(dtypes.uint8, dtypes.uint16, dtypes.bool)).cast(dtypes.ints, name="x"), lambda ctx,x:
    (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.MOVZX).call(dst, *x.src)) if x.src[0].dtype.itemsize < x.dtype.itemsize else None),
   (UPat(dtype=dtypes.int32).cast(dtypes.int64s, name="x"), lambda ctx,x:
@@ -529,10 +519,12 @@ isel_matcher = PatternMatcher([
   (UPat(dtype=dtypes.int16s).bitcast(dtypes.float16).named("x"), lambda ctx,x: vpins(ctx, x, x.src)),
   (UPat(dtype=dtypes.int32s).bitcast(dtypes.float32).named("x"), lambda ctx,x:
    (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VMOVD).call(dst, *x.src))),
-  (UPat(dtype=dtypes.int64s).bitcast(dtypes.float64).named("x"), lambda x: UOp.ins(X86Ops.VMOVQ, x.src, x.dtype)),
+  (UPat(dtype=dtypes.int64s).bitcast(dtypes.float64).named("x"), lambda ctx,x:
+   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VMOVQ).call(dst, *x.src))),
   (UPat(dtype=dtypes.float32).bitcast(dtypes.int32s).named("x"), lambda ctx,x:
    (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VMOVDm).call(dst, *x.src))),
-  (UPat(dtype=dtypes.float64).bitcast(dtypes.int64s).named("x"), lambda x: UOp.ins(X86Ops.VMOVQm, x.src, x.dtype)),
+  (UPat(dtype=dtypes.float64).bitcast(dtypes.int64s).named("x"), lambda ctx,x:
+   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.VMOVQm).call(dst, *x.src))),
   # lower register mops: a store is just a copy, load is an anon copy to preserve ordering
   (UPat.var("a").store(UPat.var("val")), lambda a,val:
     (dst:=with_regs(buf.without_after, (regbuf_reg(buf.without_after),))).after(UOp.asm(copy_op(val.dtype)).call(dst, val.after(buf)))
@@ -559,7 +551,6 @@ isel_matcher = PatternMatcher([
   # move const to registers for instructions that don't support immediate operands
   (UPat(Ops.ASM).call(allow_any_len=True, name="x"), load_const),
   # allocate virtual registers
-  #(UPat((Ops.INS, Ops.BUFFER, Ops.ALLOC), name="x"), alloc_vregs),
   (UPat(Ops.ALLOC, name="alloc").after(UPat(Ops.ASM).call(allow_any_len=True, name="call")), alloc_after),
 ])
 
