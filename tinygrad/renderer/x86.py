@@ -375,8 +375,7 @@ def load_const(ctx:IselContext, x:UOp) -> UOp:
   return x.replace(src=tuple(s if i in immediate else mov_op(ctx, s) for i,s in enumerate(x.src)))
 
 def alloc_after(ctx:IselContext, alloc:UOp, call:UOp) -> UOp|None:
-  assert alloc.addrspace is AddrSpace.REG, "asm cannot write to non reg"
-  if alloc.arg.reg is not None: return None
+  if alloc.addrspace is not AddrSpace.REG or alloc.arg.reg is not None: return None
   if alloc.dtype in dtypes.floats or call.body.arg in XMM_OPS: dst = ctx.vreg(XMM)
   else: dst = ctx.vreg(WGPR)
   reg = alloc.replace(arg=replace(alloc.arg, reg=dst))

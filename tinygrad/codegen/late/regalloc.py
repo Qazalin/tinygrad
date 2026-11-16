@@ -15,6 +15,7 @@ class LinearScanRegallocContext:
       if u.op is Ops.AFTER and u.src[0].op in {Ops.BUFFER, Ops.ALLOC}:
         for call in u.src[1:]:
           if call.op is Ops.CALL and call.body.op is Ops.ASM: self.outputs.setdefault(call, []).append(u.src[0])
+    self.outputs = {call: [s for s in call.src[1:] if s in outputs] for call,outputs in self.outputs.items()}
     written = {dst for outputs in self.outputs.values() for dst in outputs}
     self.defs = {u: tuple(unwrap(rdef(dst)) for dst in self.outputs.get(u, [])) if u.op is Ops.CALL else
                  regs(u) if u not in written else () for u in uops}
