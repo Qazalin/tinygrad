@@ -817,6 +817,7 @@ class X86Renderer(ISARenderer):
     return "\n".join(asm)
 
   def render(self, uops:list[UOp]) -> str:
+    return ""
     targets: dict[UOp, int] = {}
     jumps: dict[UOp, int] = {}
     binary = bytearray()

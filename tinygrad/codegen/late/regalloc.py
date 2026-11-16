@@ -97,9 +97,9 @@ class LinearScanRegallocContext:
 
 def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
   from tinygrad.uop.ops import graph_rewrite
-  graph_rewrite(x, PatternMatcher([]), name="view regalloc input")
   i = next(ctx.idx)
   if x.op in PSEUDO_OPS: return None
+  graph_rewrite(x, PatternMatcher([]), name="view regalloc input")
   nsrc = []
   def retag(x:UOp, r:Register) -> UOp:
     return x.replace(src=(retag(x.src[0],r),*x.src[1:])) if x.op in {Ops.AFTER, Ops.BITCAST} else with_regs(x, (r,))
@@ -118,8 +118,9 @@ def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
   before = [ctx.ren.fill(ctx.spills[v], ctx.vdef(v), r) for v,r in ctx.insert_before.get(i, [])]
   after = [ctx.ren.spill(ctx.spills[v], nx) for v in regs(x) if v in ctx.spills]
 
+  graph_rewrite(nx, PatternMatcher([]), name="view regalloc output")
   return nx, before + [nx] + after
 
 pm_regalloc_rewrite = PatternMatcher([
-  (UPat({Ops.INS, Ops.BUFFER, Ops.ALLOC, Ops.RANGE, Ops.END} | PSEUDO_OPS, name="x"), regalloc_rewrite),
+  (UPat({Ops.INS, Ops.BUFFER, Ops.ALLOC, Ops.RANGE, Ops.END, Ops.CALL} | PSEUDO_OPS, name="x"), regalloc_rewrite),
 ])
