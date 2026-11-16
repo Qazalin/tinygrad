@@ -488,9 +488,9 @@ isel_matcher = PatternMatcher([
   (UPat((Ops.INDEX, Ops.SHRINK), name="x"), lambda x: lea(x) if not _is_vec_xmm(x.src[0]) and x.addrspace is not AddrSpace.REG else None),
   # TODO: fuse stores, very few cases -- store cmp becomes setcc, store gep int becomes vpextr, store bitcast to int becomes vmovd/q
   # load, store
-  (UPat(Ops.LOAD, dtypes.floats, src=(UPat(name="a"),), name="x"), lambda x,a: None if a.addrspace is AddrSpace.REG else
+  (UPat(Ops.LOAD, dtypes.floats, src=(UPat(name="a"),), name="x"), lambda ctx,x,a: None if a.addrspace is AddrSpace.REG else
    UOp.ins(X86Ops.VPINSRW, (UOp(Ops.NOOP),) + fold_address(a) + (imm(dtypes.uint8, 0),), x.dtype) if x.max_numel() * x.dtype.itemsize == 2 else
-   UOp.ins(_xmm_sz(x), fold_address(a), x.dtype)),
+   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(_xmm_sz(x)).call(dst, *fold_address(a)))),
   (UPat(Ops.LOAD, dtypes.ints+(dtypes.bool,), src=(UPat(name="a"),), name="x"), lambda ctx,x,a: None if a.addrspace is AddrSpace.REG else
    (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.MOV).call(dst, *fold_address(a)))
    if x.max_numel() == 1 else UOp.ins(_xmm_sz(x), fold_address(a), x.dtype)),
