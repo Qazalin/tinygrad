@@ -78,7 +78,7 @@ class LinearScanRegallocContext:
             # two address instructions (src is reused by def) can only coalesce reused src.
             # reused src goes first to get priority in case of a tiebreak
             if ren.is_two_address(u) and j == 0:
-              uses = tuple(live.get(rdef(s)) for s in u.src)
+              uses = tuple(live.get(rdef(s)) for s in self.reads[u] if rdef(s) is not None)
               cons = ((uses[0],) if uses[0] in cons else ()) + tuple(r for r in cons if r not in uses)
             live[v] = alloc(cons, i+1)
           self.reals.setdefault(i, {})[v] = live[v]
