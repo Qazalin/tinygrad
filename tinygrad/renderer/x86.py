@@ -490,7 +490,7 @@ isel_matcher = PatternMatcher([
    UOp.ins(X86Ops.MOV, fold_address(a), x.dtype) if x.max_numel() == 1 else UOp.ins(_xmm_sz(x), fold_address(a), x.dtype)),
   (UPat.var("a").store(UPat.var("b", dtypes.floats), name="x"), lambda a,b,x: None if a.addrspace is AddrSpace.REG else
    UOp.ins(X86Ops.VPEXTRW, fold_address(a) + (b, imm(dtypes.uint8, 0)), x.dtype) if b.max_numel() * b.dtype.itemsize == 2 else
-   UOp.ins(X86Ops[_xmm_sz(b).name+"m"], fold_address(a) + (b,), x.dtype)),
+   (addr:=fold_address(a))[0].after(UOp.asm(X86Ops[_xmm_sz(b).name+"m"]).call(*addr, b))),
   (UPat.var("a").store(UPat.var("b", dtypes.ints+(dtypes.bool,)), name="x"), lambda a,b,x: None if a.addrspace is AddrSpace.REG else
    UOp.ins(X86Ops[_xmm_sz(b).name+"m"], fold_address(a) + (b,), x.dtype) if b.max_numel() > 1 else
    UOp.ins(X86Ops.MOVm, fold_address(a) + (b,), x.dtype) if (i:=to_imm(b)) is None else UOp.ins(X86Ops.MOVi, fold_address(a) + (i,), x.dtype)),

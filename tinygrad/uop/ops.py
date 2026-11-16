@@ -597,6 +597,8 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   def barrier(self, *src:UOp): return UOp(Ops.BARRIER, src=(self,)+src)
   @staticmethod
   def ins(op, src:tuple[UOp, ...], dtype:DType) -> UOp: return UOp(Ops.INS, src, (op, dtype))
+  @staticmethod
+  def asm(op) -> UOp: return UOp(Ops.ASM, arg=op)
   def contract(self, *rngs:UOp):
     assert all(x.axis_type == AxisType.UPCAST for x in rngs), "all contract ranges must be upcast"
     return UOp.stack(*[self.substitute(dict(zip(rngs, [r.const_like(i) for r,i in zip(rngs, idx)])))
@@ -1356,7 +1358,7 @@ class ProgramInfo:
                        tuple(sorted(dedup(ins))), target)
 
 # the body of a CALL is always one of these: programs (SINK/PROGRAM/LINEAR), bulk stores, and function references
-OPAQUE_CALL_BODIES = {Ops.SINK, Ops.PROGRAM, Ops.LINEAR, Ops.STORE, Ops.CUSTOM_FUNCTION}
+OPAQUE_CALL_BODIES = {Ops.SINK, Ops.PROGRAM, Ops.LINEAR, Ops.STORE, Ops.CUSTOM_FUNCTION, Ops.ASM}
 
 # the arg of CUSTOM_FUNCTION: an external function symbol and the dtype of the value it returns
 @dataclass(frozen=True)
