@@ -990,7 +990,7 @@ async function main() {
       }
       appendSteps(ul, i, steps);
     }
-    return setState({ currentCtx: 2, currentStep: 36, expandSteps: true });
+    return setState({ currentCtx: 2, currentStep: 37, expandSteps: true });
   }
   // ** center graph
   const { currentCtx, currentStep, currentRewrite, expandSteps } = state;

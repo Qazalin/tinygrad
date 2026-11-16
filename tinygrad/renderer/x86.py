@@ -546,13 +546,16 @@ def lower_range(x:UOp) -> tuple[UOp, list[UOp]]:
   bound = x.src[0]
   deps:tuple[UOp, ...] = ()
   while bound.op is Ops.AFTER: bound, deps = bound.src[0], deps + bound.src[1:]
-  idx = with_regs(UOp.ins(X86Ops.MOVi, (imm(x.dtype, 0),) + deps, x.dtype), (regbuf_reg(x),))
+  counter = UOp.alloc((), x.dtype, slot=-1, addrspace=AddrSpace.REG).base
+  counter = counter.replace(arg=replace(counter.arg, reg=regbuf_reg(x)))
+  init = UOp.asm(X86Ops.MOVi).call(counter, imm(x.dtype, 0).after(*deps))
+  idx = counter.after(init)
   flags = with_regs(UOp.alloc((), dtypes.uint64, slot=-1, addrspace=AddrSpace.REG).base, (regbuf_reg(x, (RFLAGS,)),))
   cmp = UOp.asm(X86Ops.CMPi if is_imm(bound) else X86Ops.CMP).call(flags, idx, bound)
-  return idx.after(x), [idx, flags, x, start:=label(x), cmp, ready:=flags.after(cmp), UOp.asm(X86Ops.JGE).call(start, ready)]
+  return idx.after(x), [counter, init, idx, flags, x, start:=label(x), cmp, ready:=flags.after(cmp), UOp.asm(X86Ops.JGE).call(start, ready)]
 
 def lower_end(x:UOp, c:UOp) -> tuple[UOp, list[UOp]]:
-  inc = with_regs(UOp.ins(X86Ops.ADDi, (c, imm(c.dtype, 1)), c.dtype), regs(c.src[0]))
+  inc = with_regs(UOp.ins(X86Ops.ADDi, (c, imm(c.dtype, 1)), c.dtype), regs(c.without_after))
   return (end:=x.replace(src=(x.src[0], c.src[1]))), [inc, end]
 
 pre_regalloc_matcher = PatternMatcher([

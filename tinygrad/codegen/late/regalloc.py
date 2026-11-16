@@ -96,6 +96,8 @@ class LinearScanRegallocContext:
           if v in self.spills and v not in live_in: live.pop(v)
 
 def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
+  from tinygrad.uop.ops import graph_rewrite
+  graph_rewrite(x, PatternMatcher([]), name="view regalloc input")
   i = next(ctx.idx)
   if x.op in PSEUDO_OPS: return None
   nsrc = []
