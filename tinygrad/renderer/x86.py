@@ -551,7 +551,8 @@ def lower_range(x:UOp) -> tuple[UOp, list[UOp]]:
   idx = counter.after(init)
   flags = with_regs(UOp.alloc((), dtypes.uint64, slot=-1, addrspace=AddrSpace.REG).base, (regbuf_reg(x, (RFLAGS,)),))
   cmp = UOp.asm(X86Ops.CMPi if is_imm(bound) else X86Ops.CMP).call(flags, idx, bound)
-  return idx.after(x), [counter, init, idx, flags, x, start:=label(x), cmp, ready:=flags.after(cmp), UOp.asm(X86Ops.JGE).call(start, ready)]
+  return (value:=idx.after(x)), [counter, init, idx, flags, x, value, start:=label(x), cmp, ready:=flags.after(cmp),
+                               UOp.asm(X86Ops.JGE).call(start, ready)]
 
 def lower_end(x:UOp, c:UOp) -> tuple[UOp, list[UOp]]:
   counter = c.without_after
@@ -559,7 +560,8 @@ def lower_end(x:UOp, c:UOp) -> tuple[UOp, list[UOp]]:
   flags = flags.replace(arg=replace(flags.arg, reg=regbuf_reg(x, (RFLAGS,))))
   inc = UOp.asm(X86Ops.ADDi).call(counter, flags, c, imm(c.dtype, 1))
   idx, ready = counter.after(inc), flags.after(inc)
-  return (end:=x.replace(src=(x.src[0].after(idx, ready), c.src[1]))), [flags, inc, idx, ready, end]
+  effect = x.src[0].after(idx, ready)
+  return (end:=x.replace(src=(effect, c.src[1]))), [flags, inc, idx, ready, effect, end]
 
 pre_regalloc_matcher = PatternMatcher([
   (UPat(Ops.BUFFER, name="x"), lambda ctx,x: alloc_buffer(ctx,x) if x.addrspace is not AddrSpace.REG else None),

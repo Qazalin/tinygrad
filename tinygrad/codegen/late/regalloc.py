@@ -1,15 +1,29 @@
 import itertools
-from tinygrad.helpers import dedup
+from tinygrad.helpers import dedup, unwrap
 from tinygrad.uop.ops import UOp, Ops, PatternMatcher, UPat
 from tinygrad.renderer.x86 import ISARenderer, Register, rdef, regs, with_regs, LinearContext
 
 # ops that participate in register allocation
-REGALLOC_OPS = {Ops.INS, Ops.BUFFER, Ops.RANGE, Ops.END}
+REGALLOC_OPS = {Ops.CALL, Ops.BUFFER, Ops.ALLOC, Ops.RANGE, Ops.END}
 
 class LinearScanRegallocContext:
   # returns the uop that defines the virtual register
-  def vdef(self, v:Register) -> UOp: return self.uops[self.live_range[v][0]]
+  def vdef(self, v:Register) -> UOp: return self.definitions[v]
   def __init__(self, ctx:LinearContext, uops:list[UOp], ren:ISARenderer):
+    self.outputs: dict[UOp, list[UOp]] = {}
+    for u in uops:
+      if u.op is Ops.AFTER and u.src[0].op in {Ops.BUFFER, Ops.ALLOC}:
+        for call in u.src[1:]:
+          if call.op is Ops.CALL and call.body.op is Ops.ASM: self.outputs.setdefault(call, []).append(u.src[0])
+    written = {dst for outputs in self.outputs.values() for dst in outputs}
+    self.defs = {u: tuple(unwrap(rdef(dst)) for dst in self.outputs.get(u, [])) if u.op is Ops.CALL else
+                 regs(u) if u not in written else () for u in uops}
+    self.reads = {u: tuple(s for s in u.src if s not in self.outputs.get(u, [])) for u in uops}
+    self.definitions: dict[Register, UOp] = {}
+    for call, outputs in self.outputs.items():
+      for dst in outputs: self.definitions.setdefault(unwrap(rdef(dst)), dst.after(call))
+    self.definitions.update({r:u for u in uops if u.op is Ops.BUFFER for r in self.defs[u]})
+    self.bindings: dict[UOp, dict[UOp, UOp]] = {}
     self.uops = uops = [u for u in uops if u.op in REGALLOC_OPS]
     self.ren = ren
     self.idx = itertools.count()
@@ -19,8 +33,8 @@ class LinearScanRegallocContext:
     lr = self.live_range
     loops: dict[int, int] = {} # the interval of each loop, from its RANGE to the last uop that reads that RANGE
     for idx,u in reversed(list(enumerate(uops))):
-      defs = regs(u)
-      for v in defs + tuple(rdef(s) for s in dedup(u.src)):
+      defs = self.defs[u]
+      for v in defs + tuple(rdef(s) for s in dedup(self.reads[u])):
         if isinstance(v, Register): lr.setdefault(v, []).insert(0, idx)
       for v in defs:
         if (n:=max((e for s,e in loops.items() if s <= lr[v][-1] < e), default=None)): lr[v].append(n)
@@ -51,14 +65,14 @@ class LinearScanRegallocContext:
 
     for i,u in enumerate(uops):
       # allocate uses
-      for s in u.src:
+      for s in self.reads[u]:
         if not isinstance(v:=rdef(s), Register): continue
         if v not in live: live[v] = fill(v, i)
         self.reals.setdefault(i, {})[v] = live[v]
 
       # allocate defs
-      if regs(u):
-        for j,v in enumerate(regs(u)):
+      if self.defs[u]:
+        for j,v in enumerate(self.defs[u]):
           if v not in live:
             cons = v.cons
             # two address instructions (src is reused by def) can only coalesce reused src.
@@ -96,6 +110,7 @@ class LinearScanRegallocContext:
 def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
   from tinygrad.uop.ops import graph_rewrite
   i = next(ctx.idx)
+  original = ctx.uops[i]
   graph_rewrite(x, PatternMatcher([]), name="view regalloc input")
   nsrc = []
   def retag(x:UOp, r:Register) -> UOp:
@@ -104,20 +119,24 @@ def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
     # v here is the virtual defined by the original s as s is the rewritten version
     if (v:=rdef(ctx.uops[i].src[j])) in ctx.reals.get(i, {}):
       reg = ctx.reals[i][v]
-      if v in ctx.spills:
+      if v in ctx.spills and ctx.uops[i].src[j] in ctx.reads[original]:
         fill = ctx.ren.fill(ctx.spills[v], ctx.vdef(v), reg)
         # an AFTER-wrapped value (e.g. a RANGE bound) keeps its ordering deps around the fill
         nsrc.append(s.replace(src=(fill,)+s.src[1:]) if s.op is Ops.AFTER else fill)
       else: nsrc.append(retag(s, reg))
     else: nsrc.append(s)
-  nx = with_regs(x.replace(src=tuple(nsrc)), tuple(ctx.reals[i][v] for v in regs(x))) if regs(x) else x.replace(src=tuple(nsrc))
+  nx = x.replace(src=tuple(nsrc))
+  if x.op in {Ops.BUFFER, Ops.ALLOC} and ctx.defs[original]: nx = with_regs(nx, tuple(ctx.reals[i][v] for v in ctx.defs[original]))
+  ctx.bindings[nx] = {dst: nx.src[original.src.index(dst)] for dst in ctx.outputs.get(original, [])}
 
   before = [ctx.ren.fill(ctx.spills[v], ctx.vdef(v), r) for v,r in ctx.insert_before.get(i, [])]
-  after = [ctx.ren.spill(ctx.spills[v], nx) for v in regs(x) if v in ctx.spills]
+  after = [ctx.ren.spill(ctx.spills[v], dst.after(nx)) for old,dst in ctx.bindings[nx].items() if (v:=rdef(old)) in ctx.spills]
 
   graph_rewrite(nx, PatternMatcher([]), name="view regalloc output")
   return nx, before + [nx] + after
 
 pm_regalloc_rewrite = PatternMatcher([
-  #(UPat(REGALLOC_OPS, name="x"), regalloc_rewrite),
+  (UPat(REGALLOC_OPS, name="x"), regalloc_rewrite),
+  (UPat((Ops.BUFFER, Ops.ALLOC), name="dst").after(UPat(Ops.ASM).call(allow_any_len=True, name="call")),
+   lambda ctx,dst,call: ((out:=ctx.bindings[call][dst].after(call)), [out])),
 ])
