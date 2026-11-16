@@ -24,6 +24,8 @@ class LinearScanRegallocContext:
       for dst in outputs: self.definitions.setdefault(unwrap(rdef(dst)), dst.after(call))
     self.definitions.update({r:u for u in uops if u.op is Ops.BUFFER for r in self.defs[u]})
     self.bindings: dict[UOp, dict[UOp, UOp]] = {}
+    self.reloads: dict[Register, UOp] = {}
+    self.effect = UOp(Ops.NOOP)
     self.uops = uops = [u for u in uops if u.op in REGALLOC_OPS]
     self.ren = ren
     self.idx = itertools.count()
@@ -112,25 +114,29 @@ def regalloc_rewrite(ctx:LinearScanRegallocContext, x:UOp):
   i = next(ctx.idx)
   original = ctx.uops[i]
   graph_rewrite(x, PatternMatcher([]), name="view regalloc input")
+  before = []
+  for v,r in ctx.insert_before.get(i, []):
+    value = ctx.ren.fill(ctx.spills[v], ctx.vdef(v), r, ctx.effect)
+    before.append(value)
+    ctx.reloads[v], ctx.effect = value, value
   nsrc = []
-  def retag(x:UOp, r:Register) -> UOp:
-    return x.replace(src=(retag(x.src[0],r),*x.src[1:])) if x.op in {Ops.AFTER, Ops.BITCAST} else with_regs(x, (r,))
+  def retag(x:UOp, r:Register, value:UOp|None=None) -> UOp:
+    return x.replace(src=(retag(x.src[0],r,value),*x.src[1:])) if x.op in {Ops.AFTER, Ops.BITCAST} else \
+      value if value is not None else with_regs(x, (r,))
   for j,s in enumerate(x.src):
     # v here is the virtual defined by the original s as s is the rewritten version
     if (v:=rdef(ctx.uops[i].src[j])) in ctx.reals.get(i, {}):
       reg = ctx.reals[i][v]
-      if v in ctx.spills and ctx.uops[i].src[j] in ctx.reads[original]:
-        fill = ctx.ren.fill(ctx.spills[v], ctx.vdef(v), reg)
-        # an AFTER-wrapped value (e.g. a RANGE bound) keeps its ordering deps around the fill
-        nsrc.append(s.replace(src=(fill,)+s.src[1:]) if s.op is Ops.AFTER else fill)
-      else: nsrc.append(retag(s, reg))
+      nsrc.append(retag(s, reg, ctx.reloads.get(v) if original.src[j] in ctx.reads[original] else None))
     else: nsrc.append(s)
   nx = x.replace(src=tuple(nsrc))
   if x.op in {Ops.BUFFER, Ops.ALLOC} and ctx.defs[original]: nx = with_regs(nx, tuple(ctx.reals[i][v] for v in ctx.defs[original]))
   ctx.bindings[nx] = {dst: nx.src[original.src.index(dst)] for dst in ctx.outputs.get(original, [])}
 
-  before = [ctx.ren.fill(ctx.spills[v], ctx.vdef(v), r) for v,r in ctx.insert_before.get(i, [])]
-  after = [ctx.ren.spill(ctx.spills[v], dst.after(nx)) for old,dst in ctx.bindings[nx].items() if (v:=rdef(old)) in ctx.spills]
+  values = [dst.after(nx) for dst in ctx.bindings[nx].values()] if x.op is Ops.CALL else [nx]
+  after = [ctx.ren.spill(ctx.spills[v], value) for v,value in zip(ctx.defs[original], values) if v in ctx.spills]
+  for v in ctx.defs[original]: ctx.reloads.pop(v, None)
+  if x.op in {Ops.CALL, Ops.RANGE, Ops.END} or after: ctx.effect = ctx.effect.after(nx, *after)
 
   graph_rewrite(nx, PatternMatcher([]), name="view regalloc output")
   return nx, before + [nx] + after
