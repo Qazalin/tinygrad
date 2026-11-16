@@ -12,7 +12,7 @@ def lane(y:UOp, i:int) -> UOp: return y.index(UOp.cconst(i, dtypes.int))
 class TestIselX86(unittest.TestCase):
   def isel_rewrite(self, x:UOp):
     x = pack_args(x, ProgramInfo.from_sink(x).params)
-    return graph_rewrite(x, X86Renderer(Target(device="CPU", arch="x86_64")).isel_matcher, IselContext(), bottom_up=True)
+    return graph_rewrite(x, X86Renderer(Target(device="CPU", arch="x86_64")).isel_matcher, IselContext(x), bottom_up=True)
 
   def _check_op(self, dt_op, expr):
     nargs = expr.__code__.co_argcount

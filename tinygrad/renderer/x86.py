@@ -19,8 +19,12 @@ class Register:
   def __repr__(self): return self.name
 
 class IselContext:
-  def __init__(self): self.reg_n = itertools.count()
+  def __init__(self, sink:UOp):
+    self.reg_n = itertools.count()
+    self.alloc_n = itertools.count(max((x.arg.slot+1 for x in sink.toposort() if x.op is Ops.ALLOC), default=0))
   def vreg(self, cons:tuple[Register, ...]|Register): return Register(f"v{next(self.reg_n)}", 0, cons if isinstance(cons, tuple) else (cons,))
+
+def tmp(ctx:IselContext, dtype): return UOp.alloc((), dtype, next(ctx.alloc_n), AddrSpace.REG).base
 
 # the registers an INS defines follow its opcode and dtype in its arg
 def regs(u:UOp) -> tuple[Register, ...]:
@@ -486,8 +490,9 @@ isel_matcher = PatternMatcher([
   (UPat(Ops.LOAD, dtypes.floats, src=(UPat(name="a"),), name="x"), lambda x,a: None if a.addrspace is AddrSpace.REG else
    UOp.ins(X86Ops.VPINSRW, (UOp(Ops.NOOP),) + fold_address(a) + (imm(dtypes.uint8, 0),), x.dtype) if x.max_numel() * x.dtype.itemsize == 2 else
    UOp.ins(_xmm_sz(x), fold_address(a), x.dtype)),
-  (UPat(Ops.LOAD, dtypes.ints+(dtypes.bool,), src=(UPat(name="a"),), name="x"), lambda x,a: None if a.addrspace is AddrSpace.REG else
-   UOp.ins(X86Ops.MOV, fold_address(a), x.dtype) if x.max_numel() == 1 else UOp.ins(_xmm_sz(x), fold_address(a), x.dtype)),
+  (UPat(Ops.LOAD, dtypes.ints+(dtypes.bool,), src=(UPat(name="a"),), name="x"), lambda ctx,x,a: None if a.addrspace is AddrSpace.REG else
+   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.MOV).call(dst, *fold_address(a)))
+   if x.max_numel() == 1 else UOp.ins(_xmm_sz(x), fold_address(a), x.dtype)),
   (UPat.var("a").store(UPat.var("b", dtypes.floats), name="x"), lambda a,b,x: None if a.addrspace is AddrSpace.REG else
    UOp.ins(X86Ops.VPEXTRW, fold_address(a) + (b, imm(dtypes.uint8, 0)), x.dtype) if b.max_numel() * b.dtype.itemsize == 2 else
    (addr:=fold_address(a))[0].after(UOp.asm(X86Ops[_xmm_sz(b).name+"m"]).call(*addr, b))),
