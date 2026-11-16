@@ -75,8 +75,8 @@ const layoutUOp = (g, { graph, change }, opts) => {
       dims = rectDims(width, height);
     }
     const op = label.split("\n", 1)[0];
-    const callNode = op === "CALL" || op === "PROGRAM";
-    const collapsePorts = op === "CALL" ? [0] : op === "PROGRAM" ? [0, 1] : null;
+    const callNode = op === "CALL" //|| op === "PROGRAM";
+    const collapsePorts = op === "CALL" ? [0] : op === "PROGRAM" ? null : null;
     if (callNode) callCount++;
     g.setNode(k, {...dims, label, labelX:0, ref, id:k, color, callNode, collapsePorts, exclude, addrspace, source, lang,
       className:label.startsWith("REWRITE_ERROR") ? "err" : null});

@@ -232,6 +232,7 @@ RSP = Register("rsp", 4)
 RBP = Register("rbp", 5)
 RSI = Register("rsi", 6)
 RDI = Register("rdi", 7)
+RFLAGS = Register("rflags", 0)
 GPR = (RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI) + tuple(Register(f"r{i}", i) for i in range(8, 16))
 XMM = tuple(Register(f"xmm{i}", i) for i in range(16))
 # gprs you can write to
@@ -250,7 +251,8 @@ def args_pointer() -> UOp: return reg(dtypes.uint64, RDI)
 
 # ***** X86 instruction selection *****
 # a register buffer is its own virtual register, named by its identity
-def regbuf_reg(x:UOp) -> Register: return rdef(x) or Register(f"b{x.key.hex()}", 0, XMM if x.dtype in dtypes.floats else WGPR)
+def regbuf_reg(x:UOp, cons:tuple[Register, ...]|None=None) -> Register:
+  return rdef(x) or Register(f"b{x.key.hex()}", 0, cons if cons is not None else XMM if x.dtype in dtypes.floats else WGPR)
 # a value moved into a register constrained to cons
 def pin(ctx:IselContext, x:UOp, cons:Register|tuple[Register, ...]) -> UOp: return with_regs(UOp.ins(X86Ops.MOV, (x,), x.dtype), (ctx.vreg(cons),))
 def base(x:UOp, i:int) -> UOp: return s.src[0] if (s:=x.src[i]).op is Ops.INDEX else s
@@ -503,7 +505,7 @@ isel_matcher = PatternMatcher([
   # move const to registers for instructions that don't support immediate operands
   (UPat(Ops.INS, name="x"), load_const),
   # allocate virtual registers
-  (UPat((Ops.INS, Ops.BUFFER, Ops.ALLOC), name="x"), alloc_vregs),
+  #(UPat((Ops.INS, Ops.BUFFER, Ops.ALLOC), name="x"), alloc_vregs),
 ])
 
 # ***** pre register allocation *****
@@ -536,8 +538,9 @@ def lower_range(x:UOp) -> tuple[UOp, list[UOp]]:
   deps:tuple[UOp, ...] = ()
   while bound.op is Ops.AFTER: bound, deps = bound.src[0], deps + bound.src[1:]
   idx = with_regs(UOp.ins(X86Ops.MOVi, (imm(x.dtype, 0),) + deps, x.dtype), (regbuf_reg(x),))
-  cmp = UOp.ins(X86Ops.CMPi if is_imm(bound) else X86Ops.CMP, (idx, bound), dtypes.void)
-  return idx.after(x), [idx, x, start:=label(x), cmp, UOp.ins(X86Ops.JGE, (start, cmp), dtypes.void)]
+  flags = with_regs(UOp.alloc((), dtypes.uint64, slot=-1, addrspace=AddrSpace.REG).base, (regbuf_reg(x, (RFLAGS,)),))
+  cmp = UOp.asm(X86Ops.CMPi if is_imm(bound) else X86Ops.CMP).call(flags, idx, bound)
+  return idx.after(x), [idx, flags, x, start:=label(x), cmp, ready:=flags.after(cmp), UOp.asm(X86Ops.JGE).call(start, ready)]
 
 def lower_end(x:UOp, c:UOp) -> tuple[UOp, list[UOp]]:
   inc = with_regs(UOp.ins(X86Ops.ADDi, (c, imm(c.dtype, 1)), c.dtype), regs(c.src[0]))
