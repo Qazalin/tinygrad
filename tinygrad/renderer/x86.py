@@ -369,6 +369,14 @@ def load_const(x:UOp) -> UOp:
       ({2,3} if op in X86GroupOp.Rm1st and n>3 else set())
   return x.replace(src=tuple(s if i in immediate else mov_op(s) for i,s in enumerate(x.src)))
 
+def alloc_after(ctx:IselContext, alloc:UOp, call:UOp) -> UOp|None:
+  assert alloc.addrspace is AddrSpace.REG, "asm cannot write to non reg"
+  if alloc.arg.reg is not None: return None
+  if alloc.dtype in dtypes.floats or call.body.arg in XMM_OPS: dst = ctx.vreg(XMM)
+  else: dst = ctx.vreg(WGPR)
+  reg = alloc.replace(arg=replace(alloc.arg, reg=dst))
+  return reg.after(call.replace(src=tuple(reg if s is alloc else s for s in call.src)))
+
 isel_matcher = PatternMatcher([
   # **** Op -> Op ****
   # BACKEDGE becomes a conditional jump to its RANGE, it uses flags
@@ -506,6 +514,7 @@ isel_matcher = PatternMatcher([
   (UPat(Ops.INS, name="x"), load_const),
   # allocate virtual registers
   #(UPat((Ops.INS, Ops.BUFFER, Ops.ALLOC), name="x"), alloc_vregs),
+  (UPat(Ops.ALLOC, name="alloc").after(UPat(Ops.ASM).call(allow_any_len=True, name="call")), alloc_after),
 ])
 
 # ***** pre register allocation *****
