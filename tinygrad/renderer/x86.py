@@ -537,7 +537,7 @@ def alloc_buffer(ctx:'X86LinearContext', x:UOp):
 
 # TODO: control flow should be overhauled so that this isn't necessary
 # a LABEL marks its src: the start of a loop its RANGE, the exit of a loop the start LABEL. a jump's first src is what its LABEL marks
-def label(x:UOp) -> UOp: return UOp.ins(X86Ops.LABEL, (x,), dtypes.void)
+def label(x:UOp) -> UOp: return UOp.asm(X86Ops.LABEL).call(x)
 
 # a loop's LABEL follows its RANGE. a bounded RANGE's index is a register named by the RANGE, 0 before the loop, compared to the bound
 # after the LABEL and incremented before the END, the body reads it as AFTER(index, RANGE)
@@ -555,8 +555,12 @@ def lower_range(x:UOp) -> tuple[UOp, list[UOp]]:
   return idx.after(x), [counter, init, idx, flags, x, start:=label(x), cmp, ready:=flags.after(cmp), UOp.asm(X86Ops.JGE).call(start, ready)]
 
 def lower_end(x:UOp, c:UOp) -> tuple[UOp, list[UOp]]:
-  inc = with_regs(UOp.ins(X86Ops.ADDi, (c, imm(c.dtype, 1)), c.dtype), regs(c.without_after))
-  return (end:=x.replace(src=(x.src[0], c.src[1]))), [inc, end]
+  counter = c.without_after
+  flags = UOp.alloc((), dtypes.uint64, slot=-1, addrspace=AddrSpace.REG).base
+  flags = flags.replace(arg=replace(flags.arg, reg=regbuf_reg(x, (RFLAGS,))))
+  inc = UOp.asm(X86Ops.ADDi).call(counter, flags, c, imm(c.dtype, 1))
+  idx, ready = counter.after(inc), flags.after(inc)
+  return (end:=x.replace(src=(x.src[0].after(idx, ready), c.src[1]))), [flags, inc, idx, ready, end]
 
 pre_regalloc_matcher = PatternMatcher([
   (UPat(Ops.BUFFER, name="x"), lambda ctx,x: alloc_buffer(ctx,x) if x.addrspace is not AddrSpace.REG else None),
@@ -568,9 +572,9 @@ pre_regalloc_matcher = PatternMatcher([
 # ***** post register allocation *****
 # final rewrite to match the isa spec
 post_regalloc_matcher = PatternMatcher([
-  (UPat(Ops.SINK, name="x"), lambda x: (x, [UOp.ins(X86Ops.RET, x.src, x.dtype)])),
+  (UPat(Ops.SINK, name="x"), lambda x: (x, [UOp.asm(X86Ops.RET).call(*x.src)])),
   # an END jumps back to its loop's LABEL and labels the loop's exit
-  (UPat(Ops.END, name="x"), lambda x: (x, [UOp.ins(X86Ops.JMP, (x.src[1],), dtypes.void), label(label(x.src[1]))])),
+  (UPat(Ops.END, name="x"), lambda x: (x, [UOp.asm(X86Ops.JMP).call(x.src[1]), label(label(x.src[1]))])),
   # rewrite two address instructions to two address form, if reused src wasn't coalesced insert a move
   (UPat(Ops.INS, name="x"), lambda ctx,x: (nx:=x.replace(src=x.src[1:]),
    [ctx.ren.copy(x.src[0], rdef(x)), nx] if rdef(x) != rdef(x.src[0]) else [nx]) if x.arg[0] in X86GroupOp.TwoAddress else None),
