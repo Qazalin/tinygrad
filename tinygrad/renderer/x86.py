@@ -5,7 +5,7 @@ from tinygrad.dtype import dtypes, DType, truncate, AddrSpace
 from tinygrad.uop import FastEnum, auto, Ops, GroupOp
 from tinygrad.uop.ops import UOp, UPat, PatternMatcher, promo_dtype
 from tinygrad.renderer import Renderer
-from tinygrad.helpers import unwrap, Target
+from tinygrad.helpers import unwrap, Target, dedup
 from dataclasses import dataclass, field, replace
 
 @dataclass(frozen=True)
@@ -583,7 +583,20 @@ post_regalloc_matcher = PatternMatcher([
 
 # ***** X86 instruction encoding *****
 
+def asm_operands(x:UOp) -> tuple[UOp, ...]:
+  src = tuple(s for s in x.src[1:] if rdef(s) != RFLAGS)
+  if x.body.arg in X86GroupOp.TwoAddress:
+    assert rdef(src[0]) == rdef(src[1]), "two-address instruction requires the same input and output register"
+    src = src[:1] + src[2:]
+  return src
+
+def asm_calls(uops:list[UOp]) -> list[UOp]:
+  assert all(u.op is not Ops.INS for u in uops), "INS must be lowered to ASM calls"
+  return dedup(call for u in uops for call in ((u,) if u.op is Ops.CALL else u.src[1:] if u.op is Ops.AFTER else ())
+               if call.op is Ops.CALL and call.body.op is Ops.ASM)
+
 def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> bytes|None:
+  op, src = x.body.arg, asm_operands(x)
   def _encode(reg_uop:UOp|None, rm_uop:UOp, idx_uop:UOp|None=None, disp_uop:UOp|None=None, scale_uop:UOp|None=None,
               vvvv_uop:UOp|None=None, imm_uop:UOp|None=None) -> bytes:
     nonlocal reg, opc
@@ -611,7 +624,7 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
       # bit signaling 64 bit variant of instruction
       w = sz == 8
       # legacy 8bit opcode is 1 less than 16-64bit variants
-      demote = (rm_sz == 1 or reg_sz == 1) and x.arg[0] not in X86GroupOp.ReadFlags | {X86Ops.LEA}
+      demote = (rm_sz == 1 or reg_sz == 1) and op not in X86GroupOp.ReadFlags | {X86Ops.LEA}
       # REX byte is required when 64 bit or an extended reg is used (index 8 - 15) or lower 8 bits of (rsp, rbp, rsi, rdi) are accessed
       if w | r | _x | b | (reg_sz == 1 & reg >> 2) | (rm_sz == 1 & rm >> 2) | (demote and disp_uop is None and rm >= 4):
         inst += bytes([0b0100 << 4 | w << 3 | r << 2 | _x << 1 | b])
@@ -651,25 +664,26 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
     return inst
 
   # get the encoding structure of the uop
-  # when a uop writes to memory it takes the form of a store, dtype is void, no definition
   address:tuple[UOp|None, ...]
-  if x.arg[0] in X86GroupOp.WriteMem:
-    if len(x.src) > 4: address, rest = x.src[:4], x.src[4:]
-    else: address, rest = (x, None, None, None), x.src
+  if op in X86GroupOp.WriteMem:
+    if len(src) > 4: address, rest = src[:4], src[4:]
+    else: address, rest = (src[0], None, None, None), src[1:]
     imm_uop = rest[:1] if rest and is_imm(rest[0]) else (None,)
     return _encode(rest[0], *address, *(None, *rest[1:])) if reg is None else _encode(None, *address, *(None, *imm_uop))
 
-  if x.arg[0] in X86GroupOp.Rm1st:
-    if len(x.src) > 3: address, rest = x.src[:4], x.src[4:]
-    else: address, rest = (x.src[0], None, None, None), x.src[1:]
+  if op in X86GroupOp.Rm1st:
+    dst, src = (None, src) if op is X86Ops.CMPi else (src[0], src[1:])
+    if len(src) > 3: address, rest = src[:4], src[4:]
+    else: address, rest = (src[0], None, None, None), src[1:]
     imm_uop = rest[:1] if rest and is_imm(rest[0]) else (None,)
-    return _encode(x, *address, *(None, *imm_uop)) if reg is None else _encode(None, *address, *(x if sel else None, *imm_uop))
+    return _encode(dst, *address, *(None, *imm_uop)) if reg is None else _encode(None, *address, *(dst if sel else None, *imm_uop))
 
-  if x.arg[0] in X86GroupOp.Rm2nd:
-    if len(x.src) > 4: address, rest = x.src[1:5], x.src[:1] + x.src[5:]
-    else: address, rest = (x.src[1], None, None, None), x.src[:1] + x.src[2:]
+  if op in X86GroupOp.Rm2nd:
+    dst, src = (None, src) if op is X86Ops.CMP else (src[0], src[1:])
+    if len(src) > 4: address, rest = src[1:5], src[:1] + src[5:]
+    else: address, rest = (src[1], None, None, None), src[:1] + src[2:]
     # cmp reg, rm doesn't define a new register
-    return _encode(x, *address, *rest) if x.dtype is not dtypes.void else _encode(rest[0], *address)
+    return _encode(dst, *address, *rest) if dst is not None else _encode(rest[0], *address)
 
   return None
 
@@ -680,7 +694,7 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
 encodings = {
   # moves
   X86Ops.MOVABS: lambda x:
-   bytes([0b0100 << 4 | 0b1 << 3 | 0b00 << 2 | rdef(x).index >> 3, 0xB8 + (rdef(x).index & 0b111)]) + struct.pack(x.dtype.fmt, x.src[0].src[0].val),
+   bytes([0x48 | rdef(x.src[1]).index >> 3, 0xB8 + (rdef(x.src[1]).index & 7)]) + struct.pack(x.src[1].dtype.fmt, x.src[2].src[0].val),
   X86Ops.MOV: lambda x: encode(x, 0x8B), X86Ops.MOVi: lambda x: encode(x, 0xC7, reg=0),
   X86Ops.MOVm: lambda x: encode(x, 0x89), X86Ops.LEA: lambda x: encode(x, 0x8D),
   X86Ops.VMOVSS: lambda x: encode(x, 0x10, pp=2, sel=1), X86Ops.VMOVSSm: lambda x: encode(x, 0x11, pp=2, sel=1),
@@ -694,10 +708,10 @@ encodings = {
   X86Ops.VCVTSS2SD: lambda x: encode(x, 0x5A, pp=2, sel=1), X86Ops.VCVTSD2SS: lambda x: encode(x, 0x5A, pp=3, sel=1),
   X86Ops.VCVTPH2PS: lambda x: encode(x, 0x13, pp=1, sel=2), X86Ops.VCVTPS2PH: lambda x: encode(x, 0x1D, pp=1, sel=3),
   # the int src is the 2nd src (the rm field), its width picks the 32 or 64 bit form
-  X86Ops.VCVTSI2SS: lambda x: encode(x, 0x2A, pp=2, sel=1, we=x.src[1].dtype.itemsize == 8),
-  X86Ops.VCVTSI2SD: lambda x: encode(x, 0x2A, pp=3, sel=1, we=x.src[1].dtype.itemsize == 8),
-  X86Ops.VCVTTSS2SI: lambda x: encode(x, 0x2C, pp=2, sel=1, we=x.dtype.itemsize == 8),
-  X86Ops.VCVTTSD2SI: lambda x: encode(x, 0x2C, pp=3, sel=1, we=x.dtype.itemsize == 8),
+  X86Ops.VCVTSI2SS: lambda x: encode(x, 0x2A, pp=2, sel=1, we=x.src[3].dtype.itemsize == 8),
+  X86Ops.VCVTSI2SD: lambda x: encode(x, 0x2A, pp=3, sel=1, we=x.src[3].dtype.itemsize == 8),
+  X86Ops.VCVTTSS2SI: lambda x: encode(x, 0x2C, pp=2, sel=1, we=x.src[1].dtype.itemsize == 8),
+  X86Ops.VCVTTSD2SI: lambda x: encode(x, 0x2C, pp=3, sel=1, we=x.src[1].dtype.itemsize == 8),
   # int division
   X86Ops.IDIV: lambda x: encode(x, 0xF7, reg=7), X86Ops.DIV: lambda x: encode(x, 0xF7, reg=6),
   # scalar int binary
@@ -758,8 +772,11 @@ class X86LinearContext(LinearContext):
         after.append(self.ren.fill(slot,a,r))
 
     if self.stack_size > 0:
-      before.insert(0, with_regs(UOp.ins(X86Ops.SUBi, (stack_pointer(),imm(dtypes.int32, self.stack_size)), dtypes.uint64), (RSP,)))
-      after.append(with_regs(UOp.ins(X86Ops.ADDi, (stack_pointer(),imm(dtypes.int32, self.stack_size)), dtypes.uint64), (RSP,)))
+      sp, flags = stack_pointer(), reg(dtypes.uint64, RFLAGS)
+      sub = UOp.asm(X86Ops.SUBi).call(sp, flags, sp, imm(dtypes.int32, self.stack_size))
+      add = UOp.asm(X86Ops.ADDi).call(sp, flags, sp, imm(dtypes.int32, self.stack_size))
+      before[0:0] = [sp.after(sub), flags.after(sub)]
+      after.extend([sp.after(add), flags.after(add)])
     return before + uops[:-1] + after + [uops[-1]]
 
   def assign_spill_slot(self, r:Register, u:UOp) -> int:
@@ -791,14 +808,15 @@ class X86Renderer(ISARenderer):
   def spill(self, spill_slot:int, x:UOp) -> UOp:
     op = X86Ops.VMOVUPSm if rdef(x).cons[0] in XMM else X86Ops.MOVm
     disp = UOp.cconst(spill_slot, dtypes.int32)
-    return UOp.ins(op, fold_address(stack_pointer().index(disp)) + (x,), dtypes.void)
+    return stack_pointer().after(UOp.asm(op).call(*fold_address(stack_pointer().index(disp)), x))
 
   def fill(self, spill_slot:int, x:UOp, reg:Register) -> UOp:
     disp = UOp.cconst(spill_slot, dtypes.int32)
-    return with_regs(UOp.ins(X86Ops.VMOVUPS if reg.cons[0] in XMM else X86Ops.MOV, fold_address(stack_pointer().index(disp)), x.dtype), (reg,))
+    dst = UOp.placeholder((), x.dtype, slot=-1, addrspace=AddrSpace.REG, reg=reg)
+    return dst.after(UOp.asm(X86Ops.VMOVUPS if reg.cons[0] in XMM else X86Ops.MOV).call(dst, *fold_address(stack_pointer().index(disp))))
 
   def asm_str(self, uops:list[UOp], function_name:str) -> str:
-    def _format_op(x:UOp) -> str: return f"    {(o[7:-1] if (o:=str(x.arg[0]))[-1] in ('i', 'm') else o[7:]).lower():7s}"
+    def _format_op(x:UOp) -> str: return f"    {(o[7:-1] if (o:=str(x.body.arg))[-1] in ('i', 'm') else o[7:]).lower():7s}"
     def _format_operands(x:UOp) -> str:
       def _format(src:tuple[UOp, ...]) -> list[str]:
         return [str(s.src[0].val) if is_imm(s) else reg_strs[o].get(s.dtype.itemsize, o) if \
@@ -806,38 +824,38 @@ class X86Renderer(ISARenderer):
       def _mem_adress(base:UOp, idx:UOp, disp:UOp, scale:UOp) -> list[str]:
         return [f"[{rdef(base)}" + (f" + {rdef(idx)}*{scale.src[0].val}" if rdef(idx) else "") + (f" + {d}" if (d:=disp.src[0].val) else "") + "]"]
 
-      if len(x.src) > 4 and x.arg[0] in X86GroupOp.WriteMem: ret = _mem_adress(*x.src[:4]) + _format(x.src[4:])
-      elif len(x.src) > 3 and x.arg[0] in X86GroupOp.Rm1st: ret = _format((x,)) + _mem_adress(*x.src[:4]) + _format(x.src[4:])
-      elif len(x.src) > 4 and x.arg[0] in X86GroupOp.Rm2nd: ret = _format((x, x.src[0])) + _mem_adress(*x.src[1:5]) + _format(x.src[5:])
-      else: ret = _format((x,) + x.src)
+      src, op = asm_operands(x), x.body.arg
+      if len(src) > 4 and op in X86GroupOp.WriteMem: ret = _mem_adress(*src[:4]) + _format(src[4:])
+      elif len(src) > 4 and op in X86GroupOp.Rm1st: ret = _format(src[:1]) + _mem_adress(*src[1:5]) + _format(src[5:])
+      elif len(src) > 5 and op in X86GroupOp.Rm2nd: ret = _format(src[:2]) + _mem_adress(*src[2:6]) + _format(src[6:])
+      else: ret = _format(src)
       return ", ".join(ret)
 
     asm = [f".{function_name}:"]
-    for u in uops:
-      if u.op is not Ops.INS: continue
-      if u.arg[0] is X86Ops.LABEL: asm.append(f".L{uops.index(u)}:")
-      elif u.arg[0] is X86Ops.RET: asm.append(_format_op(u))
-      elif u.arg[0] in X86GroupOp.Jump: asm.append(_format_op(u) + f" .L{uops.index(label(u.src[0]))}")
+    calls = asm_calls(uops)
+    for u in calls:
+      if u.body.arg is X86Ops.LABEL: asm.append(f".L{calls.index(u)}:")
+      elif u.body.arg is X86Ops.RET: asm.append(_format_op(u))
+      elif u.body.arg in X86GroupOp.Jump: asm.append(_format_op(u) + f" .L{calls.index(label(u.src[1]))}")
       else: asm.append(_format_op(u) + " " + _format_operands(u))
     return "\n".join(asm)
 
   def render(self, uops:list[UOp]) -> str:
-    return ""
     targets: dict[UOp, int] = {}
     jumps: dict[UOp, int] = {}
     binary = bytearray()
-    for u in uops:
-      if u.op is not Ops.INS: continue
-      if u.arg[0] is X86Ops.LABEL:
-        targets[u.src[0]] = len(binary)
+    calls = asm_calls(uops)
+    for u in calls:
+      if u.body.arg is X86Ops.LABEL:
+        targets[u.src[1]] = len(binary)
         continue
-      if u.arg[0] not in encodings or (l:=encodings[u.arg[0]](u)) is None:
-        raise RuntimeError(f"failed to encode {u.arg[0]} with {u.dtype} srcs {[x.dtype for x in u.src]}")
+      if u.body.arg not in encodings or (l:=encodings[u.body.arg](u)) is None:
+        raise RuntimeError(f"failed to encode {u.body.arg} with srcs {[x.dtype for x in u.src[1:]]}")
       binary.extend(l)
-      if u.arg[0] in X86GroupOp.Jump: jumps[u] = len(binary)
+      if u.body.arg in X86GroupOp.Jump: jumps[u] = len(binary)
     # fixup jump targets now that encoding size is known
-    for u in uops:
-      if (t:=jumps.get(u)) is not None: binary[t-4:t] = (targets[u.src[0]] - t).to_bytes(4, 'little', signed=True)
+    for u in calls:
+      if (t:=jumps.get(u)) is not None: binary[t-4:t] = (targets[u.src[1]] - t).to_bytes(4, 'little', signed=True)
     return binary.hex()
 
   def supported_dtypes(self): return {d for d in super().supported_dtypes() if d not in dtypes.fp8s+(dtypes.bfloat16,)}
