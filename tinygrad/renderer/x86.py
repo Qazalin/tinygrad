@@ -23,7 +23,7 @@ class IselContext:
     self.alloc_n = itertools.count(max((x.arg.slot+1 for x in sink.toposort() if x.op is Ops.ALLOC), default=0))
   def vreg(self, cons:tuple[Register, ...]|Register): return Register(f"v{next(self.reg_n)}", 0, cons if isinstance(cons, tuple) else (cons,))
 
-def tmp(ctx:IselContext, dtype): return UOp.alloc((), dtype, next(ctx.alloc_n), AddrSpace.REG).base
+def tmp(ctx:IselContext, dtype:DType) -> UOp: return UOp.alloc((), dtype, next(ctx.alloc_n), AddrSpace.REG).base
 
 def regs(u:UOp) -> tuple[Register, ...]:
   return (u.arg.reg,) if u.op in {Ops.BUFFER, Ops.ALLOC} and u.arg.reg is not None else ()
@@ -539,8 +539,7 @@ isel_matcher = PatternMatcher([
    if x.max_numel() * x.dtype.itemsize == 2 else
    (dst:=tmp(ctx, x.dtype)).after(UOp.asm(_xmm_sz(x)).call(dst, *fold_address(a)))),
   (UPat(Ops.LOAD, dtypes.ints+(dtypes.bool,), src=(UPat(name="a"),), name="x"), lambda ctx,x,a: None if a.addrspace is AddrSpace.REG else
-   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.MOV).call(dst, *fold_address(a)))
-   if x.max_numel() == 1 else (dst:=tmp(ctx, x.dtype)).after(UOp.asm(_xmm_sz(x)).call(dst, *fold_address(a)))),
+   (dst:=tmp(ctx, x.dtype)).after(UOp.asm(X86Ops.MOV if x.max_numel() == 1 else _xmm_sz(x)).call(dst, *fold_address(a)))),
   (UPat.var("a").store(UPat.var("b", dtypes.floats), name="x"), lambda a,b,x: None if a.addrspace is AddrSpace.REG else
    (addr:=fold_address(a))[0].after(UOp.asm(X86Ops.VPEXTRW).call(*addr, b, imm(dtypes.uint8, 0))) if b.max_numel() * b.dtype.itemsize == 2 else
    (addr:=fold_address(a))[0].after(UOp.asm(X86Ops[_xmm_sz(b).name+"m"]).call(*addr, b))),
@@ -572,7 +571,7 @@ def flag_rematerialize(ctx:'X86LinearContext', x:UOp):
 # the element size of loads and stores is already captured by fold_address before stack buffers become 64-bit pointers
 def alloc_buffer(ctx:'X86LinearContext', x:UOp):
   dst = Register(f"s{ctx.stack_size}", 0, WGPR)
-  buf = with_regs(UOp.alloc((), dtypes.uint64, slot=-1, addrspace=AddrSpace.REG).base, (dst,))
+  buf = UOp.alloc((), dtypes.uint64, slot=-1, addrspace=AddrSpace.REG, reg=dst).base
   call = UOp.asm(X86Ops.LEA).call(buf, *fold_address(stack_pointer().index(UOp.cconst(ctx.stack_size, dtypes.uint32))))
   nx = buf.after(call)
   ctx.stack_size += x.max_numel() * x.dtype.itemsize
@@ -589,19 +588,17 @@ def lower_range(x:UOp) -> tuple[UOp, list[UOp]]:
   bound = x.src[0]
   deps:tuple[UOp, ...] = ()
   while bound.op is Ops.AFTER: bound, deps = bound.src[0], deps + bound.src[1:]
-  counter = UOp.alloc((), x.dtype, slot=-1, addrspace=AddrSpace.REG).base
-  counter = counter.replace(arg=replace(counter.arg, reg=regbuf_reg(x)))
+  counter = UOp.alloc((), x.dtype, slot=-1, addrspace=AddrSpace.REG, reg=regbuf_reg(x)).base
   init = UOp.asm(X86Ops.MOVi).call(counter, imm(x.dtype, 0).after(*deps))
   idx = counter.after(init)
-  flags = with_regs(UOp.alloc((), dtypes.uint64, slot=-1, addrspace=AddrSpace.REG).base, (regbuf_reg(x, (RFLAGS,)),))
+  flags = UOp.alloc((), dtypes.uint64, slot=-1, addrspace=AddrSpace.REG, reg=regbuf_reg(x, (RFLAGS,))).base
   cmp = UOp.asm(X86Ops.CMPi if is_imm(bound) else X86Ops.CMP).call(flags, idx, bound)
   return (value:=idx.after(x)), [counter, init, idx, flags, x, value, start:=label(x), cmp, ready:=flags.after(cmp),
                                UOp.asm(X86Ops.JGE).call(start, ready)]
 
 def lower_end(x:UOp, c:UOp) -> tuple[UOp, list[UOp]]:
   counter = c.without_after
-  flags = UOp.alloc((), dtypes.uint64, slot=-1, addrspace=AddrSpace.REG).base
-  flags = flags.replace(arg=replace(flags.arg, reg=regbuf_reg(x, (RFLAGS,))))
+  flags = UOp.alloc((), dtypes.uint64, slot=-1, addrspace=AddrSpace.REG, reg=regbuf_reg(x, (RFLAGS,))).base
   inc = UOp.asm(X86Ops.ADDi).call(counter, flags, c, imm(c.dtype, 1))
   idx, ready = counter.after(inc), flags.after(inc)
   effect = x.src[0].after(idx, ready)
