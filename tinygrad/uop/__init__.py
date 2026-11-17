@@ -76,8 +76,7 @@ class Ops(FastEnum):
   CONST = auto()
 
   # INS is a machine instruction
-  INS = auto()
-  ASM = auto()
+  INS = auto(); ASM = auto()
 
   # ** 6 -- ops that don't exist in programs **
 

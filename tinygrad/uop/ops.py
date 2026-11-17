@@ -6,15 +6,16 @@ from enum import Enum, auto
 from tinygrad.uop import Ops, GroupOp
 from tinygrad.dtype import ConstType, dtypes, DType, DTypeLike, truncate, least_upper_dtype, least_upper_float, Invalid, AddrSpace, strong_dtype
 from tinygrad.dtype import PyConst, InvalidType, bitcast
-from tinygrad.device import Buffer, BufferSpec, MultiBuffer, canonicalize_device, is_disk_device, TinyELF
 from tinygrad.helpers import ContextVar, all_int, prod, getenv, all_same, Context, partition, temp, unwrap, T, argfix, flatten
 from tinygrad.helpers import PROFILE, dedup, cdiv, cmod, floordiv, floormod, diskcache_put, to_function_name, cpu_profile, TracingKey
 from tinygrad.helpers import VIZ, SPEC, CAPTURE_PROCESS_REPLAY, DISALLOW_BROADCAST, get_shape, fully_flatten, to_tuple
-from tinygrad.helpers import colored, ansilen, printable, Target, is_image_shape, strides_for_shape
+from tinygrad.helpers import colored, ansilen, printable, Target, is_image_shape, strides_for_shape, is_disk_device, canonicalize_device
 if TYPE_CHECKING:
+  from tinygrad.device import Buffer, BufferSpec, MultiBuffer
   from tinygrad.renderer import Estimates
   from tinygrad.runtime.support.hcq2 import HCQInfo
   from tinygrad.renderer.x86 import Register
+  from tinygrad.renderer.amd.dsl import Reg
 
 class AxisType(Enum):
   def __repr__(self): return str(self)
@@ -42,7 +43,7 @@ class ParamArg:
   # the memory the linker gives an ALLOC
   spec: BufferSpec|None = None
   # optional register constraints on this allocation, for assembly backends
-  reg: Register|None = None
+  reg: Register|Reg|None = None
   def __repr__(self):
     fields = (("vmin_vmax", None), ("name", None), ("addrspace", AddrSpace.GLOBAL), ("device", None),
               ("volatile", False), ("image", None), ("bind_on_realize", False), ("val", None), ("spec", None), ("reg", None))
@@ -804,7 +805,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   unique_num = itertools.count(0)
 
   def getaddr(self, device=None) -> UOp:
-    if self.without_after.op not in GroupOp.Defines|{Ops.SHRINK, Ops.BITCAST, Ops.BINARY, Ops.MSTACK, Ops.MSELECT, Ops.LINEAR}: return self
+    if self.without_after.op not in GroupOp.Defines|{Ops.SHRINK, Ops.BITCAST, Ops.MSTACK, Ops.MSELECT, Ops.LINEAR}: return self
     return UOp(Ops.GETADDR, src=(self,), arg=device or to_tuple(self.device)[0])
   @staticmethod
   def device_range_src(device:str|tuple[str, ...]|None) -> tuple[UOp, ...]:
@@ -821,6 +822,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     assert dtype.itemsize > 0, f"not a storage dtype: {dtype}"
     assert isinstance(size, int), f"new_buffer size must be a concrete int, got {size}"
     slot = next(UOp.unique_num) if num is None else num
+    from tinygrad.device import Buffer, MultiBuffer
     buf = MultiBuffer(device, size * dtype.itemsize) if isinstance(device, tuple) else Buffer(device, size * dtype.itemsize)
     return UOp._buffer(size, dtype, slot, device=device, buffer=buf)
   @staticmethod
@@ -884,7 +886,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     if self.op in {Ops.SPECIAL, Ops.RANGE, Ops.CONST}: return AddrSpace.ALU
     if self.op is Ops.BINARY: return AddrSpace.GLOBAL
     if self.op is Ops.LOAD: return AddrSpace.ALU # LOAD brings things into the ALU
-    if self.op in {Ops.INDEX, Ops.CAST, Ops.AFTER, Ops.REDUCE, Ops.STORE, Ops.MSTACK, Ops.MSELECT, Ops.END, Ops.UNSHARD}:
+    if self.op in {Ops.INDEX, Ops.CAST, Ops.AFTER, Ops.REDUCE, Ops.MSTACK, Ops.MSELECT, Ops.END, Ops.UNSHARD}:
       return self.src[0].addrspace
     if self.op in GroupOp.Movement: return self.src[0].addrspace
     if self.op in {Ops.STACK, Ops.WMMA} or self.op in GroupOp.Elementwise:
@@ -894,7 +896,6 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     return None
   @property
   def buf_uop(self) -> UOp:
-    if self.op in GroupOp.Defines: return self
     if self.op is Ops.MSELECT: return self.src[0].buf_uop.mselect(self.arg)
     if self.op is Ops.MSTACK: return UOp(Ops.MSTACK, src=tuple(x.buf_uop for x in self.src))
     if self.base.op is Ops.AFTER: return self.base.src[0].buf_uop.base
@@ -903,7 +904,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     return s
 
   def contiguous_view(self) -> tuple[UOp, int]|None:
-    from tinygrad.schedule.prepare import pm_mops
+    from tinygrad.codegen.prepare import pm_mops
     from tinygrad.uop.symbolic import symbolic
 
     # WEBGPU and CL do not support views.
@@ -940,6 +941,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
 
   @property
   def buffer(self) -> Buffer|MultiBuffer:
+    from tinygrad.device import Buffer, MultiBuffer
     # a bare STAGE (same-device materialization) keeps the source's buffer
     if self.op is Ops.STAGE and self.arg is None: return self.src[0].buffer
     if self.op in {Ops.CONTIGUOUS_BACKWARD, Ops.RESHAPE, Ops.UNSHARD, Ops.DETACH, Ops.AFTER, Ops.BITCAST}: return self.src[0].buffer
@@ -1167,11 +1169,13 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
 
   @staticmethod
   def alloc(shape:tuple[sint, ...], dtype:DType, slot:int|None=None, addrspace=AddrSpace.GLOBAL, device=None, axis:int|None=None,
-            spec:BufferSpec|None=None, bind_on_realize:bool=False, name:str|None=None):
+            spec:BufferSpec|None=None, bind_on_realize:bool=False, name:str|None=None, reg:Register|Reg|None=None):
     ret = UOp(Ops.ALLOC, src=(shape_to_shape_arg((prod(to_max_shape(shape)),)),)+UOp.device_range_src(device),
               arg=ParamArg(next(UOp.unique_num) if slot is None else slot, strong_dtype(dtype),
-                           addrspace=addrspace, device=device, spec=spec, bind_on_realize=bind_on_realize, name=name))
+                           addrspace=addrspace, device=device, spec=spec, bind_on_realize=bind_on_realize, name=name, reg=reg))
     return ret.reshape(()) if not shape else ret.view_as(shape, axis)
+  @staticmethod
+  def extern(shape:tuple[int, ...], dtype:DType, device, name:str): return UOp.alloc(shape, dtype, 0, device=device, name=name).replace(op=Ops.EXTERN)
   def alloc_like(self, slot:int|None=None, addrspace=AddrSpace.GLOBAL): return UOp.alloc(self.max_shard_shape, self.dtype, slot, addrspace)
 
   @staticmethod
@@ -1196,14 +1200,14 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   # TODO: this should replace placeholder
   @staticmethod
   def param(slot:int, dtype:DType, shape:tuple[sint, ...]|sint|None=None, device=None, vmin_vmax:tuple[PyConst, PyConst]|None=None,
-            name=None, addrspace=AddrSpace.GLOBAL, volatile:bool=False):
+            name=None, addrspace=AddrSpace.GLOBAL, volatile:bool=False, reg:Register|Reg|None=None):
     """create a PARAM: a single sint or 1-d shape gives a flat param of that size, a None shape gives a scalar param.
     src[0] stores the concrete max size (never symbolic): a multi-dim shape is a RESHAPE on top of the flat param,
     a symbolic shape is a max-size param shrunk to the real shape"""
     if dtype in dtypes.weaks: raise RuntimeError(f"cannot create param for weak dtype {dtype}")
     shape = (shape,) if isinstance(shape, (int, UOp)) else shape or ()
     ret = UOp(Ops.PARAM, src=(shape_to_shape_arg((prod(to_max_shape(shape)),) if shape else ()),),
-              arg=ParamArg(slot, dtype, vmin_vmax, name, addrspace, device, volatile))
+              arg=ParamArg(slot, dtype, vmin_vmax, name, addrspace, device, volatile, reg=reg))
     return ret.view_as(shape)
   def param_like(self, slot:int, name:str|None=None):
     # Scalar arguments bind by slot; names and values stay at the call site, not in schedule cache keys.
@@ -1291,10 +1295,6 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     params = [u for u in self.src[1].src if u in self.arg.params]
     params += [p for p in self.arg.params if p.arg.slot not in {u.arg.slot for u in params}]
     return tuple(sorted(params, key=lambda p: p.arg.slot))
-
-  def to_elf(self) -> TinyELF:
-    sig = tuple((p.arg.name, p.arg.addrspace, p.dtype, p._shape) for p in self.kernel_params)
-    return TinyELF(self.src[3].arg, self.src[0].arg.function_name, self.arg.target, sig, self.key)
 
   @property
   def src_without_body(self) -> tuple[UOp, ...]: return self.src[1:] if self.op is Ops.CALL else self.src
@@ -1886,6 +1886,11 @@ def to_max_shape(shape:tuple[sint, ...]) -> tuple[int, ...]: return tuple(int(x.
 
 _substitute = PatternMatcher([(UPat(tuple(Ops), name="x"), lambda ctx,x: ctx.get(x,None))])
 pm_resolve_params = PatternMatcher([(UPat(Ops.PARAM, name="p"), lambda ctx,p: ctx[p.arg.slot] if p.arg.slot >= 0 else None)])
+# flatten LINEAR-in-LINEAR: any nested LINEAR child gets inlined into its parent's src
+pm_flatten_linear = PatternMatcher([
+  (UPat(Ops.LINEAR, custom_early_reject={Ops.LINEAR}, name="lin"),
+   lambda lin: lin.replace(src=tuple(flatten(c.src if c.op is Ops.LINEAR else (c,) for c in lin.src)))),
+])
 
 def resolve_returned_after(r:UOp, t:UOp) -> UOp|None:
   """Extract a call output's matching store, preserving writes to the enclosing scope's storage (PARAMs and EXTERNs)."""

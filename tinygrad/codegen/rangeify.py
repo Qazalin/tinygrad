@@ -8,8 +8,8 @@ from tinygrad.uop.symbolic import symbolic
 from tinygrad.helpers import prod, dedup, VIZ, MAX_KERNEL_BUFFERS, SPEC
 from tinygrad.helpers import get_single_element
 from tinygrad.codegen.simplify import pm_flatten_range, pm_reduce_simplify
-from tinygrad.schedule.indexing import run_rangeify, BufferizeOpts, apply_movement_op
-from tinygrad.schedule.prepare import pm_mops
+from tinygrad.codegen.indexing import run_rangeify, BufferizeOpts, apply_movement_op
+from tinygrad.codegen.prepare import pm_mops
 
 # creation can recurse a lot
 import sys
@@ -118,9 +118,6 @@ pm_const_buffer_folding = pm_mops+PatternMatcher([
   # indexing an after with all fully invalid stores is invalid
   (UPat(Ops.INDEX, src=(UPat(Ops.AFTER, name="after"),), allow_any_len=True, name="idx"),
    lambda idx,after: idx.const_like(Invalid) if after_all_invalid(after) else None),
-  # a deviceless MSTACK src is the same value on every device, so indexing the stack is just indexing that value
-  (UPat(Ops.MSTACK, src=(UPat.var("s"),), allow_any_len=True).f(Ops.INDEX, allow_any_len=True, name="idx"),
-   lambda s,idx: idx.replace(src=(s,)+idx.src[1:]) if s.device is None else None),
 ])
 
 pm_remove_bufferize = PatternMatcher([

@@ -1,7 +1,7 @@
 from tinygrad.helpers import all_same, prod, getenv, ALLREDUCE_CAST
 from tinygrad.uop.ops import Ops, UOp, PatternMatcher, UPat, GroupOp, AxisType, graph_rewrite, broadcast_axes, _broadcast_shape, sint_to_uop
 from tinygrad.dtype import dtypes
-from tinygrad.schedule.allreduce import handle_allreduce
+from tinygrad.codegen.allreduce import handle_allreduce
 
 # ***** multi rewrite MSELECT/MSTACK *****
 
@@ -22,12 +22,16 @@ def mstack_early_shrink(ms:UOp, shrink:UOp):
 
 def lower_broadcast_copy(c:UOp, x:UOp):
   if not (isinstance(c.device, tuple) and isinstance(x.device, str)): return None
-  if (sx:=x.simplify()).device is None: return UOp(Ops.MSTACK, src=(sx,)*len(c.device))
+  # a deviceless value has no storage to copy, each device computes it
+  if (sx:=x.simplify()).device is None: return UOp(Ops.MSTACK, src=tuple(sx.copy_to_device(d) for d in c.device))
   return UOp(Ops.MSTACK, src=tuple(x.pad_to(x.max_shape).contiguous().copy_to_device(d) for d in c.device)).shrink_to(c.shape)
 
 replace_allreduce = PatternMatcher([
   # BROADCAST: explicitly expand broadcast copies and combine with MSTACK
   (UPat(Ops.COPY, name="c", src=(UPat(name="x"),), allow_any_len=True), lower_broadcast_copy),
+  # a deviceless value is copied straight to its final device, never through another one
+  (UPat(Ops.COPY, name="c", src=(UPat(Ops.COPY, src=(UPat(name="x"),)),), allow_any_len=True),
+   lambda c,x: c.replace(src=(x,)+c.src[1:]) if x.device is None else None),
   # COPY_TO_ONE: if copying from multidevice to one, MSELECT the first (TODO: a little from each?)
   (UPat(Ops.COPY, name="c", src=(UPat(name="x"),), allow_any_len=True), lambda c,x:
     (m if (m:=x.mselect(0)).device == c.device else m.copy_to_device(c.device))
