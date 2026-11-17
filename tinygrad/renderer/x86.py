@@ -641,7 +641,6 @@ def asm_operands(x:UOp) -> tuple[UOp, ...]:
   return src
 
 def asm_calls(uops:list[UOp]) -> list[UOp]:
-  assert all(u.op is not Ops.INS for u in uops), f"INS must be lowered to ASM calls: {[u.arg[0] for u in uops if u.op is Ops.INS]}"
   return dedup(call for u in uops for call in ((u,) if u.op is Ops.CALL else u.src[1:] if u.op is Ops.AFTER else ())
                if call.op is Ops.CALL and call.body.op is Ops.ASM)
 

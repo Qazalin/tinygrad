@@ -97,7 +97,7 @@ spec_shared = PatternMatcher([
 
   # AFTER on Movement Op, a define, STAGE, or another AFTER
   # CONST/CAST/NOOP are range bounds: RANGE(AFTER(CONST, other_range)) orders a loop after a sibling
-  (UPat(Ops.AFTER, src=(UPat(GroupOp.Movement|GroupOp.Defines|{Ops.STAGE, Ops.INDEX, Ops.AFTER, Ops.UNSHARD, Ops.BITCAST, Ops.INS,
+  (UPat(Ops.AFTER, src=(UPat(GroupOp.Movement|GroupOp.Defines|{Ops.STAGE, Ops.INDEX, Ops.AFTER, Ops.UNSHARD, Ops.BITCAST,
                                                 Ops.CONST, Ops.CAST, Ops.NOOP, Ops.STACK}),),
         allow_any_len=True), lambda: True),
   # an AFTER can wrap a scalar or shaped ALU value to order it after effect ops
@@ -116,7 +116,6 @@ spec_shared = PatternMatcher([
   (UPat(Ops.BARRIER, dtypes.void), lambda: True),
 
   # assembly instruction
-  (UPat(Ops.INS, name="x"), lambda x: isinstance(x.arg, tuple) and len(x.arg) >= 2 and isinstance(x.arg[1], DType)),
   (UPat(Ops.ASM), lambda: True),
 
   # LOAD(idx) / STORE(idx, val) with gates on the LOAD/STORE; a STORE's value matches its target's dtype
@@ -241,8 +240,8 @@ spec_hcq = PatternMatcher([
 spec_full = PatternMatcher([
   (UPat(Ops.REWRITE_ERROR, dtypes.void, name="x"), lambda x: isinstance(x.arg, str)),
 
-  # codegen may end ranges after gpudims has replaced RANGE with SPECIAL.
-  (UPat(Ops.END, src=(UPat(dtype=dtypes.void), UPat()), allow_any_len=True, name="x"),
+  # codegen may replace RANGE with SPECIAL and stores with AFTER(destination, CALL).
+  (UPat(Ops.END, src=(UPat.any(UPat(dtype=dtypes.void), UPat(Ops.AFTER)), UPat()), allow_any_len=True, name="x"),
    lambda x: x.arg is None and all(dtypes.is_int(u.dtype) for u in x.src[1:])),
 
   # allow any AFTER
