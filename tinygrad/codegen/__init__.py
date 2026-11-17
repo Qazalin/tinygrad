@@ -465,7 +465,9 @@ def do_linearize(ctx:Renderer, prg:UOp, sink:UOp) -> UOp:
     # incoming register buffers are live from entry, before any instruction can overwrite them
     lst = sorted(lst, key=lambda u: u.op is not Ops.BUFFER)
     regalloc_ctx = LinearScanRegallocContext(lin_ctx, lst, ctx)
+    graph_rewrite(UOp.sink(*lst), PatternMatcher([]), name="view regalloc input")
     lst = line_rewrite(lst, pm_regalloc_rewrite, regalloc_ctx)
+    graph_rewrite(UOp.sink(*lst), PatternMatcher([]), name="view regalloc output")
     lst = lin_ctx.insert_linearized(lst)
     lst = line_rewrite(lst, ctx.post_regalloc_matcher, lin_ctx)
     if DEBUG >= 4: print(ctx.asm_str(lst, sink.arg.function_name))
