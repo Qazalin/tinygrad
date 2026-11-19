@@ -586,7 +586,7 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
   @staticmethod
   def ins(op, src:tuple[UOp, ...], dtype:DType, *regs:Register) -> UOp:
     params = [UOp.param(i, dtype, addrspace=AddrSpace.REG, reg=r) for i,r in enumerate(regs)]
-    return UOp.native(op, *params, dtype=dtype).call(*src)
+    return (UOp.native(op, *params) if params else UOp.native(op, dtype=dtype)).call(*src)
   def contract(self, *rngs:UOp):
     assert all(x.axis_type == AxisType.UPCAST for x in rngs), "all contract ranges must be upcast"
     return UOp.stack(*[self.substitute(dict(zip(rngs, [r.const_like(i) for r,i in zip(rngs, idx)])))
@@ -1212,8 +1212,10 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     return ret if axis is None else ret.unshard(axis)
 
   @staticmethod
-  def native(code:Any, *src:UOp, shape:tuple[sint, ...]=(), dtype:DType=dtypes.void, fmt:bool=False) -> UOp:
-    return UOp(Ops.NATIVE, src=src or (UOp.param(-1, dtype, shape),), arg=NativeInfo(code, fmt=fmt))
+  def native(code:Any, *src:UOp, shape:tuple[sint, ...]|None=None, dtype:DType|None=None, fmt:bool=False) -> UOp:
+    if src: assert shape is None and dtype is None, "shape and dtype are inferred from src"
+    else: src = (UOp.param(-1, dtypes.void if dtype is None else dtype, () if shape is None else shape),)
+    return UOp(Ops.NATIVE, src=src, arg=NativeInfo(code, fmt=fmt))
 
   def call(self, *srcs:UOp, grad_fxn:Callable|None=None,
            name:str|None=None, precompile:bool=False, precompile_backward:bool=False, inline:bool=False, hcq:HCQInfo|None=None) -> UOp:
