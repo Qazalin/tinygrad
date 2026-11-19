@@ -506,19 +506,22 @@ class X86LinearContext(LinearContext):
 def alloc_vregs(ctx:X86LinearContext, x:UOp) -> UOp:
   # no register definition
   if x.dtype is dtypes.void: return x
-  defs = regs(x) or (Register("", 0, XMM if x.dtype in dtypes.floats or x.body.arg.code in XMM_OPS else WGPR),)
-  return with_regs(x, tuple(r if r.name else replace(r, name=f"v{next(ctx.reg_n)}") for r in defs))
+  if not (defs := regs(x)): defs = (Register("", 0, XMM if x.dtype in dtypes.floats or x.body.arg.code in XMM_OPS else WGPR),)
+  named = [r if r.name else replace(r, name=f"v{next(ctx.reg_n)}") for r in defs]
+  return with_regs(x, tuple(named))
 
 # the flags belong to the last instruction that wrote them. x86 has no good way to store/restore them (then regalloc would
 # handle it), so a consumer that no longer owns its compare re-emits it. Unlike a regalloc rematerialization this is not
 # optional, there is no fallback load from stack
 def flag_rematerialize(ctx:X86LinearContext, x:UOp):
-  if x.op is Ops.CALL: x = alloc_vregs(ctx, x)
-  if x.op in (Ops.RANGE, Ops.END) or x.body.arg.code in X86GroupOp.WriteFlags: ctx.lock = x
-  elif x.body.arg.code in X86GroupOp.ReadFlags and ctx.lock is not (flag_def:=x.src[-1]):
-    ctx.lock = flag_def
-    return (x, [flag_def, x])
-  return (x, [x]) if x.op is Ops.CALL else None
+  if x.op is Ops.CALL:
+    x = alloc_vregs(ctx, x)
+    if x.body.arg.code in X86GroupOp.WriteFlags: ctx.lock = x
+    elif x.body.arg.code in X86GroupOp.ReadFlags and ctx.lock is not (flag_def:=x.src[-1]):
+      ctx.lock = flag_def
+      return (x, [flag_def, x])
+    return (x, [x])
+  ctx.lock = x
 
 # the element size of loads and stores is already captured by fold_address before stack buffers become 64-bit pointers
 def alloc_buffer(ctx:X86LinearContext, x:UOp):
