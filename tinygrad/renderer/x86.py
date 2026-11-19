@@ -17,10 +17,6 @@ class Register:
   def cons(self): return self._cons or (self,)
   def __repr__(self): return self.name
 
-class IselContext:
-  def __init__(self): self.reg_n = itertools.count()
-  def vreg(self, cons:tuple[Register, ...]|Register): return Register(f"v{next(self.reg_n)}", 0, cons if isinstance(cons, tuple) else (cons,))
-
 # the registers an ins defines exist in the src of NATIVE
 def regs(u:UOp) -> tuple[Register, ...]:
   if u.op in {Ops.BUFFER, Ops.ALLOC}: return (u.arg.reg,) if u.arg.reg is not None else ()
@@ -245,7 +241,8 @@ def args_pointer() -> UOp: return reg(dtypes.uint64, RDI)
 # a register buffer is its own virtual register, named by its identity
 def regbuf_reg(x:UOp) -> Register: return rdef(x) or Register(f"b{x.key.hex()}", 0, XMM if x.dtype in dtypes.floats else WGPR)
 # a value moved into a register constrained to cons
-def pin(ctx:IselContext, x:UOp, cons:Register|tuple[Register, ...]) -> UOp: return UOp.ins(X86Ops.MOV, (x,), x.dtype, ctx.vreg(cons))
+def pin(x:UOp, cons:Register|tuple[Register, ...]) -> UOp:
+  return UOp.ins(X86Ops.MOV, (x,), x.dtype, Register("", 0, cons if isinstance(cons, tuple) else (cons,)))
 def base(x:UOp, i:int) -> UOp: return s.src[0] if (s:=x.src[i]).op is Ops.INDEX else s
 def lane(x:UOp, i:int) -> int: return s.src[1].src[0].val if (s:=x.src[i]).op is Ops.INDEX else 0
 def to_int(dt:DType): return {dtypes.float16: dtypes.int16, dtypes.float32: dtypes.int32, dtypes.float64: dtypes.int64}[dt]
@@ -281,22 +278,22 @@ def vpins(x:UOp, srcs:tuple[UOp, ...]) -> UOp:
   op = {2: X86Ops.VPINSRW, 4: X86Ops.VPINSRD}[x.dtype.itemsize]
   return functools.reduce(lambda ret,i: UOp.ins(op, (ret, srcs[i], imm(dtypes.uint8, i)), x.dtype), range(len(srcs)), UOp(Ops.NOOP))
 
-def idiv(ctx:IselContext, x:UOp) -> UOp:
+def idiv(x:UOp) -> UOp:
   op = X86Ops.DIV if x.dtype in dtypes.uints else X86Ops.IDIV
   val = UOp.cconst(0, x.dtype) if x.dtype in dtypes.uints else x.src[0] >> UOp.cconst(x.dtype.itemsize*8-1, x.dtype)
-  ext = [] if x.dtype in dtypes.int8s else [pin(ctx, val, RDX)]
+  ext = [] if x.dtype in dtypes.int8s else [pin(val, RDX)]
   dividend_dtype = dtypes.int16 if x.dtype in dtypes.int8s else x.dtype
-  dividend = pin(ctx, x.src[0].cast(dividend_dtype), RAX)
-  defs = [ctx.vreg(RAX), ctx.vreg(RDX)][:1+(x.dtype not in dtypes.int8s)]
-  divisor = pin(ctx, x.src[1], tuple(r for r in WGPR if r not in (RAX, RDX)))
+  dividend = pin(x.src[0].cast(dividend_dtype), RAX)
+  defs = [Register("", 0, (r,)) for r in (RAX, RDX)][:1+(x.dtype not in dtypes.int8s)]
+  divisor = pin(x.src[1], tuple(r for r in WGPR if r not in (RAX, RDX)))
   idiv = UOp.ins(op, (dividend, divisor) + tuple(ext), x.dtype, *defs)
   # this move "cleanses" the register constraints (rax/rdx) of idiv
   return UOp.ins(X86Ops.MOV, (idiv,), x.dtype)
 
 # a variable shift count implicitly reads cl so it goes in rcx, the shifted value can't be in rcx
-def shift(ctx:IselContext, x:UOp, op:X86Ops) -> UOp:
-  val = pin(ctx, x.src[0], tuple(r for r in WGPR if r is not RCX))
-  cnt = pin(ctx, x.src[1], RCX)
+def shift(x:UOp, op:X86Ops) -> UOp:
+  val = pin(x.src[0], tuple(r for r in WGPR if r is not RCX))
+  cnt = pin(x.src[1], RCX)
   return UOp.ins(op, (val, cnt), x.dtype)
 
 def fold_address(x:UOp) -> tuple[UOp, UOp, UOp, UOp]:
@@ -325,21 +322,6 @@ def _xmm_sz(x: UOp) -> X86Ops:
   if bits >= 16: return X86Ops.VMOVUPS
   if bits >= 8: return X86Ops.VMOVSD
   return X86Ops.VMOVSS
-
-def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
-  # no register definition
-  if x.dtype is dtypes.void: return None
-  # already allocated vregs
-  if regs(x) and regs(x)[0]._cons: return None
-  # a register buffer is a BUFFER, a stack buffer becomes the LEA of its address before regalloc
-  if x.op in {Ops.BUFFER, Ops.ALLOC}:
-    return with_regs(x, (ctx.vreg(x.arg.reg) if x.arg.reg else regbuf_reg(x),)) if x.addrspace is AddrSpace.REG else None
-  if regs(x): defs = [ctx.vreg(regs(x))]
-  elif x.dtype in dtypes.floats or x.body.arg.code in XMM_OPS: defs = [ctx.vreg(XMM)]
-  else: defs = [ctx.vreg(WGPR)]
-  # TODO: add this once the scheduler can track register pressure
-  # if x.arg[0] in X86GroupOp.WriteFlags: defs.append(ctx.vreg(RFLAGS))
-  return with_regs(x, tuple(defs))
 
 def copy_op(dt:DType) -> X86Ops:
   return {dtypes.float16:X86Ops.VMOVSS, dtypes.float32:X86Ops.VMOVSS, dtypes.float64:X86Ops.VMOVSD, dtypes.bool:X86Ops.MOVZX}.get(dt, X86Ops.MOV)
@@ -427,9 +409,9 @@ isel_matcher = PatternMatcher([
   (UPat(Ops.SUB, dtypes.ints, (UPat.var("a"), UPat.cvar().cast(name="c"))),
    lambda a,c: UOp.ins(X86Ops.SUBi, (a, i), a.dtype) if (i:=to_imm(c)) is not None else None),
   # int binary with register
-  ((UPat(dtype=dtypes.ints) << UPat()).named("x"), lambda ctx,x: shift(ctx, x, X86Ops.SHL)),
-  ((UPat(dtype=dtypes.uints) >> UPat()).named("x"), lambda ctx,x: shift(ctx, x, X86Ops.SHR)),
-  ((UPat(dtype=dtypes.sints) >> UPat()).named("x"), lambda ctx,x: shift(ctx, x, X86Ops.SAR)),
+  ((UPat(dtype=dtypes.ints) << UPat()).named("x"), lambda x: shift(x, X86Ops.SHL)),
+  ((UPat(dtype=dtypes.uints) >> UPat()).named("x"), lambda x: shift(x, X86Ops.SHR)),
+  ((UPat(dtype=dtypes.sints) >> UPat()).named("x"), lambda x: shift(x, X86Ops.SAR)),
   (UPat.var("a", dtypes.ints) + UPat.var("b"), lambda a,b: UOp.ins(X86Ops.ADD, (a, b), a.dtype)),
   (UPat.var("a", dtypes.ints) * UPat.var("b"), lambda a,b: UOp.ins(X86Ops.IMUL, (a, b), a.dtype)),
   (UPat.var("a", dtypes.ints+(dtypes.bool,)) & UPat.var("b"), lambda a,b: UOp.ins(X86Ops.AND, (a, b), a.dtype)),
@@ -489,8 +471,8 @@ isel_matcher = PatternMatcher([
    UOp.ins(X86Ops.MOVm, fold_address(a) + (b,), x.dtype) if (i:=to_imm(b)) is None else UOp.ins(X86Ops.MOVi, fold_address(a) + (i,), x.dtype)),
   # move const to registers for instructions that don't support immediate operands
   (UPat(Ops.CALL, name="x"), load_const),
-  # allocate virtual registers
-  (UPat((Ops.CALL, Ops.BUFFER, Ops.ALLOC), name="x"), alloc_vregs),
+  # give buffers distinct registers
+  (UPat((Ops.BUFFER, Ops.ALLOC), name="x"), lambda x: with_regs(x, (regbuf_reg(x),)) if x.addrspace is AddrSpace.REG and x.arg.reg is None else None),
 ])
 
 # ***** pre register allocation *****
@@ -498,6 +480,7 @@ class X86LinearContext(LinearContext):
   def __init__(self, ren:'X86Renderer'):
     super().__init__(ren)
     self.lock: UOp|None = None
+    self.reg_n = itertools.count()
 
   # stack alloc/dealloc and callee saved handling
   def insert_linearized(self, uops:list[UOp]) -> list[UOp]:
@@ -520,15 +503,22 @@ class X86LinearContext(LinearContext):
     self.stack_size = offset + sz
     return offset
 
+def alloc_vregs(ctx:X86LinearContext, x:UOp) -> UOp:
+  # no register definition
+  if x.dtype is dtypes.void: return x
+  defs = regs(x) or (Register("", 0, XMM if x.dtype in dtypes.floats or x.body.arg.code in XMM_OPS else WGPR),)
+  return with_regs(x, tuple(r if r.name else replace(r, name=f"v{next(ctx.reg_n)}") for r in defs))
+
 # the flags belong to the last instruction that wrote them. x86 has no good way to store/restore them (then regalloc would
 # handle it), so a consumer that no longer owns its compare re-emits it. Unlike a regalloc rematerialization this is not
 # optional, there is no fallback load from stack
 def flag_rematerialize(ctx:X86LinearContext, x:UOp):
+  if x.op is Ops.CALL: x = alloc_vregs(ctx, x)
   if x.op in (Ops.RANGE, Ops.END) or x.body.arg.code in X86GroupOp.WriteFlags: ctx.lock = x
   elif x.body.arg.code in X86GroupOp.ReadFlags and ctx.lock is not (flag_def:=x.src[-1]):
     ctx.lock = flag_def
     return (x, [flag_def, x])
-  return None
+  return (x, [x]) if x.op is Ops.CALL else None
 
 # the element size of loads and stores is already captured by fold_address before stack buffers become 64-bit pointers
 def alloc_buffer(ctx:X86LinearContext, x:UOp):
