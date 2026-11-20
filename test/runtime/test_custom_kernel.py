@@ -373,6 +373,26 @@ class TestCustomKernel(unittest.TestCase):
       return C[0].set(C.after(i, j)[0] + 1, end=(j, i)).sink(arg=KernelInfo())
     self.assertEqual(Tensor.custom_kernel(Tensor.zeros(1, dtype=dtypes.int).contiguous(), fxn=kernel)[0].tolist(), [6])
 
+  def test_zero_trip_range(self):
+    def kernel(C:UOp, n:UOp) -> UOp:
+      r = UOp.range(n, 0)
+      C = C[0].set(7)
+      return C[0].store(C.after(r)[0] + 1).end(r).sink(arg=KernelInfo(opts_to_apply=()))
+    for n in (0, 1, 4):
+      for bound in (UOp.const(n), Variable("n", 0, 4, dtypes.int).bind(n)):
+        with self.subTest(bound=bound):
+          c = Tensor.empty(1, dtype=dtypes.int)
+          out = c.custom_kernel(fxn=lambda C: kernel(C, bound)) if bound.op is Ops.CONST else c.custom_kernel(Tensor(bound), fxn=kernel)
+          self.assertEqual(out[0].tolist(), [7+n])
+
+  def test_nested_range_with_empty_first_iteration(self):
+    def kernel(C:UOp) -> UOp:
+      i = UOp.range(4, 0)
+      j = UOp.range(i, 1)
+      return C[i].store(C.after(j)[i] + j.cast(C.dtype) + 1).end(j, i).sink(arg=KernelInfo(opts_to_apply=()))
+    c = Tensor.zeros(4, dtype=dtypes.int).contiguous()
+    self.assertEqual(c.custom_kernel(fxn=kernel)[0].tolist(), [0, 1, 3, 6])
+
   def test_gemm_backward_custom(self): self.test_gemm_backward(True)
   def test_gemm_backward(self, custom_backward_gemm=False):
     N = 4

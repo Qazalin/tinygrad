@@ -32,11 +32,27 @@ from tinygrad.codegen.late.coalesce import indexing_simplify, memory_coalescing,
 from tinygrad.codegen.rangeify import BufferizeOpts, get_kernel_graph
 from tinygrad.codegen.memory import memory_plan_rewrite
 
-def do_number_param(ctx:tuple[int, dict[str, int]], x:UOp): # after the params, one slot per name
+def do_number_param(ctx:tuple[int, dict[str, int], itertools.count], x:UOp): # after the params, one slot per name
   if x.is_variable and x.arg.slot == -1: return x.replace(arg=replace(x.arg, slot=ctx[0] + ctx[1].setdefault(x.arg.name, len(ctx[1]))))
 
 pm_number_params = PatternMatcher([
   (UPat(Ops.PARAM, name="x"), do_number_param),
+])
+
+# convert bound RANGE to BACKEDGE
+def range_to_backedge(slots:itertools.count, body:UOp, r:UOp) -> UOp|None:
+  bound = r.src[0]
+  if bound.without_after.vmin <= 0: return None  # BACKEDGE executes its body at least once
+  counter = UOp.placeholder((1,), r.dtype, next(slots), AddrSpace.REG)
+  zero = UOp.const(0, dtypes.int)
+  loop = r.replace(src=(counter.after(bound).index(zero).store(0),))
+  idx = counter.after(loop).index(zero).load()
+  body = body.substitute({r:idx})
+  nxt = idx + UOp.const(1, r.dtype)
+  return counter.after(body).index(zero).store(nxt).backedge(loop, nxt < bound.without_after)
+
+pm_backedge = PatternMatcher([
+  (UPat(Ops.END, src=(UPat.var("body"), UPat(Ops.RANGE, dtype=dtypes.ints, name="r"))), lambda ctx,body,r: range_to_backedge(ctx[2], body, r)),
 ])
 
 def build_range_map(sink:UOp) -> dict[tuple, int]:
@@ -378,9 +394,13 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
   # this was the linearizer
   sink = graph_rewrite(sink, pm_add_control_flow, ctx=CFGContext(sink), name="add control flow", bottom_up=True)
 
+  # Count work while the loop trip counts are still explicit.
+  if isinstance(sink.arg, KernelInfo) and sink.arg.estimates is None:
+    sink = sink.replace(arg=replace(sink.arg, estimates=Estimates.from_uops(tuple(linearize(sink)), ignore_indexing=True)))
+
   # put the variables in slots
   num_params = max([x.arg.slot + 1 for x in sink.toposort() if x.op is Ops.PARAM and x.arg.slot != -1], default=0)
-  sink = graph_rewrite(sink, pm_number_params, ctx=(num_params, {}), name="number variables", walk=True)
+  sink = graph_rewrite(sink, pm_number_params+pm_backedge, ctx=(num_params, {}, slots), name="number variables and lower ranges", walk=True)
 
   if VIZ: graph_rewrite(sink, PatternMatcher([]), name="View Output AST")
   if SPEC:
@@ -503,8 +523,6 @@ def do_to_program(ast:UOp, renderer:Renderer) -> UOp:
     assert isinstance(ast.arg, KernelInfo), "requires KernelInfo on arg to to_program"
     full_sink = full_rewrite_to_sink(ast, renderer, optimize=not ast.arg.optimized)
     prog_info = ProgramInfo.from_sink(full_sink, renderer.target)
-    if full_sink.arg.estimates is None:
-      full_sink = full_sink.replace(arg=replace(full_sink.arg, estimates=Estimates.from_uops(tuple(linearize(full_sink)), ignore_indexing=True)))
     if renderer.packed_args and full_sink.arg.kernel: full_sink = pack_args(full_sink, prog_info.params)
     # instruction selection
     if isinstance(renderer, ISARenderer):
