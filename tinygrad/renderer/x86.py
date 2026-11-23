@@ -304,12 +304,19 @@ def _xmm_sz(x: UOp) -> X86Ops:
   if bits >= 8: return X86Ops.VMOVSD
   return X86Ops.VMOVSS
 
-def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
+def alloc_vregs(ctx:IselContext, x:UOp) -> UOp:
+  op, n = x.body.arg.code, len(x.src_without_body)
+  # keep the instruction's immediate operand as a constant
+  immediate = {n-1} if op in X86GroupOp.Immediate else set()
+  # memory addresses are (base, index, displacement, scale), keep displacement and scale constant too
+  immediate |= {2,3} if op in X86GroupOp.WriteMem and n>4 else {3,4} if op in X86GroupOp.Rm2nd and n>4 else \
+      ({2,3} if op in X86GroupOp.Rm1st and n>3 else set())
+  x = x.replace(src=(x.body,)+tuple(s if i in immediate else mov_op(s) for i,s in enumerate(x.src_without_body)))
   # no register definition
-  if x.dtype is dtypes.void: return None
+  if x.dtype is dtypes.void: return x
   if (dst:=vdef(x)) is not None:
     # already allocated vregs
-    if physical_reg(dst) is None: return None
+    if physical_reg(dst) is None: return x
     defs = tuple(p for choices in register_choices(x).values() for p in ctx.vreg(x.dtype, choices))
   else: defs = ctx.vreg(x.dtype, XMM if x.dtype in dtypes.floats or x.body.arg.code in XMM_OPS else WGPR)
   return UOp.ins(x.body.arg.code, x.src_without_body, x.dtype, *defs)
@@ -320,15 +327,6 @@ def copy_op(dt:DType) -> X86Ops:
 def mov_op(s:UOp) -> UOp:
   if s.op is Ops.AFTER: return s.replace(src=(mov_op(s.src[0]),)+s.src[1:])
   return UOp.ins(X86Ops.MOVABS if s.dtype in dtypes.int64s else X86Ops.MOVi, (imm(s.dtype, s.src[0].val),), s.dtype) if is_imm(s) else s
-
-def load_const(x:UOp) -> UOp:
-  op, n = x.body.arg.code, len(x.src_without_body)
-  # keep the instruction's immediate operand as a constant
-  immediate = {n-1} if op in X86GroupOp.Immediate else set()
-  # memory addresses are (base, index, displacement, scale), keep displacement and scale constant too
-  immediate |= {2,3} if op in X86GroupOp.WriteMem and n>4 else {3,4} if op in X86GroupOp.Rm2nd and n>4 else \
-      ({2,3} if op in X86GroupOp.Rm1st and n>3 else set())
-  return x.replace(src=(x.body,)+tuple(s if i in immediate else mov_op(s) for i,s in enumerate(x.src_without_body)))
 
 isel_matcher = PatternMatcher([
   # **** Op -> Op ****
@@ -454,8 +452,6 @@ isel_matcher = PatternMatcher([
   (UPat.var("a").store(UPat.var("b", dtypes.ints+(dtypes.bool,)), name="x"), lambda a,b,x: None if a.addrspace is AddrSpace.REG else
    UOp.ins(X86Ops[_xmm_sz(b).name+"m"], fold_address(a) + (b,), x.dtype) if b.max_numel() > 1 else
    UOp.ins(X86Ops.MOVm, fold_address(a) + (b,), x.dtype) if (i:=to_imm(b)) is None else UOp.ins(X86Ops.MOVi, fold_address(a) + (i,), x.dtype)),
-  # move const to registers for instructions that don't support immediate operands
-  (UPat(Ops.CALL, name="x"), load_const),
   # allocate virtual registers
   (UPat(Ops.CALL, name="x"), alloc_vregs),
 ])
