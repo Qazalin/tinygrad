@@ -30,6 +30,17 @@ def custom_gemm(C:UOp, A:UOp, B:UOp) -> UOp:
   return prog.sink(arg=KernelInfo(name=f"custom_gemm_{C.shape[0]}_{C.shape[1]}_{A.shape[1]}", opts_to_apply=()))
 
 class TestCustomKernel(unittest.TestCase):
+  def test_x86_large_displacement(self):
+    from tinygrad.renderer.x86 import X86Ops, X86Renderer
+    renderer = X86Renderer(Target("CPU", arch="x86_64"))
+    for idx in ((1<<29)-1, 1<<29):  # last aligned disp32, then first offset that needs a register
+      def kernel(B, A): return B[0].store(A[idx]).sink(arg=KernelInfo(name="large_displacement"))
+      out, inp = (Tensor.empty(n, dtype=dtypes.uint32, device="NULL") for n in (1, idx+1))
+      ast = Tensor.custom_kernel(out, inp, fxn=kernel)[0].schedule_linear().src[-1].src[0]
+      linear = to_program(ast, renderer).src[1]
+      self.assertEqual([u.src[1].src[0].val for u in linear.src if u.op is Ops.CALL and u.body.arg.code is X86Ops.MOVABS],
+                       [idx] if idx == 1<<29 else [])
+
   def test_gemm_group_refused(self):
     # k is a serial LOOP: custom_gemm has no Ops.REDUCE
     a, b, c = Tensor.empty(16, 16), Tensor.empty(16, 16), Tensor.empty(16, 16)
