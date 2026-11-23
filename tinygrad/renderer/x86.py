@@ -280,13 +280,13 @@ def shift(ctx:IselContext, x:UOp, op:X86Ops) -> UOp:
 def fold_address(x:UOp) -> tuple[UOp, UOp, UOp, UOp]:
   def _disp(v:int) -> UOp: return imm(dtypes.int32 if abs(v) > dtypes.int8.max else dtypes.int8, v)
   def _cast(v:UOp) -> UOp: return v.cast(dtypes.int64) if v.vmin < 0 else v.cast(dtypes.uint32) if v.dtype.itemsize < 4 else v
-  if x.op not in {Ops.INDEX, Ops.SHRINK}: return (x, UOp(Ops.NOOP), _disp(0), imm(dtypes.uint32, x.dtype.itemsize))
+  if x.op not in {Ops.INDEX, Ops.SHRINK}: return (x, imm(dtypes.u64, 0), _disp(0), imm(dtypes.uint32, x.dtype.itemsize))
   base, idx = x.src[0], x.src[1]
   scale = 1 if base in (stack_pointer(), args_pointer()) else base.dtype.itemsize
   sz = imm(dtypes.uint32, base.dtype.itemsize)
   if idx.op is Ops.ADD and is_imm(c:=idx.src[1]):
     return (base, _cast(idx.src[0]), _disp(c.src[0].val * scale), sz)
-  if is_imm(idx): return (base, UOp(Ops.NOOP), _disp(idx.src[0].val * scale), sz)
+  if is_imm(idx): return (base, imm(dtypes.u64, 0), _disp(idx.src[0].val * scale), sz)
   return (base, _cast(idx), _disp(0), sz)
 
 def lea(x:UOp) -> UOp: return UOp.ins(X86Ops.LEA, fold_address(x), dtypes.uint64)
@@ -304,14 +304,18 @@ def _xmm_sz(x: UOp) -> X86Ops:
   if bits >= 8: return X86Ops.VMOVSD
   return X86Ops.VMOVSS
 
+def mov_op(s:UOp) -> UOp:
+  if s.op is Ops.AFTER: return s.replace(src=(mov_op(s.src[0]),)+s.src[1:])
+  return UOp.ins(X86Ops.MOVABS if s.dtype in dtypes.int64s else X86Ops.MOVi, (imm(s.dtype, s.src[0].val),), s.dtype) if is_imm(s) else s
+
 def alloc_vregs(ctx:IselContext, x:UOp) -> UOp:
   op, n = x.body.arg.code, len(x.src_without_body)
   # keep the instruction's immediate operand as a constant
   immediate = {n-1} if op in X86GroupOp.Immediate else set()
-  # memory addresses are (base, index, displacement, scale), keep displacement and scale constant too
-  immediate |= {2,3} if op in X86GroupOp.WriteMem and n>4 else {3,4} if op in X86GroupOp.Rm2nd and n>4 else \
-      ({2,3} if op in X86GroupOp.Rm1st and n>3 else set())
-  x = x.replace(src=(x.body,)+tuple(s if i in immediate else mov_op(s) for i,s in enumerate(x.src_without_body)))
+  # memory addresses are (base, index, displacement, scale), keep their immediate operands constant
+  immediate |= {1,2,3} if op in X86GroupOp.WriteMem and n>4 else {2,3,4} if op in X86GroupOp.Rm2nd and n>4 else \
+      ({1,2,3} if op in X86GroupOp.Rm1st and n>3 else set())
+  x = x.replace(src=(x.body,)+tuple(s if i in immediate and is_imm(s) else mov_op(s) for i,s in enumerate(x.src_without_body)))
   # no register definition
   if x.dtype is dtypes.void: return x
   if (dst:=vdef(x)) is not None:
@@ -323,10 +327,6 @@ def alloc_vregs(ctx:IselContext, x:UOp) -> UOp:
 
 def copy_op(dt:DType) -> X86Ops:
   return {dtypes.float16:X86Ops.VMOVSS, dtypes.float32:X86Ops.VMOVSS, dtypes.float64:X86Ops.VMOVSD, dtypes.bool:X86Ops.MOVZX}.get(dt, X86Ops.MOV)
-
-def mov_op(s:UOp) -> UOp:
-  if s.op is Ops.AFTER: return s.replace(src=(mov_op(s.src[0]),)+s.src[1:])
-  return UOp.ins(X86Ops.MOVABS if s.dtype in dtypes.int64s else X86Ops.MOVi, (imm(s.dtype, s.src[0].val),), s.dtype) if is_imm(s) else s
 
 isel_matcher = PatternMatcher([
   # **** Op -> Op ****
