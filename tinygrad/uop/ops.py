@@ -1205,8 +1205,9 @@ class UOp(Mixin, metaclass=UOpMetaClass):
     if tuple(max_shape) != tuple(shape): ret = ret.shrink_to(shape)
     return ret if axis is None else ret.unshard(axis)
 
-  def native(self:UOp|None=None, /, *, code:Any, fmt:bool=False) -> UOp:
-    return UOp(Ops.NATIVE, src=(self,) if self is not None else (), arg=NativeInfo(code, fmt=fmt))
+  def native(*src:UOp, code:Any, fmt:bool=False) -> UOp:
+    assert len(src) <= 1, f"native has exactly 1 or 0 srcs, got {src}"
+    return UOp(Ops.NATIVE, src=src, arg=NativeInfo(code, fmt=fmt))
 
   def call(self, *srcs:UOp, grad_fxn:Callable|None=None,
            name:str|None=None, precompile:bool=False, precompile_backward:bool=False, inline:bool=False, hcq:HCQInfo|None=None) -> UOp:
