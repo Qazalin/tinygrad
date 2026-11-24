@@ -140,7 +140,7 @@ def dtype_from_uop(op:Ops, src:tuple[UOp,...], arg:Any) -> DType:
     case Ops.CALL:
       return call_return_value(src[0]).dtype
     case Ops.NATIVE:
-      return src[0].dtype
+      return src[0].dtype if src else dtypes.void
     case Ops.INDEX:
       # an image access is always float, no matter the storage dtype
       # TODO: should there be a CAST so src[0].dtype just work?
@@ -376,11 +376,15 @@ class UOp(Mixin, metaclass=UOpMetaClass):
         return wmma_b + (self.src[2].shape[-1],)
 
       # passthrough ops
+      case Ops.MSTACK | Ops.MSELECT | Ops.DETACH | Ops.CONTIGUOUS_BACKWARD | Ops.AFTER | Ops.LOAD | \
+          Ops.COPY | Ops.ALLREDUCE | Ops.STORE | Ops.END:
+        return self.src[0]._shape
+
+      case Ops.NATIVE:
+        return self.src[0]._shape if self.src else ()
+
       case Ops.CALL:
         return call_return_value(self.body)._shape
-      case Ops.MSTACK | Ops.MSELECT | Ops.DETACH | Ops.CONTIGUOUS_BACKWARD | Ops.AFTER | Ops.LOAD | \
-           Ops.COPY | Ops.ALLREDUCE | Ops.STORE | Ops.END | Ops.NATIVE:
-        return self.src[0]._shape
 
       case Ops.BITCAST:
         ps = self.src[0]._shape
@@ -448,6 +452,8 @@ class UOp(Mixin, metaclass=UOpMetaClass):
     if self.op is Ops.BARRIER: return tuple(flatten([x.ended_ranges for x in self.src]))
     # UNSHARD ends the DEVICE range: its src is per-device index math, the device axis is carried by the axis metadata
     if self.op is Ops.UNSHARD: return self.src[1:]
+    # MSELECT picks a single lane, so consumers are no longer indexed by the source's device range.
+    if self.op is Ops.MSELECT: return tuple(r for r in self.src[0].ranges if r.axis_type is AxisType.DEVICE)
     return ()
 
   # determine what ranges this is in
@@ -1203,10 +1209,12 @@ class UOp(Mixin, metaclass=UOpMetaClass):
     return ret if axis is None else ret.unshard(axis)
 
   @staticmethod
-  def native(code:Any, src:UOp|None=None, shape:tuple[sint, ...]=(), dtype:DType=dtypes.void, fmt:bool=False,
+  def native(code:Any, src:UOp|None=None, shape:tuple[sint, ...]|None=None, dtype:DType|None=None, fmt:bool=False,
              fixed_regs:bool=False) -> UOp:
-    return UOp(Ops.NATIVE, src=(src if src is not None else UOp.param(-1, dtype, shape),),
-               arg=NativeInfo(code, fmt=fmt, fixed_regs=fixed_regs))
+    if shape is not None or dtype is not None:
+      assert src is None, f"native either receives src or {dtype=} and {shape=}"
+      src = UOp.param(-1, dtype or dtypes.void, shape or ())
+    return UOp(Ops.NATIVE, src=(src,) if src is not None else (), arg=NativeInfo(code, fmt, fixed_regs))
 
   def call(self, *srcs:UOp, grad_fxn:Callable|None=None,
            name:str|None=None, precompile:bool=False, precompile_backward:bool=False, inline:bool=False, hcq:HCQInfo|None=None) -> UOp:
