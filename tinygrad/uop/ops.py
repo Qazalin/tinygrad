@@ -1207,7 +1207,9 @@ class UOp(Mixin, metaclass=UOpMetaClass):
 
   @staticmethod
   def native(code:Any, src:UOp|None=None, shape:tuple[sint, ...]|None=None, dtype:DType|None=None, fmt:bool=False) -> UOp:
-    if shape is not None or dtype is not None: src = UOp.param(-1, dtype or dtypes.void, shape or ())
+    if shape is not None or dtype is not None:
+      assert src is None, f"native cannot have src when {dtype=} or {shape=} are passed in"
+      src = UOp.param(-1, dtype or dtypes.void, shape or ())
     return UOp(Ops.NATIVE, src=(src,) if src is not None else (), arg=NativeInfo(code, fmt=fmt))
 
   def call(self, *srcs:UOp, grad_fxn:Callable|None=None,
