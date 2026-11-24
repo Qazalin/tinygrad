@@ -511,8 +511,9 @@ def do_to_program(ast:UOp, renderer:Renderer) -> UOp:
         # TODO: renderer.packed_args is not idempotent
         host_renderer.packed_args = False
         # device dtype decomposition already ran; don't decompose host ABI pointers and native instruction semantics a second time
-        with Context(EMULATED_DTYPES=""):
-          return to_program(full_sink, host_renderer).replace(arg=prog_info)
+        with Context(EMULATED_DTYPES=""): host_prg = to_program(full_sink, host_renderer)
+        programs = tuple(c.body for c in host_prg.src[1].src if c.op is Ops.CALL and c.body.op is Ops.PROGRAM)
+        return host_prg.replace(arg=replace(prog_info, programs=programs))
     prg = UOp(Ops.PROGRAM, src=(full_sink,), arg=prog_info)
   else: raise RuntimeError(f"can't call to_program on {ast.op}")
   if not isinstance(prg.arg, ProgramInfo): prg = prg.replace(arg=ProgramInfo.from_sink(prg.src[0], renderer.target))

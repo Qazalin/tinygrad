@@ -124,6 +124,7 @@ def promo_dtype(src:tuple[UOp,...]) -> DType:
 def call_return_value(body:UOp) -> UOp:
   if body.op is Ops.PROGRAM: body = body.src[0]
   if body.op is Ops.LINEAR: body = body.src[-1]
+  if body.op is Ops.SINK and getattr(body.arg, "kernel", False): return body
   return body.src[0] if body.op is Ops.SINK and len(body.src) == 1 else body
 
 def dtype_from_uop(op:Ops, src:tuple[UOp,...], arg:Any) -> DType:
@@ -1328,6 +1329,7 @@ class ProgramInfo:
   outs: tuple[int, ...] = ()
   ins: tuple[int, ...] = ()
   target: Target = Target()
+  programs: tuple[UOp, ...] = ()  # compiled helper dependencies, retained even if the linear body is opaque
 
   def launch_dims(self, call:UOp): return tuple(map(call.bind_symbols, self.global_size)), tuple(map(call.bind_symbols, self.local_size))
 
