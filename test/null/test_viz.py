@@ -199,7 +199,7 @@ class TestViz(unittest.TestCase):
 
   @Context(SPEC=1)
   def test_dtype_label(self):
-    u = UOp(Ops.ADD, src=(UOp.native("fn"), UOp.const(1)))
+    u = UOp(Ops.ADD, src=(UOp.native(code="fn"), UOp.const(1)))
     node = uop_to_json(VizData(), u)[id(u)]
     self.assertTrue(node["label"].startswith("ADD"))
     self.assertIn("ISSUE GETTING DTYPE", node["label"])
@@ -489,7 +489,7 @@ class TestVizIntegration(unittest.TestCase):
     def custom_fn(X:UOp):
       X = X.flatten()
       i = UOp.range(X.numel(), 0)
-      custom_op = UOp.native("{0} + undeclared_name;", shape=X[i].shape, dtype=X.dtype, fmt=True).call(X[i], inline=True)
+      custom_op = UOp.param(-1, X.dtype, X[i].shape).native(code="{0} + undeclared_name;", fmt=True).call(X[i], inline=True)
       self.assertEqual(custom_op.shape, ())
       return X[i].store(custom_op).end(i).sink(arg=KernelInfo(name=f"custom_fn_{X.numel()}"))
     x = Tensor.custom_kernel(Tensor.empty(1, device="CPU"), fxn=custom_fn)[0]
@@ -908,7 +908,7 @@ class TestCfg(unittest.TestCase):
       lidx = UOp.special(1, "lidx0")
       gidx = UOp.special(1, "gidx0")
       sink = UOp.sink(out.base, lidx, gidx, arg=KernelInfo(name=name))
-      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple([UOp.native(x).call() for x in insts]))))
+      return UOp(Ops.PROGRAM, src=(sink, UOp(Ops.LINEAR, src=tuple([UOp.native(code=x).call() for x in insts]))))
     with save_viz() as viz:
       with Context(DEV=f"NULL::{target}"):
         out = Tensor.custom_kernel(Tensor.empty(1), fxn=fxn)[0]

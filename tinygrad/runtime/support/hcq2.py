@@ -64,7 +64,7 @@ def make_submit(*cmds:UOp, dev:str, queue:str, deps:tuple[UOp, ...]) -> UOp: # a
 @uopfunc
 def do_get_time_ms(ms:UOp) -> UOp:
   ts = UOp.placeholder((2,), dtypes.u64, addrspace=AddrSpace.REG)
-  ts = ts.after(UOp.native("clock_gettime", dtype=dtypes.i32).call(UOp.const(time.CLOCK_MONOTONIC, dtypes.i32), ts.index(0)))
+  ts = ts.after(UOp.param(-1, dtypes.i32, ()).native(code="clock_gettime").call(UOp.const(time.CLOCK_MONOTONIC, dtypes.i32), ts.index(0)))
   return ms.index(0).store(ts[0] * 1000 + ts[1] // 1000000).sink()
 def get_time_ms(dep:UOp) -> UOp: return (ms:=UOp.placeholder((1,), dtypes.u64, addrspace=AddrSpace.REG)).after(do_get_time_ms(ms.after(dep)))[0]
 
@@ -85,7 +85,7 @@ def announce(slots:dict[str, UOp], num_queues:dict[str, int], dep:UOp) -> list[U
   bumped = [timeline(dev).after(dep).index(1).store(timeline_value(dev) + 1) for dev in slots]
   return bumped + [buf.after(dep).index(2 * num_queues[dev]).store(timeline_value(dev) + 1) for dev, buf in slots.items()]
 
-def ins(name:str, *src:UOp|int) -> UOp: return UOp.native(name).call(*[UOp.const(s, dtypes.u32) if isinstance(s, int) else s for s in src])
+def ins(name:str, *src:UOp|int) -> UOp: return UOp.native(code=name).call(*[UOp.const(s, dtypes.u32) if isinstance(s, int) else s for s in src])
 
 def lockstep(streams:list[list[tuple]]) -> list[UOp]: # a step issues the next (issue, complete, range) command of each stream, then completes all
   # the trip each command starts at, a command without a range is one trip
@@ -152,7 +152,7 @@ def pack_args(args:list[tuple[int, UOp]], size:int) -> list[UOp]:
 
 def ccall(fn:Any, *args:UOp|int) -> UOp:
   ret = dtypes.void if fn.restype is None else getattr(dtypes, fn.restype.__name__[2:], dtypes.u64) # void, c_int -> int, pointers -> u64
-  return UOp.native(fn.__name__, dtype=ret).call(*[UOp.const(a, dtypes.i32) if isinstance(a, int) else a for a in args])
+  return UOp.param(-1, ret, ()).native(code=fn.__name__).call(*[UOp.const(a, dtypes.i32) if isinstance(a, int) else a for a in args])
 
 def cstruct(struct_t:type[Struct], **fields:UOp|int) -> UOp:
   flds = {n: (o, {d.itemsize: d for d in dtypes.uints}[ctypes.sizeof(t)]) for n, t, o, *_ in struct_t._real_fields_ if ctypes.sizeof(t)}

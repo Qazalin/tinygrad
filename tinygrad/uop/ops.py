@@ -585,7 +585,7 @@ class UOp(Mixin, metaclass=UOpMetaClass):
   def ins(op, src:tuple[UOp, ...], dtype:DType, *regs:UOp) -> UOp:
     params = [UOp.param(r.arg.slot, dtype, name=r.arg.name, addrspace=AddrSpace.REG) if r.op is Ops.BUFFER else r for r in regs]
     native_src = params[0].after(*params[1:]) if params else UOp.param(-1, dtype)
-    return UOp.native(op, native_src).call(*src)
+    return native_src.native(code=op).call(*src)
   def contract(self, *rngs:UOp):
     assert all(x.axis_type == AxisType.UPCAST for x in rngs), "all contract ranges must be upcast"
     return UOp.stack(*[self.substitute(dict(zip(rngs, [r.const_like(i) for r,i in zip(rngs, idx)])))
@@ -1205,12 +1205,8 @@ class UOp(Mixin, metaclass=UOpMetaClass):
     if tuple(max_shape) != tuple(shape): ret = ret.shrink_to(shape)
     return ret if axis is None else ret.unshard(axis)
 
-  @staticmethod
-  def native(code:Any, src:UOp|None=None, shape:tuple[sint, ...]|None=None, dtype:DType|None=None, fmt:bool=False) -> UOp:
-    if shape is not None or dtype is not None:
-      assert src is None, f"native cannot have src when {dtype=} or {shape=} are passed in"
-      src = UOp.param(-1, dtype or dtypes.void, shape or ())
-    return UOp(Ops.NATIVE, src=(src,) if src is not None else (), arg=NativeInfo(code, fmt=fmt))
+  def native(self:UOp|None=None, /, *, code:Any, fmt:bool=False) -> UOp:
+    return UOp(Ops.NATIVE, src=(self,) if self is not None else (), arg=NativeInfo(code, fmt=fmt))
 
   def call(self, *srcs:UOp, grad_fxn:Callable|None=None,
            name:str|None=None, precompile:bool=False, precompile_backward:bool=False, inline:bool=False, hcq:HCQInfo|None=None) -> UOp:

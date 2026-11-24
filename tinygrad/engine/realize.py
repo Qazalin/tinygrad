@@ -186,7 +186,7 @@ def _validate(call:UOp, sink:UOp) -> UOp:
   shadows = tuple(p if p.addrspace is AddrSpace.ALU else
                   UOp.new_buffer(("CPU",)*len(p.device) if isinstance(p.device, tuple) else "CPU", prod(p.max_shape), p.dtype) for p in call.src[1:])
   copies = tuple(s.store_call(p) for s, p in zip(shadows, call.src[1:]) if p.addrspace is not AddrSpace.ALU)
-  return UOp(Ops.LINEAR, src=copies + (call, UOp.native("validate", sink).call(*shadows, *call.src[1:])))
+  return UOp(Ops.LINEAR, src=copies + (call, sink.native(code="validate").call(*shadows, *call.src[1:])))
 pm_validate = PatternMatcher([(UPat(Ops.CALL, src=(UPat(Ops.SINK, name="sink"),), name="call", allow_any_len=True), _validate)]) + pm_flatten_linear
 
 # ctx is beam value

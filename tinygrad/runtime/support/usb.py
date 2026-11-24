@@ -401,13 +401,13 @@ def usb_copy_rewriter(s:UOp) -> UOp|None:
 
   # host side, after the submit
   link = usb_link(dev).after(s)
-  done = UOp.native("usb_begin").call(link, usb_fence(dev), link.index(2).load())
+  done = UOp.native(code="usb_begin").call(link, usb_fence(dev), link.index(2).load())
   for cin, run, table, k in runs:
-    if run: done = UOp.native("usb_drain").call(link.after(done), usb_fence(dev), UOp.const(run + 1, dtypes.uint64)) # a run uses both halves
+    if run: done = UOp.native(code="usb_drain").call(link.after(done), usb_fence(dev), UOp.const(run + 1, dtypes.uint64)) # a run uses both halves
     live = UOp.range(link.after(done).index(5).load().eq(0).cast(dtypes.int), next(UOp.unique_num), dtype=dtypes.int) # no trips once failed
     loop, at = UOp.range(UOp(Ops.NOOP).after(link, live), next(UOp.unique_num), dtype=dtypes.void), usb_stack(dtypes.int, 0)
     i, word = at.after(loop).index(0).load(), usb_fence(dev) if cin else usb_go(dev)
-    sent = UOp.native("usb_send" if cin else "usb_recv").call(link.after(loop), table, i, UOp.const(run, dtypes.int), word)
+    sent = UOp.native(code="usb_send" if cin else "usb_recv").call(link.after(loop), table, i, UOp.const(run, dtypes.int), word)
     done = at.after(sent).index(0).store(i + 1).backedge(loop, (i + 1 < k) & link.after(sent).index(5).load().eq(0)).end(live)
   return link.after(done).index(2).store(UOp.const(n, dtypes.uint64))
 
