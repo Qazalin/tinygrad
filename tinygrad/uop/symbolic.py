@@ -459,11 +459,15 @@ pm_simplify_valid = PatternMatcher([
 
 # this is symbolic 2.0
 REMOVE_FROM_SINK_LIKE = {Ops.NOOP, Ops.STACK, Ops.SINK, Ops.AFTER}
+def flatten_sink_src(root:UOp, x:UOp) -> tuple[UOp, ...]:
+  # a non-void STACK is a vector return value, not a group of void kernel stores
+  if x.op is Ops.STACK and x.dtype is not dtypes.void: return (x,)
+  return x.src if x.op in REMOVE_FROM_SINK_LIKE else (x,)
 pm_clean_up_group_sink = PatternMatcher([
   # clean up SINK
   (UPat(Ops.SINK, name="root"),
-    lambda root: UOp(root.op, src=tuple(flatten(x.src if x.op in REMOVE_FROM_SINK_LIKE else (x,) for x in root.src)), arg=root.arg)
-      if any(x.op in REMOVE_FROM_SINK_LIKE for x in root.src) else None),
+    lambda root: UOp(root.op, src=tuple(flatten(flatten_sink_src(root, x) for x in root.src)), arg=root.arg)
+      if any(len(flatten_sink_src(root, x)) != 1 or flatten_sink_src(root, x)[0] is not x for x in root.src) else None),
 ])
 
 sym = symbolic+pm_simplify_valid+PatternMatcher([

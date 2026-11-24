@@ -311,14 +311,14 @@ def full_rewrite_to_sink(ast:UOp, ren:Renderer, optimize:bool=True) -> UOp:
 
   sink = graph_rewrite(sink, symbolic_simple+pm_expand_broadcast+pm_add_loads, name="*** expand broadcast / add loads")
 
-  # devectorize
-  sink = graph_rewrite(sink, symbolic_simple+devectorizer2+indexing_simplify, name="devectorize2")
+  # unoptimized outlined helpers retain vector loads/stores; optimized kernels devectorize based on global/local indexing
+  if optimize: sink = graph_rewrite(sink, symbolic_simple+devectorizer2+indexing_simplify, name="devectorize2")
 
   # some coalescing misses without this
   sink = graph_rewrite(sink, sym, name="early symbolic")
 
   # do memory coalescing (late)
-  sink = memory_coalescing(sink, ren)
+  if optimize: sink = memory_coalescing(sink, ren)
   # an image is read_only or write_only, so a PARAM that is both loaded and stored stays a buffer
   loaded, stored = [{u.src[0].buf_uop for u in sink.toposort() if u.op is op} for op in (Ops.LOAD, Ops.STORE)]
   sink = graph_rewrite(sink, pm_simplify_add_image, name="add images", ctx=({}, ren, loaded & stored), bottom_up=True)

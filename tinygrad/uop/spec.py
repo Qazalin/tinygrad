@@ -124,7 +124,8 @@ spec_shared = PatternMatcher([
   # STORE: the target must be storage or a STAGE realization point (or an AFTER/BITCAST/view of one);
   # STAGE targets are written into the buffer the STAGE creates. INDEX stores are checked above
   (UPat(Ops.STORE, dtypes.void, (UPat(name="x"), UPat())), lambda x:
-   True if (b:=x.storage_base).op in GroupOp.Defines|{Ops.STAGE} else None if b.op is Ops.INDEX else False),
+   True if (b:=x.storage_base).op in GroupOp.Defines|{Ops.STAGE} or (x.op is Ops.EXPAND and x.src[0].storage_base.op is Ops.INDEX) else
+   None if b.op is Ops.INDEX else False),
 
   # WMMA has a <a, b, acc>
   (UPat(Ops.WMMA, src=(UPat(), UPat(), UPat()), name="x"), lambda x: isinstance(x.arg, tuple) and len(x.arg) == 4),
@@ -207,7 +208,9 @@ spec_program = PatternMatcher([
   # allow special SHRINK of a buffer or its bitcast
   (UPat(Ops.SHRINK, src=(UPat(GroupOp.Defines|{Ops.AFTER}).or_bitcasted(), UPat(), UPat.cvar().or_casted())), lambda: True),
 
-  # movement ops are not allowed in programs
+  # vectorized outlined memory helpers retain an expanded indexed target
+  (UPat(Ops.EXPAND, src=(UPat((Ops.INDEX, Ops.SHRINK)).or_bitcasted(), UPat(dtype=dtypes.ints+(dtypes.weakint, dtypes.void)))), lambda: True),
+  # other movement ops are not allowed in programs
   (UPat(GroupOp.Movement), lambda: False),
 
   # Invalid is not allowed in program

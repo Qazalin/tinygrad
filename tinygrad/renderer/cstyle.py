@@ -162,7 +162,8 @@ class CStyleLanguage(Renderer):
     if any(is_image_shape(u._shape) for _,(u,_) in bufs):
       tmp = "const sampler_t smp = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST;\n"
     buftypes = [(name, ("volatile " if u.arg.volatile else "")+(self.var_prefix if u.addrspace == AddrSpace.ALU else "")+
-                       self._render_dtype(u.dtype, addrspace=u.addrspace, mutable=mutable, override_ptr=u.addrspace != AddrSpace.ALU, shape=u._shape)+
+                       self._render_dtype(u.dtype, sz=u.max_numel() if u.addrspace is AddrSpace.ALU else 1, addrspace=u.addrspace,
+                                          mutable=mutable, override_ptr=u.addrspace != AddrSpace.ALU, shape=u._shape)+
                        (self.var_suffix if u.addrspace == AddrSpace.ALU else self.buffer_suffix)) for name,(u,mutable) in bufs]
     local_dims = [u.src[0] for u in uops if u.op is Ops.SPECIAL and u.arg[0] == "l"]
     launch_bounds = prod([d.vmax for d in local_dims])
@@ -233,6 +234,10 @@ class CStyleLanguage(Renderer):
         if u.dtype is dtypes.void: continue
         r[u] = r[u.src[0]]
         continue
+      # an expanded pointer is one base address; render_ptr applies the vector access cast
+      if u.op is Ops.EXPAND and u.src[0].op in {Ops.INDEX, Ops.SHRINK}:
+        r[u] = r[u.src[0]]
+        continue
       if u.op is Ops.SINK:
         if u.arg is not None: name = u.arg.function_name
         if (ret:=call_return_value(u)).dtype is not dtypes.void: kernel.append(f"{'  '*depth}return {r[ret]};")
@@ -274,7 +279,9 @@ class CStyleLanguage(Renderer):
 
     # NOTE: this relies on bufs dict preserving order
     return (name, kernel, list(bufs.values()))
-  def param_type(self, p:UOp): return "volatile "*p.arg.volatile + self._render_dtype(p.dtype, 1, p.addrspace, True, p.addrspace != AddrSpace.ALU)
+  def param_type(self, p:UOp):
+    sz = p.max_numel() if p.addrspace is AddrSpace.ALU else 1
+    return "volatile "*p.arg.volatile + self._render_dtype(p.dtype, sz, p.addrspace, True, p.addrspace != AddrSpace.ALU, p._shape)
   def render(self, uops:list[UOp]) -> str:
     bodies = dedup(u.body for u in UOp.sink(*uops).toposort(enter_calls=bool(self.inline_prefix)) if u.op is Ops.CALL
                    and not (u.body.op is Ops.NATIVE and u.body.arg.fmt))
@@ -285,7 +292,8 @@ class CStyleLanguage(Renderer):
               f"static inline {self.inline_prefix} {self.render_return_type(b)} {b.arg}("
               f"{', '.join(f'{self.param_type(p)} {n}' for n,(p,_) in inlines[b][2])}) {{\n" +
               '\n'.join(inlines[b][1]) + "\n}" for b in bodies]
-    return self.render_kernel(*self._render(uops), uops+[u for b in inlines for u in b.src], prefix or None)
+    type_uops = uops + [u for b in inlines for u in b.src] + [p for b in bodies if b.op is Ops.PROGRAM for p in b.arg.params]
+    return self.render_kernel(*self._render(uops), type_uops, prefix or None)
 
 class ClangRenderer(CStyleLanguage):
   float4 = "(float4)"

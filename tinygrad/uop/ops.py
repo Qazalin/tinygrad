@@ -1207,8 +1207,10 @@ class UOp(Mixin, metaclass=UOpMetaClass):
     return ret if axis is None else ret.unshard(axis)
 
   @staticmethod
-  def native(code:Any, src:UOp|None=None, shape:tuple[sint, ...]=(), dtype:DType=dtypes.void, fmt:bool=False) -> UOp:
-    return UOp(Ops.NATIVE, src=(src if src is not None else UOp.param(-1, dtype, shape),), arg=NativeInfo(code, fmt=fmt))
+  def native(code:Any, src:UOp|None=None, shape:tuple[sint, ...]=(), dtype:DType=dtypes.void, fmt:bool=False,
+             fixed_regs:bool=False) -> UOp:
+    return UOp(Ops.NATIVE, src=(src if src is not None else UOp.param(-1, dtype, shape),),
+               arg=NativeInfo(code, fmt=fmt, fixed_regs=fixed_regs))
 
   def call(self, *srcs:UOp, grad_fxn:Callable|None=None,
            name:str|None=None, precompile:bool=False, precompile_backward:bool=False, inline:bool=False, hcq:HCQInfo|None=None) -> UOp:
@@ -1295,7 +1297,7 @@ class UOp(Mixin, metaclass=UOpMetaClass):
 
 def uopfunc(fn:Callable[..., UOp]) -> Callable[..., UOp]: # sugar for body.call(*args): uop args become params
   def param(i:int, n:str, a:UOp) -> UOp:
-    if a.addrspace in (None, AddrSpace.ALU): return UOp.param(i, a.commit_dtype(dtypes.int), name=n, addrspace=AddrSpace.ALU)
+    if a.addrspace in (None, AddrSpace.ALU): return UOp.param(i, a.commit_dtype(dtypes.int), a._shape, name=n, addrspace=AddrSpace.ALU)
     return UOp.param(i, a.dtype, 1 if a.op is Ops.INDEX else a.max_numel(), a.device, name=n, addrspace=a.addrspace)
   def outlined(*args, name:str|None=None, **kwargs) -> UOp:
     bound = inspect.signature(fn).bind(*args, **kwargs).arguments
@@ -1358,6 +1360,7 @@ class NativeInfo:
   # renderer specific
   code: Any
   fmt: bool = False
+  fixed_regs: bool = False  # the semantic value is followed by native-only fixed register definitions in AFTER
 
 @dataclass(frozen=True)
 class CallInfo:
