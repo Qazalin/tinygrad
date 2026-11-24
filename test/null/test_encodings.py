@@ -2,7 +2,8 @@ import unittest
 from tinygrad.helpers import Target
 from tinygrad.uop.ops import UOp
 from tinygrad.dtype import dtypes
-from tinygrad.renderer.x86 import X86Ops, X86Renderer, RBP, RDI, RSP, RSI, RAX, RDX, XMM, GPR, fold_address, move_native
+from tinygrad.renderer.x86 import X86Ops, X86Renderer, RBP, RDI, RSP, RSI, RAX, RDX, XMM, GPR, fold_address, move_native, \
+  cmp_native, cmov_native, with_native_defs
 
 class TestEncodingsX86(unittest.TestCase):
   # NOTE: x86 supports a single displacement as memory address and index without base memory address
@@ -144,9 +145,12 @@ class TestEncodingsX86(unittest.TestCase):
     # imul edi, dword ptr [rdi + rsi*4 + 0xa], 0xa
     self.assertEqual(bytes.fromhex(self.encode(imul)), bytes.fromhex("69 BC B7 0A 00 00 00 0A 00 00 00"))
 
-  # cmoves have the cmp as the last src even though it is not explicitly used, the cmp doesn't define a reg and is ignored in the encoding
-  def test_cmove_ignore_cmp(self):
-    cmove = UOp.ins(X86Ops.CMOVNE, (RAX.cast(dtypes.i32), UOp.ins(X86Ops.CMP, (), dtypes.void)), dtypes.i32, RDX)
+  # cmoves carry their flags producer as the last src even though it is not explicitly used in the encoding
+  def test_cmove_ignores_flags(self):
+    a, b = RAX.cast(dtypes.i32), RDX.cast(dtypes.i32)
+    cmove = with_native_defs(cmov_native(b, a, cmp_native("CMP", a, b)), (RDX,))
+    # post_regalloc drops the two-address source, leaving the value and flags operands
+    cmove = cmove.replace(src=(cmove.body, cmove.src[2], cmove.src[3]))
     # cmovne edx, eax
     self.assertEqual(bytes.fromhex(self.encode(cmove)), bytes.fromhex("0F 45 D0"))
 

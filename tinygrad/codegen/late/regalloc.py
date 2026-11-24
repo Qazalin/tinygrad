@@ -1,7 +1,7 @@
 import itertools
-from tinygrad.helpers import dedup, get_single_element
+from tinygrad.helpers import dedup, get_single_element, unwrap
 from tinygrad.uop.ops import UOp, Ops, PatternMatcher, UPat
-from tinygrad.renderer.x86 import ISARenderer, vdef, register_choices, with_native_defs, LinearContext
+from tinygrad.renderer.x86 import ISARenderer, vdef, register_choices, with_native_defs, LinearContext, is_flag_reg, physical_reg
 
 # ops that participate in register allocation
 REGALLOC_OPS = {Ops.CALL, Ops.BUFFER, Ops.RANGE, Ops.END}
@@ -23,9 +23,9 @@ class LinearScanRegallocContext:
     for idx,u in reversed(list(enumerate(uops))):
       defs = tuple(self.defs[idx])
       for v in defs + tuple(vdef(s) for s in dedup(u.src)):
-        if v is not None: lr.setdefault(v, []).insert(0, idx)
+        if v is not None and not is_flag_reg(v): lr.setdefault(v, []).insert(0, idx)
       for v in defs:
-        if (n:=max((e for s,e in loops.items() if s <= lr[v][-1] < e), default=None)): lr[v].append(n)
+        if not is_flag_reg(v) and (n:=max((e for s,e in loops.items() if s <= lr[v][-1] < e), default=None)): lr[v].append(n)
       if u.op is Ops.RANGE: loops[idx] = max(j for j,x in enumerate(uops) if u in x.src)
 
     # allocate registers
@@ -54,12 +54,18 @@ class LinearScanRegallocContext:
       # allocate uses
       for s in u.src:
         if (v:=vdef(s)) is None: continue
+        if is_flag_reg(v):
+          self.reals.setdefault(i, {})[v] = unwrap(physical_reg(v))
+          continue
         if v not in live: live[v] = fill(v, i)
         self.reals.setdefault(i, {})[v] = live[v]
 
       # allocate defs
       if self.defs[i]:
         for j,v in enumerate(self.defs[i]):
+          if is_flag_reg(v):
+            self.reals.setdefault(i, {})[v] = unwrap(physical_reg(v))
+            continue
           if v not in live:
             cons = choices[v]
             # two address instructions (src is reused by def) can only coalesce reused src.

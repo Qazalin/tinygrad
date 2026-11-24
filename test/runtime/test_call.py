@@ -629,7 +629,7 @@ class TestCallInKernel(unittest.TestCase):
 
     def kernel(out:UOp, src:UOp) -> UOp:
       i = UOp.range(src.shape[0], 0)
-      return out[i].store(add(src[i], 3)).end(i).sink(arg=KernelInfo(name="call_value", opts_to_apply=()))
+      return out[i].store(add(src[i].load(), 3)).end(i).sink(arg=KernelInfo(name="call_value", opts_to_apply=()))
 
     x = Tensor([1, 2, 3, 4], dtype=dtypes.int).realize()
     self.assertEqual(Tensor.empty_like(x).custom_kernel(x, fxn=kernel)[0].tolist(), [4, 5, 6, 7])

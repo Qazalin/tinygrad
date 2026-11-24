@@ -4,7 +4,7 @@ from tinygrad.helpers import Target, Context
 from tinygrad.codegen import to_program, pack_args
 from tinygrad.uop import Ops
 from tinygrad.uop.ops import UOp, dtypes, graph_rewrite, ProgramInfo
-from tinygrad.renderer.x86 import X86Renderer, X86Ops, IselContext
+from tinygrad.renderer.x86 import X86Renderer, X86Ops, IselContext, RFLAGS, rdef
 
 # INDEX on a register value with a constant index extracts a single element (the old GEP)
 def lane(y:UOp, i:int) -> UOp: return y.index(UOp.cconst(i, dtypes.int))
@@ -34,6 +34,8 @@ class TestIselX86(unittest.TestCase):
     self.assertEqual(ops.count(X86Ops.SETL), 1)
     self.assertEqual(ops.count(X86Ops.SETNE), 1)
     self.assertEqual(ops.count(X86Ops.CMP), 1)
+    cmp = next(u for u in n.toposort() if u.op is Ops.CALL and u.body.arg.code is X86Ops.CMP)
+    self.assertEqual(rdef(cmp), RFLAGS)
 
   def test_vinsertps(self):
     a = UOp.variable("a", 0, 0, dtypes.float32)
