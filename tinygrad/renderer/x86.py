@@ -466,6 +466,10 @@ def store_native(opcode:str, base:UOp, index:UOp, displacement:UOp, scale:UOp, v
   return UOp.native(X86Ops[opcode], target.store(value))
 
 def remove_native(native:UOp, call:UOp) -> UOp:
+  # host control flow uses the original BACKEDGE, with JNE's zero-flag condition recovered from its flags dependency
+  if native.arg.code is X86Ops.JNE:
+    target, value, gate = call.src_without_body
+    return UOp(Ops.BACKEDGE, src=(value, target, read_flag(gate, ZF) ^ True))
   value = native.src[0].src[0] if native.arg.fixed_regs and native.src[0].op is Ops.AFTER else native.src[0]
   args = call.src_without_body
   params = sorted((p for p in value.toposort() if p.op is Ops.PARAM), key=lambda p: p.arg.slot)

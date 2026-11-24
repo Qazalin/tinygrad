@@ -124,7 +124,7 @@ def promo_dtype(src:tuple[UOp,...]) -> DType:
 def call_return_value(body:UOp) -> UOp:
   if body.op is Ops.PROGRAM: body = body.src[0]
   if body.op is Ops.LINEAR: body = body.src[-1]
-  return body.src[0] if body.op is Ops.SINK else body
+  return body.src[0] if body.op is Ops.SINK and len(body.src) == 1 else body
 
 def dtype_from_uop(op:Ops, src:tuple[UOp,...], arg:Any) -> DType:
   # here are the dtype production rules, total over all Ops
