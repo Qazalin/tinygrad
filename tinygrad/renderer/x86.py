@@ -37,7 +37,6 @@ def register_choices(u:UOp) -> dict[UOp, tuple[UOp, ...]]:
   operands = regs(u)
   return {p:(r,) if (r:=physical_reg(p)) is not None else operands[i+1].src
           for i,p in enumerate(operands) if p.op in (Ops.PARAM, Ops.BUFFER) and p.addrspace is AddrSpace.REG}
-def defines_flags(u:UOp) -> bool: return any(r in FLAG_REGS for rs in register_choices(u).values() for r in rs)
 
 class LinearContext:
   def __init__(self, ren:'ISARenderer'): self.ren, self.stack_size = ren, 0
@@ -204,14 +203,11 @@ GPR = tuple(UOp.placeholder((1,), dtypes.uint64, i, AddrSpace.REG, name=n) for i
             enumerate(("rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", *(f"r{i}" for i in range(8, 16)))))
 RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI = GPR[:8]
 XMM = tuple(UOp.placeholder((1,), dtypes.uint64, i, AddrSpace.REG, name=f"xmm{i}") for i in range(16))
-RFLAGS = UOp.placeholder((1,), dtypes.uint64, 16, AddrSpace.REG, name="rflags")
-FLAG_REGS = (RFLAGS,)
-physical_regs = frozenset(GPR+XMM+FLAG_REGS)
+physical_regs = frozenset(GPR+XMM)
 def physical_reg(u:UOp) -> UOp|None:
   # NOTE: this is not the architectural dtype, it's the widest dtype we use
   r = UOp.placeholder((1,), dtypes.uint64, u.arg.slot, AddrSpace.REG, name=u.arg.name)
   return r if r in physical_regs else None
-def is_flag_reg(u:UOp) -> bool: return physical_reg(u) in FLAG_REGS
 # gprs you can write to
 WGPR = tuple(r for r in GPR if r is not RSP)
 
@@ -238,7 +234,7 @@ def to_imm(c:UOp) -> UOp|None:
 # operand is NaN, so a NaN reads as "below" and as "equal", and it clears sign and overflow, so nothing reads as "less"
 def cmp(x:UOp) -> UOp:
   if x.src[0].dtype in dtypes.floats: raise RuntimeError(f"no flag compare for {x.src[0].dtype}, a float gate must be a mask")
-  return cmp_native("CMP", *x.src) if (i:=to_imm(x.src[1])) is None else cmp_native("CMPi", x.src[0], i)
+  return cmp_native("CMP", x.op, *x.src) if (i:=to_imm(x.src[1])) is None else cmp_native("CMPi", x.op, x.src[0], i)
 
 # comparisons that produce masks, the mask has the width of the operands
 def mask(x:UOp) -> UOp:
@@ -246,7 +242,7 @@ def mask(x:UOp) -> UOp:
   call = mask_native("VCMPSS" if dt is dtypes.float32 else "VCMPSD", x.op, *x.src)
   return call.replace(src=(call.body, *x.src, v))
 
-def test_gate(m:UOp) -> UOp: return cmp_native("CMPi", m.cast(dtypes.int), UOp.cconst(0, dtypes.i32))
+def test_gate(m:UOp) -> UOp: return cmp_native("CMPi", Ops.CMPNE, m.cast(dtypes.int), UOp.cconst(0, dtypes.i32))
 
 @uopfunc
 def jne_native(target:UOp, value:UOp, gate:UOp) -> UOp: return UOp.native(X86Ops.JNE, UOp(Ops.NOOP))
@@ -337,33 +333,13 @@ def load_native(opcode:str, base:UOp, index:UOp, displacement:UOp, scale:UOp, re
   if reg_name is not None: value = value.after(UOp.param(reg_slot, value.dtype, name=reg_name, addrspace=AddrSpace.REG))
   return UOp.native(X86Ops[opcode], value, fixed_regs=reg_name is not None)
 
-CF, ZF, SF, OF = 1 << 0, 1 << 6, 1 << 7, 1 << 11
-SIGNED_DTYPES = {dtypes.uint8:dtypes.int8, dtypes.uint16:dtypes.int16, dtypes.uint32:dtypes.int32, dtypes.uint64:dtypes.int64}
-UNSIGNED_DTYPES = {v:k for k,v in SIGNED_DTYPES.items()}
-def read_flag(value:UOp, bit:int) -> UOp:
-  return (value & UOp.cconst(bit, value.dtype)).ne(UOp.cconst(0, value.dtype))
-
 @uopfunc
-def _cmp_native(opcode:str, a:UOp, b:UOp) -> UOp:
-  b = b.cast(a.dtype)
-  udt, sdt = UNSIGNED_DTYPES.get(a.dtype, a.dtype), SIGNED_DTYPES.get(a.dtype, a.dtype)
-  ua, ub = a.bitcast(udt), b.bitcast(udt)
-  sa, sb, sr = a.bitcast(sdt), b.bitcast(sdt), (ua-ub).bitcast(sdt)
-  sa_neg, sb_neg, sr_neg = (x < UOp.cconst(0, sdt) for x in (sa,sb,sr))
-  flags = ((ua < ub).cast(dtypes.uint16) * UOp.cconst(CF, dtypes.uint16) |
-           a.alu(Ops.CMPEQ, b).cast(dtypes.uint16) * UOp.cconst(ZF, dtypes.uint16) |
-           sr_neg.cast(dtypes.uint16) * UOp.cconst(SF, dtypes.uint16) |
-           ((sa_neg != sb_neg) & (sa_neg != sr_neg)).cast(dtypes.uint16) * UOp.cconst(OF, dtypes.uint16))
-  return UOp.native(X86Ops[opcode], flags)
-
-def cmp_native(opcode:str, a:UOp, b:UOp) -> UOp: return with_native_defs(_cmp_native(opcode, a, b), (RFLAGS,))
+def cmp_native(opcode:str, op:Ops, a:UOp, b:UOp) -> UOp:
+  return UOp.native(X86Ops[opcode], a.alu(op, b.cast(a.dtype)))
 
 @uopfunc
 def set_native(opcode:str, value:UOp) -> UOp:
-  condition = read_flag(value, SF) != read_flag(value, OF) if opcode == "SETL" else \
-    read_flag(value, {"SETB":CF, "SETE":ZF, "SETNE":ZF}[opcode])
-  if opcode == "SETNE": condition = condition ^ True
-  return UOp.native(X86Ops[opcode], condition)
+  return UOp.native(X86Ops[opcode], value)
 
 @uopfunc
 def mask_native(opcode:str, op:Ops, a:UOp, b:UOp) -> UOp:
@@ -377,7 +353,7 @@ def blend_native(opcode:str, b:UOp, a:UOp, mask:UOp) -> UOp:
 
 @uopfunc
 def cmov_native(b:UOp, a:UOp, gate:UOp) -> UOp:
-  return UOp.native(X86Ops.CMOVNE, (read_flag(gate, ZF) ^ True).where(a, b))
+  return UOp.native(X86Ops.CMOVNE, gate.where(a, b))
 
 @uopfunc
 def add_native(a:UOp, b:UOp) -> UOp:
@@ -466,10 +442,10 @@ def store_native(opcode:str, base:UOp, index:UOp, displacement:UOp, scale:UOp, v
   return UOp.native(X86Ops[opcode], target.store(value))
 
 def remove_native(native:UOp, call:UOp) -> UOp:
-  # host control flow uses the original BACKEDGE, with JNE's zero-flag condition recovered from its flags dependency
+  # host control flow uses the original BACKEDGE and JNE's semantic nonzero comparison
   if native.arg.code is X86Ops.JNE:
     target, value, gate = call.src_without_body
-    return UOp(Ops.BACKEDGE, src=(value, target, read_flag(gate, ZF) ^ True))
+    return UOp(Ops.BACKEDGE, src=(value, target, gate))
   value = native.src[0].src[0] if native.arg.fixed_regs and native.src[0].op is Ops.AFTER else native.src[0]
   args = call.src_without_body
   params = sorted((p for p in value.toposort() if p.op is Ops.PARAM), key=lambda p: p.arg.slot)
@@ -514,10 +490,9 @@ def with_native_defs(call:UOp, defs:tuple[UOp, ...]) -> UOp:
   return call.replace(src=(body,)+call.src_without_body)
 
 def alloc_vregs(ctx:IselContext, x:UOp) -> UOp|None:
-  if x.dtype is dtypes.void: return None
+  # no register definition (comparisons have a semantic boolean value only for host emulation)
+  if x.dtype is dtypes.void or x.body.arg.code in {X86Ops.CMP, X86Ops.CMPi}: return None
   if (dst:=vdef(x)) is not None:
-    # flags are physical and non-allocatable, readers rematerialize their definitions
-    if is_flag_reg(dst): return None
     # already allocated vregs
     if physical_reg(dst) is None: return None
     defs = tuple(p for choices in register_choices(x).values() for p in ctx.vreg(x.dtype, choices))
@@ -715,7 +690,7 @@ def lower_range(x:UOp) -> tuple[UOp, list[UOp]]:
   if x.dtype is dtypes.void: return x, [x, label(x)]
   bound = x.src[0].without_after
   idx = with_native_defs(move_native("MOVi", UOp.cconst(0, x.dtype)), vreg(0, x.dtype, WGPR, name=x.key.hex()))
-  cmp = cmp_native("CMPi" if is_imm(bound) else "CMP", idx, bound)
+  cmp = cmp_native("CMPi" if is_imm(bound) else "CMP", Ops.CMPLT, idx, bound)
   return idx.after(x), [idx, x, start:=label(x), cmp, jge_native(start, cmp)]
 
 def lower_end(x:UOp, c:UOp) -> tuple[UOp, list[UOp]]:
@@ -724,8 +699,7 @@ def lower_end(x:UOp, c:UOp) -> tuple[UOp, list[UOp]]:
 
 pre_regalloc_matcher = PatternMatcher([
   (UPat(Ops.BUFFER, name="x"), lambda ctx,x: alloc_buffer(ctx,x) if x.addrspace is not AddrSpace.REG else None),
-  # flags are defined at each reader, never standalone where a later flags writer could clobber them or force a spill
-  (UPat(Ops.CALL, name="x"), lambda x: (x, []) if defines_flags(x) else
+  (UPat(Ops.CALL, name="x"), lambda x: (x, []) if x.body.arg.code in {X86Ops.CMP, X86Ops.CMPi} else
    (x, [x.src[-1], x]) if x.body.arg.code in X86GroupOp.ReadFlags else None),
   (UPat(Ops.RANGE, name="x"), lower_range),
   (UPat(Ops.END, src=(UPat(), UPat(Ops.AFTER, name="c")), name="x"), lower_end),
@@ -830,8 +804,8 @@ def encode(x:UOp, opc:int, reg:int|None=None, pp:int=0, sel:int=0, we:int=0) -> 
   if x.body.arg.code in X86GroupOp.Rm2nd:
     if len(src) > 4: address, rest = src[1:5], src[:1] + src[5:]
     else: address, rest = (src[1], None, None, None), src[:1] + src[2:]
-    # flag-only definitions have no ModRM register destination
-    if rdef(x) in FLAG_REGS or x.dtype is dtypes.void: return _encode(rest[0], *address)
+    # cmp reg, rm doesn't define a new register, even when its semantic host value is boolean
+    if x.body.arg.code in {X86Ops.CMP, X86Ops.CMPi} or x.dtype is dtypes.void: return _encode(rest[0], *address)
     return _encode(x, *address, *rest)
 
   return None
