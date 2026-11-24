@@ -368,8 +368,8 @@ def set_native(opcode:str, value:UOp) -> UOp:
 @uopfunc
 def mask_native(opcode:str, op:Ops, a:UOp, b:UOp) -> UOp:
   cond = a.alu(op, b.cast(a.dtype))
-  ones = UOp.cconst(-1, to_int(a.dtype)).bitcast(a.dtype)
-  return UOp.native(X86Ops[opcode], cond.where(ones, UOp.cconst(0, a.dtype)))
+  # form the all-ones mask at runtime; a constant NaN bitcast loses its payload when rendered as C
+  return UOp.native(X86Ops[opcode], (-cond.cast(to_int(a.dtype))).bitcast(a.dtype))
 
 @uopfunc
 def blend_native(opcode:str, b:UOp, a:UOp, mask:UOp) -> UOp:
