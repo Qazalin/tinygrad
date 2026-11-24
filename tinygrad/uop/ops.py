@@ -585,8 +585,8 @@ class UOp(Mixin, metaclass=UOpMetaClass):
   @staticmethod
   def ins(op, src:tuple[UOp, ...], dtype:DType, *regs:UOp) -> UOp:
     params = [UOp.param(r.arg.slot, dtype, name=r.arg.name, addrspace=AddrSpace.REG) if r.op is Ops.BUFFER else r for r in regs]
-    native_src = params[0].after(*params[1:]) if params else UOp.param(-1, dtype)
-    return UOp.native(op, native_src).call(*src)
+    native_src = UOp.param(-1, dtype).after(*params) if params else UOp.param(-1, dtype)
+    return UOp.native(op, native_src, fixed_regs=bool(regs)).call(*src)
   def contract(self, *rngs:UOp):
     assert all(x.axis_type == AxisType.UPCAST for x in rngs), "all contract ranges must be upcast"
     return UOp.stack(*[self.substitute(dict(zip(rngs, [r.const_like(i) for r,i in zip(rngs, idx)])))

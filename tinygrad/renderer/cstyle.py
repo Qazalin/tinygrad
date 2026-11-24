@@ -200,6 +200,8 @@ class CStyleLanguage(Renderer):
   def render_type(self, u:UOp):
     return self._render_dtype(u.dtype, u.max_numel(), u.addrspace, shape=u._shape, override_ptr=u.op is Ops.INDEX and u.addrspace is AddrSpace.REG)
   def render_return_type(self, body:UOp):
+    # only function bodies describe return values; a trailing loop END or native RET is not a kernel return
+    if body.op not in {Ops.SINK, Ops.PROGRAM, Ops.LINEAR}: return "void"
     return "void" if (ret:=call_return_value(body)).dtype is dtypes.void else self.render_type(ret)
   def render_ptr(self, u:UOp):
     # the address of an access, vector-cast if the access reads/writes more lanes than the pointer's scalar type
