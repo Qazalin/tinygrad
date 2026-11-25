@@ -10,6 +10,7 @@ from capstone import x86 as cs_x86
 from tinygrad.codegen import to_program
 from tinygrad.device import Buffer, BufferSpec, Device
 from tinygrad.dtype import dtypes, AddrSpace
+from tinygrad.engine.realize import get_runtime
 from tinygrad.helpers import Context
 from tinygrad.uop.ops import UOp, KernelInfo, Ops
 from test.emulator.lifter import lower_body, instruction_block, cfg_regions, emit_cfg, run_program
@@ -77,15 +78,16 @@ def attach_body(call:UOp) -> UOp:
   assert call.op is Ops.CALL and call.body.op is Ops.NATIVE
   compiler = _Instruction(call.body.arg.code)
   body = compiler.compile()
-  native_src = (body,) if compiler.branch_cond is None else (body, compiler.branch_cond)
-  return call.replace(src=(call.body.replace(src=native_src),)+call.src[1:])
+  if compiler.branch_cond is not None: body = body.replace(src=(*body.src, compiler.branch_cond))
+  return call.replace(src=(call.body.replace(src=(body,)),)+call.src[1:])
 
 def instruction_call(call:UOp) -> tuple[UOp, UOp|None]:
   """Lower a decoded CALL(NATIVE) to the same CALL(SINK) form used by the AMD instruction lifter."""
   attached = attach_body(call)
   insn = call.body.arg.code
   body = attached.body.src[0]
-  return lower_body(UOp.sink(body), f"x86_{insn.mnemonic}_{insn.address:x}"), attached.body.src[1] if len(attached.body.src) > 1 else None
+  is_jcc = insn.group(cs_x86.X86_GRP_JUMP) and insn.mnemonic != "jmp"
+  return lower_body(UOp.sink(body), f"x86_{insn.mnemonic}_{insn.address:x}"), body.src[-1] if is_jcc and body.src else None
 
 class _Instruction:
   def __init__(self, insn:CsInsn):
@@ -1094,8 +1096,15 @@ class X86Machine:
     self.code, self.base = code, base
     self.calls = decode(code, base)
     self.insns = {call.body.arg.code.address:call.body.arg.code for call in self.calls}
-    with Context(DEV="CPU:CLANG", NOOPT=1, CHECK_OOB=0, EMULATED_DTYPES=""):
-      self.prg = to_program(lift(self.calls, base, "x86_function"), Device["CPU"].renderer)
+    for dev in ("CPU:TCC", "CPU:CLANG"):
+      try:
+        with Context(DEV=dev, NOOPT=1, CHECK_OOB=0, EMULATED_DTYPES=""):
+          self.prg = to_program(lift(self.calls, base, "x86_function"), Device["CPU"].renderer)
+          # fail fast here so constructs TCC cannot handle (libm builtins, __fp16) fall back to clang
+          get_runtime("CPU", self.prg)
+        break
+      except Exception:
+        if dev == "CPU:CLANG": raise
 
   @staticmethod
   def _is_branch(insn:CsInsn) -> bool:
