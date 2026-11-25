@@ -1729,10 +1729,10 @@ def emu_loop_active(routes:UOp, active:UOp, header:UOp, waves:UOp):
   w = UOp.range(waves, 0, dtype=dtypes.int)
   return active[0].store(routes[w].load().eq(header).cast(dtypes.uint32).reduce(w, arg=Ops.MAX).ne(0)).sink()
 
-def lower_body(sink:UOp, name:str) -> UOp:
+def lower_body(sink:UOp) -> UOp:
   bufs = sorted((u for u in sink.toposort() if u.op is Ops.PARAM), key=lambda u: u.arg.slot)
   body = sink.substitute({b:b.param_like(i, name=b.arg.name) for i,b in enumerate(bufs)}, walk=True)
-  return body.replace(arg=KernelInfo(name)).call(*bufs)
+  return body.call(*bufs)
 
 instruction_cache:dict[tuple, list[tuple[int, int, tuple[UOp, UOp|None, dict[UOp, UOp]]]]] = {}
 
@@ -1746,8 +1746,7 @@ def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp, UOp|N
     ctx = _Ctx(_wave_size(arch))
     sink = _get_handler(inst)(inst, ctx)
     base, mask = ctx.canonical_mask(inst_bytes)
-    name = f"{_op_name(inst).lower()}_{base.to_bytes(len(inst_bytes), 'little').hex()}"
-    call = lower_body(UOp.sink(sink, *(ctx.inst_word(i) for i in range(inst.size()//4))), name)
+    call = lower_body(UOp.sink(sink, *(ctx.inst_word(i) for i in range(inst.size()//4))))
     used = UOp.sink(call, ctx.branch_cond).toposort()
     ret = call, ctx.branch_cond, {p:index for index,p in ctx.sgpr_reads.items() if p in used}
     entries.append((base, mask, ret))
@@ -1764,6 +1763,8 @@ class LifterCtx:
   arch:str
   renderer:Renderer
   branch_conds:dict[Inst, UOp|None]
+
+# name = f"{_op_name(native.arg.code).lower()}_{base.to_bytes(len(native.arg.code.to_bytes()), 'little').hex()}"
 
 def impl_native(ctx:LifterCtx, call:UOp, native:UOp) -> UOp:
   impl, ctx.branch_conds[native.arg.code] = instruction_call(native.arg.code, ctx.arch, ctx.renderer)
@@ -1969,7 +1970,7 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
       target = cond.where(taken, fallthrough) if len(dsts) == 2 else taken
       values.update({taken:_c(dsts[COND_TAKEN], dtypes.int), fallthrough:_c(dsts[COND_NOT_TAKEN], dtypes.int)} if len(dsts) == 2
                     else {taken:_c(next(iter(dsts.values()), -1), dtypes.int)})
-      instructions.append(lower_body(route[0].store(target).sink(), "emu_branch"))
+      instructions.append(lower_body(route[0].store(target).sink(KernelInfo("emu_branch"))))
     if not instructions: return end
     body, bufs = instruction_block(instructions)
     args = [values[b] if b.addrspace is AddrSpace.ALU else buffers[b][0] for b in bufs]
