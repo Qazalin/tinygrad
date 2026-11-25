@@ -45,6 +45,8 @@ class TestEmuReuse(unittest.TestCase):
     pairs = [
       (ir3.VOP1(ir3.VOP1Op.V_MOV_B32_E32, vdst=v[0], src0=1),
        ir3.VOP1(ir3.VOP1Op.V_MOV_B32_E32, vdst=v[5], src0=42)),
+      (ir3.VOP1(ir3.VOP1Op.V_MOV_B32_E32, vdst=v[0], src0=1),
+       ir3.VOP1_LIT(ir3.VOP1Op.V_MOV_B32_E32, vdst=v[5], src0=255, literal=0x12345678)),
       (ir3.SOP2(ir3.SOP2Op.S_ADD_U32, sdst=s[2], ssrc0=s[1], ssrc1=10),
        ir3.SOP2(ir3.SOP2Op.S_ADD_U32, sdst=s[8], ssrc0=s[4], ssrc1=60)),
       (ir3.GLOBAL(ir3.GLOBALOp.GLOBAL_LOAD_B32, vdst=v[0], addr=v[2:3], saddr=NULL, offset=0),

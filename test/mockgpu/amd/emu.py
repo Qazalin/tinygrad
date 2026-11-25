@@ -1703,7 +1703,7 @@ def _inst_cache_key(inst: Inst, arch: str, wave_size: int) -> tuple:
 
 instruction_cache:dict[tuple, tuple[UOp, list[Callable[[Inst], UOp]], UOp|None, list[tuple[UOp, Callable[[Inst], UOp]]]]] = {}
 
-def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp, UOp|None]:
+def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp|None, UOp|None]:
   wave_size = _wave_size(arch)
   key = (_inst_cache_key(inst, arch, wave_size), type(renderer), renderer.target, *(x.value for x in to_program_config))
   if (cached := instruction_cache.get(key)) is None:
@@ -1718,8 +1718,7 @@ def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp, UOp|N
       if ctx.branch_cond is not None else []
     cached = instruction_cache[key] = (body, call_specs, ctx.branch_cond, cond_specs)
   body, call_specs, branch_cond, cond_specs = cached
-  args = [fn(inst) for fn in call_specs]
-  call = UOp.native(inst, body).call(*args)
+  call = None if not body.src and not RENDER.value else UOp.native(inst, body).call(*(fn(inst) for fn in call_specs))
   cond = branch_cond.substitute({u: fn(inst) for u, fn in cond_specs}) if branch_cond is not None else None
   return call, cond
 
