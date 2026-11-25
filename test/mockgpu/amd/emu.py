@@ -1734,9 +1734,16 @@ def lower_body(sink:UOp) -> UOp:
   body = sink.substitute({b:b.param_like(i, name=b.arg.name) for i,b in enumerate(bufs)}, walk=True)
   return body.call(*bufs)
 
+@dataclass
+class LifterCtx:
+  arch:str
+  renderer:Renderer
+  branch_conds:dict[Inst, UOp|None]
+
 instruction_cache:dict[tuple, list[tuple[int, int, tuple[UOp, UOp|None, dict[UOp, UOp]]]]] = {}
 
-def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp, UOp|None]:
+def impl_native(ctx:LifterCtx, root:UOp, native:UOp) -> UOp:
+  inst, arch, renderer, branch_conds = native.arg.code, ctx.arch, ctx.renderer, ctx.branch_conds
   entries = instruction_cache.setdefault((arch, type(inst), inst.size(), type(renderer), renderer.target, *(x.value for x in to_program_config)), [])
   inst_bytes = inst.to_bytes()
   bits = int.from_bytes(inst_bytes, "little")
@@ -1756,21 +1763,10 @@ def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp, UOp|N
   bindings.update({p:_Ctx.sgpr.index(_c(index.get_idx().sym_infer(words))).load() if index.get_valid().sym_infer(words) else _c(0)
                    for p,index in reads.items()})
   if call is not None: call = call.replace(src=(call.body, *(bindings.get(b, b) for b in call.src[1:])))
-  return call, cond.substitute(bindings) if cond is not None else None
+  branch_conds[inst] = cond.substitute(bindings) if cond is not None else None
+  return root.replace(src=(native.replace(src=(call.body,)), *call.src_without_body))
 
-@dataclass
-class LifterCtx:
-  arch:str
-  renderer:Renderer
-  branch_conds:dict[Inst, UOp|None]
-
-# name = f"{_op_name(native.arg.code).lower()}_{base.to_bytes(len(native.arg.code.to_bytes()), 'little').hex()}"
-
-def impl_native(ctx:LifterCtx, call:UOp, native:UOp) -> UOp:
-  impl, ctx.branch_conds[native.arg.code] = instruction_call(native.arg.code, ctx.arch, ctx.renderer)
-  return call.replace(src=(native.replace(src=(impl.body,)), *impl.src[1:]))
-
-pm_impl_native = PatternMatcher([(UPat(Ops.NATIVE, name="native").call(name="call"), impl_native)])
+pm_impl_native = PatternMatcher([(UPat(Ops.NATIVE, name="native").call(name="root"), impl_native)])
 
 def instruction_block(instructions:list[UOp]) -> tuple[UOp, list[UOp]]:
   bufs = sorted({buf for call in instructions for b in call.src[1:] if (buf:=b.buf_uop).op is Ops.PARAM}, key=lambda b: b.arg.slot)
@@ -1881,13 +1877,9 @@ pm_render = PatternMatcher([
 @rewrite_group(replay="emu_process_replay")
 def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -> UOp:
   insts = amd_decode(code, arch)
-  native = UOp(Ops.LINEAR, src=tuple(UOp.native(inst).call() for inst in insts.values())).sink()
   for inst in insts.values():
     inst_st = getattr(inst, "op_name", "").lower()
     if inst_st.startswith(("s_getpc", "s_setpc")): raise NotImplementedError(f"AMD lifter does not support {inst_st}")
-  lifter_ctx = LifterCtx(arch, renderer, {})
-  native = graph_rewrite(native, pm_impl_native, ctx=lifter_ctx, name="add native impls")
-  implementations = {call.body.arg.code:call for call in native.src[0].src}
   cfg = get_cfg(insts)
   thread_branches(insts, cfg["blocks"], cfg["paths"])
   try: regions = cfg_regions(cfg["paths"], 0)
@@ -1951,6 +1943,10 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
   tid = wave*wave_size+lane
   init_vgpr = wave_vgpr.index(lane.valid(tid<total_threads)).store((((tid//(lx*ly))<<20)|(((tid//lx)%ly)<<10)|(tid%lx)).cast(dtypes.uint32)).end(lane)
   init = UOp.group(init_vgpr, *(wave_sgpr.after(consts).index(i).store(_c(v)) for i,v in dict(runtime_sgprs).items()))
+  # construct NATIVE from disasm
+  native = UOp(Ops.LINEAR, src=tuple(UOp.native(inst).call() for inst in insts.values()))
+  native = graph_rewrite(native, pm_impl_native, ctx=LifterCtx(arch, renderer, branch_conds:={}), name="add native impls")
+  implementations = {u.body.arg.code:u for u in native.toposort() if u.op is Ops.CALL}
   # construct CALL graph
   initialized = (routes.after(init).index(wave).store(0) if routed else UOp.group(init, wave)).end(wave)
   def emit_block(block_pc:int, end:UOp, scopes:tuple[UOp, ...]) -> UOp:
@@ -1961,8 +1957,11 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
       inst_st = getattr(inst, "op_name", "").lower()
       if inst_st.startswith("s_code_end"): continue
       native_call = implementations[inst]
-      call = native_call.body.src[0].call(*native_call.src[1:])
-      if (branch_cond := lifter_ctx.branch_conds[inst]) is not None: cond = branch_cond
+      inst_bytes = native_call.body.arg.code.to_bytes()
+      base, mask = ctx.canonical_mask(inst_bytes)
+      name = f"{_op_name(native_call.body.arg.code).lower()}_{base.to_bytes(len(inst_bytes), 'little').hex()}"
+      call = native_call.body.src[0].replace(arg=KernelInfo(name)).call(*native_call.src[1:])
+      if (branch_cond := branch_conds[inst]) is not None: cond = branch_cond
       if call is not None: instructions.append(call)
     values = {ctx.scratch_stride:_c(scratch_size)}
     if routed:
