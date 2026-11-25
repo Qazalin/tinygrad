@@ -12,8 +12,8 @@ from tinygrad.device import Buffer, BufferSpec, Device
 from tinygrad.dtype import dtypes, AddrSpace
 from tinygrad.engine.realize import get_runtime
 from tinygrad.helpers import Context
-from tinygrad.uop.ops import UOp, KernelInfo, Ops
-from test.emulator.lifter import lower_body, instruction_block, cfg_regions, emit_cfg, run_program
+from tinygrad.uop.ops import UOp, KernelInfo, Ops, graph_rewrite
+from test.emulator.lifter import lower_body, instruction_block, cfg_regions, emit_cfg, run_program, pm_remove_native
 
 REGS = UOp.param(0, dtypes.uint64, 16, name="regs", volatile=True)
 XMM = UOp.param(1, dtypes.uint64, 256, name="xmm", volatile=True)  # 32 vector registers, up to 64 bytes each
@@ -73,21 +73,23 @@ def decode(code:bytes, base:int=0) -> list[UOp]:
   """Decode every instruction to CALL(NATIVE(CsInsn), register/XMM/flag/memory state)."""
   return [UOp.native(insn).call(*STATE) for insn in _decoder().disasm(code, base)]
 
-def attach_body(call:UOp) -> UOp:
-  """Attach the instruction's UOp SINK to its NATIVE node, preserving the decoded CALL and its arguments."""
-  assert call.op is Ops.CALL and call.body.op is Ops.NATIVE
-  compiler = _Instruction(call.body.arg.code)
-  body = compiler.compile()
-  if compiler.branch_cond is not None: body = body.replace(src=(*body.src, compiler.branch_cond))
-  return call.replace(src=(call.body.replace(src=(body,)),)+call.src[1:])
+_instruction_cache:dict[tuple, tuple[UOp, UOp|None]] = {}
 
 def instruction_call(call:UOp) -> tuple[UOp, UOp|None]:
-  """Lower a decoded CALL(NATIVE) to the same CALL(SINK) form used by the AMD instruction lifter."""
-  attached = attach_body(call)
+  """Lower a decoded CALL(NATIVE(CsInsn)) to CALL(NATIVE(SINK)), cached per instruction encoding.
+  Instruction bodies only depend on the encoding; RIP-relative memory operands additionally embed the absolute target."""
   insn = call.body.arg.code
-  body = attached.body.src[0]
+  rip = any(op.type == cs_x86.X86_OP_MEM and op.mem.base == cs_x86.X86_REG_RIP for op in insn.operands)
+  if (ret:=_instruction_cache.get(key:=(bytes(insn.bytes), insn.address if rip else None))) is not None: return ret
+  compiler = _Instruction(insn)
+  body = compiler.compile()
+  if compiler.branch_cond is not None: body = body.replace(src=(*body.src, compiler.branch_cond))
   is_jcc = insn.group(cs_x86.X86_GRP_JUMP) and insn.mnemonic != "jmp"
-  return lower_body(UOp.sink(body), f"x86_{insn.mnemonic}_{insn.address:x}"), body.src[-1] if is_jcc and body.src else None
+  cond = body.src[-1] if is_jcc and body.src else None
+  lowered = lower_body(body.replace(arg=KernelInfo(f"x86_{insn.mnemonic}_{bytes(insn.bytes).hex()}")))
+  lowered = lowered.replace(src=(UOp.native(insn, lowered.body), *lowered.src[1:]))
+  _instruction_cache[key] = (lowered, cond)
+  return lowered, cond
 
 class _Instruction:
   def __init__(self, insn:CsInsn):
@@ -1075,8 +1077,8 @@ def lift(calls:list[UOp], base:int=0, name:str="x86") -> UOp:
     target = cond.where(taken, fallthrough) if len(dsts) == 2 else taken
     values.update({taken:_c(dsts[COND_TAKEN]), fallthrough:_c(dsts[COND_NOT_TAKEN])} if len(dsts) == 2
                   else {taken:_c(next(iter(dsts.values()), -1))})
-    instructions.append(lower_body(route[0].store(target).sink(), "x86_branch"))
-    body, bufs = instruction_block(instructions, STATE)
+    instructions.append(lower_body(route[0].store(target).sink(arg=KernelInfo("x86_branch"))))
+    body, bufs = instruction_block(instructions)
     args = [values[b] if b.addrspace is AddrSpace.ALU else buffers[b] for b in bufs]
     args += [_c(block_pc).after(end, *scopes)]
     params = [UOp.param(i, a.dtype, a.shape, addrspace=AddrSpace.ALU if i >= len(bufs) or bufs[i].addrspace is AddrSpace.ALU
@@ -1088,7 +1090,8 @@ def lift(calls:list[UOp], base:int=0, name:str="x86") -> UOp:
     block = UOp.group(body.call(*call_args), *gates, w).end(*gates).end(w).sink(arg=KernelInfo("x86_block", optimized=True))
     return block.call(*args)
 
-  return emit_cfg(regions, routes, active, _c(1), axes, emit_block, initialized).sink(VMEM, arg=KernelInfo(name, optimized=True))
+  ret = emit_cfg(regions, routes, active, _c(1), axes, emit_block, initialized).sink(VMEM, arg=KernelInfo(name, optimized=True))
+  return graph_rewrite(ret, pm_remove_native, name="remove native", enter_calls=True)
 
 class X86Machine:
   """A decoded function lifted to one CPU program. Integer arguments use the SysV register ABI."""

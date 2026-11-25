@@ -2,7 +2,7 @@ import ctypes, platform, shutil, subprocess, tempfile, unittest
 from pathlib import Path
 
 from tinygrad.uop import Ops
-from test.device.cpu.emu import X86Machine, decode, attach_body, instruction_call
+from test.device.cpu.emu import X86Machine, decode, instruction_call
 
 CLANG_FLAGS = ["-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-fcf-protection=none"]
 
@@ -21,10 +21,8 @@ class TestX86Emulator(unittest.TestCase):
   def test_native_decode_and_uop_bodies(self):
     calls = decode(bytes.fromhex("8d0437c3"))  # lea eax, [rdi+rsi]; ret
     self.assertTrue(all(call.op is Ops.CALL and call.body.op is Ops.NATIVE for call in calls))
-    attached = [attach_body(call) for call in calls]
-    self.assertTrue(all(call.body.op is Ops.NATIVE and call.body.src[0].op is Ops.SINK for call in attached))
     lowered = [instruction_call(call)[0] for call in calls]
-    self.assertFalse(any(u.op is Ops.NATIVE for call in lowered for u in call.toposort()))
+    self.assertTrue(all(call.body.op is Ops.NATIVE and call.body.src[0].op is Ops.SINK for call in lowered))
     self.assertEqual(X86Machine(bytes.fromhex("8d0437c3")).run_i32(20, 22), 42)
 
   def test_clang_integer_arithmetic(self):

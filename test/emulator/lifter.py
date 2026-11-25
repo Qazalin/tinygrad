@@ -3,47 +3,47 @@ from collections.abc import Callable, Iterator
 from dataclasses import replace
 from tinygrad.dtype import dtypes
 from tinygrad.engine.realize import run_linear
-from tinygrad.uop.ops import UOp, Ops, KernelInfo, uopfunc
+from tinygrad.uop.ops import UOp, Ops, KernelInfo, PatternMatcher, UPat, uopfunc
 
 
 def _param_like(u:UOp, slot:int) -> UOp:
   ret = u.param_like(slot, name=u.arg.name)
   return ret.replace(arg=replace(ret.arg, volatile=True)) if u.op is Ops.PARAM and u.arg.volatile and not ret.arg.volatile else ret
 
-def lower_body(sink:UOp, name:str) -> UOp:
+def lower_body(sink:UOp) -> UOp:
   """Turn an instruction/body SINK into a CALL with its PARAMs collected and renumbered."""
   bufs = sorted((u for u in sink.toposort() if u.op is Ops.PARAM), key=lambda u:u.arg.slot)
   body = sink.substitute({b:_param_like(b, i) for i,b in enumerate(bufs)}, walk=True)
-  return body.replace(arg=KernelInfo(name)).call(*bufs)
+  return body.call(*bufs)
 
-
-def instruction_block(instructions:list[UOp], ordering_buffers:tuple[UOp, ...]=()) -> tuple[UOp, list[UOp]]:
+def instruction_block(instructions:list[UOp]) -> tuple[UOp, list[UOp]]:
   """Compose instruction CALLs into an explicitly ordered PROGRAM and return its external buffers."""
-  bufs = sorted({buf for call in instructions for b in call.src[1:] if (buf:=b.buf_uop).op is Ops.PARAM}, key=lambda b:b.arg.slot)
+  bufs = sorted({b for call in instructions for b in call.src[1:] if b.op is Ops.PARAM}, key=lambda b:b.arg.slot)
   params = {b:_param_like(b, i) for i,b in enumerate(bufs)}
   linear = list(UOp.sink(*params.values()).toposort())[:-1]
-  seen:set[UOp] = set()
+  seen = set(linear)
   for call in instructions:
     args = [params.get(b, b) for b in call.src[1:]]
     inputs = UOp.sink(*args)
-    nodes = inputs.toposort(lambda u:u.op is not Ops.PARAM and u not in seen)
+    nodes = inputs.toposort(lambda u:u not in seen)
     nodes.pop(inputs)
     seen.update(nodes)
     linear.extend(nodes)
     linear.append(call.replace(src=(call.body, *args)))
-    if any(b in call.src[1:] for b in ordering_buffers): seen.clear()
   return UOp(Ops.PROGRAM, src=(sink:=UOp.sink(*linear, arg=KernelInfo("emu_block", optimized=True)),
                               UOp(Ops.LINEAR, src=(*linear, sink)))), bufs
+
+pm_remove_native = PatternMatcher([(UPat(Ops.NATIVE, name="native"), lambda native: native.src[0])])
 
 @uopfunc
 def emu_loop_active(routes:UOp, active:UOp, header:UOp, waves:UOp):
   w = UOp.range(waves, 0, dtype=dtypes.int)
-  return active[0].store(routes[w].load().eq(header).cast(dtypes.uint32).reduce(w, arg=Ops.MAX).ne(0)).sink()
+  return active[0].store(routes[w].load().eq(header).cast(dtypes.u32).reduce(w, arg=Ops.MAX).ne(0)).sink()
 
 def emit_cfg(regions:list["CFGRegion"], routes:UOp, active:UOp, waves:UOp, axes:Iterator[int],
              emit_block:Callable[[int, UOp, tuple[UOp, ...]], UOp], end:UOp, scopes:tuple[UOp, ...]=()) -> UOp:
   """Emit structured CFG regions with per-route loopback and exit checks."""
-  def emit_dispatch(regions:list["CFGRegion"], scopes:tuple[UOp, ...], end:UOp) -> UOp:
+  def emit_dispatch(regions:list[CFGRegion], scopes:tuple[UOp, ...], end:UOp) -> UOp:
     for pc, body in regions:
       if body:
         loop = UOp.loop(next(axes)).replace(src=(UOp(Ops.NOOP).after(end),))
