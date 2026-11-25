@@ -1042,7 +1042,8 @@ def lift(calls:list[UOp], base:int=0, name:str="x86") -> UOp:
     args = [values[b] if b.addrspace is AddrSpace.ALU else buffers[b] for b in bufs]
     args += [_c(block_pc).after(end, *scopes)]
     params = [UOp.param(i, a.dtype, a.shape, addrspace=AddrSpace.ALU if i >= len(bufs) or bufs[i].addrspace is AddrSpace.ALU
-                        else AddrSpace.GLOBAL, name=bufs[i].arg.name if i < len(bufs) else None) for i,a in enumerate(args)]
+                        else AddrSpace.GLOBAL, name=bufs[i].arg.name if i < len(bufs) else None,
+                        volatile=i < len(bufs) and bufs[i].op is Ops.PARAM and bufs[i].arg.volatile) for i,a in enumerate(args)]
     w = UOp.range(1, 0, dtype=dtypes.int)
     gates = (UOp.range(params[bufs.index(route)][0].load().eq(params[-1]).cast(dtypes.uint64), 1, dtype=dtypes.int),)
     call_args = [p if b.addrspace is AddrSpace.ALU else p.after(*gates, w) for b,p in zip(bufs, params)]
