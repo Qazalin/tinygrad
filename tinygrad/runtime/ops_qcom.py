@@ -291,7 +291,7 @@ class QCOMAllocator(Allocator['QCOMDevice']):
 def flag(nm, val): return (val << getattr(kgsl, f"{nm}_SHIFT")) & getattr(kgsl, f"{nm}_MASK")
 
 class KGSLIface:
-  count, submit_ioctl = 1, kgsl.IOCTL_KGSL_GPU_COMMAND
+  count, submit_ioctl, has_sysfs = 1, kgsl.IOCTL_KGSL_GPU_COMMAND, True
 
   def __init__(self, dev:QCOMDevice, device_id:int):
     self.fd = FileIOInterface('/dev/kgsl-3d0', os.O_RDWR)
@@ -347,7 +347,7 @@ class KGSLIface:
       kgsl.IOCTL_KGSL_DEVICE_WAITTIMESTAMP_CTXTID(self.fd, context_id=self.ctx, timestamp=ts, timeout=tm)
 
 class MSMIface:
-  count, submit_ioctl = 1, msm_drm.DRM_IOCTL_MSM_GEM_SUBMIT
+  count, submit_ioctl, has_sysfs = 1, msm_drm.DRM_IOCTL_MSM_GEM_SUBMIT, False
 
   def __init__(self, dev:QCOMDevice, device_id:int):
     self.dev, self.fd = dev, FileIOInterface('/dev/dri/renderD128', os.O_RDWR)
@@ -396,9 +396,13 @@ Compiled.pm_encode += PatternMatcher([
   (UPat.sink(arg=KernelInfo("qcom_compute_submit")).call(UPat()).after(allow_any_len=True, name="s"), lambda s: QCOMComputeQueue(s).encode()),
 ])
 
+class MOCKIface(KGSLIface):
+  has_sysfs = False
+  def map(self, ptr:int, size:int) -> BufferStorage: return BufferStorage(ptr, (None, False), MMIOInterface(ptr, size, fmt='B'))
+
 class QCOMDevice(Compiled):
   renderers = [QCOMCLRenderer, IR3Renderer]
-  ifaces = [KGSLIface, MSMIface]
+  ifaces = [KGSLIface, MSMIface, MOCKIface]
   timestamp_divider = 19.2
 
   def __init__(self, device:str=""):
@@ -409,7 +413,7 @@ class QCOMDevice(Compiled):
     # a7xx start with 730x or 'Cxxx', a8xx starts 'Exxx'
     if self.gpu_id[:2] >= (7, 3): raise RuntimeError(f"Unsupported GPU: chip_id={chip_id:#x}")
 
-    if PROFILE and isinstance(self.iface, KGSLIface):
+    if PROFILE and self.iface.has_sysfs:
       System.write_sysfs("/sys/class/kgsl/kgsl-3d0/idle_timer", value="4000000000", msg="Failed to disable suspend mode", expected="4294967276")
 
     super().__init__(device, QCOMAllocator(self), None,
@@ -435,5 +439,5 @@ class QCOMDevice(Compiled):
 
   def _at_profile_finalize(self):
     super()._at_profile_finalize()
-    if isinstance(self.iface, KGSLIface):
+    if self.iface.has_sysfs:
       with contextlib.suppress(RuntimeError): System.write_sysfs("/sys/class/kgsl/kgsl-3d0/idle_timer", "10", "Failed to reenable suspend mode")

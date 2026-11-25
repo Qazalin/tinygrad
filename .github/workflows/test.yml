@@ -687,6 +687,38 @@ jobs:
       - name: Run process replay tests
         uses: ./.github/actions/process-replay
 
+  testqcom:
+    name: Linux (qcom ir3)
+    runs-on: *linux
+    timeout-minutes: 20
+    env:
+      DEV: MOCK+QCOM:IR3
+      SKIP_SLOW_TEST: 1
+      TEST_MAX_EXAMPLES: 50
+      PARALLEL: 0
+      PYTHONPATH: .
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tinygrad
+        with:
+          key: qcom-ir3
+          deps: "testing_unit mesa"
+          llvm: 'true'
+      - name: Verify QCOM IR3 autogen is up to date
+        run: |
+          python -m test.mockgpu.qcom.generate
+          git diff --exit-code test/mockgpu/qcom/ins.py
+      - name: Check Device.DEFAULT and print some source
+        run: |
+          python3 -c "from tinygrad import Device; assert Device.DEFAULT == 'QCOM', Device.DEFAULT"
+          DEBUG=5 FORWARD_ONLY=1 python3 test/test_tiny.py TestTiny.test_plus
+      - name: Run pytest (qcom)
+        run: python -m pytest -n=auto test/test_tiny.py test/runtime/test_ops.py test/runtime/test_dtype.py test/runtime/test_dtype_alu.py test/runtime/test_jit.py test/device/qcom --durations=20
+      - name: Run IMAGE tests (qcom)
+        run: IMAGE=2 python -m pytest -n=auto test/test_tiny.py::TestTiny::test_gemm test/test_tiny.py::TestTiny::test_hgemm test/test_tiny.py::TestTiny::test_gemv test/test_tiny.py::TestTiny::test_mnist test/test_tiny.py::TestTiny::test_mnist_backward
+
 # ****** Compile-only Tests ******
 
   compiletests:

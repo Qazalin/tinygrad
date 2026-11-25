@@ -1,4 +1,5 @@
 import ctypes, time, os, builtins, fcntl, typing
+from dataclasses import replace
 from tinygrad.helpers import DEV, dedup, to_tuple, round_up
 from tinygrad.device import Compiled, host_of
 from tinygrad.dtype import dtypes
@@ -9,11 +10,18 @@ from tinygrad.runtime.autogen import libc
 from test.mockgpu.nv.nvdriver import NVDriver
 from test.mockgpu.amd.amddriver import AMDDriver
 from test.mockgpu.am.amdriver import AMDriver, AMUSBDriver
+from test.mockgpu.qcom.qcomdriver import QCOMDriver
 start = time.perf_counter()
 
 drivers = [cls() for t in DEV.value if (cls:={"MOCKPCI+AMD": AMDriver, "MOCKKFD+AMD": AMDDriver, "MOCK+AMD": AMDDriver, "MOCKUSB+AMD": AMUSBDriver,
-                                              "MOCK+NV": NVDriver}.get(f"{t.interface}+{t.device}"))]
+                                              "MOCK+NV": NVDriver, "MOCK+QCOM": QCOMDriver}.get(f"{t.interface}+{t.device}"))]
 tracked_fds: dict[int, typing.Any] = {}
+
+@ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_ulong, ctypes.c_void_p)
+def mockgpu_ioctl(fd:int, req:int, argp:int) -> int:
+  if fd in tracked_fds: return tracked_fds[fd].ioctl(fd, req, argp)
+  return int(libc.dll.ioctl(fd, ctypes.c_ulong(req), ctypes.c_void_p(argp)))
+setattr(libc.dll, "mockgpu_ioctl", mockgpu_ioctl)
 
 @ctypes.CFUNCTYPE(None, ctypes.c_uint64)
 def mockgpu_doorbell(addr:int): # compiled stores aren't tracked, so the submits report their doorbells
@@ -26,7 +34,14 @@ def hook_doorbells(s:UOp) -> UOp|None:
   hooks = tuple(UOp.native("mockgpu_doorbell").call(b.after(c).getaddr(host_of(d))) for c in s.toposort() if c.op is Ops.CALL
                 for b in c.src[1:] if b.op is Ops.EXTERN and "doorbell" in str(b.arg.name) and (d:=to_tuple(b.device)[0]).split(":")[0] in mocked)
   return None if all(h in s.src for h in hooks) else s.replace(src=tuple(dedup(s.src + hooks)))
-Compiled.pm_lower += PatternMatcher([(UPat(Ops.SINK, name="s"), hook_doorbells)])
+def hook_ioctls(n:UOp) -> UOp|None:
+  # QCOM submits PM4 command buffers via compiled ccall(libc.dll.ioctl, fd, ...) rather than MMIO doorbells;
+  # mockgpu_ioctl dispatches tracked mock fds to VirtDriver and forwards all other fds to libc.ioctl.
+  return n.replace(arg=replace(n.arg, code="mockgpu_ioctl")) if "QCOM" in mocked and getattr(n.arg, "code", None) == "ioctl" else None
+Compiled.pm_lower += PatternMatcher([
+  (UPat(Ops.SINK, name="s"), hook_doorbells),
+  (UPat(Ops.NATIVE, name="n"), hook_ioctls),
+])
 
 @ctypes.CFUNCTYPE(None, ctypes.c_uint64)
 def mockgpu_progress(_:int): # compiled spin loops wait on the gpus, which run only when called
