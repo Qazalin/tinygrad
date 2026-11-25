@@ -684,12 +684,12 @@ def _compile_sop(inst: ir3.SOP1|ir3.SOP2|ir3.SOPC|ir3.SOPK|ir4.SOP1|ir4.SOP2|ir4
     if isinstance(inst, ir4.SOP1) and inst.op in _BARRIER_SOP1_OPS: return UOp.sink()
     sdst_off = _field_off(inst, 'sdst')
     srcs = {'S0': ctx.rsrc('ssrc0', None, bits['s0'])}
-    dst_off, dst_size, dst_field = sdst_off, bits['d'] // 32, 'sdst'
+    dst_off, dst_size, dst_field = sdst_off, 2 if bits['d'] == 64 else 1, 'sdst'
   elif isinstance(inst, (ir3.SOP2, ir4.SOP2, irc.SOP2)):
     sdst_off = _field_off(inst, 'sdst')
     srcs = {'S0': ctx.rsrc('ssrc0', None, bits['s0']), 'S1': ctx.rsrc('ssrc1', None, bits['s1'])}
     if (lit := ctx.optional_imm_field('literal')) is not None: srcs['SIMM32'] = lit
-    dst_off, dst_size, dst_field = sdst_off, bits['d'] // 32, 'sdst'
+    dst_off, dst_size, dst_field = sdst_off, 2 if bits['d'] == 64 else 1, 'sdst'
   elif isinstance(inst, (ir3.SOPC, ir4.SOPC, irc.SOPC)):
     srcs = {'S0': ctx.rsrc('ssrc0', None, bits['s0']), 'S1': ctx.rsrc('ssrc1', None, bits['s1'])}
     dst_off, dst_size, dst_field = 0, 0, None
@@ -1319,11 +1319,11 @@ def _compile_vopd(inst: ir3.VOPD | ir4.VOPD, ctx: _Ctx) -> UOp:
 
   lane = ctx.range()
   srcy0 = ctx.rsrc('srcy0', lane)
-  srcy1 = ctx.rvgpr(vsrcy1_reg, lane, ctx._fext('v', 'vsrcy1', 0))
-  d0y = ctx.rvgpr(vdsty_reg, lane, ctx._fext('v', 'vdsty', 0))
+  srcy1 = ctx.rvgpr(vsrcy1_reg, lane, ctx._fext('v', 'vsrcy1', 0)) if inst.opy.name != 'V_DUAL_MOV_B32' else _c(0)
+  d0y = ctx.rvgpr(vdsty_reg, lane, ctx._fext('v', 'vdsty', 0)) if inst.opy.name != 'V_DUAL_MOV_B32' else _c(0)
   srcx0 = ctx.rsrc('srcx0', lane)
-  srcx1 = ctx.rvgpr(vsrcx1_reg, lane, ctx._fext('v', 'vsrcx1', 0))
-  d0x = ctx.rvgpr(vdstx_reg, lane, ctx._fext('v', 'vdstx', 0))
+  srcx1 = ctx.rvgpr(vsrcx1_reg, lane, ctx._fext('v', 'vsrcx1', 0)) if inst.opx.name != 'V_DUAL_MOV_B32' else _c(0)
+  d0x = ctx.rvgpr(vdstx_reg, lane, ctx._fext('v', 'vdstx', 0)) if inst.opx.name != 'V_DUAL_MOV_B32' else _c(0)
   reads = UOp.group(srcx0, srcx1, d0x, srcy0, srcy1, d0y)
   all_stores = []
   for op, s0, s1, d0, vdst_reg, vdst_fn, label in [
@@ -1635,22 +1635,37 @@ def lower_body(sink:UOp) -> UOp:
   params = {b:UOp.param(i, b.dtype, b.shape, name=_local_param_name(i, b), addrspace=b.addrspace) for i,b in enumerate(bufs)}
   return sink.substitute(params, walk=True).call(*bufs)
 
-_IMM_FIELDS = {'encoding', 'offset', 'ioffset', 'offset0', 'offset1', 'simm16', 'literal'}
-_SPECIAL_SGPRS = {VCC_LO.offset, VCC_LO.offset + 1, EXEC_LO.offset, EXEC_LO.offset + 1, SCC.offset, 124}
+_IMM_FIELDS = {'encoding', 'offset', 'ioffset', 'offset0', 'offset1', 'simm16', 'literal', 'dlc', 'slc', 'th', 'scope', 'cpol'}
+_EXEC_SGPRS = {EXEC_LO.offset, EXEC_LO.offset + 1}
+_VCC_SGPRS = {VCC_LO.offset, VCC_LO.offset + 1}
 
 def _inst_cache_key(inst: Inst, arch: str, wave_size: int) -> tuple:
   """Canonical cache key for instruction body sharing: captures opcode, static modifiers, operand kinds, and register aliasing."""
+  op_name = _op_name(inst)
+  is_sop = isinstance(inst, (ir3.SOP1, ir3.SOP2, ir3.SOPC, ir3.SOPK, ir4.SOP1, ir4.SOP2, ir4.SOPC, ir4.SOPK,
+                             irc.SOP1, irc.SOP2, irc.SOPC, irc.SOPK))
+  special = {124}
+  if is_sop:
+    special.add(SCC.offset)
+    if 'EXEC' in op_name: special |= _EXEC_SGPRS
+  else:
+    special |= _EXEC_SGPRS
+    if isinstance(inst, (ir3.VOP2, ir3.VOPC, ir3.VOPD, ir3.SOPP, ir4.VOP2, ir4.VOPC, ir4.VOPD, ir4.SOPP,
+                         irc.VOP2, irc.VOPC, irc.SOPP)) or 'DIV_SCALE' in op_name:
+      special |= _VCC_SGPRS
   alias: dict[tuple[str, int], int] = {}
   def reg_id(file: str, idx: int):
-    if file == 's' and idx in _SPECIAL_SGPRS: return ('sp', idx)
+    if file == 's' and idx in special: return ('sp', idx)
     return alias.setdefault((file, idx), len(alias))
   ops = inst.operands
   acc_mem = bool(_iattr(inst, 'acc'))
   acc_mfma = bool(_iattr(inst, 'acc_cd'))
-  is_acc_mov = 'ACCVGPR_MOV' in _op_name(inst)
-  parts: list = [arch, type(inst), inst.size()]
+  is_acc_mov = 'ACCVGPR_MOV' in op_name
+  parts: list = [arch, type(inst).__name__.removesuffix('_LIT')]
   for fname, _ in inst._fields:
-    if fname in _IMM_FIELDS: continue
+    if fname in _IMM_FIELDS or (fname == 'glc' and 'ATOMIC' not in op_name): continue
+    if fname == 'vsrcx1' and hasattr(inst, 'opx') and inst.opx.name == 'V_DUAL_MOV_B32': continue
+    if fname == 'vsrcy1' and hasattr(inst, 'opy') and inst.opy.name == 'V_DUAL_MOV_B32': continue
     val = getattr(inst, fname)
     if isinstance(val, Reg):
       if not _field_active(fname, ops): continue
@@ -1856,11 +1871,13 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
   if (v0_param := _reg_param('v', 0, wave_size)) in buffers:
     lane = UOp.range(wave_size, 5, dtype=dtypes.int)
     tid = wave*wave_size+lane
-    v0_wave = buffers[v0_param][0].shrink(((wave*wave_size, (wave+1)*wave_size),)).after(wg)
+    v0_buf = buffers[v0_param][0]
+    v0_wave = (v0_buf.shrink(((wave*wave_size, (wave+1)*wave_size),)) if n_waves > 1 else v0_buf).after(wg)
     init_stores.append(v0_wave.index(lane.valid(tid<total_threads)).store((((tid//(lx*ly))<<20)|(((tid//lx)%ly)<<10)|(tid%lx)).cast(dtypes.u32)).end(lane))
   for i, v in dict(runtime_sgprs).items():
     if (s_param := _reg_param('s', i, wave_size)) in buffers:
-      s_wave = buffers[s_param][0].shrink(((wave, wave+1),)).after(wg)
+      s_buf = buffers[s_param][0]
+      s_wave = (s_buf.shrink(((wave, wave+1),)) if n_waves > 1 else s_buf).after(wg)
       init_stores.append(s_wave.index(0).store(_c(v)))
   init = UOp.group(*init_stores, wg)
   # construct CALL graph
@@ -1875,6 +1892,8 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
                     else {taken:_c(next(iter(dsts.values()), -1), dtypes.int)})
     body, bufs = instruction_block(instructions)
     args = [values[b] if b.addrspace is AddrSpace.ALU else buffers[b][0] for b in bufs]
+    if n_waves == 1 and block_pc in unconditional:
+      return body.call(*(a if b.addrspace is AddrSpace.ALU else a.after(end, *scopes) for b,a in zip(bufs, args)))
     args += [_c(block_pc, dtypes.int).after(end, *scopes)]
     params = [UOp.param(i, a.dtype, a.shape, name=_local_param_name(i, b), addrspace=b.addrspace) for i,(a,b) in enumerate(zip(args, bufs))]
     params.append(UOp.param(len(bufs), dtypes.int, addrspace=AddrSpace.ALU))
@@ -1883,7 +1902,7 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
     gates = () if block_pc in unconditional else (UOp.range(params[bufs.index(route)][w].load().eq(params[-1]).cast(dtypes.int),
                                                             1, dtype=dtypes.int),)
     call_args = [p if b.addrspace is AddrSpace.ALU else p.after(*gates, w).shrink(((w*s, (w+1)*s),))
-                 if (s:=buffers[b][1]) else p.after(*gates, w) for b,p in zip(bufs, params)]
+                 if (s:=buffers[b][1]) and n_waves > 1 else p.after(*gates, w) for b,p in zip(bufs, params)]
     block = UOp.group(body.call(*call_args), *gates, w).end(*gates).end(w).sink(arg=KernelInfo("emu_waves"))
     return block.call(*args)
   def emit_dispatch(regions:list[CFGRegion], scopes:tuple[UOp, ...], end:UOp) -> UOp:

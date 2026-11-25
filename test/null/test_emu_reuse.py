@@ -11,13 +11,15 @@ from tinygrad.uop.ops import Ops
 from test.mockgpu.amd.emu import lift, instruction_call
 
 DISPATCH = (1, 1, 1, 32, 1, 1, 0x19c, 0)
-DISPATCH64 = (1, 1, 1, 64, 1, 1, 0x19c, 0)
+DISPATCH_2W = (1, 1, 1, 64, 1, 1, 0x19c, 0)
+DISPATCH64_2W = (1, 1, 1, 128, 1, 1, 0x19c, 0)
 
 def _asm(*insts) -> bytes: return b"".join(i.to_bytes() for i in insts)
 
 def _waves_and_blocks(uop):
-  waves = [u.body for u in uop.toposort() if u.op is Ops.CALL and u.body.arg.name == "emu_waves"]
+  waves = [u.body for u in uop.toposort() if u.op is Ops.CALL and u.body.op is Ops.SINK and u.body.arg.name == "emu_waves"]
   blocks = [u.body for w in waves for u in w.toposort() if u.op is Ops.CALL and u.body.src[0].arg.name == "emu_block"]
+  blocks += [u.body for u in uop.toposort() if u.op is Ops.CALL and u.body.op is Ops.PROGRAM and u.body.src[0].arg.name == "emu_block"]
   return waves, blocks
 
 class TestEmuReuse(unittest.TestCase):
@@ -65,7 +67,7 @@ class TestEmuReuse(unittest.TestCase):
   def test_block_and_waves_reuse_different_regs(self):
     r = Device["NULL"].renderer
     cases = [
-      ("rdna3", DISPATCH,
+      ("rdna3", DISPATCH_2W,
        _asm(ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]),
             ir3.VOP2(ir3.VOP2Op.V_MUL_F32_E32, vdst=v[3], src0=v[2], vsrc1=v[0]),
             ir3.SOP2(ir3.SOP2Op.S_ADD_U32, sdst=s[4], ssrc0=s[2], ssrc1=s[3]),
@@ -74,14 +76,14 @@ class TestEmuReuse(unittest.TestCase):
             ir3.VOP2(ir3.VOP2Op.V_MUL_F32_E32, vdst=v[1], src0=v[10], vsrc1=v[5]),
             ir3.SOP2(ir3.SOP2Op.S_ADD_U32, sdst=s[9], ssrc0=s[7], ssrc1=s[4]),
             ir3.SOPP(ir3.SOPPOp.S_ENDPGM))),
-      ("rdna4", DISPATCH,
+      ("rdna4", DISPATCH_2W,
        _asm(ir4.VOP2(ir4.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]),
             ir4.VOP2(ir4.VOP2Op.V_MUL_F32_E32, vdst=v[3], src0=v[2], vsrc1=v[0]),
             ir4.SOPP(ir4.SOPPOp.S_ENDPGM)),
        _asm(ir4.VOP2(ir4.VOP2Op.V_ADD_F32_E32, vdst=v[12], src0=v[8], vsrc1=v[3]),
             ir4.VOP2(ir4.VOP2Op.V_MUL_F32_E32, vdst=v[1], src0=v[12], vsrc1=v[8]),
             ir4.SOPP(ir4.SOPPOp.S_ENDPGM))),
-      ("cdna", DISPATCH64,
+      ("cdna", DISPATCH64_2W,
        _asm(irc.VOP2(irc.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]),
             irc.VOP2(irc.VOP2Op.V_MUL_F32_E32, vdst=v[3], src0=v[2], vsrc1=v[0]),
             irc.SOPP(irc.SOPPOp.S_ENDPGM)),
@@ -96,6 +98,11 @@ class TestEmuReuse(unittest.TestCase):
       self.assertEqual(len(b1), 1)
       self.assertIs(b1[0], b2[0], f"{arch}: same instruction stream with different regs must share emu_block")
       self.assertIs(w1[0], w2[0], f"{arch}: same instruction stream with different regs must share emu_waves")
+    # Single-wave unconditional blocks call emu_block directly and still share emu_block
+    _, b1 = _waves_and_blocks(lift(cases[0][2], "rdna3", r, DISPATCH, "p1_1w"))
+    _, b2 = _waves_and_blocks(lift(cases[0][3], "rdna3", r, DISPATCH, "p2_1w"))
+    self.assertEqual(len(b1), 1)
+    self.assertIs(b1[0], b2[0])
 
   def test_diamond_cfg_block_reuse(self):
     # Two branches at different PCs with the same instruction stream on different registers
@@ -115,7 +122,7 @@ class TestEmuReuse(unittest.TestCase):
       # block 3 (PC 32): done
       ir3.SOPP(ir3.SOPPOp.S_ENDPGM),
     )
-    uop = lift(code, "rdna3", Device["NULL"].renderer, DISPATCH, "diamond")
+    uop = lift(code, "rdna3", Device["NULL"].renderer, DISPATCH_2W, "diamond")
     waves, blocks = _waves_and_blocks(uop)
     self.assertEqual(len(waves), 4)
     self.assertEqual(len(blocks), 4)
@@ -125,7 +132,7 @@ class TestEmuReuse(unittest.TestCase):
 
     # Also verify codegen deduplication through to_program with ClangRenderer (no execution)
     renderer = ClangRenderer(Target("CPU", arch="x86_64,x86-64"))
-    prg = to_program(lift(code, "rdna3", renderer, DISPATCH, "diamond_c"), renderer)
+    prg = to_program(lift(code, "rdna3", renderer, DISPATCH_2W, "diamond_c"), renderer)
     wave_calls = [u.body for u in prg.toposort() if u.op is Ops.CALL and u.body.src[0].arg.name.startswith("emu_waves")]
     self.assertEqual(len(wave_calls), 4)
     self.assertEqual(len(set(wave_calls)), 3)
