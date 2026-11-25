@@ -337,10 +337,6 @@ class UOp(Mixin, metaclass=UOpMetaClass):
            Ops.LINEAR | Ops.PROGRAM | Ops.SOURCE:
         return None
 
-      # special (terrible) case for RESHAPE on NOOP
-      case Ops.RESHAPE:
-        if self.src[0].op is Ops.NOOP: return self.marg
-
       # hacks for NOOP
       case Ops.NOOP:
         return self.src[0]._shape if len(self.src) >= 1 else None
