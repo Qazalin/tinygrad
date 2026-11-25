@@ -53,7 +53,6 @@ class _MXCSRContext:
 from tinygrad.uop.ops import UOp, Ops, KernelInfo, uopfunc, rewrite_group, graph_rewrite, PatternMatcher, UPat
 from tinygrad.dtype import dtypes, AddrSpace
 from tinygrad.device import Buffer, BufferSpec, Device
-from tinygrad.engine.realize import run_linear
 from tinygrad.codegen import to_program, to_program_config
 from tinygrad.renderer import Renderer
 from tinygrad.helpers import Context, DEV, to_mv, ContextVar, VIZ
@@ -70,6 +69,7 @@ from tinygrad.renderer.amd.dsl import VCC_LO, EXEC_LO, SCC, ttmp, Inst
 from tinygrad.runtime.autogen.amd.common import Fmt, OpType
 from test.amd.helpers import decode_dpp16
 from test.mockgpu.amd.pcode import parse_pcode, _FUNCS, _set_bits, _to_bool, _to_u32, _val_to_bits, _ftz_f32, _bitreverse, _countbits
+from test.emulator.lifter import lower_body, instruction_block, cfg_regions, IrreducibleCFG, emit_cfg, run_program
 
 def _c(val, dtype=dtypes.uint32): return UOp.const(val, dtype)
 
@@ -1723,16 +1723,6 @@ def emu_consts(sgpr:UOp, wave_size:int):
   init_floats = UOp.group(*[sgpr.index(i).store(_c(v)) for i,v in F32_INLINE.items()])
   return UOp.sink(init_ints, init_floats, *([sgpr.index(124).store(_c(0))] if wave_size == 32 else []))
 
-@uopfunc
-def emu_loop_active(routes:UOp, active:UOp, header:UOp, waves:UOp):
-  w = UOp.range(waves, 0, dtype=dtypes.int)
-  return active[0].store(routes[w].load().eq(header).cast(dtypes.uint32).reduce(w, arg=Ops.MAX).ne(0)).sink()
-
-def lower_body(sink:UOp, name:str) -> UOp:
-  bufs = sorted((u for u in sink.toposort() if u.op is Ops.PARAM), key=lambda u: u.arg.slot)
-  body = sink.substitute({b:b.param_like(i, name=b.arg.name) for i,b in enumerate(bufs)}, walk=True)
-  return body.replace(arg=KernelInfo(name)).call(*bufs)
-
 instruction_cache:dict[tuple, list[tuple[int, int, tuple[UOp, UOp|None, dict[UOp, UOp]]]]] = {}
 
 def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp, UOp|None]:
@@ -1757,22 +1747,6 @@ def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp, UOp|N
                    for p,index in reads.items()})
   if call is not None: call = call.replace(src=(call.body, *(bindings.get(b, b) for b in call.src[1:])))
   return call, cond.substitute(bindings) if cond is not None else None
-
-def instruction_block(instructions:list[UOp]) -> tuple[UOp, list[UOp]]:
-  bufs = sorted({buf for call in instructions for b in call.src[1:] if (buf:=b.buf_uop).op is Ops.PARAM}, key=lambda b: b.arg.slot)
-  params = {b:b.param_like(i, name=b.arg.name) for i,b in enumerate(bufs)}
-  linear = list(UOp.sink(*params.values()).toposort())[:-1]
-  seen: set[UOp] = set()
-  for call in instructions:
-    args = [params.get(b, b) for b in call.src[1:]]
-    inputs = UOp.sink(*args)
-    nodes = inputs.toposort(lambda u:u.op is not Ops.PARAM and u not in seen)
-    nodes.pop(inputs)
-    seen.update(nodes)
-    linear.extend(nodes)
-    linear.append(call.replace(src=(call.body, *args)))
-    if _Ctx.sgpr in call.src[1:]: seen.clear()
-  return UOp(Ops.PROGRAM, src=(sink:=UOp.sink(*linear, arg=KernelInfo("emu_block", optimized=True)), UOp(Ops.LINEAR, src=(*linear, sink)))), bufs
 
 def thread_branches(insts, blocks:dict[int, list[int]], paths:dict[int, dict[int, int]]):
   # thread jump-only blocks.
@@ -1806,45 +1780,6 @@ def merge_branches(insts, blocks:dict[int, list[int]], paths:dict[int, dict[int,
       blocks[pc] = blocks[pc][:-1]
       paths[pc] = {header:UNCOND}
     blocks[header], paths[header] = [header], dests
-
-# a block has an empty body; a loop contains its header block and the rest of its iteration.
-CFGRegion = tuple[int, list["CFGRegion"]]
-class IrreducibleCFG(RuntimeError): pass
-
-def cfg_regions(paths:dict[int, dict[int, int]], entry:int) -> list[CFGRegion]:
-  # number the reachable blocks in DFS postorder, without recursion on long instruction streams.
-  order:dict[int, int] = {}
-  seen, pending = set(), [(entry, False)]
-  while pending:
-    pc, visited = pending.pop()
-    if visited: order[pc] = len(order)
-    elif pc not in seen:
-      seen.add(pc)
-      pending.append((pc, True))
-      pending.extend((dst, False) for dst in sorted(paths[pc], reverse=True))
-  preds:dict[int, set[int]] = {pc:set() for pc in order}
-  for pc in order:
-    for dst in paths[pc]: preds[dst].add(pc)
-  def build(remaining:set[int]) -> list[CFGRegion]:
-    regions: list[CFGRegion] = []
-    # reverse postorder and predecessor walks partition this region into SCCs in execution order.
-    for pc in sorted(remaining, key=order.__getitem__, reverse=True):
-      if pc not in remaining: continue
-      component, todo = set(), [pc]
-      while todo:
-        if (dst:=todo.pop()) not in remaining: continue
-        remaining.remove(dst)
-        component.add(dst)
-        todo.extend(preds[dst])
-      body:list[CFGRegion] = []
-      if len(component) > 1 or pc in paths[pc]:
-        if any(preds[dst] - component for dst in component if dst != pc):
-          raise IrreducibleCFG("irreducible control flow is not supported by the AMD lifter")
-        # removing the single entry exposes nested loops; the original DFS order still applies.
-        body = [(pc, [])] + build(component - {pc})
-      regions.append((pc, body))
-    return regions
-  return build(set(order))
 
 RENDER = ContextVar("RENDER", 0) # render lifted ast back to assembly
 
@@ -1953,7 +1888,7 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
                     else {taken:_c(next(iter(dsts.values()), -1), dtypes.int)})
       instructions.append(lower_body(route[0].store(target).sink(), "emu_branch"))
     if not instructions: return end
-    body, bufs = instruction_block(instructions)
+    body, bufs = instruction_block(instructions, (_Ctx.sgpr,))
     args = [values[b] if b.addrspace is AddrSpace.ALU else buffers[b][0] for b in bufs]
     args += [_c(block_pc, dtypes.int).after(end, *scopes)]
     params = [UOp.param(i, a.dtype, a.shape, addrspace=AddrSpace.ALU if i >= len(bufs) or bufs[i].addrspace is AddrSpace.ALU
@@ -1966,20 +1901,8 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
                  if (s:=buffers[b][1]) else p.after(*gates, w) for b,p in zip(bufs, params)]
     block = UOp.group(body.call(*call_args), *gates, w).end(*gates).end(w).sink(arg=KernelInfo("emu_waves"))
     return block.call(*args)
-  def emit_dispatch(regions:list[CFGRegion], scopes:tuple[UOp, ...], end:UOp) -> UOp:
-    for pc, body in regions:
-      if body:
-        loop = UOp.loop(next(axes)).replace(src=(UOp(Ops.NOOP).after(end),))
-        end = emit_dispatch(body, scopes+(loop,), loop)
-        # waves that exited keep their route while the remaining waves repeat the loop.
-        check = emu_loop_active(routes.after(end, *scopes, loop), active, _c(pc, dtypes.int), _c(n_waves, dtypes.int))
-        end = end.backedge(loop, active.after(check, *scopes, loop)[0].load())
-      else:
-        # complete the block for every participating wave before entering its successors, including barrier successors.
-        end = emit_block(pc, end, scopes)
-    return end
-
-  ret = emit_dispatch(regions, (wg,), initialized).end(wg).sink(ctx.vmem, arg=KernelInfo(name=name, optimized=True))
+  ret = emit_cfg(regions, routes, active, _c(n_waves, dtypes.int), axes, emit_block, initialized, (wg,)).end(wg) \
+    .sink(ctx.vmem, arg=KernelInfo(name=name, optimized=True))
   if RENDER:
     linear = graph_rewrite(ret, pm_render, name="render", enter_calls=True)
     if VIZ: graph_rewrite(linear, PatternMatcher([]), name="View Rendered Graph")
@@ -2018,5 +1941,5 @@ def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, 
   for p in prg.kernel_params:
     if p.addrspace is AddrSpace.ALU: args[p.arg.slot] = p.bind(args_ptr)
   with _MXCSRContext():
-    run_linear(UOp(Ops.LINEAR, src=(prg.call(*args),)), update_stats=False)
+    run_program(prg, args)
   return 0

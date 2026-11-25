@@ -1,7 +1,7 @@
 from __future__ import annotations
 import platform, ctypes, struct, json
 from typing import Any
-from tinygrad.helpers import OSX, unwrap, data64_le, cpu_profile
+from tinygrad.helpers import OSX, unwrap, data64_le, cpu_profile, DEV
 from tinygrad.device import Compiled, Program, HostAllocator, BufferSpec
 from tinygrad.renderer import TinyELF
 from tinygrad.runtime.support.c import DLL
@@ -21,6 +21,7 @@ class CPUProgram(Program['CPUDevice']):
 
   def __init__(self, dev:CPUDevice, obj:TinyELF, links:dict[str,CPUProgram]):
     self.dev, self.name, self.signature, self.profile_key, self.links = dev, obj.name, obj.signature, obj.profile_key, links
+    self.emulator:Any = None
     self.lvp = obj.target.renderer == "LVP"
     self.packer = struct.Struct(''.join(unwrap(dt.fmt) for _, dt in TinyELF.iter_sig(self.signature)))
     if dev.remote is not None:
@@ -30,6 +31,9 @@ class CPUProgram(Program['CPUDevice']):
       self.buf = dev.allocator.alloc(len(obj.lib), BufferSpec(nolru=True))
       loaded = self._load(obj.lib, self.buf.buf)
       unwrap(self.buf.host)[:len(loaded)] = loaded
+      if DEV.target("CPU").interface == "MOCK":
+        from test.device.cpu.emu import X86Machine
+        self.emulator = X86Machine(loaded, self.buf.buf)
 
       # RWX pages are unrepresentable on apple silicon (https://blog.svenpeter.dev/posts/m1_sprr_gxf/), so flip the written pages to R-X
       libc.mprotect(ctypes.c_void_p(self.buf.buf), len(obj.lib), libc.PROT_READ | libc.PROT_EXEC)
@@ -54,7 +58,9 @@ class CPUProgram(Program['CPUDevice']):
     if (remote:=self.dev.remote) is not None:
       ret = (remote._rpc if wait else remote._post)(remote.sock, RemoteCmd.EXEC_PROG, self.fxn, len(kernargs), int(wait), payload=bytes(kernargs))
       return ret[0] / 1e9 if ret is not None else None
-    with cpu_profile(self.name, self.dev.device, profile_key=self.profile_key) as prof: self.fxn(kernargs)
+    with cpu_profile(self.name, self.dev.device, profile_key=self.profile_key) as prof:
+      if self.emulator is not None: self.emulator.run_abi(ctypes.addressof(kernargs))
+      else: self.fxn(kernargs)
     return float(unwrap(prof.en) - prof.st) * 1e-6 if wait else None
 
 class CPUDevice(Compiled):
