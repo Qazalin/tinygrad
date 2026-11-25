@@ -504,7 +504,7 @@ class _Instruction:
     self._vec_write(dst.reg, values, size)
 
   def _shift_vector(self, m:str) -> None:
-    if m.endswith("dq"): raise NotImplementedError(f"byte vector shift {m}")
+    if m.endswith("dq"): return self._shift_lanes(m)
     dst, left, right = self._vector_operands(m)
     size = {"w":2, "d":4, "q":8}[m[-1]]
     count = self._vector_size(dst.reg) // size
@@ -519,6 +519,20 @@ class _Instruction:
       else: result = value.cast(SINT_DT[size]) >> amount.cast(SINT_DT[size])
       shifted.append(result.cast(UINT_DT[size]))
     self._vec_write(dst.reg, shifted, size)
+
+  def _shift_lanes(self, m:str) -> None:
+    """vpslldq / vpsrldq: shift each 128-bit lane left/right by an immediate number of bytes, zero-filling."""
+    ops = self.insn.operands
+    dst, src, imm = (ops[0], ops[0], ops[1]) if len(ops) == 2 else ops
+    count = self._vector_size(dst.reg)
+    values = self._read_vector_operand(src, 1, count)
+    n = min(imm.imm, 16)
+    out = []
+    for lane in range(count // 16):
+      sel = values[lane * 16:(lane + 1) * 16]
+      if m.startswith("vpsrl"): out += [sel[i + n] if i + n < 16 else _c(0, dtypes.uint8) for i in range(16)]
+      else: out += [sel[i - n] if i >= n else _c(0, dtypes.uint8) for i in range(16)]
+    self._vec_write(dst.reg, out, 1)
 
   def _byte_mask(self, m:str) -> None:
     dst, src = self.insn.operands
@@ -1043,7 +1057,7 @@ class X86Machine:
     self.code, self.base = code, base
     self.calls = decode(code, base)
     self.insns = {call.body.arg.code.address:call.body.arg.code for call in self.calls}
-    with Context(DEV="CPU:LLVM", NOOPT=1, CHECK_OOB=0, EMULATED_DTYPES=""):
+    with Context(DEV="CPU:CLANG", NOOPT=1, CHECK_OOB=0, EMULATED_DTYPES=""):
       self.prg = to_program(lift(self.calls, base, "x86_function"), Device["CPU"].renderer)
 
   @staticmethod
