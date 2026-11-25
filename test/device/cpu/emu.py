@@ -121,7 +121,8 @@ class _Instruction:
     elif m in ("movups", "movaps", "movupd", "movapd", "vmovups", "vmovaps", "vmovupd", "vmovapd", "movlps", "movlpd",
                "vmovlps", "vmovlpd", "movdqa", "movdqu", "vmovdqa", "vmovdqu", "vmovdqu64", "vmovdqu32",
                "vmovdqu16", "vmovdqu8", "vmovdqa64", "vmovdqa32", "vmovdqa16", "vmovdqa8"): self._move_vector(m)
-    elif m in ("xorps", "xorpd", "pxor", "vxorps", "vxorpd", "vpxor"): self._logic_vector(m)
+    elif m in ("xorps", "xorpd", "pxor", "vxorps", "vxorpd", "vpxor", "andps", "andpd", "vandps", "vandpd",
+               "andnps", "andnpd", "vandnps", "vandnpd", "pandn", "vpandn"): self._logic_vector(m)
     elif m in ("addps", "addpd", "subps", "subpd", "mulps", "mulpd", "divps", "divpd", "minps", "minpd", "maxps", "maxpd",
                "vaddps", "vaddpd", "vsubps", "vsubpd", "vmulps", "vmulpd", "vdivps", "vdivpd",
                "vminps", "vminpd", "vmaxps", "vmaxpd"): self._binary_vector(m)
@@ -131,7 +132,7 @@ class _Instruction:
     elif m in ("movshdup", "movsldup", "vmovshdup", "vmovsldup", "movddup", "vmovddup"): self._shuffle_dup(m)
     elif m in ("insertps", "vinsertps"): self._insert_ps(m)
     elif m in ("pinsrw", "pinsrd", "vpinsrw", "vpinsrd"): self._insert_int(m)
-    elif m in ("pextrw", "pextrd", "vpextrw", "vpextrd", "extractps", "vextractps"): self._extract_int(m)
+    elif m in ("pextrw", "pextrd", "vpextrw", "vpextrd", "pextrb", "vpextrb", "extractps", "vextractps"): self._extract_int(m)
     elif m in ("shufps", "shufpd", "vshufps", "vshufpd"): self._shuffle(m)
     elif m in ("movlhps", "movhlps", "vmovlhps", "vmovhlps"): self._move_low_high(m)
     elif m in ("vgatherdps", "vgatherdpd", "vgatherqps", "vgatherqpd"): self._gather(m)
@@ -142,20 +143,26 @@ class _Instruction:
     elif m in ("vpermt2ps", "vpermt2pd", "vpermt2d", "vpermt2q"): self._permute_two(m)
     elif m in ("vpermps", "vpermpd"): self._permute_qwords(m) if self.insn.operands[-1].type == cs_x86.X86_OP_IMM else self._permute_variable(m)
     elif m in ("blendps", "blendpd", "vblendps", "vblendpd", "pblendd", "vpblendd"): self._blend(m)
+    elif m in ("blendvps", "blendvpd", "vblendvps", "vblendvpd", "pblendvb", "vpblendvb"): self._blend_variable(m)
     elif m in ("sqrtss", "sqrtsd", "sqrtps", "sqrtpd", "vsqrtss", "vsqrtsd", "vsqrtps", "vsqrtpd"): self._sqrt_vector(m)
     elif m in ("pshufd", "vpshufd"): self._shuffle_dwords(m)
+    elif m == "vpshufb": self._shuffle_bytes(m)
     elif m in ("vshuff64x2", "vshuff32x4", "vshufi64x2", "vshufi32x4"): self._shuffle_chunks(m)
     elif m.startswith(("punpck", "vpunpck", "unpck", "vunpck")): self._unpack(m)
     elif m.startswith("vfmadd") or m.startswith("vfmsub"): self._fma_vector(m)
     elif m.startswith(("cvt", "vcvt")): self._convert(m)
     elif m.startswith(("vpadd", "vpsub", "vpmul", "vpand", "vpor", "vpxor")): self._integer_vector(m)
+    elif m in ("vpackssdw", "vpacksswb"): self._pack_saturated(m)
+    elif m.startswith(("vmaskmov", "vpmaskmov")): self._masked_store(m)
     elif m.startswith(("vpsrl", "vpsll", "vpsra", "vprol", "vpror")): self._shift_vector(m)
     elif m.startswith("vpmovm2"): self._mask_to_vector(m)
+    elif m == "vpmovmskb": self._byte_mask(m)
     elif m.startswith("vpmov"): self._extend_vector(m)
     elif m == "call": self._call()
     elif m in ("vmovd", "vmovq", "movd", "movq"): self._move_between_gpr_xmm(m)
     elif m.startswith("vpcmp"): self._compare_integer_mask(m)
-    elif m.startswith("vcmp"): self._compare_vector_mask(m)
+    elif m.startswith("vcmp") and self.insn.reg_name(self.insn.operands[0].reg).startswith("k"): self._compare_vector_mask(m)
+    elif m.startswith("vcmp"): self._compare_vector_xmm(m)
     elif m.startswith("kmov"): self._move_mask(m)
     elif m.startswith("kshift"): self._shift_mask(m)
     elif m.startswith(("kor", "kand", "kxor", "knot", "kxnor")): self._logic_mask(m)
@@ -513,12 +520,33 @@ class _Instruction:
       shifted.append(result.cast(UINT_DT[size]))
     self._vec_write(dst.reg, shifted, size)
 
+  def _byte_mask(self, m:str) -> None:
+    dst, src = self.insn.operands
+    bits = _c(0)
+    for i, byte in enumerate(self._vec_read(src.reg, 1, self._vector_size(src.reg))):
+      bits = bits | ((byte & _c(0x80)).ne(_c(0)).cast(dtypes.uint64) << _c(i))
+    self._write_operand(dst, bits)
+
   def _mask_to_vector(self, m:str) -> None:
     dst, src = self.insn.operands
     size = 4 if m.endswith("d") else 8
     mask = MASKS.index(_c(int(self.insn.reg_name(src.reg)[1:]))).load()
     values = [((mask >> _c(i)) & _c(1)).cast(UINT_DT[size]) * _c(_mask(size), UINT_DT[size]) for i in range(self._vector_size(dst.reg)//size)]
     self._vec_write(dst.reg, values, size)
+
+  def _pack_saturated(self, m:str) -> None:
+    dst, left, right = self._vector_operands(m)
+    src_size, dst_size = (4, 2) if m.endswith("dw") else (2, 1)
+    lanes = self._vector_size(dst.reg) // 16
+    per_lane = 16 // src_size
+    srcs = [self._read_vector_operand(src, src_size, lanes * per_lane) for src in (left, right)]
+    lo, hi = -(1 << (dst_size * 8 - 1)), (1 << (dst_size * 8 - 1)) - 1
+    def sat(x:UOp) -> UOp:
+      return x.cast(SINT_DT[src_size]).maximum(_c(lo, SINT_DT[src_size])).minimum(_c(hi, SINT_DT[src_size])).cast(UINT_DT[dst_size])
+    values = []
+    for lane in range(lanes):
+      for src in srcs: values += [sat(x) for x in src[lane * per_lane:(lane + 1) * per_lane]]
+    self._vec_write(dst.reg, values, dst_size)
 
   def _extend_vector(self, m:str) -> None:
     dst, src = self.insn.operands
@@ -535,7 +563,10 @@ class _Instruction:
     size = 8 if m.endswith("pd") else 4
     count = self._vector_size(dst.reg) // size
     a, b = self._read_vector_operand(left, size, count), self._read_vector_operand(right, size, count)
-    self._vec_write(dst.reg, [x ^ y for x,y in zip(a,b)], size)
+    if m.startswith(("andn", "vandn", "pandn")): values = [(x ^ _c(_mask(size), UINT_DT[size])) & y for x,y in zip(a,b)]
+    elif m.startswith(("and", "vand")): values = [x & y for x,y in zip(a,b)]
+    else: values = [x ^ y for x,y in zip(a,b)]
+    self._vec_write(dst.reg, values, size)
   def _binary_vector(self, m:str) -> None:
     dst, left, right = self._vector_operands(m)
     dt, size = self._float_type(m), 4 if m.endswith("ps") else 8
@@ -639,24 +670,39 @@ class _Instruction:
     dt = dtypes.float32 if size == 4 else dtypes.float64
     a = [x.bitcast(dt) for x in self._read_vector_operand(left, size, count)]
     b = [x.bitcast(dt) for x in self._read_vector_operand(right, size, count)]
-    cc = m[4:-2]
     bits = _c(0)
     for i,(x,y) in enumerate(zip(a,b)):
-      unordered = x.ne(x) | y.ne(y)
-      ordered = unordered.logical_not()
-      if cc in ("eq", "o", "ord"): cond = ordered & x.eq(y) if cc == "eq" else ordered
-      elif cc in ("ne", "neq", "unord"): cond = unordered | x.ne(y) if cc != "unord" else unordered
-      elif cc == "lt": cond = ordered & (x < y)
-      elif cc == "le": cond = ordered & (x <= y)
-      elif cc == "gt": cond = ordered & (x > y)
-      elif cc == "ge": cond = ordered & (x >= y)
-      elif cc == "nlt": cond = unordered | (x >= y)
-      elif cc == "nle": cond = unordered | (x > y)
-      elif cc == "ngt": cond = unordered | (x <= y)
-      elif cc == "nge": cond = unordered | (x < y)
-      else: raise NotImplementedError(f"vector comparison {m}")
-      bits = bits | (cond.cast(dtypes.uint64) << _c(i))
+      bits = bits | (self._float_cond(m[4:-2], x, y).cast(dtypes.uint64) << _c(i))
     self.stores.append(MASKS.index(_c(int(self.insn.reg_name(dst.reg)[1:]))).store(bits))
+
+  def _float_cond(self, cc:str, x:UOp, y:UOp) -> UOp:
+    """Predicate from vcmp mnemonics (e.g. eq, lt, unord, nle), true when the comparison holds."""
+    cc = cc.removesuffix("_oq").removesuffix("_uq").removesuffix("_q")
+    unordered = x.ne(x) | y.ne(y)
+    ordered = unordered.logical_not()
+    if cc in ("eq", "o", "ord"): return ordered & x.eq(y) if cc == "eq" else ordered
+    elif cc in ("ne", "neq", "unord"): return unordered | x.ne(y) if cc != "unord" else unordered
+    elif cc == "lt": return ordered & (x < y)
+    elif cc == "le": return ordered & (x <= y)
+    elif cc == "gt": return ordered & (x > y)
+    elif cc == "ge": return ordered & (x >= y)
+    elif cc == "nlt": return unordered | (x >= y)
+    elif cc == "nle": return unordered | (x > y)
+    elif cc == "ngt": return unordered | (x <= y)
+    elif cc == "nge": return unordered | (x < y)
+    else: raise NotImplementedError(f"vector comparison {cc}")
+
+  def _compare_vector_xmm(self, m:str) -> None:
+    """AVX form of cmpps/cmpss: element-wise compare writing 0/-1 masks into the XMM/YMM dst."""
+    dst, left, right = self.insn.operands
+    size = 4 if m.endswith(("ss", "ps")) else 8
+    count = 1 if m.endswith(("ss", "sd")) else self._vector_size(dst.reg) // size
+    dt = dtypes.float32 if size == 4 else dtypes.float64
+    a = [x.bitcast(dt) for x in self._read_vector_operand(left, size, count)]
+    b = [x.bitcast(dt) for x in self._read_vector_operand(right, size, count)]
+    values = [self._float_cond(m[4:-2], x, y).cast(UINT_DT[size]) * _c(_mask(size), UINT_DT[size]) for x,y in zip(a,b)]
+    if m.endswith(("ss", "sd")): values += self._vec_read(dst.reg, size, self._vector_size(dst.reg) // size)[1:]
+    self._vec_write(dst.reg, values, size)
 
   def _shuffle_dup(self, m:str) -> None:
     dst, src = self.insn.operands
@@ -702,7 +748,7 @@ class _Instruction:
 
   def _extract_int(self, m:str) -> None:
     dst, src, imm = self.insn.operands
-    size = 2 if m.endswith("w") else 4
+    size = 1 if m.endswith("b") else 2 if m.endswith("w") else 4
     self._write_operand(dst, self._vec_read(src.reg, size)[imm.imm])
 
   def _shuffle(self, m:str) -> None:
@@ -735,6 +781,21 @@ class _Instruction:
       address = base + index.cast(dtypes.uint64) * _c(mem.mem.scale) + _c(mem.mem.disp & _mask(8))
       values.append(self._load(address, size))
     self._vec_write(dst.reg, values, size)
+
+  def _masked_store(self, m:str) -> None:
+    dst, mask, src = self.insn.operands
+    size = 8 if m.endswith(("pd", "q")) else 4
+    count = self._vector_size(src.reg) // size
+    sign = _c(1 << (size * 8 - 1), UINT_DT[size])
+    masks, values = self._vec_read(mask.reg, size, count), self._read_vector_operand(src, size, count)
+    selected = [m & sign for m in masks]
+    if dst.type == cs_x86.X86_OP_REG:  # masked load: masked-out elements are zeroed
+      self._vec_write(dst.reg, [cond.ne(_c(0, UINT_DT[size])).where(value, _c(0, UINT_DT[size]))
+                                for cond, value in zip(selected, values)], size)
+    else:  # masked store: masked-out elements are left untouched
+      for i, (cond, value) in enumerate(zip(selected, values)):
+        address = self._address(dst.mem) + _c(i * size)
+        self._store(address, cond.ne(_c(0, UINT_DT[size])).where(value, self._load(address, size)), size)
 
   def _insert_extract_128(self, m:str) -> None:
     dst, src, imm = self.insn.operands[-3:]
@@ -785,6 +846,15 @@ class _Instruction:
     a, b = self._read_vector_operand(left, size, count), self._read_vector_operand(right, size, count)
     self._vec_write(dst.reg, [y if imm.imm & (1 << i) else x for i,(x,y) in enumerate(zip(a,b))], size)
 
+  def _blend_variable(self, m:str) -> None:
+    dst, left, right, mask = self.insn.operands
+    size = 4 if m.endswith("ps") else 8
+    count = self._vector_size(dst.reg) // size
+    a, b = self._read_vector_operand(left, size, count), self._read_vector_operand(right, size, count)
+    sign = _c(1 << (size * 8 - 1), UINT_DT[size])
+    selectors = self._vec_read(mask.reg, size, count)
+    self._vec_write(dst.reg, [(s & sign).ne(_c(0, UINT_DT[size])).where(y, x) for s, x, y in zip(selectors, a, b)], size)
+
   def _sqrt_vector(self, m:str) -> None:
     dst, src = self.insn.operands[0], self.insn.operands[-1]
     dt, size = self._float_type(m), 4 if m.endswith(("ss", "ps")) else 8
@@ -798,6 +868,19 @@ class _Instruction:
     shuffled = []
     for base in range(0, len(values), 4): shuffled += [values[base+((imm.imm >> (2*i)) & 3)] for i in range(4)]
     self._vec_write(dst.reg, shuffled, 4)
+
+  def _shuffle_bytes(self, m:str) -> None:
+    dst, src, control = self.insn.operands
+    count = self._vector_size(dst.reg)
+    data, controls = self._read_vector_operand(src, 1, count), self._read_vector_operand(control, 1, count)
+    values = []
+    for lane in range(count // 16):
+      sel = data[lane * 16:(lane + 1) * 16]
+      for c in controls[lane * 16:(lane + 1) * 16]:
+        value = sel[0]
+        for i, candidate in enumerate(sel[1:], 1): value = (c & _c(0x0f)).eq(_c(i)).where(candidate, value)
+        values.append((c & _c(0x80)).eq(_c(0)).where(value, _c(0, dtypes.uint8)))
+    self._vec_write(dst.reg, values, 1)
 
   def _shuffle_chunks(self, m:str) -> None:
     dst, left, right, imm = self.insn.operands
