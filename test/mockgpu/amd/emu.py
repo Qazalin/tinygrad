@@ -292,6 +292,7 @@ F32_INLINE = {240: 0x3f000000, 241: 0xbf000000, 242: 0x3f800000, 243: 0xbf800000
 # Canonical physical register param tokens: 0..255 SGPR, 256..511 VGPR, 512..767 ACCVGPR
 @functools.cache
 def _reg_param(file: str, idx: int, wave_size: int) -> UOp:
+  assert 0 <= idx < 256, f"register index out of range: {file}{idx}"
   if file == 's': return UOp.param(idx, dtypes.uint32, (1,), name=f"s{idx}", addrspace=AddrSpace.REG)
   if file == 'v': return UOp.param(256 + idx, dtypes.uint32, (wave_size,), name=f"v{idx}", addrspace=AddrSpace.REG)
   if file == 'a': return UOp.param(512 + idx, dtypes.uint32, (wave_size,), name=f"a{idx}", addrspace=AddrSpace.REG)
@@ -334,18 +335,17 @@ def _is_16bit_rdna_hi_field(inst: Inst, fname: str) -> bool:
   bits = inst.canonical_op_bits
   return (bits['d'] == 16 if fname == 'vdst' else bits['s0'] == 16)
 
+def _field_active(fname: str, ops: dict) -> bool:
+  return (not ops or fname in ops or (fname == 'src0' and 'vsrc0' in ops)
+          or fname in ('scale_src0', 'scale_src1', 'vsrc0', 'vsrc1', 'sdst', 'sbase'))
+
 def _active_reg_fields(inst: Inst) -> list[tuple[str, Reg]]:
   ops = inst.operands
-  out = []
-  for fname, _ in inst._fields:
-    val = getattr(inst, fname)
-    if isinstance(val, Reg) and (not ops or fname in ops or fname in ('scale_src0', 'scale_src1', 'vsrc0', 'vsrc1', 'sdst')):
-      out.append((fname, val))
-  return out
+  return [(fname, val) for fname, _ in inst._fields if isinstance(val := getattr(inst, fname), Reg) and _field_active(fname, ops)]
 
 def _ext_reg(file: str, fname: str, delta: int, shift: int, wave_size: int, inst: Inst) -> UOp:
   off = _field_off(inst, fname)
-  return _reg_param(file, (off - 256 - shift if file != 's' else off) + delta, wave_size)
+  return _reg_param(file, (off - 256 - shift if off >= 256 else off) + delta, wave_size)
 
 def _ext_sdwa_sgpr(fname: str, wave_size: int, inst: Inst) -> UOp: return _reg_param('s', _field_off(inst, fname) - 256, wave_size)
 def _ext_sdwa_imm(fname: str, inst: Inst) -> UOp: return _c(_inline_u32(_field_off(inst, fname) - 256, getattr(inst, 'literal', None)))
@@ -543,7 +543,7 @@ class _Ctx:
     _, assigns = parse_pcode(pcode, srcs)
     stores = []
     for dest, val in assigns:
-      if dest.startswith('D0'): stores.extend(self.wsgpr(vdst_off, val.cast(dtypes.uint32), self._fext('s', 'vdst', 0)))
+      if dest.startswith('D0'): stores.extend(self.wsgpr(vdst_vreg, val.cast(dtypes.uint32), self._fext('s', 'vdst', 0)))
       elif dest.startswith('VGPR['): stores.append(val[0].store(val[1].cast(dtypes.uint32)))
     return UOp.sink(*stores)
 
@@ -1627,10 +1627,13 @@ def emu_loop_active(routes:UOp, active:UOp, header:UOp, waves:UOp):
   w = UOp.range(waves, 0, dtype=dtypes.int)
   return active[0].store(routes[w].load().eq(header).cast(dtypes.u32).reduce(w, arg=Ops.MAX).ne(0)).sink()
 
+def _local_param_name(i:int, b:UOp) -> str | None:
+  return f"r{i}" if 0 <= b.arg.slot < 768 else b.arg.name
+
 def lower_body(sink:UOp) -> UOp:
-  bufs = sorted((u for u in sink.toposort() if u.op is Ops.PARAM), key=lambda u: u.arg.slot)
-  body = sink.substitute({b:UOp.param(i, b.dtype, b.shape, name=b.arg.name, addrspace=b.addrspace) for i,b in enumerate(bufs)}, walk=True)
-  return body.call(*bufs)
+  bufs = list(dict.fromkeys(u for u in sink.toposort() if u.op is Ops.PARAM))
+  params = {b:UOp.param(i, b.dtype, b.shape, name=_local_param_name(i, b), addrspace=b.addrspace) for i,b in enumerate(bufs)}
+  return sink.substitute(params, walk=True).call(*bufs)
 
 _IMM_FIELDS = {'encoding', 'offset', 'ioffset', 'offset0', 'offset1', 'simm16', 'literal'}
 _SPECIAL_SGPRS = {VCC_LO.offset, VCC_LO.offset + 1, EXEC_LO.offset, EXEC_LO.offset + 1, SCC.offset, 124}
@@ -1650,7 +1653,7 @@ def _inst_cache_key(inst: Inst, arch: str, wave_size: int) -> tuple:
     if fname in _IMM_FIELDS: continue
     val = getattr(inst, fname)
     if isinstance(val, Reg):
-      if ops and fname not in ops and fname not in ('scale_src0', 'scale_src1', 'vsrc0', 'vsrc1', 'sdst'): continue
+      if not _field_active(fname, ops): continue
       off, sz = val.offset, val.sz
       # SDWA vsrc0/vsrc1 can be SGPR/inline when s0/s1 is set
       if isinstance(inst, (irc.VOP1_SDWA, irc.VOP2_SDWA, irc.VOP2_SDWA_SDST, irc.VOPC_SDWA_SDST)) and \
@@ -1663,6 +1666,9 @@ def _inst_cache_key(inst: Inst, arch: str, wave_size: int) -> tuple:
         else: parts.append((fname, 'S', tuple(reg_id('s', off + d) for d in range(sz))))
         continue
       if off >= 256:
+        if fname == 'vdst' and _op_name(inst) in ('V_READLANE_B32', 'V_READFIRSTLANE_B32', 'V_READFIRSTLANE_B32_E32', 'V_READFIRSTLANE_B32_E64'):
+          parts.append((fname, 'S', (reg_id('s', off - 256),)))
+          continue
         sh = 128 if (off >= 384 and _is_16bit_rdna_hi_field(inst, fname)) else 0
         is_acc = (wave_size == 64) and (
           is_acc_mov or
@@ -1703,8 +1709,8 @@ def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp, UOp|N
   return call, cond
 
 def instruction_block(instructions:list[UOp]) -> tuple[UOp, list[UOp]]:
-  bufs = sorted({b for call in instructions for b in call.src[1:] if b.op is Ops.PARAM}, key=lambda b: b.arg.slot)
-  params = {b:UOp.param(i, b.dtype, b.shape, name=b.arg.name, addrspace=b.addrspace) for i,b in enumerate(bufs)}
+  bufs = list(dict.fromkeys(b for call in instructions for b in call.src[1:] if b.op is Ops.PARAM))
+  params = {b:UOp.param(i, b.dtype, b.shape, name=_local_param_name(i, b), addrspace=b.addrspace) for i,b in enumerate(bufs)}
   linear = list(UOp.sink(*params.values()).toposort())[:-1]
   seen = set(linear)
   for call in instructions:
@@ -1870,7 +1876,7 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
     body, bufs = instruction_block(instructions)
     args = [values[b] if b.addrspace is AddrSpace.ALU else buffers[b][0] for b in bufs]
     args += [_c(block_pc, dtypes.int).after(end, *scopes)]
-    params = [UOp.param(i, a.dtype, a.shape, name=b.arg.name, addrspace=b.addrspace) for i,(a,b) in enumerate(zip(args, bufs))]
+    params = [UOp.param(i, a.dtype, a.shape, name=_local_param_name(i, b), addrspace=b.addrspace) for i,(a,b) in enumerate(zip(args, bufs))]
     params.append(UOp.param(len(bufs), dtypes.int, addrspace=AddrSpace.ALU))
     # lower the wave loop with the block, so repeated blocks share its indexing and route check too.
     w = UOp.range(n_waves, 0, dtype=dtypes.int)
