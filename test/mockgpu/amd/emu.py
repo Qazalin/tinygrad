@@ -6,6 +6,7 @@
 #   arg=3: lds - local data share
 #   arg=4: scratch - per-lane scratch memory
 import ctypes, functools, itertools, re, platform, subprocess, tempfile, traceback
+from dataclasses import dataclass
 from typing import Callable
 
 # Set/restore DAZ+FTZ (denormals-are-zero + flush-to-zero) to match RDNA3 default float mode
@@ -1758,6 +1759,18 @@ def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp, UOp|N
   if call is not None: call = call.replace(src=(call.body, *(bindings.get(b, b) for b in call.src[1:])))
   return call, cond.substitute(bindings) if cond is not None else None
 
+@dataclass
+class LifterCtx:
+  arch:str
+  renderer:Renderer
+  branch_conds:dict[Inst, UOp|None]
+
+def impl_native(ctx:LifterCtx, call:UOp, native:UOp) -> UOp:
+  impl, ctx.branch_conds[native.arg.code] = instruction_call(native.arg.code, ctx.arch, ctx.renderer)
+  return call.replace(src=(native.replace(src=(impl.body,)), *impl.src[1:]))
+
+pm_impl_native = PatternMatcher([(UPat(Ops.NATIVE, name="native").call(name="call"), impl_native)])
+
 def instruction_block(instructions:list[UOp]) -> tuple[UOp, list[UOp]]:
   bufs = sorted({buf for call in instructions for b in call.src[1:] if (buf:=b.buf_uop).op is Ops.PARAM}, key=lambda b: b.arg.slot)
   params = {b:b.param_like(i, name=b.arg.name) for i,b in enumerate(bufs)}
@@ -1867,9 +1880,13 @@ pm_render = PatternMatcher([
 @rewrite_group(replay="emu_process_replay")
 def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -> UOp:
   insts = amd_decode(code, arch)
+  native = UOp(Ops.LINEAR, src=tuple(UOp.native(inst).call() for inst in insts.values())).sink()
   for inst in insts.values():
     inst_st = getattr(inst, "op_name", "").lower()
     if inst_st.startswith(("s_getpc", "s_setpc")): raise NotImplementedError(f"AMD lifter does not support {inst_st}")
+  lifter_ctx = LifterCtx(arch, renderer, {})
+  native = graph_rewrite(native, pm_impl_native, ctx=lifter_ctx, name="add native impls")
+  implementations = {call.body.arg.code:call for call in native.src[0].src}
   cfg = get_cfg(insts)
   thread_branches(insts, cfg["blocks"], cfg["paths"])
   try: regions = cfg_regions(cfg["paths"], 0)
@@ -1942,8 +1959,9 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
       inst = insts[off]
       inst_st = getattr(inst, "op_name", "").lower()
       if inst_st.startswith("s_code_end"): continue
-      call, branch_cond = instruction_call(inst, arch, renderer)
-      if branch_cond is not None: cond = branch_cond
+      native_call = implementations[inst]
+      call = native_call.body.src[0].call(*native_call.src[1:])
+      if (branch_cond := lifter_ctx.branch_conds[inst]) is not None: cond = branch_cond
       if call is not None: instructions.append(call)
     values = {ctx.scratch_stride:_c(scratch_size)}
     if routed:
