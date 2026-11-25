@@ -151,6 +151,7 @@ class _Instruction:
     elif m.startswith(("punpck", "vpunpck", "unpck", "vunpck")): self._unpack(m)
     elif m.startswith("vfmadd") or m.startswith("vfmsub"): self._fma_vector(m)
     elif m.startswith(("cvt", "vcvt")): self._convert(m)
+    elif m.startswith(("round", "vround", "vrndscale")): self._round(m)
     elif m.startswith(("vpadd", "vpsub", "vpmul", "vpand", "vpor", "vpxor")): self._integer_vector(m)
     elif m in ("vpackssdw", "vpacksswb"): self._pack_saturated(m)
     elif m.startswith(("vmaskmov", "vpmaskmov")): self._masked_store(m)
@@ -392,18 +393,32 @@ class _Instruction:
 
   def _div(self, signed:bool) -> None:
     op = self.insn.operands[0]
-    if op.size != 4: raise NotImplementedError("only 32-bit div/idiv is implemented")
-    hi = self._read_gpr(cs_x86.X86_REG_EDX).cast(dtypes.uint64) << _c(32)
-    lo = self._read_gpr(cs_x86.X86_REG_EAX).cast(dtypes.uint64)
-    divisor = self._read_operand(op).cast(dtypes.uint32)
+    size = op.size
+    if size == 8:
+      # the RDX:RAX dividend only produces a valid result if it fits in 64 bits, otherwise the CPU traps with #DE
+      dividend, divisor = self._read_gpr(cs_x86.X86_REG_RAX).cast(dtypes.uint64), self._read_operand(op).cast(dtypes.uint64)
+      qreg, dreg = cs_x86.X86_REG_RAX, cs_x86.X86_REG_RDX
+    elif size == 4:
+      dividend = (self._read_gpr(cs_x86.X86_REG_EDX).cast(dtypes.uint64) << _c(32)) | self._read_gpr(cs_x86.X86_REG_EAX).cast(dtypes.uint64)
+      divisor = self._read_operand(op).cast(dtypes.uint32)
+      qreg, dreg = cs_x86.X86_REG_EAX, cs_x86.X86_REG_EDX
+    elif size == 2:
+      dividend = (self._read_gpr(cs_x86.X86_REG_DX).cast(dtypes.uint32) << _c(16)) | self._read_gpr(cs_x86.X86_REG_AX).cast(dtypes.uint32)
+      divisor = self._read_operand(op).cast(dtypes.uint16)
+      qreg, dreg = cs_x86.X86_REG_AX, cs_x86.X86_REG_DX
+    elif size == 1:
+      dividend, divisor = self._read_gpr(cs_x86.X86_REG_AX).cast(dtypes.uint16), self._read_operand(op).cast(dtypes.uint8)
+      qreg, dreg = cs_x86.X86_REG_AL, cs_x86.X86_REG_AH
+    else: raise NotImplementedError(f"div with operand size {size}")
+    wide, swide = (dtypes.uint64, dtypes.int64) if size == 8 else (UINT_DT[size * 2], SINT_DT[size * 2])
     if signed:
-      dividend = (hi | lo).bitcast(dtypes.int64)
-      divisor = divisor.cast(dtypes.int32).cast(dtypes.int64)
-    else: dividend = hi | lo
-    quotient = dividend.alu(Ops.TRUNCDIV, divisor)
-    remainder = dividend.alu(Ops.TRUNCMOD, divisor)
-    self._write_gpr(cs_x86.X86_REG_EAX, quotient.cast(dtypes.uint32))
-    self._write_gpr(cs_x86.X86_REG_EDX, remainder.cast(dtypes.uint32))
+      dividend = dividend.bitcast(swide)
+      divisor = divisor.bitcast(swide) if size == 8 else divisor.cast(SINT_DT[size]).cast(swide)
+    else:
+      dividend = dividend.cast(wide)
+      divisor = divisor.cast(wide)
+    self._write_gpr(qreg, dividend.alu(Ops.TRUNCDIV, divisor).cast(UINT_DT[size]))
+    self._write_gpr(dreg, dividend.alu(Ops.TRUNCMOD, divisor).cast(UINT_DT[size]))
 
   def _push(self) -> None:
     op = self.insn.operands[0]
@@ -634,6 +649,22 @@ class _Instruction:
       value = self._vec_read(src.reg, size, 1)[0]
       self._write_operand(dst, value)
 
+  def _round(self, m:str) -> None:
+    ops = self.insn.operands
+    dst = ops[0]
+    mode = ops[-1].imm & 0b11 if ops[-1].type == cs_x86.X86_OP_IMM else 0  # MXCSR-controlled rounding is nearest-even
+    size = 4 if ("ss" in m or "ps" in m) else 8
+    dt = dtypes.float32 if size == 4 else dtypes.float64
+    rnd = (lambda x: x.round(), lambda x: x.floor(), lambda x: x.ceil(), lambda x: x.trunc())[mode]
+    if m.endswith(("ss", "sd")):
+      src, values = ops[-2], self._read_vector_operand(ops[-2], size, 1)
+      if len(ops) == 4:  # VEX scalar form merges the upper lanes from the first source
+        values += self._vec_read(ops[1].reg, size, self._vector_size(dst.reg) // size)[1:]
+    else:
+      src = ops[1]
+      values = self._read_vector_operand(src, size, self._vector_size(dst.reg) // size)
+    self._vec_write(dst.reg, [rnd(x.bitcast(dt)).bitcast(UINT_DT[size]) for x in values], size)
+
   def _convert(self, m:str) -> None:
     name = m.removeprefix("v").removeprefix("cvt")
     ops = self.insn.operands
@@ -644,7 +675,12 @@ class _Instruction:
       return self._write_operand(dst, value)
     if "si2" in name:
       dt = dtypes.float32 if name.endswith("ss") else dtypes.float64
-      value = self._read_operand(src).cast(SINT_DT[src.size]).cast(dt)
+      int_src = ops[-1]  # last operand is the integer source in both legacy and AVX forms
+      if int_src.type == cs_x86.X86_OP_REG and self.insn.reg_name(int_src.reg).startswith(("xmm", "ymm", "zmm")):
+        size = 4 if dt == dtypes.float32 else 8  # fixed by the instruction: ss takes an int32, sd an int64
+        value = XMM.index(_c(self._xmm_number(int_src.reg) * 8)).load().cast(SINT_DT[size]).cast(dt)
+      else:
+        value = self._read_operand(int_src).cast(SINT_DT[int_src.size]).cast(dt)
       return self._write_xmm(dst.reg, value, "ss" if dt == dtypes.float32 else "sd")
     if name in ("ss2sd", "sd2ss"):
       dt = dtypes.float64 if name == "ss2sd" else dtypes.float32
