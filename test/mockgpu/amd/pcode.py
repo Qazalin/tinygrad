@@ -29,7 +29,7 @@ def _u32(v): return _const(dtypes.uint32, v)
 def _u64(v): return _const(dtypes.uint64, v)
 def _const_uop_int(u: UOp) -> int:
   while u.op is Ops.CAST: u = u.src[0]
-  assert u.op is Ops.CONST, f"expected constant VGPR index, got {u}"
+  if u.op is not Ops.CONST: raise RuntimeError(f"dynamic VGPR index not supported: {u}")
   return int(u.arg)
 def _to_u32(v): return v if v.dtype == dtypes.uint32 else v.bitcast(dtypes.uint32) if v.dtype.itemsize == 4 else v.cast(dtypes.uint32)
 def _to_bool(v): return v if v.dtype == dtypes.bool else v.ne(_const(v.dtype, 0))
@@ -656,9 +656,8 @@ class Parser:
         self.eat('RBRACKET')
         vgpr = self.vars.get('_vgpr')
         if vgpr is None: return _u32(0)
-        if isinstance(vgpr, dict): return vgpr[_const_uop_int(reg)].index(_to_u32(lane)).load()
-        ws = self.vars.get('_wave_size', 32)
-        return vgpr.index(_to_u32(reg) * _u32(ws) + _to_u32(lane)).load()
+        assert isinstance(vgpr, dict)
+        return vgpr[_const_uop_int(reg)].index(_to_u32(lane)).load()
       if self.try_eat('LPAREN'):
         args = self._parse_args()
         self.eat('RPAREN')
@@ -683,9 +682,8 @@ class Parser:
           self.eat('RBRACKET')
           vgpr = self.vars.get('_vgpr')
           if vgpr is None: return _u32(0)
-          if isinstance(vgpr, dict): return vgpr[_const_uop_int(reg)].index(_u32(int(idx))).load()
-          ws = self.vars.get('_wave_size', 32)
-          return vgpr.index(_to_u32(reg) * _u32(ws) + _u32(int(idx))).load()
+          assert isinstance(vgpr, dict)
+          return vgpr[_const_uop_int(reg)].index(_u32(int(idx))).load()
         elem = self.vars.get(f'{name}@{idx}', self.vars.get(f'{name}{idx}'))
         if elem is None:
           # Extract bit idx from base variable (like var[idx])
@@ -1166,11 +1164,8 @@ def parse_block(lines: list[str], start: int, env: dict[str, VarVal], funcs: dic
           rg, val = parse_tokens(reg_toks, env, funcs), parse_tokens(toks[j:], env, funcs)
           vgpr = env.get('_vgpr')
           if assigns is not None:
-            if isinstance(vgpr, dict):
-              vgpr_idx = vgpr[_const_uop_int(rg)].index(_to_u32(ln))
-            else:
-              ws = env.get('_wave_size', 32)
-              vgpr_idx = _to_u32(rg) * _u32(ws) + _to_u32(ln)
+            assert isinstance(vgpr, dict)
+            vgpr_idx = vgpr[_const_uop_int(rg)].index(_to_u32(ln))
             assigns.append((f'VGPR[{_tok_str(lane_toks)}][{_tok_str(reg_toks)}][{hi_val}:{lo_val}]', (vgpr_idx, val, _u32(hi_val), _u32(lo_val))))
           i += 1
           continue
@@ -1180,11 +1175,8 @@ def parse_block(lines: list[str], start: int, env: dict[str, VarVal], funcs: dic
         rg, val = parse_tokens(reg_toks, env, funcs), parse_tokens(toks[j:], env, funcs)
         if assigns is not None:
           vgpr = env.get('_vgpr')
-          if isinstance(vgpr, dict):
-            assigns.append((f'VGPR[{_tok_str(lane_toks)}][{_tok_str(reg_toks)}]', (vgpr[_const_uop_int(rg)].index(_to_u32(ln)), val)))
-          else:
-            ws = env.get('_wave_size', 32)
-            assigns.append((f'VGPR[{_tok_str(lane_toks)}][{_tok_str(reg_toks)}]', (_to_u32(rg) * _u32(ws) + _to_u32(ln), val)))
+          assert isinstance(vgpr, dict)
+          assigns.append((f'VGPR[{_tok_str(lane_toks)}][{_tok_str(reg_toks)}]', (vgpr[_const_uop_int(rg)].index(_to_u32(ln)), val)))
         i += 1
         continue
 

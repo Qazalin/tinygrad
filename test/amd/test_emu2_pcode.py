@@ -334,13 +334,13 @@ class TestConcatWidthParsing(unittest.TestCase):
       self.assertIs(parsed.simplify(), UOp.const(expected, dtypes.uint32))
 
   def test_permlane64_wave64_pcode_indices(self):
-    vgpr = UOp.param(0, dtypes.uint32, 256)
+    v0, v1 = UOp.param(0, dtypes.uint32, 64), UOp.param(1, dtypes.uint32, 64)
     srcs = {
       'SRC0': UOp.const(0, dtypes.uint32),
       'VDST': UOp.const(1, dtypes.uint32),
       'EXEC_LO': UOp.const(0xFFFFFFFF, dtypes.uint32),
       'EXEC': UOp.const(0xFFFFFFFFFFFFFFFF, dtypes.uint64),
-      '_vgpr': vgpr,
+      '_vgpr': {0: v0, 1: v1},
       '_wave_size': 64,
       'S0': UOp.const(0, dtypes.uint32),
       'S1': UOp.const(0, dtypes.uint32),
@@ -351,12 +351,16 @@ class TestConcatWidthParsing(unittest.TestCase):
       simp = v.simplify()
       self.assertEqual(simp.op, Ops.LOAD)
       self.assertEqual(simp.src[0].op, Ops.INDEX)
+      self.assertIs(simp.src[0].src[0], v0)
       self.assertIs(simp.src[0].src[1].simplify(), UOp.const(expected, dtypes.uint32))
 
     _, assigns = parse_pcode(PCODE[VOP1Op.V_PERMLANE64_B32_E32], srcs)
     self.assertEqual(len(assigns), 64)
-    for lane, (dst_idx, src_idx) in {0: (64, 32), 31: (95, 63), 32: (96, 0), 63: (127, 31)}.items():
-      self.assertIs(assigns[lane][1][0].simplify(), UOp.const(dst_idx, dtypes.uint32))  # type: ignore[index]
+    for lane, src_idx in {0: 32, 31: 63, 32: 0, 63: 31}.items():
+      dst_idx = assigns[lane][1][0]  # type: ignore[index]
+      self.assertEqual(dst_idx.op, Ops.INDEX)
+      self.assertIs(dst_idx.src[0], v1)
+      self.assertIs(dst_idx.src[1].simplify(), UOp.const(lane, dtypes.uint32))
       check_load_idx(assigns[lane][1][1], src_idx)  # type: ignore[index]
 
 class TestAllPcode(unittest.TestCase):
@@ -376,7 +380,7 @@ class TestAllPcode(unittest.TestCase):
             'M0': u32(), 'PC': u64(), 'DENORM': u32(1), 'ROUND_MODE': u32(), 'ROUND_TOWARD_ZERO': u32(),
             'ROUND_NEAREST_EVEN': u32(), 'WAVE_STATUS': u32(),
             'MAX_FLOAT_F32': u32(0x7f7fffff), 'Unsigned': u32(1), 'clampedLOD': u32(),
-            '_lds': lds, '_vmem': lds, '_active': UOp.const(True)}
+            '_lds': lds, '_vmem': lds, '_vgpr': defaultdict(lambda: UOp.param(0, dtypes.uint32, 64)), '_active': UOp.const(True)}
 
   def _parse_all_pcode(self, pcode_dict, arch: str, min_pct: float):
     """Parse all pcode. RuntimeError = parser limitation (ok), other exceptions = real bugs."""
