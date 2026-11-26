@@ -1,5 +1,6 @@
 import unittest
 from tinygrad.runtime.autogen.amd.rdna3.ins import *
+from tinygrad.runtime.autogen.amd.cdna import ins as irc
 from tinygrad.helpers import dedup, DEBUG
 from tinygrad import UOp, Device
 from tinygrad.uop.ops import Ops
@@ -90,6 +91,22 @@ class TestEmuReuse(unittest.TestCase):
     self.assertEqual(icache_size(), n + 1)
     self.assertEqual(len(dedup_body(get_calls(p1, "v_add") + get_calls(p2, "v_add"))), 1)
     self.assertEqual(len(dedup_body(get_calls(p1, "v_add") + get_calls(p3, "v_add"))), 2)
+
+  def test_false_miss(self):
+    k1 = Kernel()
+    k1.emit(global_load_b32(vdst=v[0], addr=v[1:2], saddr=NULL))
+    k1.emit(s_endpgm())
+    p1 = get_prg(k1)
+    n = icache_size()
+
+    k2 = Kernel()
+    k2.emit(global_load_b32(vdst=v[0], addr=v[1:2], saddr=NULL, slc=1))
+    k2.emit(s_endpgm())
+    p2 = get_prg(k2)
+    self.assertEqual(icache_size(), n + 1)
+    b1, b2 = get_calls(p1, "global_load")[0].body, get_calls(p2, "global_load")[0].body
+    self.assertNotEqual(b1.src[0].arg.name, b2.src[0].arg.name)
+    self.assertEqual(b1.src[0].src, b2.src[0].src)
 
 if __name__ == "__main__":
   unittest.main()
