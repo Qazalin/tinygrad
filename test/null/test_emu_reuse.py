@@ -24,7 +24,6 @@ def _waves_and_blocks(uop):
 
 class TestEmuReuse(unittest.TestCase):
   def test_inst_reuse_different_regs(self):
-    r = Device["NULL"].renderer
     pairs = [
       ("rdna3", ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]),
                 ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[10], src0=v[7], vsrc1=v[3])),
@@ -36,12 +35,11 @@ class TestEmuReuse(unittest.TestCase):
                 irc.VOP2(irc.VOP2Op.V_ADD_F32_E32, vdst=v[14], src0=v[5], vsrc1=v[9])),
     ]
     for arch, i1, i2 in pairs:
-      c1, _ = instruction_call(i1, arch, r)
-      c2, _ = instruction_call(i2, arch, r)
+      c1, _ = instruction_call(i1, arch)
+      c2, _ = instruction_call(i2, arch)
       self.assertIs(c1.body.src[0], c2.body.src[0], f"{arch} {i1} vs {i2} should share instruction body")
 
   def test_inst_reuse_different_imms(self):
-    r = Device["NULL"].renderer
     pairs = [
       (ir3.VOP1(ir3.VOP1Op.V_MOV_B32_E32, vdst=v[0], src0=1),
        ir3.VOP1(ir3.VOP1Op.V_MOV_B32_E32, vdst=v[5], src0=42)),
@@ -53,16 +51,15 @@ class TestEmuReuse(unittest.TestCase):
        ir3.GLOBAL(ir3.GLOBALOp.GLOBAL_LOAD_B32, vdst=v[4], addr=v[6:7], saddr=NULL, offset=64)),
     ]
     for i1, i2 in pairs:
-      c1, _ = instruction_call(i1, "rdna3", r)
-      c2, _ = instruction_call(i2, "rdna3", r)
+      c1, _ = instruction_call(i1, "rdna3")
+      c2, _ = instruction_call(i2, "rdna3")
       self.assertIs(c1.body.src[0], c2.body.src[0], f"{i1} vs {i2} should share instruction body")
 
   def test_inst_aliasing_distinct(self):
-    r = Device["NULL"].renderer
     # aliased ops share with each other, but not with non-aliased (restrict pointer safety)
-    a1, _ = instruction_call(ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[0], src0=v[0], vsrc1=v[1]), "rdna3", r)
-    a2, _ = instruction_call(ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[5], src0=v[5], vsrc1=v[2]), "rdna3", r)
-    na, _ = instruction_call(ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]), "rdna3", r)
+    a1, _ = instruction_call(ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[0], src0=v[0], vsrc1=v[1]), "rdna3")
+    a2, _ = instruction_call(ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[5], src0=v[5], vsrc1=v[2]), "rdna3")
+    na, _ = instruction_call(ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]), "rdna3")
     self.assertIs(a1.body.src[0], a2.body.src[0])
     self.assertIsNot(a1.body.src[0], na.body.src[0])
 
