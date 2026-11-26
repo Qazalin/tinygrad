@@ -104,9 +104,9 @@ class TestEmuReuse(unittest.TestCase):
     k2.emit(s_endpgm())
     p2 = get_prg(k2)
     self.assertEqual(icache_size(), n + 1)
-    b1, b2 = get_calls(p1, "global_load")[0].body, get_calls(p2, "global_load")[0].body
-    self.assertNotEqual(b1.src[0].arg.name, b2.src[0].arg.name)
-    self.assertEqual(b1.src[0].src, b2.src[0].src)
+    sink1, sink2 = get_calls(p1, "global_load")[0].body.src[0], get_calls(p2, "global_load")[0].body.src[0]
+    self.assertEqual(sink1.src, sink2.src)
+    self.assertNotEqual(sink1.arg.name, sink2.arg.name)
 
 if __name__ == "__main__":
   unittest.main()
