@@ -69,7 +69,7 @@ from tinygrad.runtime.autogen.amd.cdna import ins as irc
 from tinygrad.renderer.amd.dsl import VCC_LO, EXEC_LO, SCC, ttmp, Inst, Reg
 from tinygrad.runtime.autogen.amd.common import Fmt, OpType
 from test.amd.helpers import decode_dpp16
-from test.mockgpu.amd.pcode import parse_pcode, SrcVal, _FUNCS, _set_bits, _to_bool, _to_u32, _val_to_bits, _ftz_f32, _bitreverse, _countbits
+from test.mockgpu.amd.pcode import parse_pcode, _FUNCS, _set_bits, _to_bool, _to_u32, _val_to_bits, _ftz_f32, _bitreverse, _countbits
 
 def _c(val, dtype=dtypes.uint32): return UOp.const(val, dtype)
 
@@ -329,7 +329,7 @@ def _field_int(inst: Inst, name: str, signed: bool = False) -> int:
     if v >= (1 << (w - 1)): v -= (1 << w)
   return v
 
-class _VGPRMap(dict[int, UOp]):
+class _VGPRMap(dict):
   def __init__(self, ctx: '_Ctx'): self.ctx = ctx
   def __getitem__(self, idx: int) -> UOp: return self.ctx.vgpr(idx)
 
@@ -444,7 +444,7 @@ class _Ctx:
       elif dest.startswith('PC'): raise NotImplementedError("AMD lifter does not support direct PC writes")
     return stores
 
-  def compile_sop_pcode(self, op, srcs: dict[str, SrcVal], sdst_reg: int, sdst_size: int) -> UOp:
+  def compile_sop_pcode(self, op, srcs: dict[str, UOp | int | dict[int, UOp]], sdst_reg: int, sdst_size: int) -> UOp:
     """Compile a scalar instruction."""
     pcode = get_pcode(op)
     srcs.update(self.base_srcs(self.rexec()), VCC=self.rmask(VCC_LO.offset))
@@ -479,16 +479,17 @@ class _Ctx:
       elif dest.startswith('VGPR['): stores.append(val[0].store(val[1].cast(dtypes.uint32)))
     return UOp.sink(*stores)
 
-  def base_srcs(self, exec_mask: UOp, lane: UOp | None = None) -> dict[str, SrcVal]:
+  def base_srcs(self, exec_mask: UOp, lane: UOp | None = None) -> dict[str, UOp | int | dict[int, UOp]]:
     """Pcode environment entries shared by all instructions: EXEC/SCC, rounding mode (emulator always rounds-nearest-even),
     and CDNA SDWA byte/word select defaults (E32 encodings always use BYTE0/WORD0)."""
-    srcs: dict[str, SrcVal] = {'EXEC': exec_mask, 'SCC': self.rsgpr(SCC.offset), '_vgpr': _VGPRMap(self),
-      '_wave_size': self.wave_size, 'ROUND_MODE': _c(0), 'ROUND_TOWARD_ZERO': _c(0), 'ROUND_NEAREST_EVEN': _c(0),
-      'SDWA_SRC0_SEL': _c(0), 'BYTE0': _c(0), 'BYTE1': _c(1), 'BYTE2': _c(2), 'BYTE3': _c(3), 'WORD0': _c(0), 'WORD1': _c(1)}
+    srcs: dict[str, UOp | int | dict[int, UOp]] = {'EXEC': exec_mask, 'SCC': self.rsgpr(SCC.offset), '_vgpr': _VGPRMap(self), '_wave_size': self.wave_size,
+                                  'ROUND_MODE': _c(0), 'ROUND_TOWARD_ZERO': _c(0), 'ROUND_NEAREST_EVEN': _c(0),
+                                  'SDWA_SRC0_SEL': _c(0), 'BYTE0': _c(0), 'BYTE1': _c(1), 'BYTE2': _c(2), 'BYTE3': _c(3),
+                                  'WORD0': _c(0), 'WORD1': _c(1)}
     if lane is not None: srcs['laneId'] = lane
     return srcs
 
-  def compile_vop_pcode(self, op, srcs: dict[str, SrcVal], lane: UOp, vdst_reg: int, exec_mask: UOp,
+  def compile_vop_pcode(self, op, srcs: dict[str, UOp | int | dict[int, UOp]], lane: UOp, vdst_reg: int, exec_mask: UOp,
                         opsel_dst_hi: bool = False, sdst_reg: int | None = None, clmp: int = 0, src0_vreg: int | None = None) -> UOp:
     """Compile VOP instruction to a sink of stores."""
     pcode = get_pcode(op)
@@ -606,7 +607,7 @@ def _compile_sop(inst: ir3.SOP1|ir3.SOP2|ir3.SOPC|ir3.SOPK|ir4.SOP1|ir4.SOP2|ir4
     if isinstance(inst, ir4.SOPK): s0 = simm16
     elif isinstance(inst, irc.SOPK) and 'CMPK' not in op_name and 'SETREG' not in op_name: s0 = simm16_sext
     else: s0 = d0
-    srcs: dict[str, SrcVal] = {'S0': s0, 'S1': simm16_sext, 'SIMM16': simm16_sext, 'D0': d0}
+    srcs: dict[str, UOp | int | dict[int, UOp]] = {'S0': s0, 'S1': simm16_sext, 'SIMM16': simm16_sext, 'D0': d0}
     dst_off, dst_size = sdst_off, 1
   elif isinstance(inst, (ir3.SOP1, ir4.SOP1, irc.SOP1)):
     if isinstance(inst, ir4.SOP1) and inst.op in _BARRIER_SOP1_OPS: return UOp.sink()
@@ -729,7 +730,7 @@ def _compile_sdwa(inst: irc.VOP1_SDWA | irc.VOP2_SDWA | irc.VOP2_SDWA_SDST | irc
   s0 = _sdwa_select(_read_sdwa_src(vsrc0_idx, inst.s0, lane), src0_sel, src0_sext)
   if isinstance(inst, (irc.VOP2_SDWA, irc.VOP2_SDWA_SDST)):
     s1 = _sdwa_select(_read_sdwa_src(vsrc1_idx, inst.s1, lane), src1_sel, src1_sext)
-    srcs: dict[str, SrcVal] = {'S0': s0, 'S1': s1, 'D0': ctx.rvgpr(vdst_reg, lane)}
+    srcs:dict[str, UOp | int | dict[int, UOp]] = {'S0': s0, 'S1': s1, 'D0': ctx.rvgpr(vdst_reg, lane)}
   else:
     srcs = {'S0': s0}
   has_dst_sel = hasattr(type(inst), 'dst_sel')
@@ -783,7 +784,7 @@ def _compile_vop12(inst: ir3.VOP1 | ir3.VOP1_SDST | ir3.VOP1_DPP16 | ir3.VOP2 | 
   if isinstance(inst, (ir3.VOP1, ir4.VOP1, irc.VOP1)):
     d0 = _cond_hi16(write_hi_half, ctx.rvgpr(vdst_reg, lane))
     s0, src0_vreg = _load_vsrc0(ctx, inst, lane, bits, is_f64, is_float, d0)
-    srcs: dict[str, SrcVal] = {'S0': s0, 'D0': d0, 'OPSEL': _c(0)}
+    srcs: dict[str, UOp | int | dict[int, UOp]] = {'S0': s0, 'D0': d0, 'OPSEL': _c(0)}
   else:
     vsrc1_off = _field_off(inst, 'vsrc1') - 256
     vsrc1_hi = bits['s0'] == 16 and not isinstance(inst, irc.VOP2) and vsrc1_off >= 128
@@ -1188,7 +1189,7 @@ def _compile_vop3p(inst: ir3.VOP3P | ir4.VOP3P | irc.VOP3P | irc.VOP3PX2, ctx: _
               ctx.wvgpr(vdst_reg + 1, lane, hi_val, exec_mask)]
     return UOp.sink(UOp.group(*stores).end(lane))
 
-  srcs: dict[str, SrcVal] = {}
+  srcs: dict[str, UOp | int | dict[int, UOp]] = {}
   if is_pk_f32:
     hi_bits = (opsel_hi & 1, opsel_hi & 2, 1 if opsel_hi2 else 0)
     for i, (bit, fname) in enumerate(zip((1, 2, 4), ('src0', 'src1', 'src2'))):
@@ -1251,7 +1252,7 @@ def _compile_vopd(inst: ir3.VOPD | ir4.VOPD, ctx: _Ctx) -> UOp:
       (inst.opy, srcy0, srcy1, d0y, vdsty_reg, 'vdsty', 'Y')]:
     vop = VOPD_TO_VOP2.get(op)
     assert vop is not None, f"no VOP mapping for VOPD {label}: {op}"
-    srcs: dict[str, SrcVal] = {'S0': s0, 'S1': s1, 'D0': d0}
+    srcs: dict[str, UOp | int | dict[int, UOp]] = {'S0': s0, 'S1': s1, 'D0': d0}
     if vop in (ir3.VOP2Op.V_FMAAK_F32_E32, ir3.VOP2Op.V_FMAMK_F32_E32):
       assert literal is not None
       srcs['SIMM32'] = literal
