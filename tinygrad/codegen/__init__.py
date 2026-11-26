@@ -416,8 +416,7 @@ class LowerCallsCtx:
   names: dict[str, dict[UOp, int]] = field(default_factory=dict)
 
 def lower_call(ctx:LowerCallsCtx, call:UOp, b:UOp) -> UOp|None:
-  if b.op is Ops.PROGRAM and b.src[-1].op is Ops.BINARY: return None
-  bodies = ctx.names.setdefault(name:=to_function_name((b.src[0].arg if b.op is Ops.PROGRAM else b.arg).name), {})
+  bodies = ctx.names.setdefault(name:=to_function_name(b.arg.name), {})
   ki = KernelInfo(name + (f"_{i}" if (i:=bodies.setdefault(b, len(bodies))) else ""), optimized=True, kernel=False)
   if ctx.renderer.inline_prefix:
     b = graph_rewrite(b, pm_lower_calls, ctx=ctx, name="lower calls", walk=True)
@@ -427,7 +426,7 @@ def lower_call(ctx:LowerCallsCtx, call:UOp, b:UOp) -> UOp|None:
   return call.replace(src=(b,)+call.src[1:])
 
 pm_lower_calls = PatternMatcher([
-  (UPat(Ops.CALL, src=(UPat((Ops.SINK, Ops.PROGRAM), name="b"),), allow_any_len=True, name="call"), lower_call),
+  (UPat(Ops.CALL, src=(UPat(Ops.SINK, name="b"),), allow_any_len=True, name="call"), lower_call),
 ])
 
 def pack_args(sink:UOp, params:tuple[UOp, ...]) -> UOp:
