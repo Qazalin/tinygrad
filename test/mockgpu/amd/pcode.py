@@ -22,6 +22,7 @@ from tinygrad.codegen.decomp.transcendental import exponent_bias
 
 # Type alias for vars dict: stores UOps, tuples for lambda definitions, and dicts for per-register VGPR maps
 VarVal = UOp | tuple[str, list[str], str] | dict[int, UOp]
+SrcVal = UOp | int | dict[int, UOp]
 
 def _const(dt, v): return UOp.const(v, dt)
 def _single_value(v: UOp): return v.vmin if v.vmin == v.vmax else None
@@ -1432,7 +1433,7 @@ def parse_block(lines: list[str], start: int, env: dict[str, VarVal], funcs: dic
 def parse_expr(expr: str, env: dict[str, VarVal], funcs: dict | None = None) -> UOp:
   return parse_tokens(tokenize(expr.strip().rstrip(';')), env, funcs)
 
-def parse_pcode(pcode: str, srcs: dict[str, UOp | int] | None = None, funcs: dict | None = None) -> tuple[dict, list]:
+def parse_pcode(pcode: str, srcs: dict[str, SrcVal] | None = None, funcs: dict | None = None) -> tuple[dict, list]:
   env: dict = srcs.copy() if srcs else {}
   assigns: list[tuple[str, UOp]] = []
   lines: list[str] = []
