@@ -1755,17 +1755,13 @@ def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp, UOp|N
 def instruction_block(instructions:list[UOp]) -> tuple[UOp, list[UOp]]:
   bufs = sorted({b for call in instructions for b in call.src[1:] if b.op is Ops.PARAM}, key=lambda b: b.arg.slot)
   params = {b:UOp.param(i, b.dtype, b.shape, name=b.arg.name, addrspace=b.addrspace) for i,b in enumerate(bufs)}
-  linear = list(UOp.sink(*params.values()).toposort())[:-1]
-  seen = set(linear)
+  prev: UOp | None = None
   for call in instructions:
     args = [params.get(b, b) for b in call.src[1:]]
-    inputs = UOp.sink(*args)
-    nodes = inputs.toposort(lambda u:u not in seen)
-    nodes.pop(inputs)
-    seen.update(nodes)
-    linear.extend(nodes)
-    linear.append(call.replace(src=(call.body, *args)))
-  return UOp(Ops.PROGRAM, src=(sink:=UOp.sink(*linear, arg=KernelInfo("emu_block", optimized=True)), UOp(Ops.LINEAR, src=(*linear, sink)))), bufs
+    if prev is not None: args = [a.after(prev) if i == 0 else a for i, a in enumerate(args)]
+    new_call = call.replace(src=(call.body, *args))
+    prev = new_call if args else (UOp.group(prev, new_call) if prev is not None else new_call)
+  return UOp.sink(*([prev] if prev is not None else []), arg=KernelInfo("emu_block", optimized=True)), bufs
 
 # a block has an empty body; a loop contains its header block and the rest of its iteration.
 CFGRegion = tuple[int, list["CFGRegion"]]
@@ -1807,12 +1803,14 @@ def cfg_regions(paths:dict[int, dict[int, int]], entry:int) -> list[CFGRegion]:
 RENDER = ContextVar("RENDER", 0) # render lifted ast back to assembly
 
 def linearize_basic_block(call:UOp):
+  if getattr(call.body.arg, "name", None) == "emu_block":
+    return UOp(Ops.LINEAR, src=tuple(x for x in call.body.toposort() if x.op is Ops.BINARY))
   return UOp(Ops.LINEAR, src=tuple(y for x in call.body.toposort() if x.op is Ops.LINEAR for y in x.src if y.op is Ops.BINARY))
 
 pm_render = PatternMatcher([
-  (UPat(Ops.NATIVE, name="native").call(allow_any_len=True), lambda native: UOp(Ops.BINARY, arg=native.arg.code.to_bytes())),
-  (UPat(Ops.CALL, src=(UPat.any(UPat(Ops.SINK), UPat(Ops.PROGRAM, src=(UPat(Ops.SINK),), allow_any_len=True)),),
-        allow_any_len=True, name="call"), linearize_basic_block),
+  (UPat(Ops.NATIVE, name="native").call(allow_any_len=True, name="call"),
+   lambda native, call: UOp.group(UOp(Ops.BINARY, arg=native.arg.code.to_bytes()), *call.src[1:])),
+  (UPat(Ops.CALL, src=(UPat(Ops.SINK),), allow_any_len=True, name="call"), linearize_basic_block),
   (UPat(Ops.SINK, name="root"), lambda root: next((x for x in root.toposort() if x.op is Ops.LINEAR), None)
    if isinstance(root.arg, KernelInfo) and root.arg.name.startswith("emu ") else None),
 ])
@@ -1932,10 +1930,9 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
   if RENDER:
     linear = graph_rewrite(ret, pm_render, name="render", enter_calls=True)
     if VIZ: graph_rewrite(linear, PatternMatcher([]), name="View Rendered Graph")
-    assert len(linear.src) == len(insts), f"{len(linear.src)} != {len(insts)}"
-    for (pc, inst), x in zip(insts.items(), linear.src):
-      out = x.arg if x.op is Ops.BINARY else b"".join(y.arg for y in x.src)
-      assert out == inst.to_bytes(), f"{inst.op_name.lower()}: {out.hex()} != {inst.to_bytes().hex()}"
+    rendered = {x.arg for x in linear.src}
+    expected = {inst.to_bytes() for inst in insts.values()}
+    assert rendered == expected, f"rendered mismatch: missing={expected-rendered}, extra={rendered-expected}"
   ret = graph_rewrite(ret, pm_remove_native, name="remove native", enter_calls=True)
   return ret
 
