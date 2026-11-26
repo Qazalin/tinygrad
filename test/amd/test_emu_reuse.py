@@ -31,7 +31,8 @@ def icache_size() -> int: return sum(len(v) for v in instruction_cache.values())
 
 class TestEmuReuse(unittest.TestCase):
   def setUp(self): instruction_cache.clear()
-  def test_reuse(self):
+
+  def test_reuse_imm(self):
     k = Kernel()
     k.emit(v_mov_b32_e32(v[3], v[4]))
     k.emit(v_mov_b32_e32(v[4], 10))
