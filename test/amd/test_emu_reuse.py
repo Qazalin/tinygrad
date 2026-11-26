@@ -1,6 +1,5 @@
 import unittest
 from tinygrad.runtime.autogen.amd.rdna3.ins import *
-from tinygrad.runtime.autogen.amd.cdna import ins as irc
 from tinygrad.helpers import dedup, DEBUG
 from tinygrad import UOp, Device
 from tinygrad.uop.ops import Ops
@@ -33,6 +32,16 @@ def icache_size() -> int: return sum(len(v) for v in instruction_cache.values())
 class TestEmuReuse(unittest.TestCase):
   def setUp(self): instruction_cache.clear()
 
+  def test_reuse_vgpr(self):
+    k = Kernel()
+    k.emit(v_mov_b32_e32(v[3], v[4]))
+    k.emit(v_mov_b32_e32(v[5], v[6]))
+    k.emit(s_endpgm())
+    prg = get_prg(k)
+    v_mov_calls = get_calls(prg, "v_mov")
+    self.assertEqual(len(v_mov_calls), 2)
+    self.assertEqual(len(dedup_body(v_mov_calls)), 1)
+
   def test_reuse_imm(self):
     k = Kernel()
     k.emit(v_mov_b32_e32(v[3], v[4]))
@@ -51,8 +60,11 @@ class TestEmuReuse(unittest.TestCase):
     p1 = get_prg(k1)
     n = icache_size()
 
+    get_prg(k1)
+    self.assertEqual(icache_size(), n)
+
     k2 = Kernel()
-    k2.emit(v_mov_b32_e32(v[5], 10))
+    k2.emit(v_mov_b32_e32(v[5], v[6]))
     k2.emit(s_endpgm())
     p2 = get_prg(k2)
     self.assertEqual(icache_size(), n)
@@ -60,16 +72,18 @@ class TestEmuReuse(unittest.TestCase):
 
   def test_instruction_cache_literal(self):
     k1 = Kernel()
-    k1.emit(v_mov_b32_e32(v[3], 0x12345678))
+    k1.emit(v_mov_b32_e32(v[4], 10))
     k1.emit(s_endpgm())
-    get_prg(k1)
+    p1 = get_prg(k1)
     n = icache_size()
 
     k2 = Kernel()
+    k2.emit(v_mov_b32_e32(v[3], 0x12345678))
     k2.emit(v_mov_b32_e32(v[4], 0xdeadbeef))
     k2.emit(s_endpgm())
-    get_prg(k2)
-    self.assertEqual(icache_size(), n)
+    p2 = get_prg(k2)
+    self.assertEqual(icache_size(), n + 1)
+    self.assertEqual(len(dedup_body(get_calls(p1, "v_mov") + get_calls(p2, "v_mov"))), 2)
 
   def test_instruction_cache_modifiers(self):
     k1 = Kernel()
