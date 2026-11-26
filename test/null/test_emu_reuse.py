@@ -25,14 +25,10 @@ def _waves_and_blocks(uop):
 class TestEmuReuse(unittest.TestCase):
   def test_inst_reuse_different_regs(self):
     pairs = [
-      ("rdna3", ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]),
-                ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[10], src0=v[7], vsrc1=v[3])),
-      ("rdna3", ir3.SOP2(ir3.SOP2Op.S_ADD_U32, sdst=s[4], ssrc0=s[2], ssrc1=s[3]),
-                ir3.SOP2(ir3.SOP2Op.S_ADD_U32, sdst=s[12], ssrc0=s[9], ssrc1=s[6])),
-      ("rdna4", ir4.VOP2(ir4.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]),
-                ir4.VOP2(ir4.VOP2Op.V_ADD_F32_E32, vdst=v[11], src0=v[4], vsrc1=v[8])),
-      ("cdna",  irc.VOP2(irc.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]),
-                irc.VOP2(irc.VOP2Op.V_ADD_F32_E32, vdst=v[14], src0=v[5], vsrc1=v[9])),
+      ("rdna3", ir3.v_add_f32_e32(v[2], v[0], v[1]), ir3.v_add_f32_e32(v[10], v[7], v[3])),
+      ("rdna3", ir3.s_add_u32(s[4], s[2], s[3]), ir3.s_add_u32(s[12], s[9], s[6])),
+      ("rdna4", ir4.v_add_f32_e32(v[2], v[0], v[1]), ir4.v_add_f32_e32(v[11], v[4], v[8])),
+      ("cdna", irc.v_add_f32_e32(v[2], v[0], v[1]), irc.v_add_f32_e32(v[14], v[5], v[9])),
     ]
     for arch, i1, i2 in pairs:
       c1, _ = instruction_call(i1, arch)
@@ -41,14 +37,11 @@ class TestEmuReuse(unittest.TestCase):
 
   def test_inst_reuse_different_imms(self):
     pairs = [
-      (ir3.VOP1(ir3.VOP1Op.V_MOV_B32_E32, vdst=v[0], src0=1),
-       ir3.VOP1(ir3.VOP1Op.V_MOV_B32_E32, vdst=v[5], src0=42)),
-      (ir3.VOP1(ir3.VOP1Op.V_MOV_B32_E32, vdst=v[0], src0=1),
-       ir3.VOP1_LIT(ir3.VOP1Op.V_MOV_B32_E32, vdst=v[5], src0=255, literal=0x12345678)),
-      (ir3.SOP2(ir3.SOP2Op.S_ADD_U32, sdst=s[2], ssrc0=s[1], ssrc1=10),
-       ir3.SOP2(ir3.SOP2Op.S_ADD_U32, sdst=s[8], ssrc0=s[4], ssrc1=60)),
-      (ir3.GLOBAL(ir3.GLOBALOp.GLOBAL_LOAD_B32, vdst=v[0], addr=v[2:3], saddr=NULL, offset=0),
-       ir3.GLOBAL(ir3.GLOBALOp.GLOBAL_LOAD_B32, vdst=v[4], addr=v[6:7], saddr=NULL, offset=64)),
+      (ir3.v_mov_b32_e32(v[0], 1), ir3.v_mov_b32_e32(v[5], 42)),
+      (ir3.v_mov_b32_e32(v[0], 1), ir3.v_mov_b32_e32(v[5], 0x12345678)),
+      (ir3.s_add_u32(s[2], s[1], 10), ir3.s_add_u32(s[8], s[4], 60)),
+      (ir3.global_load_b32(v[0], v[2:3], saddr=NULL, offset=0),
+       ir3.global_load_b32(v[4], v[6:7], saddr=NULL, offset=64)),
     ]
     for i1, i2 in pairs:
       c1, _ = instruction_call(i1, "rdna3")
@@ -57,9 +50,9 @@ class TestEmuReuse(unittest.TestCase):
 
   def test_inst_aliasing_distinct(self):
     # aliased ops share with each other, but not with non-aliased (restrict pointer safety)
-    a1, _ = instruction_call(ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[0], src0=v[0], vsrc1=v[1]), "rdna3")
-    a2, _ = instruction_call(ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[5], src0=v[5], vsrc1=v[2]), "rdna3")
-    na, _ = instruction_call(ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]), "rdna3")
+    a1, _ = instruction_call(ir3.v_add_f32_e32(v[0], v[0], v[1]), "rdna3")
+    a2, _ = instruction_call(ir3.v_add_f32_e32(v[5], v[5], v[2]), "rdna3")
+    na, _ = instruction_call(ir3.v_add_f32_e32(v[2], v[0], v[1]), "rdna3")
     self.assertIs(a1.body.src[0], a2.body.src[0])
     self.assertIsNot(a1.body.src[0], na.body.src[0])
 
@@ -67,28 +60,28 @@ class TestEmuReuse(unittest.TestCase):
     r = Device["NULL"].renderer
     cases = [
       ("rdna3", DISPATCH_2W,
-       _asm(ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]),
-            ir3.VOP2(ir3.VOP2Op.V_MUL_F32_E32, vdst=v[3], src0=v[2], vsrc1=v[0]),
-            ir3.SOP2(ir3.SOP2Op.S_ADD_U32, sdst=s[4], ssrc0=s[2], ssrc1=s[3]),
-            ir3.SOPP(ir3.SOPPOp.S_ENDPGM)),
-       _asm(ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[10], src0=v[5], vsrc1=v[2]),
-            ir3.VOP2(ir3.VOP2Op.V_MUL_F32_E32, vdst=v[1], src0=v[10], vsrc1=v[5]),
-            ir3.SOP2(ir3.SOP2Op.S_ADD_U32, sdst=s[9], ssrc0=s[7], ssrc1=s[4]),
-            ir3.SOPP(ir3.SOPPOp.S_ENDPGM))),
+       _asm(ir3.v_add_f32_e32(v[2], v[0], v[1]),
+            ir3.v_mul_f32_e32(v[3], v[2], v[0]),
+            ir3.s_add_u32(s[4], s[2], s[3]),
+            ir3.s_endpgm()),
+       _asm(ir3.v_add_f32_e32(v[10], v[5], v[2]),
+            ir3.v_mul_f32_e32(v[1], v[10], v[5]),
+            ir3.s_add_u32(s[9], s[7], s[4]),
+            ir3.s_endpgm())),
       ("rdna4", DISPATCH_2W,
-       _asm(ir4.VOP2(ir4.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]),
-            ir4.VOP2(ir4.VOP2Op.V_MUL_F32_E32, vdst=v[3], src0=v[2], vsrc1=v[0]),
-            ir4.SOPP(ir4.SOPPOp.S_ENDPGM)),
-       _asm(ir4.VOP2(ir4.VOP2Op.V_ADD_F32_E32, vdst=v[12], src0=v[8], vsrc1=v[3]),
-            ir4.VOP2(ir4.VOP2Op.V_MUL_F32_E32, vdst=v[1], src0=v[12], vsrc1=v[8]),
-            ir4.SOPP(ir4.SOPPOp.S_ENDPGM))),
+       _asm(ir4.v_add_f32_e32(v[2], v[0], v[1]),
+            ir4.v_mul_f32_e32(v[3], v[2], v[0]),
+            ir4.s_endpgm()),
+       _asm(ir4.v_add_f32_e32(v[12], v[8], v[3]),
+            ir4.v_mul_f32_e32(v[1], v[12], v[8]),
+            ir4.s_endpgm())),
       ("cdna", DISPATCH64_2W,
-       _asm(irc.VOP2(irc.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]),
-            irc.VOP2(irc.VOP2Op.V_MUL_F32_E32, vdst=v[3], src0=v[2], vsrc1=v[0]),
-            irc.SOPP(irc.SOPPOp.S_ENDPGM)),
-       _asm(irc.VOP2(irc.VOP2Op.V_ADD_F32_E32, vdst=v[15], src0=v[6], vsrc1=v[1]),
-            irc.VOP2(irc.VOP2Op.V_MUL_F32_E32, vdst=v[2], src0=v[15], vsrc1=v[6]),
-            irc.SOPP(irc.SOPPOp.S_ENDPGM))),
+       _asm(irc.v_add_f32_e32(v[2], v[0], v[1]),
+            irc.v_mul_f32_e32(v[3], v[2], v[0]),
+            irc.s_endpgm()),
+       _asm(irc.v_add_f32_e32(v[15], v[6], v[1]),
+            irc.v_mul_f32_e32(v[2], v[15], v[6]),
+            irc.s_endpgm())),
     ]
     for arch, disp, c1, c2 in cases:
       w1, b1 = _waves_and_blocks(lift(c1, arch, r, disp, "p1"))
@@ -108,18 +101,18 @@ class TestEmuReuse(unittest.TestCase):
     # must share the exact same emu_block and emu_waves bodies.
     code = _asm(
       # block 0 (PC 0): branch to block 2 (PC 20, +3 dwords from PC 8)
-      ir3.SOPC(ir3.SOPCOp.S_CMP_EQ_U32, ssrc0=s[4], ssrc1=0),
-      ir3.SOPP(ir3.SOPPOp.S_CBRANCH_SCC0, simm16=3),
+      ir3.s_cmp_eq_u32(s[4], 0),
+      ir3.s_cbranch_scc0(simm16=3),
       # block 1 (PC 8): v2 = v0 + v1; v3 = v2 * v0; branch to done (+3 dwords from PC 20)
-      ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[2], src0=v[0], vsrc1=v[1]),
-      ir3.VOP2(ir3.VOP2Op.V_MUL_F32_E32, vdst=v[3], src0=v[2], vsrc1=v[0]),
-      ir3.SOPP(ir3.SOPPOp.S_BRANCH, simm16=3),
+      ir3.v_add_f32_e32(v[2], v[0], v[1]),
+      ir3.v_mul_f32_e32(v[3], v[2], v[0]),
+      ir3.s_branch(simm16=3),
       # block 2 (PC 20): v10 = v5 + v2; v1 = v10 * v5; branch to done (0 dwords from PC 32)
-      ir3.VOP2(ir3.VOP2Op.V_ADD_F32_E32, vdst=v[10], src0=v[5], vsrc1=v[2]),
-      ir3.VOP2(ir3.VOP2Op.V_MUL_F32_E32, vdst=v[1], src0=v[10], vsrc1=v[5]),
-      ir3.SOPP(ir3.SOPPOp.S_BRANCH, simm16=0),
+      ir3.v_add_f32_e32(v[10], v[5], v[2]),
+      ir3.v_mul_f32_e32(v[1], v[10], v[5]),
+      ir3.s_branch(simm16=0),
       # block 3 (PC 32): done
-      ir3.SOPP(ir3.SOPPOp.S_ENDPGM),
+      ir3.s_endpgm(),
     )
     uop = lift(code, "rdna3", Device["NULL"].renderer, DISPATCH_2W, "diamond")
     waves, blocks = _waves_and_blocks(uop)
