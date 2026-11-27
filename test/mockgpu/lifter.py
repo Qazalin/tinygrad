@@ -67,16 +67,6 @@ def cfg_regions(paths:dict[int, dict[int, int]], entry:int) -> list[CFGRegion]:
     return regions
   return build(set(order))
 
-def unconditional_blocks(regions:list[CFGRegion], paths:dict[int, dict[int, int]]) -> set[int]:
-  unconditional:set[int] = set()
-  possible:set[int]|None = {0}
-  for pc, body in regions:
-    if body: possible = None
-    elif possible is not None:
-      if possible == {pc}: unconditional.add(pc)
-      possible = (possible - {pc}) | (set(paths[pc]) or {-1})
-  return unconditional
-
 def emit_cfg(regions:list[CFGRegion], routes:UOp, active:UOp, waves:UOp, axes:Iterator[int],
              emit_block:Callable[[int, UOp, tuple[UOp, ...]], UOp], end:UOp, scopes:tuple[UOp, ...]=()) -> UOp:
   def emit_dispatch(regions:list[CFGRegion], scopes:tuple[UOp, ...], end:UOp) -> UOp:

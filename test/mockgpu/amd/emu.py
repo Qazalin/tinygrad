@@ -55,10 +55,10 @@ from tinygrad.dtype import dtypes, AddrSpace
 from tinygrad.device import Buffer, BufferSpec, Device
 from tinygrad.codegen import to_program, to_program_config
 from tinygrad.renderer import Renderer
-from tinygrad.helpers import Context, DEV, to_mv, ContextVar, VIZ
+from tinygrad.helpers import Context, DEV, to_mv, ContextVar
 from tinygrad.runtime.autogen import hsa
 from tinygrad.viz.serve import amd_decode, get_cfg, COND_TAKEN, COND_NOT_TAKEN, get_elf_section
-from test.mockgpu.lifter import lower_body, instruction_block, cfg_regions, unconditional_blocks, emit_cfg, run_program, pm_remove_native
+from test.mockgpu.lifter import lower_body, instruction_block, cfg_regions, emit_cfg, run_program, pm_remove_native
 
 from tinygrad.runtime.autogen.amd.rdna3.str_pcode import PCODE as PCODE_RDNA3
 from tinygrad.runtime.autogen.amd.rdna4.str_pcode import PCODE as PCODE_RDNA4
@@ -492,7 +492,7 @@ class _Ctx:
     op_name = op.name
     src0_off, vdst_off = self.inst_field(type(inst).src0), self.inst_field(type(inst).vdst)
     src0_reg = (src0_off >= _c(256)).where(src0_off - _c(256), _c(0))  # VGPR index or 0
-    src1_off, src2_off = self.optional_field(inst, 'src1'), self.optional_field(inst, 'src2')
+    src1_off, src2_off, literal = self.optional_field(inst, 'src1'), self.optional_field(inst, 'src2'), self.optional_field(inst, 'literal')
     src1_reg = (src1_off >= _c(256)).where(src1_off - _c(256), src1_off) if src1_off is not None else _c(0)
     src2_reg = (src2_off >= _c(256)).where(src2_off - _c(256), src2_off) if src2_off is not None else _c(0)
     exec_val = self.rexec()
@@ -500,9 +500,9 @@ class _Ctx:
     srcs = {
       'SRC0': src0_reg, 'VDST': vdst_off, 'EXEC_LO': exec_lo, 'EXEC': exec_val.cast(dtypes.uint64),
       '_vgpr': self.vgpr, '_wave_size': self.wave_size, 'SRC1': src1_reg, 'SRC2': src2_reg,
-      'S0': self.rsrc_dyn(src0_off, _c(0, dtypes.int)) if 'WRITELANE' in op_name else src0_reg,
-      'S1': self.rsrc_dyn(src1_off, _c(0, dtypes.int)) if src1_off is not None else _c(0),
-      'S2': self.rsrc_dyn(src2_off, _c(0, dtypes.int)) if src2_off is not None else _c(0),
+      'S0': self.rsrc_dyn(src0_off, _c(0, dtypes.int), literal=literal) if 'WRITELANE' in op_name else src0_reg,
+      'S1': self.rsrc_dyn(src1_off, _c(0, dtypes.int), literal=literal) if src1_off is not None else _c(0),
+      'S2': self.rsrc_dyn(src2_off, _c(0, dtypes.int), literal=literal) if src2_off is not None else _c(0),
     }
     _, assigns = parse_pcode(pcode, srcs)
     stores = []
@@ -734,6 +734,8 @@ def _dpp16_ctrl(lane: UOp, dpp: int, row_mask: int, bank_mask: int, wave_size: i
     elif op == 'row_mirror': src_lane = row_base + (_c(15, dtypes.int) - lane_in_row)
     elif op == 'row_half_mirror': src_lane = row_base + ((lane_in_row & _c(8, dtypes.int)) | (_c(7, dtypes.int) - (lane_in_row & _c(7, dtypes.int))))
     elif op == 'row_bcast': src_lane = row_base
+    elif op in ('row_share', 'row_newbcast'): src_lane = row_base + _c(arg, dtypes.int)
+    elif op == 'row_xmask': src_lane = row_base + (lane_in_row ^ _c(arg, dtypes.int))
     elif op == 'wave_shl': src_lane, valid = lane_i + _c(arg, dtypes.int), lane_i < _c(wave_size - arg, dtypes.int)
     elif op == 'wave_rol': src_lane = (lane_i + _c(arg, dtypes.int)) % _c(wave_size, dtypes.int)
     elif op == 'wave_shr': src_lane, valid = lane_i - _c(arg, dtypes.int), lane_i >= _c(arg, dtypes.int)
@@ -742,10 +744,13 @@ def _dpp16_ctrl(lane: UOp, dpp: int, row_mask: int, bank_mask: int, wave_size: i
   return src_lane, enabled, valid
 
 def _load_dpp16_src0(ctx: _Ctx, inst, lane: UOp, fallback: UOp) -> UOp:
-  """Load a DPP16-swizzled src0 value from vsrc0."""
+  """Load a DPP16-swizzled src0 value from vsrc0 (snapshotting vsrc0 first so vdst==vsrc0 never aliases)."""
+  vsrc0_reg = ctx.inst_field(type(inst).vsrc0)
+  snap, sl = UOp.alloc((ctx.wave_size,), dtypes.uint32, 0, AddrSpace.REG), ctx.range()
+  snap = snap.after(snap.index(sl).store(ctx.rvgpr_dyn(vsrc0_reg, sl)).end(sl))
   src_lane, enabled, valid = _dpp16_ctrl(lane, _iattr(inst, 'dpp'), _iattr(inst, 'row_mask', 0xf), _iattr(inst, 'bank_mask', 0xf), ctx.wave_size)
   safe_src_lane = (enabled & valid).where(src_lane, _c(0, dtypes.int))
-  swizzled = ctx.rvgpr_dyn(ctx.inst_field(type(inst).vsrc0), safe_src_lane)
+  swizzled = snap.index(safe_src_lane).load()
   invalid = _c(0, fallback.dtype) if _iattr(inst, 'bc') else fallback
   return enabled.where(valid.where(swizzled, invalid), fallback)
 
@@ -1420,6 +1425,38 @@ def _compile_mem_op(inst: ir3.DS|ir3.FLAT|ir3.GLOBAL|ir3.SCRATCH|ir4.DS|ir4.VFLA
                     |irc.DS|irc.FLAT|irc.GLOBAL|irc.SCRATCH, ctx: _Ctx) -> UOp:
   """Unified memory operation compiler for DS, FLAT, GLOBAL, SCRATCH."""
   exec_mask, op_name = ctx.rexec(), _op_name(inst)
+  if op_name in ('GLOBAL_LOAD_TR_B128', 'GLOBAL_LOAD_TR_B64'):
+    # RDNA4 transpose loads ignore EXEC (whole-wave mode): all lanes participate in reading and writing.
+    addr_reg, vdst_reg = ctx.inst_field(type(inst).vaddr), ctx.inst_field(type(inst).vdst)  # type: ignore[union-attr]
+    saddr_reg = ctx.optional_field(inst, 'saddr')
+    offset64 = ctx.inst_field_signed(type(inst).ioffset).cast(dtypes.uint64)  # type: ignore[union-attr]
+    use_saddr = (saddr_reg < _c(124)) if saddr_reg is not None else UOp.const(False)
+    saddr_base = _u64(ctx.rsgpr_dyn(saddr_reg), ctx.rsgpr_dyn(saddr_reg + _c(1))) if saddr_reg is not None else _c(0, dtypes.uint64)
+    mem_u8, full_exec = ctx.vmem.bitcast(dtypes.uint8), _c((1 << ctx.wave_size) - 1, exec_mask.dtype)
+    def lane_addr(l: UOp) -> UOp:
+      vaddr_base = _u64(ctx.rvgpr_dyn(addr_reg, l), ctx.rvgpr_dyn(addr_reg + _c(1), l))
+      return use_saddr.where(saddr_base + ctx.rvgpr_dyn(addr_reg, l).cast(dtypes.uint64), vaddr_base) + offset64
+    def ld_u8(a: UOp) -> UOp: return mem_u8.index(a).load().cast(dtypes.uint32)
+    def ld_u16(a: UOp) -> UOp: return ld_u8(a) | (ld_u8(a + _c(1, dtypes.uint64)) << _c(8))
+    addrs = [lane_addr(_c(i)) for i in range(ctx.wave_size)]
+    vals: list[list[UOp]] = []
+    if op_name == 'GLOBAL_LOAD_TR_B128':
+      # 8-lane groups, 16-bit elements: lane (grp + col) receives u16 elements from lanes grp..grp+7 at byte offset col*2.
+      for i in range(ctx.wave_size):
+        grp, off = i & ~7, _c((i & 7) * 2, dtypes.uint64)
+        vals.append([ld_u16(addrs[grp + 2*d] + off) | (ld_u16(addrs[grp + 2*d + 1] + off) << _c(16)) for d in range(4)])
+    else:
+      # 16-lane groups, 8-bit elements: lane (grp + half*8 + col) receives bytes from lanes grp+half*4..+3 (d0) and grp+8+half*4..+3 (d1).
+      for i in range(ctx.wave_size):
+        grp, half, off = i & ~15, (i >> 3) & 1, _c(i & 7, dtypes.uint64)
+        d0 = d1 = _c(0)
+        for k in range(4):
+          d0 = d0 | (ld_u8(addrs[grp + half * 4 + k] + off) << _c(k * 8))
+          d1 = d1 | (ld_u8(addrs[grp + 8 + half * 4 + k] + off) << _c(k * 8))
+        vals.append([d0, d1])
+    reads = UOp(Ops.STACK, src=tuple(v for lv in vals for v in lv))
+    return UOp.sink(*(ctx.wvgpr_dyn(vdst_reg + _c(d), _c(i), vals[i][d], full_exec, after=reads)
+                      for i in range(ctx.wave_size) for d in range(len(vals[i]))))
   pcode = get_pcode(inst.op)
   # CDNA and RDNA4 FLAT/SCRATCH pcode compute addresses from raw components, but make_addr already handles this.
   # Strip the addr computation line and use pre-computed ADDR directly (rename 'addr' -> 'ADDR' in remaining pcode).
@@ -1742,19 +1779,6 @@ def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp, UOp|N
   if call is not None: call = call.replace(src=(UOp.native(inst, call.body), *(words.get(b, b) for b in call.src[1:])))
   return call, cond.substitute(words) if cond is not None else None
 
-RENDER = ContextVar("RENDER", 0) # render lifted ast back to assembly
-
-def linearize_basic_block(call:UOp):
-  return UOp(Ops.LINEAR, src=tuple(y for x in call.body.toposort() if x.op is Ops.LINEAR for y in x.src if y.op is Ops.BINARY))
-
-pm_render = PatternMatcher([
-  (UPat(Ops.NATIVE, name="native").call(allow_any_len=True), lambda native: UOp(Ops.BINARY, arg=native.arg.code.to_bytes())),
-  (UPat(Ops.CALL, src=(UPat.any(UPat(Ops.SINK), UPat(Ops.PROGRAM, src=(UPat(Ops.SINK),), allow_any_len=True)),),
-        allow_any_len=True, name="call"), linearize_basic_block),
-  (UPat(Ops.SINK, name="root"), lambda root: next((x for x in root.toposort() if x.op is Ops.LINEAR), None)
-   if isinstance(root.arg, KernelInfo) and root.arg.name.startswith("emu ") else None),
-])
-
 # instructions that directly read/write PC
 PC_INSTS = ("S_GETPC", "S_SETPC")
 
@@ -1764,8 +1788,7 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
   assert not any(getattr(inst, "op_name", "").startswith(PC_INSTS) for inst in insts.values()), f"instruction stream cannot contain {PC_INSTS}"
   cfg = get_cfg(insts)
   regions = cfg_regions(cfg["paths"], 0)
-  unconditional = unconditional_blocks(regions, cfg["paths"])
-  routed = len(unconditional) != len(regions)
+  routed = any(body or len(cfg["paths"][pc]) > 1 for pc, body in regions)
   axes = itertools.count(sum(inst.size() for inst in insts.values()))
   gx, gy, gz, lx, ly, lz, rsrc2, scratch_size = dispatch
   # init ranges
@@ -1836,8 +1859,7 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
     params.append(UOp.param(len(bufs), dtypes.int, addrspace=AddrSpace.ALU))
     # lower the wave loop with the block, so repeated blocks share its indexing and route check too.
     w = UOp.range(n_waves, 0, dtype=dtypes.int)
-    gates = () if block_pc in unconditional else (UOp.range(params[bufs.index(route)][w].load().eq(params[-1]).cast(dtypes.int),
-                                                            1, dtype=dtypes.int),)
+    gates = (UOp.range(params[bufs.index(route)][w].load().eq(params[-1]).cast(dtypes.int), 1, dtype=dtypes.int),) if routed else ()
     call_args = [p if b.addrspace is AddrSpace.ALU else p.after(*gates, w).shrink(((w*s, (w+1)*s),))
                  if (s:=buffers[b][1]) else p.after(*gates, w) for b,p in zip(bufs, params)]
     block = UOp.group(body.call(*call_args), *gates, w).end(*gates).end(w).sink(arg=KernelInfo("emu_waves"))
@@ -1845,13 +1867,6 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
 
   ret = emit_cfg(regions, routes, active, _c(n_waves, dtypes.int), axes, emit_block, initialized, (wg,)).end(wg).sink(
     ctx.vmem, arg=KernelInfo(name=name, optimized=True))
-  if RENDER:
-    linear = graph_rewrite(ret, pm_render, name="render", enter_calls=True)
-    if VIZ: graph_rewrite(linear, PatternMatcher([]), name="View Rendered Graph")
-    assert len(linear.src) == len(insts), f"{len(linear.src)} != {len(insts)}"
-    for (pc, inst), x in zip(insts.items(), linear.src):
-      out = x.arg if x.op is Ops.BINARY else b"".join(y.arg for y in x.src)
-      assert out == inst.to_bytes(), f"{inst.op_name.lower()}: {out.hex()} != {inst.to_bytes().hex()}"
   ret = graph_rewrite(ret, pm_remove_native, name="remove native", enter_calls=True)
   return ret
 

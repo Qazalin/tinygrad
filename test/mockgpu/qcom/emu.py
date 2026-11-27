@@ -10,7 +10,7 @@ from tinygrad.runtime.autogen import mesa
 from tinygrad.uop import FastEnum
 from tinygrad.uop.ops import KernelInfo, Ops, UOp, graph_rewrite
 from tinygrad.viz.serve import COND_NOT_TAKEN, COND_TAKEN, UNCOND
-from test.mockgpu.lifter import cfg_regions, emit_cfg, instruction_block, lower_body, pm_remove_native, run_program, unconditional_blocks
+from test.mockgpu.lifter import cfg_regions, emit_cfg, instruction_block, lower_body, pm_remove_native, run_program
 from test.mockgpu.qcom.ins import DECODE_TABLE, FLOAT_IMMS, LAYOUTS, IR3Cond, IR3Type
 
 # ***** IR3 Instruction Representation & Decode *****
@@ -561,8 +561,7 @@ def _decode_and_cfg(raw_code:bytes) -> tuple[dict[int, IR3Inst], dict[int, list[
 def lift(raw_code:bytes, dispatch:tuple[int, int, int, int, int, int, int, int, bool, int, int], name:str = "ir3_emu") -> UOp:
   insts, blocks, paths = _decode_and_cfg(raw_code)
   regions = cfg_regions(paths, 0)
-  unconditional = unconditional_blocks(regions, paths)
-  routed = len(unconditional) != len(regions)
+  routed = any(body or len(paths[pc]) > 1 for pc, body in regions)
 
   gx, gy, gz, lx, ly, lz, shmem_sz, pvt_sz, mergedregs, wgid_reg, lid_reg = dispatch
   n_threads, pvt_dw, lds_dw = lx * ly * lz, max(4, round_up(pvt_sz, 16) // 4), max(4, round_up(shmem_sz, 16) // 4)
@@ -606,8 +605,7 @@ def lift(raw_code:bytes, dispatch:tuple[int, int, int, int, int, int, int, int, 
     params = [UOp.param(i, a.dtype, a.shape, name=b.arg.name, addrspace=b.addrspace) for i, (a, b) in enumerate(zip(args, bufs))]
     params.append(UOp.param(len(bufs), dtypes.int, addrspace=AddrSpace.ALU))
     t = UOp.range(n_threads, 0, dtype=dtypes.int)
-    gates = (() if block_pc in unconditional
-             else (UOp.range(params[bufs.index(ROUTE)][t].load().eq(params[-1]).cast(dtypes.int), 1, dtype=dtypes.int),))
+    gates = (UOp.range(params[bufs.index(ROUTE)][t].load().eq(params[-1]).cast(dtypes.int), 1, dtype=dtypes.int),) if routed else ()
     call_args = [p if b.addrspace is AddrSpace.ALU else p.after(*gates, t).shrink(((t * _c(s), (t + _c(1)) * _c(s)),))
                  if (s := buffers[b][1]) else p.after(*gates, t) for b, p in zip(bufs, params)]
     return UOp.group(body.call(*call_args), *gates, t).end(*gates).end(t).sink(arg=KernelInfo("emu_threads")).call(*args)
