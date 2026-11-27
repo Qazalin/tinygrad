@@ -50,7 +50,7 @@ class _MXCSRContext:
     if lib is None or not hasattr(self, '_saved'): return
     lib.set_fpcr(self._saved)
 
-from tinygrad.uop.ops import UOp, Ops, KernelInfo, uopfunc, rewrite_group, graph_rewrite, PatternMatcher, UPat
+from tinygrad.uop.ops import UOp, Ops, KernelInfo, uopfunc, rewrite_group, graph_rewrite
 from tinygrad.dtype import dtypes, AddrSpace
 from tinygrad.device import Buffer, BufferSpec, Device
 from tinygrad.codegen import to_program, to_program_config
