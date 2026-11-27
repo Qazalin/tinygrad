@@ -1854,7 +1854,7 @@ def add_impl(ctx, inst:UOp) -> UOp:
   return call
 
 pm_add_impls = PatternMatcher([
-  (UPat(Ops.CALL, src=(UPat(Ops.NATIVE, src=(), name="inst"),)), add_impl),
+  (UPat(Ops.NATIVE, src=(), name="native").call(), add_impl)
 ])
 
 @rewrite_group(replay="emu_process_replay")
@@ -1914,17 +1914,17 @@ def lift(code:bytes, arch:str, dispatch:tuple, name:str="") -> UOp:
   initialized = (routes.after(init).index(wave).store(0) if routed else UOp.group(init, wave)).end(wave)
   def emit_block(block_pc:int, end:UOp, scopes:tuple[UOp, ...]) -> UOp:
     conditions:dict[UOp, UOp] = {}
-    linear = UOp(Ops.LINEAR, src=tuple(UOp.native(insts[off]).call() for off in cfg["blocks"][block_pc]))
-    instructions = list(graph_rewrite(linear, pm_add_impls, ctx=(arch, conditions), name="add instruction implementations").src)
-    cond = conditions.get(instructions[-1], UOp.const(True))
+    sink = UOp(Ops.LINEAR, src=tuple(UOp.native(insts[off]).call() for off in cfg["blocks"][block_pc]))
+    sink = graph_rewrite(linear, pm_add_impls, ctx=(arch, conditions), name="add instruction implementations")
+    calls = list(sink.src)
     values = {ctx.scratch_stride:_c(scratch_size)}
     if routed:
       dsts = {kind:dst for dst,kind in cfg["paths"][block_pc].items()}
-      target = cond.where(taken, fallthrough) if len(dsts) == 2 else taken
+      target = conditions[calls[-1]].where(taken, fallthrough) if len(dsts) == 2 else taken
       values.update({taken:_c(dsts[COND_TAKEN], dtypes.int), fallthrough:_c(dsts[COND_NOT_TAKEN], dtypes.int)} if len(dsts) == 2
                     else {taken:_c(next(iter(dsts.values()), -1), dtypes.int)})
-      instructions.append(lower_body(route[0].store(target).sink(arg=KernelInfo("emu_branch"))))
-    body, bufs = instruction_block(instructions)
+      calls.append(lower_body(route[0].store(target).sink(arg=KernelInfo("emu_branch"))))
+    body, bufs = instruction_block(calls)
     args = [values[b] if b.addrspace is AddrSpace.ALU else buffers[b][0] for b in bufs]
     args += [_c(block_pc, dtypes.int).after(end, *scopes)]
     params = [UOp.param(i, a.dtype, a.shape, name=b.arg.name, addrspace=b.addrspace) for i,(a,b) in enumerate(zip(args, bufs))]
