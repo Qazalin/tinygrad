@@ -42,6 +42,7 @@ class IR3Inst:
   def __hash__(self) -> int: return hash((self.op_name, self._raw))
   def __eq__(self, o:object) -> bool: return isinstance(o, IR3Inst) and self._raw == o._raw and self.op_name == o.op_name
   def __repr__(self) -> str: return f"{self.op_name}({self._raw:#018x})"
+  def __reduce__(self): return decode_inst, (self._raw,)
   def __getattr__(self, name:str) -> Any:
     if (f := LAYOUTS[self._layout].get(name)) is None: raise AttributeError(f"{self.op_name!r} has no field {name!r}")
     lo, hi, signed, enum = f

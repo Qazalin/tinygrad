@@ -1,4 +1,4 @@
-import ctypes, os, struct, tempfile, unittest
+import ctypes, os, pickle, struct, tempfile, unittest
 import numpy as np
 from tinygrad import Tensor, dtypes
 from tinygrad.codegen import to_program
@@ -50,6 +50,7 @@ class TestQCOMEmu(unittest.TestCase):
     self.assertEqual(len(decode_insts(raw)), len(samples))
     for ins in samples:
       self.assertEqual(decode_inst(ins.to_bytes()), ins)
+      self.assertEqual(pickle.loads(pickle.dumps(ins)), ins)
       if (call := instruction_call(ins)[0]) is not None:
         self.assertEqual((call.op, call.body.op, call.body.arg.code, call.body.src[0].op), (Ops.CALL, Ops.NATIVE, ins, Ops.SINK))
     # Dynamic register/sync bits share one compiled body; reg >= 128 (r48/p0) stays distinct
