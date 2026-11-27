@@ -50,15 +50,16 @@ class _MXCSRContext:
     if lib is None or not hasattr(self, '_saved'): return
     lib.set_fpcr(self._saved)
 
-from tinygrad.uop.ops import UOp, Ops, KernelInfo, uopfunc, rewrite_group, graph_rewrite
+from tinygrad.uop.ops import UOp, Ops, KernelInfo, uopfunc, rewrite_group
 from tinygrad.dtype import dtypes, AddrSpace
-from tinygrad.device import Buffer, BufferSpec, Device
+from tinygrad.device import Device
 from tinygrad.codegen import to_program, to_program_config
 from tinygrad.renderer import Renderer
-from tinygrad.helpers import Context, DEV, to_mv, ContextVar
+from tinygrad.helpers import to_mv, ContextVar
 from tinygrad.runtime.autogen import hsa
-from tinygrad.viz.serve import amd_decode, get_cfg, COND_TAKEN, COND_NOT_TAKEN, get_elf_section
-from test.mockgpu.lifter import lower_body, instruction_block, cfg_regions, emit_cfg, run_program, pm_remove_native
+from tinygrad.viz.serve import amd_decode, get_cfg, get_elf_section
+from test.mockgpu.lifter import (InstCache, InstCtx, VMEM, cached_inst_call, compile_program, emu_context,
+                                 lift_cfg, lower_body, run_program, vmem_buf)
 
 from tinygrad.runtime.autogen.amd.rdna3.str_pcode import PCODE as PCODE_RDNA3
 from tinygrad.runtime.autogen.amd.rdna4.str_pcode import PCODE as PCODE_RDNA4
@@ -287,18 +288,18 @@ def _int_clamp(op_name: str, srcs: dict) -> UOp | None:
     return (a + b < a).where(_c(0xFFFFFFFF), a + b)  # overflow -> MAX
   return None
 
-class _Ctx:
+class _Ctx(InstCtx):
   """Context for instruction compilation - holds buffers and helpers."""
-  __slots__ = ('dyn_fields', '_axis_id', 'wave_size', 'vgpr', 'accvgpr', 'branch_cond')
+  __slots__ = ('_axis_id', 'wave_size', 'vgpr', 'accvgpr', 'branch_cond')
   sgpr = UOp.param(0, dtypes.uint32, SGPR_COUNT, name="sgpr", addrspace=AddrSpace.REG)
-  vmem = UOp.param(2, dtypes.uint32, 1 << 46, name="vmem", addrspace=AddrSpace.GLOBAL)
+  vmem = VMEM
   lds = UOp.param(3, dtypes.uint32, 16384, name="lds", addrspace=AddrSpace.REG)
   scratch = UOp.param(4, dtypes.uint8, 1 << 30, name="scratch", addrspace=AddrSpace.REG)
   scratch_stride = UOp.param(9, dtypes.uint32, name="scratch_stride", addrspace=AddrSpace.ALU)
 
   def __init__(self, wave_size: int = 32):
+    super().__init__()
     self._axis_id, self.wave_size = 0, wave_size
-    self.dyn_fields: list[tuple[int, int]] = []  # (lo, hi) of fields read dynamically
     self.vgpr = UOp.param(1, dtypes.uint32, 256 * wave_size, name="vgpr", addrspace=AddrSpace.REG)
     self.accvgpr = UOp.param(5, dtypes.uint32, 256 * wave_size, name="accvgpr", addrspace=AddrSpace.REG) if wave_size == 64 else self.vgpr
     self.branch_cond: UOp | None = None
@@ -317,28 +318,9 @@ class _Ctx:
     result = bit.reduce(lane, arg=Ops.ADD)
     return result & exec_mask if apply_exec else result
 
-  @staticmethod
-  def inst_word(dword_idx: int) -> UOp: return UOp.param(-2-dword_idx, dtypes.uint32, name=f"inst_w{dword_idx}", addrspace=AddrSpace.ALU)
-
   def inst_field(self, field) -> UOp:
     """Extract field bits from instruction encoding. Tracks field for canonical key computation."""
-    lo, hi = field.lo, field.hi
-    self.dyn_fields.append((lo, hi))
-    dword_idx = lo // 32
-    lo_in_dword = lo % 32
-    hi_in_dword = hi % 32
-    word = self.inst_word(dword_idx)
-    if lo // 32 == hi // 32:  # Same dword
-      mask = (1 << (hi - lo + 1)) - 1
-      shifted = word if lo_in_dword == 0 else word >> _c(lo_in_dword)
-      return shifted & _c(mask)
-    else:  # Spans two dwords
-      lo_bits = 32 - lo_in_dword
-      lo_mask = (1 << lo_bits) - 1
-      hi_mask = (1 << (hi_in_dword + 1)) - 1
-      lo_part = (word >> _c(lo_in_dword)) & _c(lo_mask)
-      hi_part = self.inst_word(dword_idx + 1) & _c(hi_mask)
-      return lo_part | (hi_part << _c(lo_bits))
+    return self.extract_bits(field.lo, field.hi)
 
   def optional_field(self, inst: Inst, name: str) -> UOp | None:
     """Extract a field that only exists on some instruction formats (e.g. 'literal', 'saddr'). None if absent."""
@@ -346,22 +328,7 @@ class _Ctx:
 
   def inst_field_signed(self, field) -> UOp:
     """Extract field and sign-extend based on field width."""
-    val = self.inst_field(field)
-    width = field.hi - field.lo + 1
-    sign_bit = 1 << (width - 1)
-    return (val.cast(dtypes.int) ^ _c(sign_bit, dtypes.int)) - _c(sign_bit, dtypes.int)
-
-  def canonical_mask(self, inst_bytes: bytes|memoryview) -> tuple[int, int]:
-    """Compute canonical (base, mask) for cache lookup.
-    base = instruction bits with dynamic fields zeroed
-    mask = bitmask with 1s for static bits, 0s for dynamic bits"""
-    base = int.from_bytes(inst_bytes, 'little')
-    mask = (1 << (len(inst_bytes) * 8)) - 1  # all 1s initially
-    for lo, hi in self.dyn_fields:
-      field_mask = ((1 << (hi - lo + 1)) - 1) << lo
-      base &= ~field_mask  # zero dynamic bits in base
-      mask &= ~field_mask  # zero dynamic bits in mask
-    return base, mask
+    return self.extract_bits(field.lo, field.hi, signed=True)
 
   def rexec(self) -> UOp:
     """Read full EXEC mask (32-bit for RDNA, 64-bit for CDNA)."""
@@ -1758,26 +1725,18 @@ def emu_consts(sgpr:UOp, wave_size:int):
   init_floats = UOp.group(*[sgpr.index(i).store(_c(v)) for i,v in F32_INLINE.items()])
   return UOp.sink(init_ints, init_floats, *([sgpr.index(124).store(_c(0))] if wave_size == 32 else []))
 
-instruction_cache:dict[tuple, list[tuple[int, int, tuple[UOp, UOp|None]]]] = {}
+instruction_cache:InstCache = {}
 
-def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp, UOp|None]:
-  entries = instruction_cache.setdefault((arch, type(inst), inst.size(), type(renderer), renderer.target, *(x.value for x in to_program_config)), [])
+def instruction_call(inst:Inst, arch:str, renderer:Renderer) -> tuple[UOp|None, UOp|None]:
   inst_bytes = inst.to_bytes()
-  bits = int.from_bytes(inst_bytes, "little")
-  for base, mask, ret in entries:
-    if bits & mask == base: break
-  else:
+  key = (arch, type(inst), len(inst_bytes), type(renderer), renderer.target, *(x.value for x in to_program_config))
+  def _lower() -> tuple[UOp|None, UOp|None, int, int]:
     ctx = _Ctx(_wave_size(arch))
     sink = _get_handler(inst)(inst, ctx)
     base, mask = ctx.canonical_mask(inst_bytes)
     name = f"{_op_name(inst).lower()}_{base.to_bytes(len(inst_bytes), 'little').hex()}"
-    call = lower_body(sink.replace(arg=KernelInfo(name)))
-    ret = call, ctx.branch_cond
-    entries.append(ctx.canonical_mask(inst_bytes)+(ret,))
-  call, cond = ret
-  words = {_Ctx.inst_word(i):_c((bits >> (32*i)) & 0xffffffff) for i in range(inst.size()//4)}
-  if call is not None: call = call.replace(src=(UOp.native(inst, call.body), *(words.get(b, b) for b in call.src[1:])))
-  return call, cond.substitute(words) if cond is not None else None
+    return lower_body(sink.replace(arg=KernelInfo(name))), ctx.branch_cond, base, mask
+  return cached_inst_call(instruction_cache, key, inst, inst_bytes, _lower)
 
 # instructions that directly read/write PC
 PC_INSTS = ("S_GETPC", "S_SETPC")
@@ -1787,8 +1746,6 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
   insts = amd_decode(code, arch)
   assert not any(getattr(inst, "op_name", "").startswith(PC_INSTS) for inst in insts.values()), f"instruction stream cannot contain {PC_INSTS}"
   cfg = get_cfg(insts)
-  regions = cfg_regions(cfg["paths"], 0)
-  routed = any(body or len(cfg["paths"][pc]) > 1 for pc, body in regions)
   axes = itertools.count(sum(inst.size() for inst in insts.values()))
   gx, gy, gz, lx, ly, lz, rsrc2, scratch_size = dispatch
   # init ranges
@@ -1808,11 +1765,6 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
   buffers = {ctx.sgpr:(sgpr, SGPR_COUNT), ctx.vgpr:(vgpr, 256*wave_size), ctx.vmem:(ctx.vmem, 0),
              ctx.lds:(lds, 0), ctx.scratch:(scratch, scratch_size*wave_size)}
   if wave_size == 64: buffers[ctx.accvgpr] = (accvgpr, 256*wave_size)
-  routes = UOp.alloc((n_waves,), dtypes.int, 6, AddrSpace.REG)
-  active = UOp.alloc((1,), dtypes.bool, 7, AddrSpace.REG)
-  route = UOp.param(6, dtypes.int, (1,), name="route", addrspace=AddrSpace.REG)
-  taken, fallthrough = [UOp.param(i, dtypes.int, name=name, addrspace=AddrSpace.ALU) for i,name in enumerate(("taken", "fallthrough"), 7)]
-  buffers[route] = (routes, 1)
   # set per wave registers
   wave_sgpr = sgpr.shrink(((wave*SGPR_COUNT, (wave+1)*SGPR_COUNT),)).after(wg)
   wave_vgpr = vgpr.shrink(((wave*256*wave_size, (wave+1)*256*wave_size),)).after(wg)
@@ -1835,40 +1787,8 @@ def lift(code:bytes, arch:str, renderer:Renderer, dispatch:tuple, name:str="") -
   tid = wave*wave_size+lane
   init_vgpr = wave_vgpr.index(lane.valid(tid<total_threads)).store((((tid//(lx*ly))<<20)|(((tid//lx)%ly)<<10)|(tid%lx)).cast(dtypes.u32)).end(lane)
   init = UOp.group(init_vgpr, *(wave_sgpr.after(consts).index(i).store(_c(v)) for i,v in dict(runtime_sgprs).items()))
-  # construct CALL graph
-  initialized = (routes.after(init).index(wave).store(0) if routed else UOp.group(init, wave)).end(wave)
-  def emit_block(block_pc:int, end:UOp, scopes:tuple[UOp, ...]) -> UOp:
-    cond = UOp.const(True)
-    instructions = []
-    for off in cfg["blocks"][block_pc]:
-      call, branch_cond = instruction_call(insts[off], arch, renderer)
-      if branch_cond is not None: cond = branch_cond
-      if call is not None: instructions.append(call)
-    values = {ctx.scratch_stride:_c(scratch_size)}
-    if routed:
-      dsts = {kind:dst for dst,kind in cfg["paths"][block_pc].items()}
-      target = cond.where(taken, fallthrough) if len(dsts) == 2 else taken
-      values.update({taken:_c(dsts[COND_TAKEN], dtypes.int), fallthrough:_c(dsts[COND_NOT_TAKEN], dtypes.int)} if len(dsts) == 2
-                    else {taken:_c(next(iter(dsts.values()), -1), dtypes.int)})
-      instructions.append(lower_body(route[0].store(target).sink(arg=KernelInfo("emu_branch"))))
-    if not instructions: return end
-    body, bufs = instruction_block(instructions)
-    args = [values[b] if b.addrspace is AddrSpace.ALU else buffers[b][0] for b in bufs]
-    args += [_c(block_pc, dtypes.int).after(end, *scopes)]
-    params = [UOp.param(i, a.dtype, a.shape, name=b.arg.name, addrspace=b.addrspace) for i,(a,b) in enumerate(zip(args, bufs))]
-    params.append(UOp.param(len(bufs), dtypes.int, addrspace=AddrSpace.ALU))
-    # lower the wave loop with the block, so repeated blocks share its indexing and route check too.
-    w = UOp.range(n_waves, 0, dtype=dtypes.int)
-    gates = (UOp.range(params[bufs.index(route)][w].load().eq(params[-1]).cast(dtypes.int), 1, dtype=dtypes.int),) if routed else ()
-    call_args = [p if b.addrspace is AddrSpace.ALU else p.after(*gates, w).shrink(((w*s, (w+1)*s),))
-                 if (s:=buffers[b][1]) else p.after(*gates, w) for b,p in zip(bufs, params)]
-    block = UOp.group(body.call(*call_args), *gates, w).end(*gates).end(w).sink(arg=KernelInfo("emu_waves"))
-    return block.call(*args)
-
-  ret = emit_cfg(regions, routes, active, _c(n_waves, dtypes.int), axes, emit_block, initialized, (wg,)).end(wg).sink(
-    ctx.vmem, arg=KernelInfo(name=name, optimized=True))
-  ret = graph_rewrite(ret, pm_remove_native, name="remove native", enter_calls=True)
-  return ret
+  return lift_cfg(cfg["blocks"], cfg["paths"], lambda off: instruction_call(insts[off], arch, renderer),
+                  buffers, {ctx.scratch_stride: _c(scratch_size)}, wg, wave, n_waves, init, ctx.vmem, name, axes=axes, block_name="emu_waves")
 
 dispatch_cache:dict[tuple, UOp] = {}
 
@@ -1878,13 +1798,11 @@ REPLAY_EMU = ContextVar("REPLAY_EMU", 0)
 def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, lz: int, args_ptr: int, rsrc2: int = 0x19c,
             scratch_size: int = 0, arch: str = "rdna3", name: str = "asm") -> int:
   """Execute AMD assembly program. scratch_size is private_segment_fixed_size from kernel descriptor (per-lane)."""
-  with Context(DEV=DEV.target('CPU', renderer='LLVM'), NOOPT=1, CHECK_OOB=0, TUPLE_ORDER=0, EMULATED_DTYPES="",
-               CAPTURE_PROCESS_REPLAY=REPLAY_EMU.value, DEFAULT_FLOAT="float32", DEFAULT_INT="int32", TRANSCENDENTAL=1):
+  with emu_context(CAPTURE_PROCESS_REPLAY=REPLAY_EMU.value):
     code = bytes(to_mv(lib, lib_sz))
     dispatch = (gx, gy, gz, lx, ly, lz, rsrc2, scratch_size)
-    renderer = Device['CPU'].renderer
-    if (key:=(code, arch, dispatch, name, type(renderer), renderer.target, *(x.value for x in to_program_config))) not in dispatch_cache:
-      dispatch_cache[key] = to_program(lift(code, arch, renderer, dispatch, f"emu {name}"), renderer)
+    prg, is_new = compile_program(dispatch_cache, (code, arch, dispatch, name), lambda r: lift(code, arch, r, dispatch, f"emu {name}"))
+    if is_new:
       relift_lib = code
       for relift_count in range(1, RELIFT.value+1):
         try:
@@ -1893,11 +1811,6 @@ def run_asm(lib: int, lib_sz: int, gx: int, gy: int, gz: int, lx: int, ly: int, 
           print("relift err", traceback.format_exc())
           break
         relift_lib = get_elf_section(ret.src[3].arg, ".text").content
-    prg = dispatch_cache[key]
-  vmem_buf = UOp.from_buffer(Buffer('CPU', 1 << 48, options=BufferSpec(external_ptr=0), opaque=0), dtypes.u32)
-  args = [vmem_buf.as_extern(0)] * (max(p.arg.slot for p in prg.kernel_params) + 1)
-  for p in prg.kernel_params:
-    if p.addrspace is AddrSpace.ALU: args[p.arg.slot] = p.bind(args_ptr)
   with _MXCSRContext():
-    run_program(prg, args, [vmem_buf])
+    run_program(prg, {"vmem": vmem_buf()}, {"args_ptr": args_ptr})
   return 0
