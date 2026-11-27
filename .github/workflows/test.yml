@@ -505,6 +505,8 @@ jobs:
     timeout-minutes: 20
     env:
       DEV: MOCKKFD+AMD
+      CAPTURE_PROCESS_REPLAY: '1'
+      REPLAY_EMU: '1'
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
@@ -548,6 +550,8 @@ jobs:
           PYTHONPATH="." DEV=MOCKKFD+AMD N=256 python3 extra/gemm/amd_copy_matmul.py
       - name: Run LLVM test
         run: DEV=MOCKKFD+AMD:LLVM python test/device/amd/test_llvm.py
+      - name: Run process replay tests
+        uses: ./.github/actions/process-replay
 
   testmockam:
     name: Linux (am)
@@ -596,6 +600,8 @@ jobs:
     timeout-minutes: 20
     env:
       DEV: MOCKKFD+AMD:${{ matrix.backend == 'amdllvm' && 'LLVM' || '' }}:${{ matrix.arch }}
+      CAPTURE_PROCESS_REPLAY: '1'
+      REPLAY_EMU: '1'
       SKIP_SLOW_TEST: 1
       TEST_MAX_EXAMPLES: 50
       PARALLEL: 0
