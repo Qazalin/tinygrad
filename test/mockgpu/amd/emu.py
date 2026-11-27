@@ -1847,9 +1847,9 @@ pm_remove_native = PatternMatcher([
 # instructions that directly read/write PC
 PC_INSTS = ("S_GETPC", "S_SETPC")
 
-def add_impl(ctx, inst:UOp) -> UOp:
+def add_impl(ctx, native:UOp) -> UOp:
   arch, conditions = ctx
-  call, cond = instruction_call(inst.arg.code, arch)
+  call, cond = instruction_call(native.arg.code, arch)
   if cond is not None: conditions[call] = cond
   return call
 
@@ -1915,7 +1915,7 @@ def lift(code:bytes, arch:str, dispatch:tuple, name:str="") -> UOp:
   def emit_block(block_pc:int, end:UOp, scopes:tuple[UOp, ...]) -> UOp:
     conditions:dict[UOp, UOp] = {}
     sink = UOp(Ops.LINEAR, src=tuple(UOp.native(insts[off]).call() for off in cfg["blocks"][block_pc]))
-    sink = graph_rewrite(linear, pm_add_impls, ctx=(arch, conditions), name="add instruction implementations")
+    sink = graph_rewrite(sink, pm_add_impls, ctx=(arch, conditions), name="add instruction implementations")
     calls = list(sink.src)
     values = {ctx.scratch_stride:_c(scratch_size)}
     if routed:
