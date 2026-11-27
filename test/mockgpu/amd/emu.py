@@ -1847,6 +1847,16 @@ pm_remove_native = PatternMatcher([
 # instructions that directly read/write PC
 PC_INSTS = ("S_GETPC", "S_SETPC")
 
+def add_impl(ctx, inst:UOp) -> UOp:
+  arch, conditions = ctx
+  call, cond = instruction_call(inst.arg.code, arch)
+  if cond is not None: conditions[call] = cond
+  return call
+
+pm_add_impls = PatternMatcher([
+  (UPat(Ops.CALL, src=(UPat(Ops.NATIVE, src=(), name="inst"),)), add_impl),
+])
+
 @rewrite_group(replay="emu_process_replay")
 def lift(code:bytes, arch:str, dispatch:tuple, name:str="") -> UOp:
   insts = amd_decode(code, arch)
@@ -1903,12 +1913,10 @@ def lift(code:bytes, arch:str, dispatch:tuple, name:str="") -> UOp:
   # construct CALL graph
   initialized = (routes.after(init).index(wave).store(0) if routed else UOp.group(init, wave)).end(wave)
   def emit_block(block_pc:int, end:UOp, scopes:tuple[UOp, ...]) -> UOp:
-    cond = UOp.const(True)
-    instructions = []
-    for off in cfg["blocks"][block_pc]:
-      call, branch_cond = instruction_call(insts[off], arch)
-      if branch_cond is not None: cond = branch_cond
-      instructions.append(call)
+    conditions:dict[UOp, UOp] = {}
+    linear = UOp(Ops.LINEAR, src=tuple(UOp.native(insts[off]).call() for off in cfg["blocks"][block_pc]))
+    instructions = list(graph_rewrite(linear, pm_add_impls, ctx=(arch, conditions), name="add instruction implementations").src)
+    cond = conditions.get(instructions[-1], UOp.const(True))
     values = {ctx.scratch_stride:_c(scratch_size)}
     if routed:
       dsts = {kind:dst for dst,kind in cfg["paths"][block_pc].items()}
