@@ -21,7 +21,7 @@ EXAMPLES_DIR = Path(tinygrad.__file__).parent.parent / "extra/sqtt/examples"
 # ROCPROF DECODER
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def run_rocprof_decoder(blobs: list[bytes], lib: bytes, base: int, target: str):
+def run_rocprof_decoder(blobs: list[bytes], lib: bytes, target: str):
   """Run rocprof decoder on SQTT blobs, returning raw occupancy and instruction records."""
   image, sections, _ = elf_loader(lib)
   text = next((sh for sh in sections if sh.name == ".text"), None)
@@ -57,8 +57,11 @@ def run_rocprof_decoder(blobs: list[bytes], lib: bytes, base: int, target: str):
     return rocprof.ROCPROFILER_THREAD_TRACE_DECODER_STATUS_SUCCESS
 
   arch = TARGET_TO_ARCH[target]
+  base: int | None = None
   @rocprof.rocprof_trace_decoder_isa_callback_t
   def isa_cb(instr_ptr, mem_size_ptr, size_ptr, pc, _):
+    nonlocal base
+    if base is None: base = pc.address - text_off
     offset = pc.address - base
     if offset < text_off or offset >= text_off + text_size:
       mem_size_ptr[0] = 0
@@ -102,7 +105,7 @@ class SQTTExamplesTestBase(unittest.TestCase):
       sqtt_events = [e for e in data if type(e).__name__ == "ProfileSQTTEvent"]
       prg = next((e for e in data if type(e).__name__ == "ProfileProgramEvent"), None)
       if sqtt_events and prg:
-        cls.examples[pkl_path.stem] = (sqtt_events, prg.lib, prg.base)
+        cls.examples[pkl_path.stem] = (sqtt_events, prg.lib)
 
   def test_examples_loaded(self):
     self.assertGreater(len(self.examples), 0, "no example files found")
@@ -164,9 +167,9 @@ class SQTTExamplesTestBase(unittest.TestCase):
   @needs_rocprof
   def test_rocprof_wave_times_match(self):
     """Wave start/end times must match rocprof exactly."""
-    for name, (events, lib, base) in self.examples.items():
+    for name, (events, lib) in self.examples.items():
       with self.subTest(example=name):
-        occupancy, _ = run_rocprof_decoder([e.blob for e in events], lib, base, self.target)
+        occupancy, _ = run_rocprof_decoder([e.blob for e in events], lib, self.target)
         # extract from rocprof occupancy records
         roc_starts: dict[tuple[int, int, int], int] = {}
         roc_waves: list[tuple[int, int]] = []
@@ -194,9 +197,9 @@ class SQTTExamplesTestBase(unittest.TestCase):
   @needs_rocprof
   def test_rocprof_inst_times_match(self):
     """Instruction times must match rocprof exactly (excluding s_endpgm)."""
-    for name, (events, lib, base) in self.examples.items():
+    for name, (events, lib) in self.examples.items():
       with self.subTest(example=name):
-        _, wave_insts = run_rocprof_decoder([e.blob for e in events], lib, base, self.target)
+        _, wave_insts = run_rocprof_decoder([e.blob for e in events], lib, self.target)
         # skip last inst per wave (s_endpgm) - it needs special handling (time + duration instead of time + stall)
         roc_insts = [time + stall for insts in wave_insts for time, stall in insts[:-1]]
         # extract from our decoder

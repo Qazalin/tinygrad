@@ -32,13 +32,14 @@ class WaveExec(WaveSlot):
   begin_time:int
   end_time:int
   insts:bytearray
+  base:int=0
   def unpack_insts(self) -> Generator[InstExec, None, None]:
     sz = ctypes.sizeof(struct:=rocprof.rocprofiler_thread_trace_decoder_inst_t)
     insts_array = (struct*(len(self.insts)//sz)).from_buffer(self.insts)
     for inst in insts_array:
       inst_typ = rocprof.enum_rocprofiler_thread_trace_decoder_inst_category_t.get(inst.category)
       yield InstExec(inst_typ.replace("ROCPROFILER_THREAD_TRACE_DECODER_", "") if inst_typ else "UNKNOWN",
-                     inst.pc.address, inst.stall, inst.duration, inst.time)
+                     inst.pc.address - self.base, inst.stall, inst.duration, inst.time)
 
 @dataclasses.dataclass(frozen=True)
 class OccEvent(WaveSlot):
@@ -52,6 +53,7 @@ class _ROCParseCtx:
     self.sqtt_evs, self.disasms = iter(sqtt_evs), {k:{k2:(disasm(v2), v2.size()) for k2,v2 in v.items()} for k,v in disasms.items()}
     self.inst_execs:dict[RunKey, list[WaveExec]] = {}
     self.occ_events:dict[RunKey, list[OccEvent]] = {}
+    self.prg_bases:dict[RunKey, int] = {}
 
   def next_sqtt(self):
     x = next(self.sqtt_evs, None)
@@ -72,8 +74,8 @@ class _ROCParseCtx:
     insts_blob = bytearray(sz:=ev.instructions_size * ctypes.sizeof(rocprof.rocprofiler_thread_trace_decoder_inst_t))
     ctypes.memmove((ctypes.c_char * sz).from_buffer(insts_blob), ev.instructions_array, sz)
 
-    self.inst_execs.setdefault(unwrap(self.active_run), []).append(WaveExec(ev.wave_id, ev.cu, ev.simd, unwrap(self.active_se), ev.begin_time,
-                                                                             ev.end_time, insts_blob))
+    self.inst_execs.setdefault(run:=unwrap(self.active_run), []).append(WaveExec(ev.wave_id, ev.cu, ev.simd, unwrap(self.active_se), ev.begin_time,
+                                                                                 ev.end_time, insts_blob, self.prg_bases.get(run, 0)))
 
 def decode(sqtt_evs:list[ProfileSQTTEvent], disasms:dict[int, dict[int, Inst]]) -> _ROCParseCtx:
   ROCParseCtx = _ROCParseCtx(sqtt_evs, disasms)
@@ -102,7 +104,8 @@ def decode(sqtt_evs:list[ProfileSQTTEvent], disasms:dict[int, dict[int, Inst]]) 
 
   @rocprof.rocprof_trace_decoder_isa_callback_t
   def isa_cb(instr_ptr, mem_size_ptr, size_ptr, pc, _):
-    instr, mem_size_ptr[0] = ROCParseCtx.disasms[unwrap(ROCParseCtx.active_run)[0]][pc.address]
+    disasm_map = ROCParseCtx.disasms[(run:=unwrap(ROCParseCtx.active_run))[0]]
+    instr, mem_size_ptr[0] = disasm_map[pc.address - ROCParseCtx.prg_bases.setdefault(run, pc.address - next(iter(disasm_map)))]
 
     # this is the number of bytes to next instruction, set to 0 for end_pgm
     if instr == "s_endpgm": mem_size_ptr[0] = 0
@@ -154,15 +157,14 @@ def main() -> None:
   sqtt = [p for p in profile if isinstance(p, ProfileSQTTEvent) and p.kern == prg.tag]
 
   decoded = amd_decode((text:=get_elf_section(prg.lib, ".text")).content, get_arch(target), text.header.sh_addr)
-  pc_to_inst = {addr+prg.base:inst for addr,inst in decoded.items()}
-  rctx = decode(sqtt, {prg.tag:pc_to_inst})
+  rctx = decode(sqtt, {prg.tag:decoded})
   waves = sorted(itertools.chain.from_iterable(rctx.inst_execs.values()), key=lambda w:(w.se, w.cu, w.simd, w.wave_id, w.begin_time))
   if not waves: raise RuntimeError(f"no instruction traces for {args.kernel}")
   run_numbers:dict[str, itertools.count] = {}
   for w in itertools.islice(waves, args.n):
     if w.wave_loc not in run_numbers: run_numbers[w.wave_loc] = itertools.count()
     print(f"{w.wave_loc} N:{next(run_numbers[w.wave_loc])} Total Cycles:{w.end_time-w.begin_time}")
-    rows = [(e.time, f"0x{e.pc:x}", pc_to_inst[e.pc], e.typ, e.dur, e.stall) for e in w.unpack_insts()]
+    rows = [(e.time, f"0x{e.pc:x}", decoded[e.pc], e.typ, e.dur, e.stall) for e in w.unpack_insts()]
     print(tabulate(rows, headers=("Timestamp", "PC", "Instruction", "Type", "Duration", "Stall"), tablefmt="github"))
 
 if __name__ == "__main__":

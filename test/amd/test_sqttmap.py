@@ -24,7 +24,7 @@ def needs_rocprof(fn):
       sqtt = [e for e in data if type(e).__name__ == "ProfileSQTTEvent"][1]
       kern = {e.tag:e for e in data if type(e).__name__ == "ProfileProgramEvent"}[sqtt.kern]
       decoded = amd_decode((text:=get_elf_section(kern.lib, ".text")).content, get_arch("gfx1200"), text.header.sh_addr)
-      rctx = roc_decode([sqtt], {kern.tag:{addr+kern.base:inst for addr,inst in decoded.items()}})
+      rctx = roc_decode([sqtt], {kern.tag:decoded})
       insts = [e.time for e in list(rctx.inst_execs.values())[0][0].unpack_insts()]
       self.assertListEqual(insts, [28178, 28179, 28180, 28181, 28182, 29882, 29883, 29884, 29885, 30966, 30983, 30985, 30992, 30993])
     except Exception as e: self.skipTest(f"latest rocprof not available, install with extra/sqtt/install_rocprof_decoder.py: {e}")
@@ -34,7 +34,7 @@ def needs_rocprof(fn):
 def rocprof_inst_traces_match(sqtt, prg, target):
   from extra.sqtt.roc import decode as roc_decode, InstExec
   addr_table = amd_decode((text:=get_elf_section(prg.lib, ".text")).content, get_arch(target), text.header.sh_addr)
-  disasm_map = {addr+prg.base:inst for addr,inst in addr_table.items()}
+  disasm_map = addr_table
   rctx = roc_decode([sqtt], {prg.tag:disasm_map})
   rwaves = rctx.inst_execs.get((sqtt.kern, sqtt.exec_tag), [])
   rwaves_iter:dict[int, list[Iterator[InstExec]]] = {} # wave unit (0-15) -> list of inst trace iterators for all executions on that unit
@@ -48,7 +48,7 @@ def rocprof_inst_traces_match(sqtt, prg, target):
     if info is None: continue
     if DEBUG >= 2: print(f"{' '*29}{disasm(info.inst)}")
     rocprof_inst = next(rwaves_iter[info.wave][0])
-    ref_pc = rocprof_inst.pc-prg.base
+    ref_pc = rocprof_inst.pc
     # always check pc matches
     assert ref_pc == info.pc, f"pc mismatch {ref_pc}:{disasm_map[rocprof_inst.pc]} != {info.pc}:{disasm(info.inst)}"
     # special handling for s_endpgm, it marks the wave completion.
